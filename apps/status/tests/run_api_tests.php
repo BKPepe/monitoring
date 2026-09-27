@@ -6294,6 +6294,7 @@ try {
 // N-3  findings&summary=1: the bell's counts, kept a minute, cleared by an
 //      archive or a mute;
 // CR-9b the knowledge tips in the findings feed, without repeating a reason;
+// N-1  the health score 0-100 with its breakdown, public without hardware;
 //      regions carry the country for the public page's flags.
 // =======================================================================
 $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at, last_checked) VALUES
@@ -6358,6 +6359,74 @@ try {
     check('N-3: archivace smaže uložené počty', (int)$pdo->query("SELECT COUNT(*) FROM settings WHERE key_name LIKE 'findings\\_summary\\_%'")->fetchColumn(), 0);
     api_post($base, 'action=unarchive_monitor', ['id' => 199], $cookie_jar);
     $pdo->exec("UPDATE monitors SET status = 'unknown', last_checked = NULL WHERE id = 199");
+
+    // --- N-1: health score --------------------------------------------------
+    [$w2m_mi_code, $w2m_mi] = api_get_auth($base, 'action=monitor_insights&monitor_id=198&lang=cs', $cookie_jar);
+    check('N-1: monitor_insights vrací 200', $w2m_mi_code, 200);
+    $w2m_h = $w2m_mi['health'] ?? [];
+    $w2m_hc = array_column($w2m_h['components'] ?? [], null, 'key');
+    // availability 100, WAN 20 ms 100, alerts 50 (WAN lost), fresh 100,
+    // CPU 97 % = 0, 85 °C = 20, disk unmeasured:
+    // (3000 + 1000 + 750 + 1000 + 0 + 200) / 90 = 66,1.
+    check('N-1: skóre serveru jen ze změřeného', [$w2m_h['score'] ?? null, $w2m_h['grade'] ?? null, $w2m_h['measuredWeight'] ?? null, $w2m_h['measuredComponents'] ?? null], [66, 'poor', 90, 6]);
+    $w2m_pts = fn (string $k) => array_key_exists($k, $w2m_hc) ? $w2m_hc[$k]['points'] : 'chybí';
+    check('N-1: rozpad bodů pod prstencem', [$w2m_pts('cpu_ram'), $w2m_pts('temperature'), $w2m_pts('disk'), $w2m_pts('latency'), $w2m_pts('alerts')], [0, 20, null, 100, 50]);
+    check('N-1: složky nesou český název', $w2m_hc['availability']['label'] ?? null, 'Dostupnost');
+    check('N-1: jmenované srážky česky, s hodnotou a prahem, od největší',
+        array_map(fn ($d) => [$d['kind'], $d['label'], $d['points']], $w2m_h['deductions'] ?? []),
+        [['cpu_high', 'Vytížení CPU 97 %, nad 70 %', 16.7], ['cpu_temp_high', 'Teplota CPU 85 °C, nad 65 °C', 8.9], ['wan_lost', 'Primární WAN bez internetu', 8.3]]);
+    check_false('N-1: srážka nevrací vnitřní parametry', array_key_exists('params', $w2m_h['deductions'][0] ?? ['params' => 1]));
+    [, $w2m_mi197] = api_get_auth($base, 'action=monitor_insights&monitor_id=197&lang=cs', $cookie_jar);
+    check_true('N-1: otevřený incident běžícího webu je jmenovaná srážka',
+        in_array(['incident_open', 'Otevřený incident'], array_map(fn ($d) => [$d['kind'], $d['label']], $w2m_mi197['health']['deductions'] ?? []), true));
+    // The website shares an asset with the server's agent: the page's tips
+    // borrow the agent's CPU/RAM (bk_enrich_monitor_details), the score must not.
+    $pdo->exec("INSERT INTO assets (id, name) VALUES (9197, 'W2M stroj')");
+    $pdo->exec("UPDATE monitors SET asset_id = 9197, agent_key = 'w2m-score-key' WHERE id = 198");
+    $pdo->exec("UPDATE monitors SET asset_id = 9197 WHERE id = 197");
+    [, $w2m_mi197b] = api_get_auth($base, 'action=monitor_insights&monitor_id=197&lang=cs', $cookie_jar);
+    $w2m_c197 = array_column($w2m_mi197b['health']['components'] ?? [], null, 'key');
+    check('N-1: web na stejném stroji nepřebírá CPU serveru', array_key_exists('cpu_ram', $w2m_c197) ? $w2m_c197['cpu_ram']['points'] : 'chybí', null);
+    [, $w2m_mi_en] = api_get_auth($base, 'action=monitor_insights&monitor_id=198&lang=en', $cookie_jar);
+    check('N-1: anglicky anglická slova', array_column($w2m_mi_en['health']['deductions'] ?? [], 'label'),
+        ['CPU usage 97 %, above 70 %', 'CPU temperature 85 °C, above 65 °C', 'Primary WAN has no internet']);
+    // lang sticks to the session (lang.php): back to Czech for what follows.
+    api_get_auth($base, 'action=monitor_insights&monitor_id=198&lang=cs', $cookie_jar);
+
+    [$w2m_hs_code, $w2m_hs] = api_get_auth($base, 'action=health&lang=cs', $cookie_jar);
+    check('N-1: action=health vrací 200', $w2m_hs_code, 200);
+    $w2m_assets = array_column($w2m_hs['assets'] ?? [], null, 'monitorId');
+    check('N-1: zařízení bez dat nemá skóre, ne 100', array_key_exists(199, $w2m_assets) ? $w2m_assets[199]['score'] : 'chybí', null);
+    check('N-1: skóre zařízení v přehledu = skóre na jeho stránce, i se srážkami',
+        [$w2m_assets[198]['score'] ?? null, array_column($w2m_assets[198]['deductions'] ?? [], 'label')], [66, array_column($w2m_h['deductions'] ?? [], 'label')]);
+    check('N-1: i web sdílející stroj s agentem má v přehledu totéž skóre jako na své stránce',
+        [$w2m_assets[197]['score'] ?? 'chybí', array_column($w2m_assets[197]['deductions'] ?? [], 'kind')],
+        [$w2m_mi197b['health']['score'] ?? 'chybí', array_column($w2m_mi197b['health']['deductions'] ?? [], 'kind')]);
+    // The network: the mean of the scored, non-paused monitors - or null when
+    // fewer than half of them have a score. The test database holds fixtures
+    // of earlier blocks too, so the rule is checked against the answer's own list.
+    $w2m_live = array_filter($w2m_hs['assets'] ?? [], fn ($a) => empty($a['paused']));
+    $w2m_scored = array_values(array_filter(array_column($w2m_live, 'score'), fn ($v) => $v !== null));
+    $w2m_net = $w2m_hs['network'] ?? [];
+    check('N-1: síť počítá změřená a nepozastavená zařízení', [$w2m_net['assetsScored'] ?? null, $w2m_net['assetsTotal'] ?? null], [count($w2m_scored), count($w2m_live)]);
+    check('N-1: síť je průměr změřených, nebo null pod polovinou',
+        $w2m_net['score'] ?? 'chybí', 2 * count($w2m_scored) >= count($w2m_live) && $w2m_scored ? (int)round(array_sum($w2m_scored) / count($w2m_scored)) : null);
+    check_true('N-1: srážky sítě nesou zařízení a český popis', ($w2m_net['score'] ?? null) === null
+        || array_filter($w2m_net['deductions'] ?? [], fn ($d) => !is_int($d['monitorId'] ?? null) || !is_string($d['label'] ?? null) || $d['label'] === '') === []);
+
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'health_cache_public'");
+    [$w2m_pub_code, $w2m_pub] = api_get($base, 'action=health&scope=public&lang=cs');
+    check('N-1: veřejné skóre vrací 200', $w2m_pub_code, 200);
+    check('N-1: veřejně jen skóre sítě, žádné skóre po zařízeních', array_keys($w2m_pub), ['network', 'formulaVersion', 'generatedAt']);
+    check('N-1: veřejně bez hardwaru', array_values(array_intersect(array_column($w2m_pub['network']['components'] ?? [], 'key'), ['cpu_ram', 'disk', 'temperature'])), []);
+    $w2m_pub_ids = array_map('intval', array_column(api_get($base, 'action=monitors&scope=public')[1]['monitors'] ?? [], 'id'));
+    check('N-1: veřejné srážky jen veřejných služeb, bez hardwaru a vnitřností routeru',
+        array_values(array_filter($w2m_pub['network']['deductions'] ?? [], fn ($d) => !in_array((int)($d['monitorId'] ?? 0), $w2m_pub_ids, true)
+            || in_array($d['kind'] ?? '', ['cpu_high', 'ram_high', 'disk_full', 'smart_failed', 'cpu_temp_high', 'disk_temp_high', 'wan_lost', 'lte_backup_lost', 'wan_link_degraded', 'conntrack_full', 'firewall_disabled', 'dns_resolver_failed'], true))), []);
+    check_false('N-1: soukromý server se veřejně nejmenuje', in_array(198, array_map(fn ($d) => (int)($d['monitorId'] ?? 0), $w2m_pub['network']['deductions'] ?? []), true));
+    [, $w2m_pub_en] = api_get($base, 'action=health&scope=public&lang=en');
+    check_true('N-1: uložená veřejná odpověď se přesto popíše jazykem návštěvníka',
+        ($w2m_pub_en['network']['components'][0]['label'] ?? null) === 'Availability' && ($w2m_pub_en['generatedAt'] ?? 1) === ($w2m_pub['generatedAt'] ?? 2));
 
     // --- regions: the country for the flags ---------------------------------
     $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'regions_cache_%'");

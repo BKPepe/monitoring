@@ -77,7 +77,17 @@ $stmt_rt->execute([$monitor_id]);
 $has_response_data = ((int)$stmt_rt->fetchColumn()) > 0;
 
 // === Asset Overview data ===
-$health_score = bk_compute_asset_health_score($pdo, $monitor, $details, $latest_metrics);
+// The same health score as the app (bk_health_score, docs/api.md "Health
+// score"): one formula, so this page and /app never show two numbers for one
+// monitor - from the monitor's own stored details, not the enriched $details
+// above, which borrow a linked agent's CPU/RAM. A failure is logged and the
+// ring shows "—", never a made-up score.
+$health_score = null;
+try {
+    $health_score = bk_health_for_monitors($pdo, [$monitor], false)[$monitor_id]['score'] ?? null;
+} catch (Throwable $e) {
+    error_log('[monitor.php] health of ' . $monitor_id . ': ' . $e->getMessage());
+}
 $health_dots = bk_get_30day_health_dots($pdo, $monitor_id);
 $card_profile = bk_get_type_card_profile($monitor['type']);
 $timeline = bk_get_monitor_timeline($pdo, $monitor_id, 30);
@@ -109,7 +119,8 @@ $status_bg = ['up' => 'rgba(30,199,115,0.12)', 'down' => 'rgba(193,18,31,0.12)',
 
 // Score ring color
 // null = nothing measured (W1-B3): a grey, empty ring and no number, never 100.
-$ring_color = $health_score === null ? 'var(--text-muted)' : ($health_score >= 80 ? 'var(--color-green)' : ($health_score >= 50 ? 'var(--color-yellow)' : 'var(--color-red)'));
+// The grade's lines (bk_health_grade): good from 90, fair from 70.
+$ring_color = $health_score === null ? 'var(--text-muted)' : ($health_score >= 90 ? 'var(--color-green)' : ($health_score >= 70 ? 'var(--color-yellow)' : 'var(--color-red)'));
 $health_score_text = $health_score === null ? '—' : (string)$health_score;
 
 // Type icon

@@ -105,9 +105,13 @@ Pozor na detaily, které se snadno ztratí:
   stejně dlouhého okna, u počítadla průměr přírůstků; `null` pod 3 vzorky).
   `metric_series`, `_batch`, `metric_detail`, `metric_heatmap` a
   `metric_correlations` vracejí `label` podle `lang` (anglické názvy metrik).
-- **NetPulse vzhled (w2m):** `findings` má zdroj `tip` (tipy bez opakování
-  důvodu) a `summary=1` (jen počty, u flotily minutu v `settings`, smaže je
-  ztlumení/archivace).
+- **Skóre zdraví a NetPulse vzhled (w2m):** `action=health` (síť + monitory,
+  veřejně bez `cpu_ram`/`disk`/`temperature` a bez jmen) a
+  `monitor_insights.health` podle `bk_health_score()` (`formulaVersion` 1,
+  vzorec v docs/api.md „Health score“): jen změřené složky, neměřená vypadne a
+  váhy se přepočtou, bez dostupnosti nebo pod 40 z 100 vah = `score: null`.
+  `findings` má zdroj `tip` (tipy bez opakování důvodu) a `summary=1` (jen
+  počty, u flotily minutu v `settings`, smaže je ztlumení/archivace).
   `regions[].country` (ISO alpha-2 z popisku, jinak `null`). `daily_uptime`
   čte uzavřené dny včetně `avgMs` a počtů kontrol z `uptime_daily`, surové
   logy jen za den(y), kam souhrn nedošel.

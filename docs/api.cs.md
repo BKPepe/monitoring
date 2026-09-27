@@ -486,10 +486,11 @@ kontroly nebo hlášení. Obojí se zapíše do auditu.
 | `action=uptime_windows` | veřejný stav / přiřazené | Dostupnost monitorů za 24 h / 7 d / 30 d / 90 d v čase; `d1` je posledních 24 hodin, ostatní jsou kalendářní dny včetně dneška. Nezměřené okno je `null`, nikdy 100. Každý řádek nese `since`, první den s daty v 90denním okně, a odpověď nese `windowStart` (`d7`, `d30`, `d90`: první den každého okna); obojí je místní `Y-m-d` serveru, takže „90 dní" nad šesti týdny historie řekne, odkud jeho data jsou |
 | `action=check_stages&monitor_id=` | přiřazený monitor | Rozpad kontroly (DNS/TCP/TLS/HTTP, ServerQuery) |
 | `action=regions&days=` | veřejný stav / přiřazené | Dostupnost podle místa měření (`checked_from`). Každé místo nese `country`, kód ISO 3166-1 alpha-2 přečtený z popisku (starý popisek Cloudflaru se nejdřív opraví), `null`, když popisek zemi neuvádí - veřejná stránka podle něj kreslí vlastní vlajku, nikdy odhadnutou; veřejná projekce drží `location`, `country` a `successRate` |
+| `action=health` | veřejný stav / přiřazené | Skóre zdraví 0-100 sítě (`network` s pojmenovanými srážkami `deductions`) a v aplikaci i každého monitoru, který uživatel smí vidět (`assets`: `monitorId` a celé skóre monitoru se `components` a `deductions`), viz „Skóre zdraví“ níž. Veřejný pohled vrací jen skóre veřejné sady na úrovni sítě, bez hardwarových složek a bez skóre po monitorech |
 | `action=public_status` | veřejný stav / přiřazené | Souhrn pro veřejnou stránku: `status` je celkový verdikt (viz „Jeden celkový verdikt"), s `totalMonitors`, `downMonitors`, `warningMonitors`, `unknownMonitors`, `unmeasuredMonitors`, `maintenanceMonitors` a průměrnou dostupností. `lastUpdated` je nejnovější skutečná kontrola, `null`, když se nic neměřilo. `nodes` jsou jen monitory agentů a hostitelů (`online`, `warning`, `offline`, `maintenance`, `unknown`). V aplikaci dostane účet `user` součty jen za přiřazené monitory |
 | `action=badge[&monitor_id=][&type=uptime][&lang=en]` | veřejné | Vložitelný SVG odznak (cache 60 s): živý stav, s `type=uptime` 30denní dostupnost; bez `monitor_id` tiskne celkový verdikt veřejné sady. Neznámý monitor, nebo monitor mimo veřejnou stránku pro volajícího, který ho nesmí vidět, je 404 |
 | `action=websites_overview` | přiřazený monitor | Weby s certifikáty a dostupností v okně (`sla7` / `sla30` / `sla365` v čase, kalendářní dny včetně dneška; `null` = nic nenaměřeno). `sslAlertDays` je hranice, u které cron upozorňuje (`ssl_alert_days`). Webový monitor navíc nese `httpStatusCode`, kód HTTP, který zaznamenala jeho poslední kontrola (čte se čerstvě, ne z cache; `null` = ta kontrola žádný nezaznamenala), a `httpCheckedAt` |
-| `action=monitor_insights&monitor_id=` | přiřazený monitor | Odvozená pozorování k jednomu monitoru; `status` je stav monitoru ve sdíleném slovníku (`key`, `label`, `tone`, `icon`) a věta shrnutí je formulovaná podle stavu - údržba, pozastavení ani čekání na data už nejsou „aktuálně nedostupný“. `statusSentence` je totéž shrnutí bez hlavní starosti a bez „vše v pořádku“ (jen stav a věta o zátěži): stránka zařízení vypisuje zjištění hned pod ním. |
+| `action=monitor_insights&monitor_id=` | přiřazený monitor | Odvozená pozorování k jednomu monitoru; `status` je stav monitoru ve sdíleném slovníku (`key`, `label`, `tone`, `icon`) a věta shrnutí je formulovaná podle stavu - údržba, pozastavení ani čekání na data už nejsou „aktuálně nedostupný“. `statusSentence` je totéž shrnutí bez hlavní starosti a bez „vše v pořádku“ (jen stav a věta o zátěži): stránka zařízení vypisuje zjištění hned pod ním. `health` je skóre zdraví monitoru s rozpadem (viz „Skóre zdraví“ níž; `null` = nešlo spočítat, `score` `null` = málo dat). Staré `healthScore` patří TeamSpeaku a zůstává kvůli starším klientům |
 | `action=dashboard_insights&limit=&offset=&lang=` | přiřazený monitor | Totéž napříč monitory: předpovědi, anomálie a poznámky k síti, formulované v jazyce požadavku. Stránkované - `limit` 1-200 (výchozí 4), `offset`, a `total` říká, kolik jich je; seznam se už neuřezává na osm. V cache 5 minut pro každý jazyk zvlášť (`cachedAt`, když odpověď přišla z ní). Každá položka nese `severity` (`warning` nebo `info`) na stupnici `action=findings` |
 | `action=findings&monitor_id=&limit=&offset=&lang=` (nebo `&summary=1`) | přiřazený monitor | Jeden seznam zjištění (C-12): důvody k pozornosti (výpadek, varování, mlčící agent, privátní cíl, certifikát, metrika nad limitem, nový agent), tipy, postřehy a doporučení pro router v jednom seznamu. Tip, který opakuje důvod k pozornosti téhož monitoru (tip o CPU/RAM/disku vedle jeho metriky, tip o certifikátu), se vynechá. Každé zjištění: `key`, `source` (`status`, `certificate`, `check`, `metric`, `tip`, `agent`, `insight`, `router`), `kind`, `severity` (`critical`, `warning`, `info`), `monitorId` / `monitorName` / `monitorType`, `title`, `detail`, `action`, `since` a u doporučení pro router celá položka v `rec`. Seřazené od kritických. Stránkované přes `limit` (1-500, výchozí 50) a `offset`; `total`, `counts` podle závažnosti, `devices` (po zařízeních: `worst` a počty, přes celý seznam), `monitorsChecked`, `muted` (položky routeru, které vlastník ztlumil), `canMute`. `monitor_id` = jedno zařízení. Zdroj, který selhal, jmenuje `sourceErrors` - seznam pak není úplný, ne čistý. `summary=1` vrátí jen `total`, `counts`, `devicesWithFindings`, `monitorsChecked`, `sourceErrors` a `generatedAt`, pro zvonek nebo odznak, který se ptá opakovaně; počty celé flotily se drží minutu pro každý rozsah uživatele (`cachedAt`, když přišly odtud) a smaže je ztlumení nebo archivace. Plný seznam je vždy čerstvý |
 | `action=ui_config` | veřejné | Nastavení vzhledu pro frontend (logo, názvy) |
@@ -545,6 +546,71 @@ přepočítá v čase (`secs_up`, `secs_down`, `secs_warning`, `secs_silent`,
 `secs_maintenance`, `secs_unmeasured`); dnešek se počítá živě. Den z doby
 před časovým souhrnem (jeho logy už jsou smazané) zná jen počty kontrol a čte
 se jako celý naměřený den rozdělený podle nich.
+
+### Skóre zdraví
+
+`action=health` (síť a každý monitor), `monitor_insights.health` (jeden
+monitor) a prstenec staré stránky `monitor.php` hodnotí zdraví 0-100 jedním
+zdokumentovaným vzorcem (`bk_health_score()`, `formulaVersion` 1), jen
+z naměřených hodnot. Každá složka dostane 0-100 bodů podle vlastní křivky, nebo
+je `null`, když ji nic nezměřilo. Skóre je vážený průměr změřených složek:
+neměřená vypadne a váhy se přepočtou, nikdy se nepočítá jako plný počet. Málo
+dat - neměřená dostupnost, nebo méně než 3 změřené složky (dostupnost a dvě
+další) - je `score: null` (aplikace ukáže „—“), nikdy vymyšlené číslo.
+
+| Složka (`key`) | Váha | Body |
+|---|---|---|
+| `availability` | 30 | Dostupnost za posledních 7 dní v čase (včetně dneška); každých 0,1 % pod 100 % ubere 2 body (99,9 % = 98, 99 % = 80, 95 % a méně = 0) |
+| `latency` | 10 | Průměrná odezva za poslední hodinu (aspoň 2 měření). Agent (`vps`, `openwrt`) měří latenci WAN: 100 do 30 ms, 0 od 300 ms. Kontrola z hostingu: 100 do 300 ms, 0 od 3 s. Ztrátu paketů na WAN agent 0.1.10 neměří, proto ve vzorci není; přibude s novou `formulaVersion`, až ji agent začne hlásit |
+| `alerts` | 15 | Otevřené problémy monitoru: 100 minus 50 za každý kritický a 20 za každé varování, nejméně 0. Jsou to důvody k pozornosti z kanálu zjištění (výpadek, zhoršení, mlčící agent, certifikát, nedosažitelný cíl), otevřený incident monitoru, který zrovna nepadá (jedno varování, ať je incidentů kolik chce), a v aplikaci i vlastní ustálené verdikty routeru: primární WAN bez internetu, nefunkční místní DNS resolver a vypnutý firewall (kritické), nefunkční LTE záloha, WAN linka pod obvyklou rychlostí a plná tabulka spojení (varování). `null`, dokud se monitor neozval |
+| `freshness` | 10 | Stáří posledního hlášení proti očekávanému intervalu (60 s u agenta, interval heartbeatu, 300 s u kontroly): 100 do 3 intervalů, 50 do 10, pak 0 |
+| `cpu_ram` | 15 | Horší z využití CPU a RAM proti limitům monitoru (bez nastavených limitů zdokumentované výchozí 90/95 %): 100 do 20 bodů pod limitem, 0 na limitu |
+| `disk` | 10 | Zaplnění disku stejně (výchozí limit 90 %); disk, jehož SMART selhal, je 0 |
+| `temperature` | 10 | Horší z CPU (100 do 65 °C - tam varuje znalostní tip -, 0 od 90 °C) a disku nejblíž limitu své třídy L (60 °C rotační, 70 °C SSD, 80 °C NVMe, stejně jako upozornění na disk): 100 do L - 10, 0 na L |
+
+Hardwarová čtení (`cpu_ram`, `disk`, `temperature`) a verdikty routeru
+z hlášení staršího než 10 intervalů vypadnou: popisují stroj, jaký byl, a staré
+hlášení už stojí body ve `freshness`.
+Každý monitor se hodnotí z vlastních měření: web na stejném stroji jako agent
+si od agenta nepůjčí CPU/RAM (tipy na stránce zařízení ano), protože server
+má vlastní skóre.
+
+`grade` je `good` od 90, `fair` od 70, `poor` pod tím (`null` bez skóre).
+Každá složka nese `points`, `weight`, `label` (v jazyce požadavku), `value` a
+`unit` (co se naměřilo) a `deduction` (kolik ubrala ze skóre). `measuredWeight`
+a `measuredComponents` říkají, kolik ze vzorce se změřilo. Pozastavený monitor
+skóre nemá a nese `paused: true`.
+
+`deductions` jmenuje, co body stálo, od největší srážky: `component`, `kind`
+(stálý klíč, např. `cpu_temp_high`, `availability_low`, `stale`, `status_down`,
+`incident_open`, `wan_lost`), `label` (slova v jazyce požadavku s hodnotou a
+místem, odkud křivka začne ubírat, např. „Teplota CPU 71 °C, nad 65 °C“),
+`points` (kolik stála z výsledného skóre, na jedno desetinné místo), `value`,
+`limit` a `unit`. Složka, která bere horší ze dvou čtení, jmenuje jen to, které
+rozhodlo, a upozornění si ztrátu své složky dělí podle své ceny, takže tři
+kritická nikdy nestojí víc, než složka váží. Srážky dávají dohromady 100 minus
+nezaokrouhlené skóre; srážka pod 0,1 bodu se vynechá.
+
+Skóre sítě je prostý průměr skóre jejích monitorů (každý monitor jednou,
+pozastavené monitory do sítě nepatří: `assetsScored` z `assetsTotal`). Je
+`null`, když skóre nemá žádný monitor, nebo když ho má méně než polovina -
+číslo by pak popisovalo změřenou menšinu. Každá složka sítě je průměr bodů
+monitorů, které ji změřily (`assets`), a `deductions` sítě je pět největších
+srážek celé flotily, každá s `monitorId` a `monitorName` a za srážku svého
+monitoru dělenou `assetsScored`.
+
+Aplikace (`assets`) vrací každý monitor, který uživatel smí vidět, s celým
+objektem monitoru. Veřejný pohled (`scope=public` nebo bez přihlášení) vrací
+jen `network`, `formulaVersion` a `generatedAt`: skóre veřejné sady na úrovni
+sítě, bez hardwarových složek a bez verdiktů routeru, a žádné skóre po
+monitorech - veřejné karty už ukazují dostupnost a odezvu každé služby a druhé
+číslo na monitor, jiné než v aplikaci, by jen mátlo. Jeho srážky jmenují jen
+veřejné monitory, stejně jako veřejné karty. Ukazujte ho jako skóre veřejných
+služeb, ne jako zdraví celé sítě. Veřejná odpověď se drží minutu a slova
+dostane až při odeslání, v jazyce návštěvníka.
+
+„Infrastructure score“ týdenního souhrnu (`bk_infra_score()`) je jiné číslo:
+souhrn období porovnaný s předchozím obdobím, ne toto skóre zdraví.
 
 ### Období v `period`
 

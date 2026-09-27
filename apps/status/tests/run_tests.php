@@ -3435,7 +3435,7 @@ if (function_exists('bk_router_rec_evaluate') && is_readable(__DIR__ . '/fixture
 // měření měla v infra skóre 100. Neměřená část teď vypadne a váhy se přepočtou;
 // když se nenaměřilo nic, je výsledek null („nedostatek dat").
 bk_test_load_functions(__DIR__ . '/../functions.php', [
-    'bk_latency_score', 'bk_infra_score', 'bk_compute_asset_health_score',
+    'bk_latency_score', 'bk_infra_score',
     'bk_monitor_thresholds', 'bk_effective_threshold',
 ]);
 if (!defined('BK_DEFAULT_THRESHOLDS')
@@ -3450,26 +3450,14 @@ if (!defined('BK_DEFAULT_THRESHOLDS')
     check('infra skóre bez latence se přepočte, nepřičte 100 za latenci', bk_infra_score(90.0, null, 0, 0, 0), 93);
     check('infra skóre se vším naměřeným beze změny', bk_infra_score(100.0, 100, 0, 0, 0), 100);
 
-    $hs_base = ['id' => 9, 'type' => 'web', 'status' => 'unknown', 'last_checked' => null,
-        'cpu_threshold' => null, 'ram_threshold' => null, 'hdd_threshold' => null, 'preset_id' => null];
-    check('monitor, který nic nenaměřil: nedostatek dat, ne skóre', bk_compute_asset_health_score(null, $hs_base, [], null), null);
-    check('stav „up" bez jediného časového razítka se nepočítá',
-        bk_compute_asset_health_score(null, ['status' => 'up'] + $hs_base, [], null), null);
-    // Web bez latence i heartbeatu, poslední kontrola před dvěma hodinami:
-    // připojení 100, čerstvost 30 → 65. Dřív prahy i čerstvost daly 100.
-    $hs_stale = bk_compute_asset_health_score(null, ['status' => 'up', 'last_checked' => date('Y-m-d H:i:s', time() - 7200)] + $hs_base, [], null);
-    check('web bez latence a heartbeatu nedostane 100', $hs_stale, 65);
-
+    // The asset score itself is bk_health_score() now (N-1, the w2m block
+    // below keeps these rules: nothing measured = null, a stale check never
+    // 100). What stays here are the limits it reads.
     // Výchozí prahy jsou jedny (BK_DEFAULT_THRESHOLDS): RAM 95, disk 90.
     check('výchozí prahy: cpu 90, ram 95, disk 90', BK_DEFAULT_THRESHOLDS, ['cpu' => 90, 'ram' => 95, 'hdd' => 90]);
-    $hs_vps = ['type' => 'vps', 'status' => 'up'] + $hs_base;
-    $hs_fresh = ['agent_last_seen' => time() - 60];
-    check('RAM 93 % je pod výchozím prahem 95 (dřív přehozeno na 90)',
-        bk_compute_asset_health_score(null, $hs_vps, $hs_fresh + ['ram' => 93], null), 100);
-    check('disk 93 % je nad výchozím prahem 90 (dřív přehozeno na 95)',
-        bk_compute_asset_health_score(null, $hs_vps, $hs_fresh + ['hdd' => 93], null), 86);
-    check('práh monitoru přebije výchozí',
-        bk_compute_asset_health_score(null, ['hdd_threshold' => 95] + $hs_vps, $hs_fresh + ['hdd' => 93], null), 100);
+    $hs_vps = ['id' => 9, 'type' => 'vps', 'status' => 'up', 'cpu_threshold' => null, 'ram_threshold' => null, 'hdd_threshold' => null, 'preset_id' => null];
+    check('monitor bez vlastních prahů: null (výchozí doplní až ten, kdo čte)', bk_monitor_thresholds(null, $hs_vps), ['cpu' => null, 'ram' => null, 'hdd' => null]);
+    check('práh monitoru přebije výchozí', bk_monitor_thresholds(null, ['hdd_threshold' => 95] + $hs_vps)['hdd'], 95);
 }
 
 
@@ -3793,14 +3781,207 @@ if (function_exists('bk_insight_severity')) {
     check('bez barvy informace', bk_insight_severity([]), 'info');
 }
 
-// --- UX wave 2 on main (w2m), server: tips, flags ----------------------------
+// --- UX wave 2 on main (w2m), server: health score, tips, flags ---------------
+// N-1: the health score counts only what was measured; an unmeasured part
+// drops out and the rest renormalises, too little data is null ("—").
 // CR-9b: the tips join the findings feed without repeating a reason.
 // Public page flags: the country comes from the label, never a guess.
 bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_health_linear', 'bk_health_score', 'bk_health_grade', 'bk_health_inputs', 'bk_health_network',
+    'bk_health_num', 'bk_health_value_text', 'bk_format_duration_secs', 'bk_disk_temp_limit',
     'bk_tip_findings', 'bk_location_country', 'bk_monitor_has_reported',
     'bk_attention_reasons', 'bk_status_label', 'bk_validate_import_target', 'bk_version_is_older',
 ]);
+foreach (['BK_HEALTH_FORMULA_VERSION', 'BK_HEALTH_MIN_COMPONENTS', 'BK_HEALTH_AVAILABILITY_DAYS', 'BK_HEALTH_ALERT_COST'] as $hs_name) {
+    if (!defined($hs_name) && preg_match('/\nconst ' . $hs_name . ' = [^;]+;/', (string)file_get_contents(__DIR__ . '/../functions.php'), $hs_c)) {
+        eval(trim($hs_c[0]));
+    }
+}
+foreach (['BK_HEALTH_COMPONENTS', 'BK_HEALTH_ROUTER_LATCHES'] as $hs_name) {
+    if (!defined($hs_name) && preg_match('/\nconst ' . $hs_name . ' = \[\n.*?\n\];/s', (string)file_get_contents(__DIR__ . '/../functions.php'), $hs_c)) {
+        eval(trim($hs_c[0]));
+    }
+}
 {
+    $hs_full = ['availability' => 100.0, 'latency_ms' => 20.0, 'latency_kind' => 'wan',
+        'alerts' => [], 'age_secs' => 30, 'cadence_secs' => 60,
+        'cpu_pct' => 10.0, 'cpu_limit' => 90.0, 'ram_pct' => 20.0, 'ram_limit' => 95.0,
+        'disk_pct' => 30.0, 'disk_limit' => 90.0, 'smart_failed' => false,
+        'cpu_temp_c' => 50.0, 'disk_temp_c' => 40.0, 'disk_temp_limit' => 70.0];
+    $hs = bk_health_score($hs_full);
+    check('zdraví: vše změřené a v pořádku = 100, dobré, váha 100, 7 složek, žádná srážka',
+        [$hs['score'], $hs['grade'], $hs['measuredWeight'], $hs['measuredComponents'], $hs['formulaVersion'], $hs['deductions']], [100, 'good', 100, 7, 1, []]);
+    $hs_pts = fn (array $in, string $key) => array_column(bk_health_score($in)['components'], 'points', 'key')[$key] ?? 'chybí';
+
+    // --- curves and their bounds --------------------------------------------
+    check('zdraví: 99,9 % dostupnosti = 98 bodů, 95 % = 0, pod 95 % dál 0, nad 100 % jen 100',
+        [$hs_pts(['availability' => 99.9] + $hs_full, 'availability'), $hs_pts(['availability' => 95.0] + $hs_full, 'availability'),
+         $hs_pts(['availability' => 40.0] + $hs_full, 'availability'), $hs_pts(['availability' => 100.4] + $hs_full, 'availability')], [98, 0, 0, 100]);
+    check('zdraví: WAN 30 ms plný počet, 300 ms nula, 165 ms polovina, 2 s dál nula',
+        [$hs_pts(['latency_ms' => 30.0] + $hs_full, 'latency'), $hs_pts(['latency_ms' => 300.0] + $hs_full, 'latency'),
+         $hs_pts(['latency_ms' => 165.0] + $hs_full, 'latency'), $hs_pts(['latency_ms' => 2000.0] + $hs_full, 'latency')], [100, 0, 50, 0]);
+    check('zdraví: kontrola z hostingu má vlastní křivku (300 ms plný počet, 3 s nula)',
+        [$hs_pts(['latency_ms' => 300.0, 'latency_kind' => 'check'] + $hs_full, 'latency'), $hs_pts(['latency_ms' => 3000.0, 'latency_kind' => 'check'] + $hs_full, 'latency')], [100, 0]);
+    check('zdraví: záporná odezva není měření',
+        array_column(bk_health_score(['latency_ms' => -5.0] + $hs_full)['components'], null, 'key')['latency']['points'], null);
+    check('zdraví: CPU do 65 °C plný počet (práh tipu), 90 °C nula, 77,5 °C polovina',
+        [$hs_pts(['cpu_temp_c' => 65.0] + $hs_full, 'temperature'), $hs_pts(['cpu_temp_c' => 90.0] + $hs_full, 'temperature'), $hs_pts(['cpu_temp_c' => 77.5] + $hs_full, 'temperature')], [100, 0, 50]);
+    check('zdraví: disk podle limitu své třídy (SSD 67 z 70 °C = 30, NVMe 67 z 80 = 100, rotační 55 z 60 = 50)',
+        [$hs_pts(['disk_temp_c' => 67.0] + $hs_full, 'temperature'), $hs_pts(['disk_temp_c' => 67.0, 'disk_temp_limit' => 80.0] + $hs_full, 'temperature'),
+         $hs_pts(['disk_temp_c' => 55.0, 'disk_temp_limit' => 60.0] + $hs_full, 'temperature')], [30, 100, 50]);
+    check('zdraví: CPU 20 bodů pod limitem plný počet, na limitu nula, RAM 85 z 95 polovina',
+        [$hs_pts(['cpu_pct' => 70.0] + $hs_full, 'cpu_ram'), $hs_pts(['cpu_pct' => 90.0] + $hs_full, 'cpu_ram'), $hs_pts(['ram_pct' => 85.0] + $hs_full, 'cpu_ram')], [100, 0, 50]);
+    check('zdraví: disk se selhaným SMART = 0 i s volným místem', $hs_pts(['smart_failed' => true] + $hs_full, 'disk'), 0);
+    $hs_warn = ['kind' => 'status_warning', 'severity' => 'warning', 'params' => []];
+    $hs_crit = ['kind' => 'status_down', 'severity' => 'critical', 'params' => []];
+    check('zdraví: kritické upozornění 50 bodů, s třemi varováními nula (ne záporně), info nic nestojí',
+        [$hs_pts(['alerts' => [$hs_crit]] + $hs_full, 'alerts'), $hs_pts(['alerts' => [$hs_crit, $hs_warn, $hs_warn, $hs_warn]] + $hs_full, 'alerts'),
+         $hs_pts(['alerts' => [['kind' => 'agent_update', 'severity' => 'info', 'params' => []]]] + $hs_full, 'alerts')], [50, 0, 100]);
+    check('zdraví: čerstvost 3 intervaly plná, 10 intervalů polovina, dál nula',
+        [$hs_pts(['age_secs' => 180] + $hs_full, 'freshness'), $hs_pts(['age_secs' => 181] + $hs_full, 'freshness'), $hs_pts(['age_secs' => 600] + $hs_full, 'freshness'), $hs_pts(['age_secs' => 601] + $hs_full, 'freshness')],
+        [100, 50, 50, 0]);
+    check('zdraví: skóre zůstává v 0-100 i při nejhorším', bk_health_score(['availability' => 0.0, 'latency_ms' => 9000.0, 'alerts' => [$hs_crit, $hs_crit, $hs_crit],
+        'age_secs' => 99999, 'cadence_secs' => 60, 'cpu_pct' => 100.0, 'smart_failed' => true, 'cpu_temp_c' => 120.0])['score'], 0);
+
+    // --- named deductions ------------------------------------------------------
+    // CPU 71 °C: (90 - 71) / 25 = 76 points; 24 lost x 10/100 = 2.4 of the score.
+    $hs = bk_health_score(['cpu_temp_c' => 71.0] + $hs_full);
+    check('zdraví: srážka se jmenuje (teplota CPU 71 °C nad 65 °C = -2,4)', [$hs['score'], $hs['deductions']],
+        [98, [['component' => 'temperature', 'kind' => 'cpu_temp_high', 'params' => [], 'points' => 2.4, 'value' => 71.0, 'limit' => 65.0, 'unit' => '°C']]]);
+    // CPU 80 % (50 b.) beats RAM 80 % (75 b.): only CPU is named, 50 x 15/100.
+    $hs = bk_health_score(['cpu_pct' => 80.0, 'ram_pct' => 80.0] + $hs_full);
+    check('zdraví: u horšího ze dvou čtení se jmenuje jen to, které rozhodlo',
+        array_map(fn ($d) => [$d['kind'], $d['points'], $d['limit']], $hs['deductions']), [['cpu_high', 7.5, 70.0]]);
+    $hs = bk_health_score(['smart_failed' => true] + $hs_full);
+    check('zdraví: selhaný SMART je srážka celé složky disku', array_map(fn ($d) => [$d['kind'], $d['points']], $hs['deductions']), [['smart_failed', 10.0]]);
+    // Three criticals = 150 of a 100-point component: each keeps a third.
+    $hs = bk_health_score(['alerts' => [$hs_crit, ['kind' => 'wan_lost', 'severity' => 'critical', 'params' => []], ['kind' => 'ssl_expired', 'severity' => 'critical', 'params' => []]]] + $hs_full);
+    check('zdraví: tři kritická upozornění si rozdělí jen váhu složky (3 x 5,0 = 15)',
+        [array_column($hs['deductions'], 'points'), array_sum(array_column($hs['deductions'], 'points'))], [[5.0, 5.0, 5.0], 15.0]);
+    // availability 99 % (-6), WAN 165 ms (-5), one warning (-3), CPU 80 % (-7.5),
+    // CPU 71 °C (-2.4): 100 - 23.9 = 76.1.
+    $hs_mix = ['availability' => 99.0, 'latency_ms' => 165.0, 'alerts' => [$hs_warn], 'cpu_pct' => 80.0, 'cpu_temp_c' => 71.0] + $hs_full;
+    $hs = bk_health_score($hs_mix);
+    check('zdraví: srážky od největší, s vlastními čísly',
+        array_map(fn ($d) => [$d['kind'], $d['points']], $hs['deductions']),
+        [['cpu_high', 7.5], ['availability_low', 6.0], ['latency_high', 5.0], ['status_warning', 3.0], ['cpu_temp_high', 2.4]]);
+    check('zdraví: jmenované srážky dávají dohromady 100 minus skóre před zaokrouhlením (76,1)',
+        [$hs['score'], round(array_sum(array_column($hs['deductions'], 'points')), 1)], [76, 23.9]);
+    check('zdraví: a srážky složek taky', round(array_sum(array_map(fn ($c) => (float)($c['deduction'] ?? 0), $hs['components'])), 1), 23.9);
+    // 99.99 %: 99.8 points, 0.2 lost x 30/100 = 0.06 - below what the ring shows.
+    check('zdraví: srážka pod 0,1 bodu se vynechá', [bk_health_score(['availability' => 99.99] + $hs_full)['score'], bk_health_score(['availability' => 99.99] + $hs_full)['deductions']], [100, []]);
+    check('zdraví: srážka dostupnosti nese okno 7 dní', array_values(array_filter($hs['deductions'], fn ($d) => $d['kind'] === 'availability_low'))[0]['params'] ?? null, [7]);
+
+    // --- renormalisation, missing data, minimum -------------------------------
+    // A website: no hardware. 99 % (80 b.), 300 ms (100), no alert, fresh:
+    // (80·30 + 100·10 + 100·15 + 100·10) / 65 = 90,8 -> 91.
+    $hs_web = ['availability' => 99.0, 'latency_ms' => 300.0, 'latency_kind' => 'check',
+        'alerts' => [], 'age_secs' => 60, 'cadence_secs' => 300];
+    $hs = bk_health_score($hs_web);
+    check('zdraví: web bez hardwaru se přepočte jen ze změřeného', [$hs['score'], $hs['measuredWeight'], $hs['measuredComponents']], [91, 65, 4]);
+    check('zdraví: přepočtená srážka dostupnosti (20 · 30 / 65 = 9,2)', array_map(fn ($d) => [$d['kind'], $d['points']], $hs['deductions']), [['availability_low', 9.2]]);
+    $hs_hw = array_filter($hs['components'], fn ($c) => in_array($c['key'], ['cpu_ram', 'disk', 'temperature'], true));
+    check('zdraví: neměřená část má body i srážku null, ne 100 a 0',
+        [array_values(array_unique(array_column($hs_hw, 'points'))), array_values(array_unique(array_column($hs_hw, 'deduction')))], [[null], [null]]);
+    check('zdraví: bez dostupnosti žádné skóre, i když zbytek měří', bk_health_score(['availability' => null] + $hs_full)['score'], null);
+    check('zdraví: dostupnost a jedna další složka je málo dat (null, bez srážek)',
+        [bk_health_score(['availability' => 90.0, 'age_secs' => 10, 'cadence_secs' => 60])['score'], bk_health_score(['availability' => 90.0, 'age_secs' => 10, 'cadence_secs' => 60])['deductions']], [null, []]);
+    check('zdraví: dostupnost a dvě další složky už stačí',
+        bk_health_score(['availability' => 100.0, 'age_secs' => 10, 'cadence_secs' => 60, 'alerts' => []])['score'], 100);
+    check('zdraví: nic neměřeno = null, ne 100', [bk_health_score([])['score'], bk_health_score([])['grade'], bk_health_score([])['measuredComponents']], [null, null, 0]);
+    $hs_pub = bk_health_score(['public' => true] + $hs_full);
+    check('zdraví veřejně: bez teplot, disků a CPU/RAM', array_column($hs_pub['components'], 'key'), ['availability', 'latency', 'alerts', 'freshness']);
+    $hs_pub = bk_health_score(['public' => true, 'disk_temp_c' => 69.0, 'cpu_pct' => 89.0] + $hs_full);
+    check('zdraví veřejně: horký disk ani plné CPU skóre nesníží ani nejmenují', [$hs_pub['score'], $hs_pub['deductions']], [100, []]);
+    check('zdraví: stupně na hranicích (90 dobré, 89 a 70 slušné, 69 špatné, bez skóre nic)',
+        [bk_health_grade(90), bk_health_grade(89), bk_health_grade(70), bk_health_grade(69), bk_health_grade(null)], ['good', 'fair', 'fair', 'poor', null]);
+
+    // --- inputs from a stored monitor -----------------------------------------
+    $hs_now = 1_800_000_000;
+    $hs_lim = ['cpu' => 90, 'ram' => 95, 'hdd' => 90];
+    $hs_router = ['id' => 5, 'type' => 'openwrt', 'status' => 'up', 'target' => 'router', 'last_checked' => date('Y-m-d H:i:s', $hs_now - 30)];
+    $hs_det = ['agent_last_seen' => $hs_now - 20, 'cpu' => 12, 'ram' => 40, 'hdd' => 50, 'temperature' => 55,
+        'storage_disks' => [['smart' => ['state' => 'ok', 'passed' => true, 'temperature_c' => 41]], ['smart' => ['state' => 'ok', 'passed' => true, 'temperature_c' => 67]],
+            ['transport' => 'nvme', 'smart' => ['state' => 'ok', 'passed' => true, 'temperature_c' => 75]]]];
+    $hs_in = bk_health_inputs($hs_router, $hs_det, 99.95, ['avg' => 14.0, 'n' => 50], $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: router měří WAN, rozhoduje disk nejblíž limitu své třídy (SSD 67/70, ne NVMe 75/80), čerstvost z agenta',
+        [$hs_in['latency_kind'], $hs_in['latency_ms'], $hs_in['disk_temp_c'], $hs_in['disk_temp_limit'], $hs_in['smart_failed'], $hs_in['age_secs'], $hs_in['cadence_secs'], $hs_in['alerts']],
+        ['wan', 14.0, 67.0, 70.0, false, 20, 60, []]);
+    $hs_in = bk_health_inputs($hs_router, ['storage_disks' => [['rotational' => true, 'smart' => ['passed' => true, 'temperature_c' => 58]], ['smart' => ['passed' => true, 'temperature_c' => 67]]]] + $hs_det, 99.95, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: rotační disk 58 °C (limit 60) je blíž limitu než SSD 67 (limit 70)', [$hs_in['disk_temp_c'], $hs_in['disk_temp_limit']], [58.0, 60.0]);
+    $hs_in = bk_health_inputs(['type' => 'web', 'status' => 'unknown', 'last_checked' => null] + $hs_router, [], null, ['avg' => 80.0, 'n' => 1], $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: monitor, který se nikdy neozval, nemá upozornění, čerstvost ani odezvu z jednoho čtení',
+        [$hs_in['alerts'], $hs_in['age_secs'], $hs_in['latency_ms'], $hs_in['latency_kind']], [null, null, null, 'check']);
+    check('zdraví: takový monitor nemá skóre, ne 100', bk_health_score($hs_in)['score'], null);
+    $hs_in = bk_health_inputs(['type' => 'web', 'status' => 'up', 'target' => 'https://example.org', 'last_checked' => date('Y-m-d H:i:s', $hs_now - 7200)] + $hs_router, [], 100.0, null, $hs_lim, 14, $hs_now, false);
+    // availability 100, alerts 100, freshness 0: (3000 + 1500) / 55 = 81.8.
+    check('zdraví: web s poslední kontrolou před dvěma hodinami nedostane 100 (čerstvost 0)',
+        [bk_health_score($hs_in)['score'], array_map(fn ($d) => [$d['kind'], $d['points']], bk_health_score($hs_in)['deductions'])], [82, [['stale', 18.2]]]);
+    $hs_in = bk_health_inputs(['status' => 'down'] + $hs_router, ['ssl_days_remaining' => 3] + $hs_det, 99.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: výpadek je kritický, certifikát za 3 dny varování (se dny)',
+        array_map(fn ($a) => [$a['kind'], $a['severity'], $a['params']], $hs_in['alerts']), [['status_down', 'critical', []], ['ssl_expiring', 'warning', [3]]]);
+    $hs_in = bk_health_inputs($hs_router, $hs_det, 99.0, null, $hs_lim, 14, $hs_now, false, 2);
+    check('zdraví/vstupy: otevřený incident běžícího monitoru je jedno varování (i dva incidenty)',
+        array_map(fn ($a) => [$a['kind'], $a['severity']], $hs_in['alerts']), [['incident_open', 'warning']]);
+    $hs_in = bk_health_inputs(['status' => 'down'] + $hs_router, $hs_det, 99.0, null, $hs_lim, 14, $hs_now, false, 1);
+    check('zdraví/vstupy: incident padlého monitoru se nepočítá dvakrát', array_column($hs_in['alerts'], 'kind'), ['status_down']);
+    $hs_latched = ['wan_alert_sent' => true, 'conntrack_full_sent' => true, 'dns_resolver_alert_sent' => false] + $hs_det;
+    $hs_in = bk_health_inputs($hs_router, $hs_latched, 99.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: západky routeru (WAN bez internetu kritická, plná tabulka spojení varování)',
+        array_map(fn ($a) => [$a['kind'], $a['severity']], $hs_in['alerts']), [['wan_lost', 'critical'], ['conntrack_full', 'warning']]);
+    $hs_in = bk_health_inputs($hs_router, $hs_latched, 99.0, null, $hs_lim, 14, $hs_now, true);
+    check('zdraví/vstupy: veřejně žádné vnitřnosti routeru', $hs_in['alerts'], []);
+    // 10 cadences of 60 s: 600 s is still current, 601 s is a stale snapshot.
+    $hs_in = bk_health_inputs($hs_router, ['agent_last_seen' => $hs_now - 600] + $hs_latched, 99.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: hlášení staré 10 intervalů ještě platí', [$hs_in['cpu_pct'], $hs_in['cpu_temp_c'], count($hs_in['alerts'])], [12.0, 55.0, 2]);
+    $hs_in = bk_health_inputs(['last_checked' => date('Y-m-d H:i:s', $hs_now - 601)] + $hs_router, ['agent_last_seen' => $hs_now - 601] + $hs_latched, 99.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: starší hlášení nemá hardware ani západky (je to minulost), čerstvost ano',
+        [$hs_in['cpu_pct'], $hs_in['ram_pct'], $hs_in['disk_pct'], $hs_in['cpu_temp_c'], $hs_in['disk_temp_c'], $hs_in['smart_failed'], $hs_in['alerts'], $hs_in['age_secs']],
+        [null, null, null, null, null, null, [], 601]);
+    $hs_in = bk_health_inputs($hs_router, ['cpu' => 80, 'hdd' => 80] + $hs_det, 99.0, null, ['cpu' => null, 'ram' => null, 'hdd' => null], 14, $hs_now, false);
+    check('zdraví: nenastavený limit není 0 %, platí výchozí (CPU 80 z 90 = 50, disk 80 z 90 = 50)',
+        [$hs_in['cpu_limit'], $hs_pts($hs_in, 'cpu_ram'), $hs_pts($hs_in, 'disk')], [null, 50, 50]);
+    check('zdraví: nulový limit taky ne (CPU i disk)', [$hs_pts(['cpu_pct' => 80.0, 'cpu_limit' => 0.0] + $hs_full, 'cpu_ram'), $hs_pts(['disk_pct' => 80.0, 'disk_limit' => 0.0] + $hs_full, 'disk')], [50, 50]);
+    $hs_in = bk_health_inputs($hs_router, ['storage_disks' => [['smart' => ['state' => 'failing', 'passed' => false]]]] + $hs_det, 99.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: selhávající disk se pozná', $hs_in['smart_failed'], true);
+
+    // --- words -----------------------------------------------------------------
+    $hs_lang = $GLOBALS['BK_LANG'] ?? null;
+    $GLOBALS['BK_LANG'] = 'cs';
+    check('zdraví/slova: česky desetinná čárka, dostupnost se nezaokrouhlí nahoru na 100',
+        [bk_health_value_text(99.996, '%', 'availability_low'), bk_health_value_text(1234.4, 'ms', 'latency_high'), bk_health_value_text(720, 's', 'stale'), bk_health_value_text(71.4, '°C', 'cpu_temp_high')],
+        ['99,99 %', '1 234 ms', '12 min', '71 °C']);
+    $GLOBALS['BK_LANG'] = 'en';
+    check('zdraví/slova: anglicky desetinná tečka', [bk_health_value_text(99.25, '%', 'availability_low'), bk_health_value_text(1234.4, 'ms', 'latency_high')], ['99.25 %', '1,234 ms']);
+    if ($hs_lang === null) {
+        unset($GLOBALS['BK_LANG']);
+    } else {
+        $GLOBALS['BK_LANG'] = $hs_lang;
+    }
+
+    // --- the network -------------------------------------------------------------
+    check('síť bez skóre: null, ne průměr ničeho', [bk_health_network([])['score'], bk_health_network([1 => bk_health_score([])])['assetsScored']], [null, 0]);
+    $hs_net = bk_health_network([1 => bk_health_score($hs_full), 2 => bk_health_score($hs_web), 3 => bk_health_score([])]);
+    check('síť: průměr skóre (100 a 91), každé zařízení jednou', [$hs_net['score'], $hs_net['assetsScored'], $hs_net['assetsTotal'], $hs_net['grade']], [96, 2, 3, 'good']);
+    $hs_nc = array_column($hs_net['components'], null, 'key');
+    check('síť: složka jen ze zařízení, která ji měří', [$hs_nc['availability']['points'], $hs_nc['availability']['assets'], $hs_nc['temperature']['points'], $hs_nc['temperature']['assets']], [90, 2, 100, 1]);
+    check('síť: méně než polovina změřených zařízení = null (1 ze 3)',
+        bk_health_network([1 => bk_health_score($hs_full), 2 => bk_health_score([]), 3 => bk_health_score([])])['score'], null);
+    check('síť: polovina stačí (1 ze 2)', bk_health_network([1 => bk_health_score($hs_full), 2 => bk_health_score([])])['score'], 100);
+    $hs_paused = bk_health_score([]) + ['paused' => true];
+    $hs_net = bk_health_network([1 => bk_health_score($hs_full), 2 => bk_health_score([]), 3 => $hs_paused, 4 => $hs_paused]);
+    check('síť: pozastavená zařízení do sítě nepatří (1 ze 2, ne ze 4)', [$hs_net['score'], $hs_net['assetsTotal']], [100, 2]);
+    $hs_net = bk_health_network([7 => bk_health_score(['cpu_temp_c' => 71.0] + $hs_full), 8 => bk_health_score($hs_web)], [7 => 'Router', 8 => 'Web']);
+    check('síť: jmenované srážky zařízení vydělené počtem změřených, od největší',
+        array_map(fn ($d) => [$d['monitorId'], $d['monitorName'], $d['kind'], $d['points']], $hs_net['deductions']),
+        [[8, 'Web', 'availability_low', 4.6], [7, 'Router', 'cpu_temp_high', 1.2]]);
+    $hs_many = [];
+    foreach (range(1, 4) as $hs_i) {
+        $hs_many[$hs_i] = bk_health_score($hs_mix);
+    }
+    check('síť: nejvýš pět srážek', count(bk_health_network($hs_many)['deductions']), 5);
+    check('síť bez skóre nejmenuje srážky', bk_health_network([1 => bk_health_score(['cpu_temp_c' => 71.0] + $hs_full), 2 => bk_health_score([]), 3 => bk_health_score([])])['deductions'], []);
+
     // CR-9b: tips as findings.
     $tf_tips = [
         ['severity' => 'critical', 'text' => 'CPU vysoko', 'kind' => 'knowledge_tip_cpu_high'],

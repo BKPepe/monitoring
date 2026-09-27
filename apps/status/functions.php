@@ -8610,86 +8610,646 @@ function bk_infra_score($availability, $avg_latency_ms, $incident_count, $expiri
 }
 
 /**
- * Asset Overview - universal health score (0-100) for any monitor type.
- * Weights: uptime 30%, thresholds 30%, connectivity 20%, data freshness 20%.
- *
- * Every part that was not measured drops out and the weights renormalise over
- * the measured ones (W1-B3). Three of the four used to default to full marks:
- * a website has no cpu/ram/hdd (thresholds 100), a monitor that was never
- * checked has no timestamp (freshness 100), and 'unknown' earned half the
- * connectivity. Nothing measured at all -> null, which the page prints as
- * "nedostatek dat" instead of a score.
- *
- * @param array<string,mixed> $monitor
- * @param array<string,mixed> $details
+ * The version of the health score formula (N-1). Raised whenever a weight, a
+ * curve or the "enough data" rule changes, so a client can say which rules a
+ * number was computed by. docs/api.md "Health score" describes version 1.
  */
-function bk_compute_asset_health_score($pdo, $monitor, array $details, $latest_metrics): ?int {
-    $score = 0.0;
-    $weight_used = 0.0;
-    $add = function (?float $value, float $weight) use (&$score, &$weight_used): void {
-        if ($value !== null) {
-            $score += $value * $weight;
-            $weight_used += $weight;
+const BK_HEALTH_FORMULA_VERSION = 1;
+
+/**
+ * The components of the health score and their weights (they add up to 100).
+ * `hardware` components are left out of the public scope: a visitor sees how
+ * a public service answers, not the temperatures and disks of the machine
+ * behind it.
+ */
+const BK_HEALTH_COMPONENTS = [
+    'availability' => ['weight' => 30, 'hardware' => false],
+    'latency' => ['weight' => 10, 'hardware' => false],
+    'alerts' => ['weight' => 15, 'hardware' => false],
+    'freshness' => ['weight' => 10, 'hardware' => false],
+    'cpu_ram' => ['weight' => 15, 'hardware' => true],
+    'disk' => ['weight' => 10, 'hardware' => true],
+    'temperature' => ['weight' => 10, 'hardware' => true],
+];
+
+/**
+ * How many components must be measured for a score: availability and at
+ * least two more. One or two numbers would carry the whole 0-100 on their
+ * own and read like a verdict on everything else.
+ */
+const BK_HEALTH_MIN_COMPONENTS = 3;
+
+/** The availability window of the score, in days (today included). */
+const BK_HEALTH_AVAILABILITY_DAYS = 7;
+
+/**
+ * What one open problem costs the `alerts` component: the feed's severities
+ * (bk_attention_reasons). An `info` item (an agent update) costs nothing.
+ */
+const BK_HEALTH_ALERT_COST = ['critical' => 50.0, 'warning' => 20.0];
+
+/**
+ * 100 points at or below $good, 0 at or above $bad, a straight line between.
+ * The shape of every "less is better" curve of the health score.
+ */
+function bk_health_linear(float $value, float $good, float $bad): float {
+    if ($value <= $good) {
+        return 100.0;
+    }
+    if ($value >= $bad) {
+        return 0.0;
+    }
+    return 100.0 * ($bad - $value) / ($bad - $good);
+}
+
+/**
+ * Health score 0-100 of one monitor, from measured values only (N-1).
+ *
+ * Every component scores 0-100 points by its own documented curve, or is null
+ * when nothing measured it. The score is the weighted mean over the measured
+ * components - an unmeasured one drops out and the weights renormalise, it is
+ * never counted as full marks. "Not enough data" (score null, the app prints
+ * "—") is: availability unmeasured, or fewer than BK_HEALTH_MIN_COMPONENTS
+ * measured components.
+ *
+ * Curves (formula version 1):
+ * - availability (30): the last 7 days' availability in time; every 0.1 %
+ *   below 100 % costs 2 points (99.9 % = 98, 99 % = 80, 95 % or less = 0).
+ * - latency (10): the last hour's mean response, at least 2 readings. A router
+ *   or server agent measures its WAN latency: 100 up to 30 ms, 0 from 300 ms.
+ *   A check from the hosting (web, ping, port...): 100 up to 300 ms, 0 from 3 s.
+ * - alerts (15): open problems of the monitor, 100 minus 50 per critical and
+ *   20 per warning, at least 0. Unknown while the monitor never reported.
+ * - freshness (10): age of the newest report against the expected cadence:
+ *   100 up to 3 cadences, 50 up to 10, then 0.
+ * - cpu_ram (15): the worse of CPU and RAM usage against the monitor's limits:
+ *   100 up to 20 points under the limit, 0 at the limit.
+ * - disk (10): disk usage the same way; a disk whose SMART verdict failed = 0.
+ * - temperature (10): the worse of the CPU (100 up to 65 °C, 0 from 90 °C -
+ *   the knowledge tip's warning line) and the disk closest to its class limit
+ *   L (bk_disk_temp_limit: 100 up to L - 10, 0 at L).
+ *
+ * Besides the points, every component names what cost it points
+ * (`deductions`): each item says what was measured, from where the curve
+ * starts to take points (`limit`) and how many points of the final score it
+ * cost. A component that takes the worse of two readings (CPU/RAM, CPU/disk
+ * temperature, usage/SMART) names only the reading that decided it; the
+ * alerts share their component's loss in proportion to their cost, so three
+ * criticals never cost more than the component has. The deductions add up to
+ * 100 minus the unrounded score.
+ *
+ * Grade: good from 90, fair from 70, poor below. Pure: bk_health_inputs()
+ * gathers the inputs; the words come from bk_health_labelled().
+ *
+ * @param array<string,mixed> $in
+ * @return array{score:?int,grade:?string,formulaVersion:int,measuredWeight:int,measuredComponents:int,components:list<array{key:string,weight:int,points:?int,deduction:?float,value:?float,unit:?string}>,deductions:list<array{component:string,kind:string,params:list<int|float|string>,points:float,value:?float,limit:?float,unit:?string}>}
+ */
+function bk_health_score(array $in): array {
+    $public = !empty($in['public']);
+    $num = fn (string $k): ?float => (isset($in[$k]) && is_numeric($in[$k])) ? (float)$in[$k] : null;
+    // Per component: points (null = unmeasured), the reported value and unit,
+    // and the named losses in the component's own points (0-100).
+    $points = [];
+    $values = [];
+    $losses = [];
+    $loss = fn (string $kind, float $lost, ?float $value, ?float $limit, ?string $unit, array $params = []): array
+        => ['kind' => $kind, 'lost' => $lost, 'value' => $value, 'limit' => $limit, 'unit' => $unit, 'params' => $params];
+
+    $avail = $num('availability');
+    $points['availability'] = $avail !== null ? max(0.0, min(100.0, 100.0 - (100.0 - $avail) * 20.0)) : null;
+    $values['availability'] = [$avail, '%'];
+    $losses['availability'] = ($avail !== null && $points['availability'] < 100.0)
+        ? [$loss('availability_low', 100.0 - $points['availability'], $avail, null, '%', [BK_HEALTH_AVAILABILITY_DAYS])]
+        : [];
+
+    $lat = $num('latency_ms');
+    $wan = ($in['latency_kind'] ?? '') === 'wan';
+    $lat_good = $wan ? 30.0 : 300.0;
+    $points['latency'] = ($lat !== null && $lat >= 0) ? bk_health_linear($lat, $lat_good, $wan ? 300.0 : 3000.0) : null;
+    $values['latency'] = [$lat, 'ms'];
+    $losses['latency'] = ($points['latency'] !== null && $points['latency'] < 100.0)
+        ? [$loss('latency_high', 100.0 - $points['latency'], $lat, $lat_good, 'ms', [$wan ? 'wan' : 'check'])]
+        : [];
+
+    // alerts: a list of {kind, severity, params}; null = nobody knows yet.
+    $alerts = is_array($in['alerts'] ?? null) ? $in['alerts'] : null;
+    $losses['alerts'] = [];
+    if ($alerts !== null) {
+        $cost = 0.0;
+        $counted = [];
+        foreach ($alerts as $a) {
+            $c = BK_HEALTH_ALERT_COST[(string)($a['severity'] ?? '')] ?? 0.0;
+            if ($c > 0) {
+                $cost += $c;
+                $counted[] = [$a, $c];
+            }
         }
+        $points['alerts'] = max(0.0, 100.0 - $cost);
+        // Capped at the component's 100: each problem keeps its share.
+        $scale = $cost > 100.0 ? 100.0 / $cost : 1.0;
+        foreach ($counted as [$a, $c]) {
+            $losses['alerts'][] = $loss((string)$a['kind'], $c * $scale, null, null, null, array_values((array)($a['params'] ?? [])));
+        }
+        $values['alerts'] = [(float)count($counted), null];
+    } else {
+        $points['alerts'] = null;
+        $values['alerts'] = [null, null];
+    }
+
+    $age = $num('age_secs');
+    $cadence = max(60.0, $num('cadence_secs') ?? 300.0);
+    $points['freshness'] = $age !== null ? ($age <= 3 * $cadence ? 100.0 : ($age <= 10 * $cadence ? 50.0 : 0.0)) : null;
+    $values['freshness'] = [$age, 's'];
+    $losses['freshness'] = ($points['freshness'] !== null && $points['freshness'] < 100.0)
+        ? [$loss('stale', 100.0 - $points['freshness'], $age, 3 * $cadence, 's')]
+        : [];
+
+    // The worse of several readings decides; only that one is named.
+    $worst = function (array $readings) use ($loss): array {
+        $best = null;
+        foreach ($readings as $r) {
+            if ($best === null || $r[0] < $best[0]) {
+                $best = $r;
+            }
+        }
+        if ($best === null) {
+            return [null, []];
+        }
+        return [$best[0], $best[0] < 100.0 ? [$loss($best[1], 100.0 - $best[0], $best[2], $best[3], $best[4])] : []];
     };
 
-    // 1. Uptime (30%) - the last 30 days in time, the same number as the
-    // badge and the SLA report (bk_uptime_30d); null without a measured second.
-    $uptime_pct = null;
-    if ($pdo instanceof PDO && isset($monitor['id'])) {
-        $uptime_pct = bk_uptime_30d($pdo, (int)$monitor['id']);
+    $pressure = [];
+    foreach (['cpu', 'ram'] as $k) {
+        $v = $num($k . '_pct');
+        if ($v !== null) {
+            $limit = $num($k . '_limit');
+            $limit = ($limit !== null && $limit > 0) ? $limit : (float)BK_DEFAULT_THRESHOLDS[$k];
+            $pressure[] = [bk_health_linear($v, $limit - 20, $limit), $k . '_high', $v, $limit - 20, '%'];
+        }
     }
-    $add($uptime_pct !== null ? min(100.0, $uptime_pct) : null, 0.30);
+    [$points['cpu_ram'], $losses['cpu_ram']] = $worst($pressure);
+    $cpu_ram = array_values(array_filter([$num('cpu_pct'), $num('ram_pct')], fn ($v) => $v !== null));
+    $values['cpu_ram'] = [$cpu_ram ? max($cpu_ram) : null, '%'];
 
-    // 2. Thresholds (30%) - CPU/RAM/HDD under their limits, the preset's
-    // limits first (bk_monitor_thresholds), the documented defaults after.
-    // Only the values the monitor actually reports take part; a type without
-    // any of them (a website, a game server) has no threshold part at all.
-    $thresholds = bk_monitor_thresholds($pdo instanceof PDO ? $pdo : null, $monitor);
-    $measured = 0;
-    $violations = 0;
-    foreach (['cpu', 'ram', 'hdd'] as $key) {
-        $value = $details[$key] ?? null;
-        if (!is_numeric($value)) {
+    $disk = [];
+    $hdd = $num('disk_pct');
+    if ($hdd !== null) {
+        $limit = $num('disk_limit');
+        $limit = ($limit !== null && $limit > 0) ? $limit : (float)BK_DEFAULT_THRESHOLDS['hdd'];
+        $disk[] = [bk_health_linear($hdd, $limit - 20, $limit), 'disk_full', $hdd, $limit - 20, '%'];
+    }
+    if (($in['smart_failed'] ?? null) === true) {
+        $disk[] = [0.0, 'smart_failed', null, null, null];
+    } elseif (($in['smart_failed'] ?? null) === false && $hdd === null) {
+        // A disk that passed SMART and reports no usage is still a measured disk.
+        $disk[] = [100.0, 'smart_failed', null, null, null];
+    }
+    [$points['disk'], $losses['disk']] = $worst($disk);
+    $values['disk'] = [$hdd, '%'];
+
+    $temps = [];
+    $cpu_t = $num('cpu_temp_c');
+    if ($cpu_t !== null) {
+        $temps[] = [bk_health_linear($cpu_t, 65, 90), 'cpu_temp_high', $cpu_t, 65.0, '°C'];
+    }
+    $disk_t = $num('disk_temp_c');
+    if ($disk_t !== null) {
+        $disk_limit = $num('disk_temp_limit') ?? 70.0;
+        $temps[] = [bk_health_linear($disk_t, $disk_limit - 10, $disk_limit), 'disk_temp_high', $disk_t, $disk_limit - 10, '°C'];
+    }
+    [$points['temperature'], $losses['temperature']] = $worst($temps);
+    $temp_values = array_values(array_filter([$cpu_t, $disk_t], fn ($v) => $v !== null));
+    $values['temperature'] = [$temp_values ? max($temp_values) : null, '°C'];
+
+    $sum = 0.0;
+    $weight = 0;
+    $count = 0;
+    foreach (BK_HEALTH_COMPONENTS as $key => $def) {
+        if ($public && $def['hardware']) {
+            $points[$key] = null;
             continue;
         }
-        $measured++;
-        if ((float)$value > (float)($thresholds[$key] ?? BK_DEFAULT_THRESHOLDS[$key])) {
-            $violations++;
+        if ($points[$key] !== null) {
+            $sum += $points[$key] * $def['weight'];
+            $weight += $def['weight'];
+            $count++;
         }
     }
-    $add($measured > 0 ? (float)max(0, 100 - $violations * 33) : null, 0.30);
+    $score = ($points['availability'] !== null && $count >= BK_HEALTH_MIN_COMPONENTS) ? (int)round($sum / $weight) : null;
 
-    // 4. Freshness (20%) - how long ago the agent/check reported. Without
-    // any timestamp there is nothing to be fresh.
-    $freshness = null;
-    $last_seen = $details['agent_last_seen'] ?? null;
-    if (is_numeric($last_seen) && (int)$last_seen > 0) {
-        $age_min = (time() - (int)$last_seen) / 60;
-        $freshness = $age_min > 30 ? 30.0 : ($age_min > 10 ? 60.0 : ($age_min > 5 ? 80.0 : 100.0));
-    } elseif (!empty($monitor['last_checked']) && ($checked = strtotime((string)$monitor['last_checked'])) !== false) {
-        $age_min = (time() - $checked) / 60;
-        $freshness = $age_min > 30 ? 30.0 : ($age_min > 10 ? 60.0 : 100.0);
+    $components = [];
+    $deductions = [];
+    foreach (BK_HEALTH_COMPONENTS as $key => $def) {
+        if ($public && $def['hardware']) {
+            continue;
+        }
+        $p = $points[$key];
+        $components[] = [
+            'key' => $key,
+            'weight' => $def['weight'],
+            'points' => $p !== null ? (int)round($p) : null,
+            // What this component took off the final score, so the bars under
+            // the ring add up to 100 minus the score (up to rounding).
+            'deduction' => ($p !== null && $score !== null) ? round((100.0 - $p) * $def['weight'] / $weight, 1) : null,
+            'value' => $values[$key][0] !== null ? round((float)$values[$key][0], 2) : null,
+            'unit' => $values[$key][1],
+        ];
+        if ($p === null || $score === null) {
+            continue;
+        }
+        foreach ($losses[$key] as $l) {
+            $cost = $l['lost'] * $def['weight'] / $weight;
+            // Under a tenth of a point is below what the ring can show.
+            if ($cost < 0.1) {
+                continue;
+            }
+            $deductions[] = [
+                'component' => $key,
+                'kind' => $l['kind'],
+                'params' => $l['params'],
+                'points' => round($cost, 1),
+                'value' => $l['value'] !== null ? round($l['value'], 2) : null,
+                'limit' => $l['limit'],
+                'unit' => $l['unit'],
+            ];
+        }
     }
+    usort($deductions, fn ($a, $b) => $b['points'] <=> $a['points']);
+    return [
+        'score' => $score,
+        'grade' => bk_health_grade($score),
+        'formulaVersion' => BK_HEALTH_FORMULA_VERSION,
+        'measuredWeight' => $weight,
+        'measuredComponents' => $count,
+        'components' => $components,
+        'deductions' => $deductions,
+    ];
+}
 
-    // 3. Connectivity (20%) - the current status. 'unknown' (never checked,
-    // or an agent-side check whose agent went quiet) is not a measurement,
-    // and neither is a status nothing ever reported (no timestamp at all):
-    // that is the value the row was created with.
-    $status_score = $freshness === null ? null : match ($monitor['status'] ?? null) {
-        'up' => 100.0,
-        'maintenance' => 80.0,
-        'down', 'warning' => 0.0,
-        default => null,
-    };
-    $add($status_score, 0.20);
-    $add($freshness, 0.20);
-
-    if ($weight_used <= 0.0) {
+/** good from 90, fair from 70, poor below; null without a score. */
+function bk_health_grade(?int $score): ?string {
+    if ($score === null) {
         return null;
     }
-    // Renormalise over the actually measured components (0-100).
-    return (int)round(min(100, max(0, $score / $weight_used)));
+    return $score >= 90 ? 'good' : ($score >= 70 ? 'fair' : 'poor');
+}
+
+/**
+ * The router's own debounced verdicts that count as open problems: the
+ * latches agent_api.php keeps in last_details (two bad reports in a row set
+ * one, a good report clears it), so a single lost echo never costs points.
+ */
+const BK_HEALTH_ROUTER_LATCHES = [
+    'wan_alert_sent' => ['wan_lost', 'critical'],
+    'dns_resolver_alert_sent' => ['dns_resolver_failed', 'critical'],
+    'firewall_alert_sent' => ['firewall_disabled', 'critical'],
+    'lte_backup_alert_sent' => ['lte_backup_lost', 'warning'],
+    'wan_link_alert_sent' => ['wan_link_degraded', 'warning'],
+    'conntrack_full_sent' => ['conntrack_full', 'warning'],
+];
+
+/**
+ * The inputs of bk_health_score() for one monitor, from what is stored about
+ * it. Pure: the caller reads the 7-day availability, the last hour's latency
+ * and the open incidents in one batch for many monitors
+ * (bk_health_for_monitors).
+ *
+ * Hardware readings (CPU/RAM, disks, temperatures) and the router's latches
+ * of a report older than 10 cadences are left out: they describe the machine
+ * as it was, not as it is, and the stale data already costs its freshness.
+ * The public view gets no router latches - they are the router's internals.
+ *
+ * @param array<string,mixed> $monitor a monitors row
+ * @param array<string,mixed> $details its decoded last_details
+ * @param array{avg:?float,n:int}|null $latency the last hour's mean response_time
+ * @param array{cpu:int|float|null,ram:int|float|null,hdd:int|float|null} $limits bk_monitor_thresholds()
+ * @return array<string,mixed>
+ */
+function bk_health_inputs(array $monitor, array $details, ?float $availability, ?array $latency, array $limits, int $ssl_alert_days, int $now, bool $public, int $open_incidents = 0): array {
+    $type = strtolower((string)($monitor['type'] ?? ''));
+    $agent = in_array($type, ['vps', 'openwrt'], true);
+    $reported = bk_monitor_has_reported($monitor, $details);
+    $num = fn ($v): ?float => is_numeric($v) ? (float)$v : null;
+
+    $seen = [];
+    if (is_numeric($details['agent_last_seen'] ?? null) && (int)$details['agent_last_seen'] > 0) {
+        $seen[] = (int)$details['agent_last_seen'];
+    }
+    if ($type === 'heartbeat') {
+        if (!empty($monitor['last_heartbeat']) && ($t = strtotime((string)$monitor['last_heartbeat'])) !== false) {
+            $seen[] = $t;
+        }
+    } elseif (!empty($monitor['last_checked']) && ($t = strtotime((string)$monitor['last_checked'])) !== false) {
+        $seen[] = $t;
+    }
+    $cadence = $type === 'heartbeat' ? max(60, (int)($monitor['heartbeat_interval'] ?? 300)) : (($agent || $type === 'agent_service') ? 60 : 300);
+    $age = ($reported && $seen) ? max(0, $now - max($seen)) : null;
+    $current = $age !== null && $age <= 10 * $cadence;
+
+    $alerts = null;
+    if ($reported && ($monitor['status'] ?? '') !== 'paused') {
+        $alerts = [];
+        $reasons = bk_attention_reasons([
+            'status' => (string)($monitor['status'] ?? ''),
+            'has_reported' => true,
+            'type' => $type,
+            'target' => (string)($monitor['target'] ?? ''),
+            'ssl_days' => is_numeric($details['ssl_days_remaining'] ?? null) ? (int)$details['ssl_days_remaining'] : null,
+            'ssl_alert_days' => $ssl_alert_days,
+        ]);
+        $down = false;
+        foreach ($reasons as $r) {
+            if (isset(BK_HEALTH_ALERT_COST[$r['severity']])) {
+                $alerts[] = ['kind' => $r['kind'], 'severity' => $r['severity'], 'params' => $r['params']];
+                $down = $down || $r['kind'] === 'status_down';
+            }
+        }
+        // An open incident of a monitor that is down again is the same
+        // outage, already counted; of one that is up, it is the operator
+        // saying the matter is not closed yet.
+        if ($open_incidents > 0 && !$down) {
+            $alerts[] = ['kind' => 'incident_open', 'severity' => 'warning', 'params' => []];
+        }
+        if (!$public && $current) {
+            foreach (BK_HEALTH_ROUTER_LATCHES as $latch => [$kind, $severity]) {
+                if (($details[$latch] ?? null) === true) {
+                    $alerts[] = ['kind' => $kind, 'severity' => $severity, 'params' => []];
+                }
+            }
+        }
+    }
+
+    $disk_temp = null;
+    $disk_temp_limit = null;
+    $smart_failed = null;
+    foreach (is_array($details['storage_disks'] ?? null) ? $details['storage_disks'] : [] as $disk) {
+        if (!is_array($disk)) {
+            continue;
+        }
+        $smart = is_array($disk['smart'] ?? null) ? $disk['smart'] : [];
+        if (is_numeric($smart['temperature_c'] ?? null)) {
+            // The disk closest to its own class limit decides, not the
+            // hottest one: an NVMe at 65 °C is fine, a spinning disk is not.
+            $t = (float)$smart['temperature_c'];
+            $limit = (float)bk_disk_temp_limit($disk);
+            if ($disk_temp === null || $t - $limit > $disk_temp - (float)$disk_temp_limit) {
+                $disk_temp = $t;
+                $disk_temp_limit = $limit;
+            }
+        }
+        if (($smart['state'] ?? null) === 'failing' || ($smart['passed'] ?? null) === false) {
+            $smart_failed = true;
+        } elseif (($smart['passed'] ?? null) === true && $smart_failed === null) {
+            $smart_failed = false;
+        }
+    }
+
+    return [
+        'public' => $public,
+        'availability' => $availability,
+        'latency_ms' => ($latency !== null && $latency['n'] >= 2) ? $latency['avg'] : null,
+        'latency_kind' => $agent ? 'wan' : 'check',
+        'alerts' => $alerts,
+        'age_secs' => $age,
+        'cadence_secs' => $cadence,
+        // A limit nobody set is null here (bk_effective_threshold), not 0 %:
+        // bk_health_score() then takes the documented default.
+        'cpu_pct' => $current ? $num($details['cpu'] ?? null) : null,
+        'cpu_limit' => $num($limits['cpu'] ?? null),
+        'ram_pct' => $current ? $num($details['ram'] ?? null) : null,
+        'ram_limit' => $num($limits['ram'] ?? null),
+        'disk_pct' => $current ? $num($details['hdd'] ?? null) : null,
+        'disk_limit' => $num($limits['hdd'] ?? null),
+        'smart_failed' => $current ? $smart_failed : null,
+        'cpu_temp_c' => $current ? $num($details['temperature'] ?? null) : null,
+        'disk_temp_c' => $current ? $disk_temp : null,
+        'disk_temp_limit' => $current ? $disk_temp_limit : null,
+    ];
+}
+
+/**
+ * Health of many monitors at once: one query for their 7-day availability,
+ * one for the last hour's latency and one for their open incidents, then
+ * bk_health_inputs() and bk_health_score() per monitor. A paused monitor is
+ * measured by nothing on purpose: it gets no score and `paused: true`, and
+ * the network leaves it out. Keyed by monitor id.
+ *
+ * @param list<array<string,mixed>> $monitors rows of monitors (SELECT *)
+ * @param array<int, array<string,mixed>>|null $details_by_id decoded details per id (defaults to last_details)
+ * @return array<int, array<string,mixed>>
+ */
+function bk_health_for_monitors(PDO $pdo, array $monitors, bool $public, ?array $details_by_id = null): array {
+    $ids = array_map(fn ($m) => (int)$m['id'], $monitors);
+    if (!$ids) {
+        return [];
+    }
+    $avail = bk_uptime_day_windows($pdo, $ids, [BK_HEALTH_AVAILABILITY_DAYS]);
+    $latency = [];
+    $in = implode(',', array_fill(0, count($ids), '?'));
+    $stmt = $pdo->prepare("
+        SELECT monitor_id, AVG(NULLIF(response_time, 0)) AS avg_ms, COUNT(NULLIF(response_time, 0)) AS n
+        FROM monitor_logs
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR) AND status IN ('up', 'warning', 'down')
+          AND monitor_id IN ({$in})
+        GROUP BY monitor_id
+    ");
+    $stmt->execute($ids);
+    foreach ($stmt->fetchAll() as $row) {
+        $latency[(int)$row['monitor_id']] = ['avg' => $row['avg_ms'] !== null ? (float)$row['avg_ms'] : null, 'n' => (int)$row['n']];
+    }
+    $incidents = [];
+    try {
+        $stmt = $pdo->prepare("SELECT monitor_id, COUNT(*) AS n FROM incidents WHERE status <> 'resolved' AND monitor_id IN ({$in}) GROUP BY monitor_id");
+        $stmt->execute($ids);
+        foreach ($stmt->fetchAll() as $row) {
+            $incidents[(int)$row['monitor_id']] = (int)$row['n'];
+        }
+    } catch (PDOException $e) {
+        // An install without the incidents table has no incident to count
+        // (bk_has_open_incident reads it the same way); said in the log.
+        error_log('[bk_health_for_monitors] open incidents not read: ' . $e->getMessage());
+    }
+    $ssl_alert_days = max(1, (int)get_setting('ssl_alert_days', '14'));
+    $now = time();
+    $out = [];
+    foreach ($monitors as $m) {
+        $mid = (int)$m['id'];
+        $details = $details_by_id[$mid] ?? json_decode((string)($m['last_details'] ?? ''), true);
+        $details = is_array($details) ? $details : [];
+        if (($m['status'] ?? '') === 'paused') {
+            $out[$mid] = bk_health_score(['public' => $public]) + ['paused' => true];
+            continue;
+        }
+        $out[$mid] = bk_health_score(bk_health_inputs(
+            $m, $details, $avail[$mid][BK_HEALTH_AVAILABILITY_DAYS]['pct'] ?? null, $latency[$mid] ?? null,
+            bk_monitor_thresholds($pdo, $m), $ssl_alert_days, $now, $public, $incidents[$mid] ?? 0
+        ));
+    }
+    return $out;
+}
+
+/**
+ * The network's health from its monitors' scores (N-1): the plain mean of the
+ * scores that exist, each monitor counting once, and per component the mean
+ * points of the monitors that measured it. Paused monitors are not part of
+ * the network. Null ("—") when no monitor has a score, or when fewer than half
+ * of the monitors have one: the number would then describe the minority that
+ * was measured, not the network.
+ *
+ * `deductions` are the five biggest named deductions of the fleet, each worth
+ * its monitor's deduction divided by the number of scored monitors - what it
+ * costs the network's score. Pure.
+ *
+ * @param array<int, array<string,mixed>> $healths bk_health_for_monitors()
+ * @param array<int, string> $names monitor names by id, for the deductions
+ * @return array{score:?int,grade:?string,formulaVersion:int,assetsScored:int,assetsTotal:int,components:list<array{key:string,weight:int,points:?int,assets:int}>,deductions:list<array<string,mixed>>}
+ */
+function bk_health_network(array $healths, array $names = []): array {
+    $total = 0;
+    $scored = [];
+    foreach ($healths as $mid => $h) {
+        if (!empty($h['paused'])) {
+            continue;
+        }
+        $total++;
+        if (($h['score'] ?? null) !== null) {
+            $scored[(int)$mid] = $h;
+        }
+    }
+    $n = count($scored);
+    $score = ($n > 0 && 2 * $n >= $total) ? (int)round(array_sum(array_map(fn ($h) => (int)$h['score'], $scored)) / $n) : null;
+
+    $by_key = [];
+    $present = [];
+    $deductions = [];
+    foreach ($scored as $mid => $h) {
+        foreach ($h['components'] ?? [] as $c) {
+            $present[$c['key']] = true;
+            if ($c['points'] !== null) {
+                $by_key[$c['key']][] = (int)$c['points'];
+            }
+        }
+        if ($score === null) {
+            continue;
+        }
+        foreach ($h['deductions'] ?? [] as $d) {
+            $cost = (float)$d['points'] / $n;
+            if ($cost >= 0.1) {
+                $deductions[] = ['monitorId' => $mid, 'monitorName' => $names[$mid] ?? null, 'points' => round($cost, 1)] + $d;
+            }
+        }
+    }
+    usort($deductions, fn ($a, $b) => $b['points'] <=> $a['points']);
+    $components = [];
+    foreach (BK_HEALTH_COMPONENTS as $key => $def) {
+        if (!isset($present[$key])) {
+            continue;
+        }
+        $list = $by_key[$key] ?? [];
+        $components[] = [
+            'key' => $key,
+            'weight' => $def['weight'],
+            'points' => $list ? (int)round(array_sum($list) / count($list)) : null,
+            'assets' => count($list),
+        ];
+    }
+    return [
+        'score' => $score,
+        'grade' => bk_health_grade($score),
+        'formulaVersion' => BK_HEALTH_FORMULA_VERSION,
+        'assetsScored' => $n,
+        'assetsTotal' => $total,
+        'components' => $components,
+        'deductions' => array_slice($deductions, 0, 5),
+    ];
+}
+
+/**
+ * A number as the request's language writes it: a decimal comma in Czech.
+ */
+function bk_health_num(float $value, int $decimals): string {
+    $cs = ($GLOBALS['BK_LANG'] ?? 'cs') !== 'en';
+    return number_format($value, $decimals, $cs ? ',' : '.', $cs ? ' ' : ',');
+}
+
+/** A measured value with its unit, for a deduction's words. */
+function bk_health_value_text(float $value, ?string $unit, string $kind): string {
+    if ($unit === 's') {
+        return bk_format_duration_secs((int)round($value));
+    }
+    if ($kind === 'availability_low') {
+        // Floored: 99.996 % must not read as a full "100,00 %" next to a loss.
+        return bk_health_num(floor($value * 100) / 100, 2) . ' %';
+    }
+    return bk_health_num(round($value), 0) . ($unit !== null && $unit !== '' ? ' ' . $unit : '');
+}
+
+/**
+ * The words of one named deduction in the request's language, e.g.
+ * "Teplota CPU 71 °C, nad 65 °C". The attention kinds reuse the findings
+ * feed's names, so the ring and the feed call one problem the same.
+ *
+ * @param array<string,mixed> $d a deduction of bk_health_score()
+ */
+function bk_health_deduction_label(array $d): string {
+    $kind = (string)($d['kind'] ?? '');
+    $params = is_array($d['params'] ?? null) ? $d['params'] : [];
+    $value = is_numeric($d['value'] ?? null) ? bk_health_value_text((float)$d['value'], $d['unit'] ?? null, $kind) : null;
+    $label = match ($kind) {
+        'availability_low' => sprintf(t('health_d_availability_low'), (string)$value, (int)($params[0] ?? BK_HEALTH_AVAILABILITY_DAYS)),
+        'latency_high' => sprintf(t(($params[0] ?? '') === 'wan' ? 'health_d_latency_wan' : 'health_d_latency_check'), (string)$value),
+        'stale' => sprintf(t('health_d_stale'), (string)$value),
+        'cpu_high' => sprintf(t('health_d_cpu_high'), (string)$value),
+        'ram_high' => sprintf(t('health_d_ram_high'), (string)$value),
+        'disk_full' => sprintf(t('health_d_disk_full'), (string)$value),
+        'smart_failed' => t('health_d_smart_failed'),
+        'cpu_temp_high' => sprintf(t('health_d_cpu_temp_high'), (string)$value),
+        'disk_temp_high' => sprintf(t('health_d_disk_temp_high'), (string)$value),
+        // Without the day count the feed's own words, never "in 0 days".
+        'ssl_expiring' => is_numeric($params[0] ?? null) ? sprintf(t('health_d_ssl_expiring'), (int)$params[0]) : t('finding_ssl_expiring'),
+        'status_down', 'status_warning', 'status_unknown_stale', 'unreachable', 'ssl_expired' => t('finding_' . $kind),
+        'incident_open' => t('health_d_incident_open'),
+        'wan_lost' => t('health_d_wan_lost'),
+        'lte_backup_lost' => t('health_d_lte_backup_lost'),
+        'wan_link_degraded' => t('health_d_wan_link_degraded'),
+        'conntrack_full' => t('health_d_conntrack_full'),
+        'firewall_disabled' => t('health_d_firewall_disabled'),
+        'dns_resolver_failed' => t('health_d_dns_resolver_failed'),
+        default => $kind,
+    };
+    if (is_numeric($d['limit'] ?? null)) {
+        $label = sprintf(t('health_d_above'), $label, bk_health_value_text((float)$d['limit'], $d['unit'] ?? null, ''));
+    }
+    return $label;
+}
+
+/**
+ * A health result with each component's and each deduction's name in the
+ * request's language, for the JSON answer. The words stay out of
+ * bk_health_score() so it stays pure - and so the public answer can be kept
+ * for a minute and still be worded for each visitor's language.
+ *
+ * @param array<string,mixed> $health
+ * @return array<string,mixed>
+ */
+function bk_health_labelled(array $health): array {
+    $labels = [
+        'availability' => t('health_c_availability'),
+        'latency' => t('health_c_latency'),
+        'alerts' => t('health_c_alerts'),
+        'freshness' => t('health_c_freshness'),
+        'cpu_ram' => t('health_c_cpu_ram'),
+        'disk' => t('health_c_disk'),
+        'temperature' => t('health_c_temperature'),
+    ];
+    foreach ($health['components'] ?? [] as $i => $c) {
+        $health['components'][$i]['label'] = $labels[$c['key']] ?? $c['key'];
+    }
+    foreach ($health['deductions'] ?? [] as $i => $d) {
+        $health['deductions'][$i]['label'] = bk_health_deduction_label($d);
+        unset($health['deductions'][$i]['params']);
+    }
+    return $health;
 }
 
 /**

@@ -494,10 +494,11 @@ answers 409.
 | `action=uptime_windows` | public status / assigned | Per-monitor availability for 24 h / 7 d / 30 d / 90 d in time; `d1` is the last 24 hours, the others are calendar days with today included. An unmeasured window is `null`, never 100. Each row carries `since`, the first day with data in the 90-day window, and the answer carries `windowStart` (`d7`, `d30`, `d90`: each window's first day); both are server-local `Y-m-d`, so "90 days" over six weeks of history can say where its data starts |
 | `action=check_stages&monitor_id=` | assigned monitor | Check breakdown (DNS/TCP/TLS/HTTP, ServerQuery) |
 | `action=regions&days=` | public status / assigned | Availability by measurement location (`checked_from`). Each location carries `country`, the ISO 3166-1 alpha-2 code read from its label (a pre-fix Cloudflare label is corrected first), `null` when the label names none - the public page draws its own flag from it, never a guessed one; the public projection keeps `location`, `country` and `successRate` |
+| `action=health` | public status / assigned | Health score 0-100 of the network (`network`, with its named `deductions`) and, in the app view, of each monitor the viewer may see (`assets`: `monitorId` and the whole per-monitor score with `components` and `deductions`), see "Health score" below. The public view answers with the network-level score of the public set only, without the hardware components and without a score per monitor |
 | `action=public_status` | public status / assigned | Summary for the public page: `status` is the overall verdict (see "One overall verdict"), with `totalMonitors`, `downMonitors`, `warningMonitors`, `unknownMonitors`, `unmeasuredMonitors`, `maintenanceMonitors` and the average availability. `lastUpdated` is the newest real check, `null` when nothing was measured. `nodes` are the agent and host monitors only (`online`, `warning`, `offline`, `maintenance`, `unknown`). Inside the app a `user` account gets totals over its assigned monitors |
 | `action=badge[&monitor_id=][&type=uptime][&lang=en]` | public | Embeddable SVG badge (60 s cache): live state, or 30-day availability with `type=uptime`; without `monitor_id` it prints the overall verdict of the public set. An unknown monitor, or one off the public page for a caller who may not see it, is 404 |
 | `action=websites_overview` | assigned monitor | Sites with certificates and availability in the window (`sla7` / `sla30` / `sla365` in time, calendar days with today included; `null` = nothing measured). `sslAlertDays` is the limit cron alerts at (`ssl_alert_days`). A web monitor also carries `httpStatusCode`, the HTTP code its latest check recorded (read fresh, not from the cache; `null` = that check recorded none), and `httpCheckedAt` |
-| `action=monitor_insights&monitor_id=` | assigned monitor | Derived observations for one monitor; `status` is the monitor's state in the shared vocabulary (`key`, `label`, `tone`, `icon`), and the summary sentence is worded per state - maintenance, paused or waiting for data is no longer "currently down". `statusSentence` is the same summary without its top concern and without the all-clear (the state and a pressure line only): the asset page lists the findings right under it. |
+| `action=monitor_insights&monitor_id=` | assigned monitor | Derived observations for one monitor; `status` is the monitor's state in the shared vocabulary (`key`, `label`, `tone`, `icon`), and the summary sentence is worded per state - maintenance, paused or waiting for data is no longer "currently down". `statusSentence` is the same summary without its top concern and without the all-clear (the state and a pressure line only): the asset page lists the findings right under it. `health` is the monitor's health score with its breakdown (see "Health score" below; `null` = it could not be computed, a `score` of `null` = not enough data). The old `healthScore` is TeamSpeak's own and stays for older clients |
 | `action=dashboard_insights&limit=&offset=&lang=` | assigned monitor | The same across monitors: forecasts, anomalies and network notes, worded in the request's language. Paged - `limit` 1-200 (default 4), `offset`, and `total` says how many there are; the list is no longer cut at eight. Cached for 5 minutes per language (`cachedAt` when the answer came from it). Each item carries `severity` (`warning` or `info`) on the scale of `action=findings` |
 | `action=findings&monitor_id=&limit=&offset=&lang=` (or `&summary=1`) | assigned monitor | One findings feed (C-12): the attention reasons (outage, warning, a silent agent, a private target, a certificate, a metric over its limit, an agent update), the knowledge tips, the insights and the router recommendations in one list. A tip that repeats an attention reason of the same monitor (a CPU/RAM/disk tip next to its metric, the certificate tip) is left out. Each finding: `key`, `source` (`status`, `certificate`, `check`, `metric`, `tip`, `agent`, `insight`, `router`), `kind`, `severity` (`critical`, `warning`, `info`), `monitorId` / `monitorName` / `monitorType`, `title`, `detail`, `action`, `since`, and for a router recommendation the full item in `rec`. Sorted critical first. Paged by `limit` (1-500, default 50) and `offset`; `total`, `counts` per severity, `devices` (per device: `worst` and counts, over the whole list), `monitorsChecked`, `muted` (router items the owner muted), `canMute`. `monitor_id` = one device. A source that failed is named in `sourceErrors` - the list is then incomplete, not clean. `summary=1` answers only `total`, `counts`, `devicesWithFindings`, `monitorsChecked`, `sourceErrors` and `generatedAt`, for a bell or a badge that polls; the fleet's counts are kept for a minute per viewer (`cachedAt` when they came from there) and cleared by a mute or an archive. The full list is always fresh |
 | `action=ui_config` | public | Appearance settings for the frontend (logo, names) |
@@ -554,6 +555,76 @@ minutes (`secs_up`, `secs_down`, `secs_warning`, `secs_silent`,
 `secs_maintenance`, `secs_unmeasured`); today is computed live. A day from
 before the time rollup (its logs already pruned) knows only its check counts
 and is read as a whole measured day split by them.
+
+### Health score
+
+`action=health` (the network and each monitor), `monitor_insights.health`
+(one monitor) and the legacy `monitor.php` ring score health 0-100 by one
+documented formula (`bk_health_score()`, `formulaVersion` 1), from measured
+values only. Each component scores 0-100 points by its own curve, or is `null`
+when nothing measured it. The score is the weighted mean over the measured
+components: an unmeasured one drops out and the weights renormalise, it never
+counts as full marks. Too little data - availability unmeasured, or fewer than
+3 measured components (availability and two more) - is `score: null` (the app
+prints "—"), never an invented number.
+
+| Component (`key`) | Weight | Points |
+|---|---|---|
+| `availability` | 30 | The last 7 days' availability in time (today included); every 0.1 % below 100 % costs 2 points (99.9 % = 98, 99 % = 80, 95 % or less = 0) |
+| `latency` | 10 | The last hour's mean response (at least 2 readings). An agent (`vps`, `openwrt`) measures its WAN latency: 100 up to 30 ms, 0 from 300 ms. A check from the hosting: 100 up to 300 ms, 0 from 3 s. WAN packet loss is not measured by agent 0.1.10, so it is not part of the formula; it joins under a new `formulaVersion` once an agent reports it |
+| `alerts` | 15 | Open problems of the monitor: 100 minus 50 per critical and 20 per warning, at least 0. They are the attention reasons of the findings feed (down, degraded, agent silent, certificate, unreachable target), an open incident of a monitor that is not down (one warning, however many incidents), and in the app view the router's own debounced verdicts: primary WAN without internet, local DNS resolver failing and firewall off (critical), LTE backup down, WAN link below its usual rate and a full connection table (warning). `null` until the monitor has reported |
+| `freshness` | 10 | Age of the newest report against the expected cadence (60 s for an agent, the heartbeat's interval, 300 s for a check): 100 up to 3 cadences, 50 up to 10, then 0 |
+| `cpu_ram` | 15 | The worse of CPU and RAM usage against the monitor's limits (the documented defaults 90/95 % when none is set): 100 up to 20 points under the limit, 0 at the limit |
+| `disk` | 10 | Disk usage the same way (default limit 90 %); a disk whose SMART verdict failed is 0 |
+| `temperature` | 10 | The worse of the CPU (100 up to 65 °C - where the knowledge tip warns - 0 from 90 °C) and the disk closest to its class limit L (60 °C spinning, 70 °C SSD, 80 °C NVMe, as the disk alert uses): 100 up to L - 10, 0 at L |
+
+The hardware readings (`cpu_ram`, `disk`, `temperature`) and the router's
+verdicts of a report older than 10 cadences are left out: they describe the
+machine as it was, and the stale report already costs its `freshness`.
+Every monitor is scored from its own measurements: a website that shares a
+machine with an agent does not borrow the agent's CPU/RAM (the asset page's
+tips do), because the server has its own score.
+
+`grade` is `good` from 90, `fair` from 70, `poor` below (`null` without a
+score). Each component carries `points`, `weight`, `label` (in the request's
+language), `value` and `unit` (what was measured) and `deduction` (what it took
+off the score). `measuredWeight` and `measuredComponents` say how much of the
+formula was measured. A paused monitor has no score and carries `paused: true`.
+
+`deductions` names what cost the points, biggest first: `component`, `kind`
+(a stable key, e.g. `cpu_temp_high`, `availability_low`, `stale`,
+`status_down`, `incident_open`, `wan_lost`), `label` (the words in the request's
+language with the value and where the curve starts to take points, e.g. "CPU
+temperature 71 °C, above 65 °C"), `points` (what it cost the final score, one
+decimal), `value`, `limit` and `unit`. A component that takes the worse of two
+readings names only the one that decided it, and the alerts share their
+component's loss in proportion to their cost, so three criticals never cost
+more than the component weighs. The deductions add up to 100 minus the
+unrounded score; one under 0.1 point is left out.
+
+The network's score is the plain mean of the scores of its monitors (each
+monitor counts once, paused monitors are not part of the network:
+`assetsScored` of `assetsTotal`). It is `null` when no monitor has a score or
+when fewer than half of them have one - the number would then describe the
+minority that was measured. Each network component is the mean points of the
+monitors that measured it (`assets`), and the network's `deductions` are the
+five biggest of the fleet, each with `monitorId` and `monitorName` and worth its
+monitor's deduction divided by `assetsScored`.
+
+The app view (`assets`) returns every monitor the viewer may see with the
+whole per-monitor object. The public view (`scope=public` or no login) returns
+only `network`, `formulaVersion` and `generatedAt`: the network-level score of
+the public set, without the hardware components and without the router's
+verdicts, and no score per monitor - the public cards already show each
+service's availability and response, and a second per-monitor number that
+differs from the app's would only confuse. Its deductions name public monitors
+only, as the public cards do. Show it as the score of the public services, not
+as the health of the whole network. The public answer is kept for a minute and
+worded for each visitor's language on the way out.
+
+The weekly digest's "Infrastructure score" (`bk_infra_score()`) is a different
+number: a period summary compared with the previous period, not this health
+score.
 
 ### Values for `period`
 

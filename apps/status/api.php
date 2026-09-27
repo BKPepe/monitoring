@@ -2497,9 +2497,23 @@ if ($action === 'monitor_insights') {
             false
         );
 
+        // The health score 0-100 with its breakdown (N-1), from the monitor's
+        // OWN stored details - not the enriched ones the tips read: those
+        // borrow CPU/RAM of a linked agent, so a website would score its
+        // server's load here and a different number in action=health. The
+        // server has its own score. A failure is null with the reason in the
+        // log; "not enough data" is a health object whose score is null.
+        $health = null;
+        try {
+            $health = bk_health_labelled(bk_health_for_monitors($pdo, [$monitor], false)[$monitor_id]);
+        } catch (Throwable $he) {
+            error_log('[api.php action=monitor_insights] health of ' . $monitor_id . ': ' . $he->getMessage());
+        }
+
         echo bk_json_safe([
             'summary' => $summary,
             'statusSentence' => $status_sentence,
+            'health' => $health,
             // The monitor's state in the shared vocabulary (C-11), so the chip
             // next to the summary says what the sentence says.
             'status' => bk_status_label((string)($monitor['status'] ?? ''), bk_monitor_has_reported($monitor, $details)),
@@ -2871,6 +2885,73 @@ if ($action === 'findings') {
         ]);
     } catch (Throwable $e) {
         bk_api_fail('findings_unavailable', 500, $e, 'Zjištění se nepodařilo sestavit.');
+    }
+    exit;
+}
+
+// N-1. Health score 0-100 of the network and of each monitor.
+//
+// One documented formula (bk_health_score, docs/api.md "Health score") from
+// measured values only; an unmeasured component drops out, too little data is
+// a null score. The app view scores the monitors this viewer may see, each
+// with its breakdown. The public view (scope=public or anonymous) answers
+// with the network-level score of the public set ONLY: without the hardware
+// components and the router's internals, and without a score per monitor -
+// the public cards already show each service's availability and response,
+// and a second per-monitor number that differs from the app's (no hardware
+// there) would only confuse. Its deductions name public monitors, as the
+// public cards do. The public answer is kept for a minute (unworded, so each
+// visitor still gets their language): every visitor would otherwise
+// recompute it.
+if ($action === 'health') {
+    try {
+        $hs_public = bk_public_view();
+        $hs_payload = null;
+        if ($hs_public) {
+            $hs_kept = json_decode((string)get_setting('health_cache_public', ''), true);
+            // A kept answer of an older shape (before the named deductions)
+            // is recomputed, not served for the rest of its minute.
+            if (is_array($hs_kept) && is_array($hs_kept['data']['network']['deductions'] ?? null) && time() - (int)($hs_kept['at'] ?? 0) < 60) {
+                $hs_payload = $hs_kept['data'];
+            }
+        }
+        if ($hs_payload === null) {
+            [$hs_scope, $hs_params] = bk_list_scope_sql($pdo, bk_request_monitor_ids($pdo), 'id');
+            $hs_stmt = $pdo->prepare("SELECT * FROM monitors WHERE type NOT IN ('node', 'probe') AND archived_at IS NULL AND {$hs_scope} ORDER BY id ASC");
+            $hs_stmt->execute($hs_params);
+            $hs_rows = $hs_stmt->fetchAll();
+            $hs_healths = bk_health_for_monitors($pdo, $hs_rows, $hs_public);
+            $hs_names = [];
+            foreach ($hs_rows as $hs_row) {
+                $hs_names[(int)$hs_row['id']] = (string)$hs_row['name'];
+            }
+            $hs_payload = [
+                'network' => bk_health_network($hs_healths, $hs_names),
+                'formulaVersion' => BK_HEALTH_FORMULA_VERSION,
+                'generatedAt' => date('c'),
+            ];
+            if (!$hs_public) {
+                $hs_payload['assets'] = [];
+                foreach ($hs_rows as $hs_row) {
+                    $hs_h = $hs_healths[(int)$hs_row['id']];
+                    $hs_payload['assets'][] = ['monitorId' => (int)$hs_row['id']] + $hs_h;
+                }
+            } else {
+                try {
+                    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('health_cache_public', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+                        ->execute([json_encode(['at' => time(), 'data' => $hs_payload], JSON_UNESCAPED_UNICODE)]);
+                } catch (Throwable $he) {
+                    error_log('[api.php action=health] cache not stored: ' . $he->getMessage());
+                }
+            }
+        }
+        $hs_payload['network'] = bk_health_labelled($hs_payload['network']);
+        foreach ($hs_payload['assets'] ?? [] as $hs_i => $hs_asset) {
+            $hs_payload['assets'][$hs_i] = bk_health_labelled($hs_asset);
+        }
+        echo bk_json_safe($hs_payload);
+    } catch (Throwable $e) {
+        bk_api_fail('health_unavailable', 500, $e, 'Skóre zdraví se nepodařilo spočítat.');
     }
     exit;
 }
