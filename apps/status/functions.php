@@ -7025,6 +7025,7 @@ function check_discord($guild_id, $timeout = 3) {
  */
 function send_email($to, $subject, $html_body, array $extra_headers = [], array $context = []) {
     $ok = bk_deliver_email($to, $subject, $html_body, $extra_headers);
+    $delivery = $GLOBALS['last_mail_delivery'] ?? null;
 
     $kind = (string)($context['kind'] ?? 'other');
     bk_log_notification(
@@ -7036,14 +7037,16 @@ function send_email($to, $subject, $html_body, array $extra_headers = [], array 
         'email',
         is_string($to) ? $to : null,
         (bool)$ok,
-        // Only on a failure: a success has nothing to explain, and an error
-        // text next to ok=1 would read as "it went out, but...".
-        $ok ? null : ($GLOBALS['last_mail_error'] ?? null),
+        // A confirmed send has nothing to explain. A refusal says why, and so
+        // does an unconfirmed hand-off: "nothing confirmed it" is the point.
+        $ok && $delivery !== 'unknown' ? null : ($GLOBALS['last_mail_error'] ?? null),
         $kind,
         is_string($subject) ? $subject : null,
         // NULL when nothing confirmed a route - that is what a failed attempt
         // honestly knows, and the row must not claim 'smtp' because SMTP was tried.
-        $GLOBALS['last_mail_method'] ?? null
+        $GLOBALS['last_mail_method'] ?? null,
+        is_string($delivery) ? $delivery : null,
+        $GLOBALS['last_mail_reply'] ?? null
     );
 
     return $ok;
@@ -7056,12 +7059,18 @@ function send_email($to, $subject, $html_body, array $extra_headers = [], array 
  */
 function bk_deliver_email($to, $subject, $html_body, array $extra_headers = []) {
     $GLOBALS['last_mail_error'] = '';
-    // 'smtp' = verified delivery through an authenticated SMTP server (a strong
-    // success signal), 'fallback' = unauthenticated PHP mail() - returns true even
-    // when it only means "the local MTA accepted it for processing", not that it
-    // actually arrived. Callers (the digest etc.) use this to calibrate how
-    // confidently to word the success message - see send_digest_report_inner().
+    // 'smtp' = an authenticated SMTP server answered 250 to the message: it
+    // accepted it for delivery, which is not proof that it reached the mailbox.
+    // 'fallback' = unauthenticated PHP mail() - true only means the local MTA
+    // took it for processing, and nothing reports back what happened next.
+    // Callers (the digest etc.) use this to calibrate how confidently to word
+    // the success message - see send_digest_report_inner().
     $GLOBALS['last_mail_method'] = null;
+    // What send_email() writes to the log: 'sent' (the server confirmed with
+    // 250), 'failed' or 'unknown' (mail() took it, nobody confirmed), plus the
+    // server's own reply when there was one.
+    $GLOBALS['last_mail_delivery'] = null;
+    $GLOBALS['last_mail_reply'] = null;
 
     $smtp_host = get_setting('smtp_host', '');
     $smtp_port = (int) get_setting('smtp_port', 587);
@@ -7106,9 +7115,23 @@ function bk_deliver_email($to, $subject, $html_body, array $extra_headers = []) 
             
             $mail->send();
             $GLOBALS['last_mail_method'] = 'smtp';
+            $GLOBALS['last_mail_delivery'] = 'sent';
+            // The queue id ties the row to the mail server's own log, which is
+            // where "accepted, but never arrived" gets answered.
+            $queue_id = $mail->getSMTPInstance()->getLastTransactionID();
+            $GLOBALS['last_mail_reply'] = is_string($queue_id) && $queue_id !== ''
+                ? '250 queued as ' . $queue_id
+                : '250, no queue id';
             return true;
         } catch (Exception $e) {
-            $GLOBALS['last_mail_error'] = $mail->ErrorInfo ?? $e->getMessage();
+            $GLOBALS['last_mail_error'] = bk_smtp_failure_reason(
+                isset($mail) ? (string)$mail->ErrorInfo : '',
+                $e->getMessage(),
+                isset($mail) ? (array)$mail->getSMTPInstance()->getError() : [],
+                is_string($to) ? $to : '',
+                (string)$smtp_user
+            );
+            $GLOBALS['last_mail_delivery'] = 'failed';
             return false;
         }
     }
@@ -7135,8 +7158,71 @@ function bk_deliver_email($to, $subject, $html_body, array $extra_headers = []) 
     }
     if ($result) {
         $GLOBALS['last_mail_method'] = 'fallback';
+        // true from mail() is not a confirmation, so the row says unknown and
+        // why: on a shared host this mail is often rejected or spam-foldered
+        // later, and nothing here ever hears about it.
+        $GLOBALS['last_mail_delivery'] = 'unknown';
+        $missing = bk_mail_missing_settings((string)$smtp_host, (string)$smtp_user, (string)$smtp_pass,
+            file_exists($lib_path . 'PHPMailer.php'));
+        $GLOBALS['last_mail_error'] = "Handed to the hosting's mail(); nothing confirmed delivery. SMTP not configured: missing "
+            . implode(', ', $missing) . '.';
+    } else {
+        $GLOBALS['last_mail_delivery'] = 'failed';
     }
     return $result;
+}
+
+/**
+ * Why an SMTP send failed, in one line the log can keep.
+ *
+ * PHPMailer's ErrorInfo is the readable part, and the SMTP layer holds the
+ * server's own code and words (5.7.1, "Relaying denied"). ErrorInfo can be an
+ * empty string, which ?? would never fall through, so emptiness is checked.
+ * The recipient's address is replaced: PHPMailer names it in a refused RCPT,
+ * and the row keeps the recipient in its own column already.
+ */
+function bk_smtp_failure_reason(string $error_info, string $exception_message, array $smtp_error, string $recipient,
+                                string $sender = ''): string {
+    $reason = trim($error_info) !== '' ? trim($error_info) : trim($exception_message);
+    $server = trim(implode(' ', array_filter([
+        trim((string)($smtp_error['smtp_code'] ?? '')),
+        trim((string)($smtp_error['smtp_code_ex'] ?? '')),
+        trim((string)($smtp_error['detail'] ?? '')),
+    ], fn (string $part): bool => $part !== '')));
+    if ($server !== '' && !str_contains($reason, $server)) {
+        $reason .= ($reason !== '' ? ' ' : '') . '(server: ' . $server . ')';
+    }
+    if ($reason === '') {
+        $reason = 'SMTP send failed without a message.';
+    }
+    if ($recipient !== '') {
+        $reason = str_ireplace($recipient, '<recipient>', $reason);
+    }
+    // The sender is the SMTP login (smtp_user), which a refused MAIL FROM or
+    // an authentication error may quote.
+    if ($sender !== '') {
+        $reason = str_ireplace($sender, '<sender>', $reason);
+    }
+    return mb_strimwidth($reason, 0, 255, '…', 'UTF-8');
+}
+
+/**
+ * Which SMTP settings are missing, so the fallback to mail() can say why it
+ * happened instead of doing it silently.
+ *
+ * @return list<string>
+ */
+function bk_mail_missing_settings(string $host, string $user, string $pass, bool $library_present): array {
+    $missing = [];
+    foreach (['smtp_host' => $host, 'smtp_user' => $user, 'smtp_pass' => $pass] as $name => $value) {
+        if (trim($value) === '') {
+            $missing[] = $name;
+        }
+    }
+    if (!$library_present) {
+        $missing[] = 'lib/PHPMailer.php';
+    }
+    return $missing;
 }
 
 /**

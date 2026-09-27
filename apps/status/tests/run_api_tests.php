@@ -4959,7 +4959,7 @@ foreach ($mail_kinds as $mk) {
 }
 check('neodeslaná zpráva se nehlásí jako odeslaná', $claimed_sent, 0);
 
-$log_rows = $pdo->query("SELECT kind, channel, recipient, subject, ok, error_message, method, status
+$log_rows = $pdo->query("SELECT kind, channel, recipient, subject, ok, error_message, method, status, delivery, provider_reply
                          FROM notification_log ORDER BY id")->fetchAll();
 check('každý pokus o odeslání má v protokolu právě jeden řádek', count($log_rows), count($mail_kinds));
 check('a každý zná svůj druh zprávy', array_column($log_rows, 'kind'), $mail_kinds);
@@ -4975,6 +4975,12 @@ check_true('a nese text chyby, ne prázdno',
 // array_key_exists, ne ?? - fallback by pod testem zaměnil NULL za hodnotu.
 check_true('u selhání zůstává způsob odeslání neznámý',
     array_key_exists('method', $log_rows[0] ?? []) && $log_rows[0]['method'] === null);
+check('odmítnuté SMTP je zapsané jako neodesláno, ne jako nepotvrzené',
+    array_values(array_unique(array_column($log_rows, 'delivery'))), ['failed']);
+// PHPMailer names the recipient in some refusals; the row keeps it in its own
+// column, so the reason never has to.
+check_false('důvod neopakuje adresu příjemce',
+    str_contains((string)($log_rows[0]['error_message'] ?? ''), 'prijemce-invitation@example.invalid'));
 
 $body_leak = (int)$pdo->query("SELECT COUNT(*) FROM notification_log
     WHERE subject LIKE '%TAJNE-TELO%' OR error_message LIKE '%TAJNE-TELO%'

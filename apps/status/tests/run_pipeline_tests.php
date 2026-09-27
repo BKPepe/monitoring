@@ -789,6 +789,66 @@ if (function_exists('bk_notification_kinds')) {
 }
 
 // =======================================================================
+// E-mail - what the row may claim
+//
+// ok = 1 covered both an SMTP 250 and a mail() that merely returned true.
+// Only the first is a confirmation; the second is "handed over, unknown".
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_smtp_failure_reason', 'bk_mail_missing_settings']);
+if (function_exists('bk_smtp_failure_reason')) {
+    check('důvod selhání SMTP bere ErrorInfo a kód serveru',
+        bk_smtp_failure_reason('SMTP Error: data not accepted.', 'x',
+            ['error' => 'DATA END command failed', 'detail' => 'Message rejected', 'smtp_code' => '550', 'smtp_code_ex' => '5.7.1'], 'a@b.cz'),
+        'SMTP Error: data not accepted. (server: 550 5.7.1 Message rejected)');
+    // '' ?? 'x' is '' - an empty ErrorInfo used to leave the reason empty.
+    check('prázdné ErrorInfo propadne na text výjimky',
+        bk_smtp_failure_reason('', 'SMTP connect() failed.', [], 'a@b.cz'), 'SMTP connect() failed.');
+    check('adresa příjemce se v důvodu nahradí',
+        bk_smtp_failure_reason('SMTP Error: The following recipients failed: Nekdo@Example.com: 550 No such user', '',
+            ['detail' => 'No such user'], 'nekdo@example.com'),
+        'SMTP Error: The following recipients failed: <recipient>: 550 No such user');
+    check('i adresa odesílatele (přihlašovací jméno SMTP)',
+        bk_smtp_failure_reason('SMTP Error: The following From address failed: Status@Example.com : 553 not allowed', '',
+            [], 'nekdo@example.com', 'status@example.com'),
+        'SMTP Error: The following From address failed: <sender> : 553 not allowed');
+    check('bez jakéhokoli textu zůstane srozumitelná věta',
+        bk_smtp_failure_reason('', '', [], ''), 'SMTP send failed without a message.');
+    check('chybějící nastavení SMTP se vyjmenují',
+        bk_mail_missing_settings('', 'odesilatel@example.com', ' ', true), ['smtp_host', 'smtp_pass']);
+    check('i chybějící knihovna', bk_mail_missing_settings('h', 'u', 'p', false), ['lib/PHPMailer.php']);
+}
+
+// The mail() fallback runs only in a child PHP whose sendmail is `cat`, so no
+// message can leave this machine; the address is .invalid on top of that.
+$mail_child = function (string $sendmail): array {
+    $code = 'require ' . var_export(__DIR__ . '/assert_helpers.php', true) . ';'
+        . 'bk_test_load_functions(' . var_export(__DIR__ . '/../functions.php', true)
+        . ', ["bk_deliver_email", "bk_mail_missing_settings", "bk_smtp_failure_reason"]);'
+        . 'bk_test_load_functions(' . var_export(__DIR__ . '/../db.php', true) . ', ["get_setting", "bk_settings_defaults"]);'
+        . '$GLOBALS["system_settings"] = ["smtp_host" => "", "smtp_user" => "", "smtp_pass" => "", "site_title" => "T"];'
+        . '$ok = bk_deliver_email("nikdo@example.invalid", "Předmět", "<p>tělo</p>");'
+        . 'echo json_encode([ini_get("sendmail_path"), $ok, $GLOBALS["last_mail_method"], $GLOBALS["last_mail_delivery"],'
+        . ' $GLOBALS["last_mail_error"], $GLOBALS["last_mail_reply"]]);';
+    $out = [];
+    // Quoted: in an ini value an unquoted ';' starts a comment.
+    exec(escapeshellarg(PHP_BINARY) . ' -d ' . escapeshellarg('sendmail_path="' . $sendmail . '"')
+        . ' -r ' . escapeshellarg($code) . ' 2>/dev/null', $out);
+    $got = json_decode((string)end($out), true);
+    return is_array($got) ? $got : [];
+};
+$mc = $mail_child('cat >/dev/null');
+check('podřízené PHP opravdu posílá do cat', $mc[0] ?? null, 'cat >/dev/null');
+check('mail(), který vrátil true: předáno, nepotvrzeno', [$mc[1] ?? null, $mc[2] ?? null, $mc[3] ?? null], [true, 'fallback', 'unknown']);
+check_true('a řádek řekne proč a co chybí',
+    str_contains((string)($mc[4] ?? ''), 'nothing confirmed delivery')
+    && str_contains((string)($mc[4] ?? ''), 'smtp_host, smtp_user, smtp_pass'));
+check('odpověď serveru tu žádná není', array_key_exists(5, $mc) ? $mc[5] : 'CHYBÍ', null);
+$mc = $mail_child('cat >/dev/null; false');
+check('podřízené PHP opravdu posílá do selhávajícího cat', $mc[0] ?? null, 'cat >/dev/null; false');
+check('mail(), který vrátil false: neodesláno', [$mc[1] ?? null, $mc[3] ?? null], [false, 'failed']);
+check_true('s důvodem', trim((string)($mc[4] ?? '')) !== '');
+
+// =======================================================================
 // WhatsApp (CallMeBot) - what counts as sent
 //
 // Any HTTP 2xx used to be "sent", with the body thrown away. CallMeBot answers
