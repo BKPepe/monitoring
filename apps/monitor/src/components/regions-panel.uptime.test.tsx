@@ -37,7 +37,7 @@ describe('Měřicí místa: úspěšnost s jediným selháním', () => {
       </LanguageProvider>
     );
 
-    expect(await screen.findByText('99.99 %')).toBeTruthy();
-    expect(screen.queryByText('100.00 %')).toBeNull();
+    expect(await screen.findByText('99,99 %')).toBeTruthy();
+    expect(screen.queryByText('100,00 %')).toBeNull();
   });
 });

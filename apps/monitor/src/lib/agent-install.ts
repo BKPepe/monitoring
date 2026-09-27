@@ -25,15 +25,88 @@ export interface InstallStep {
 
 type TranslateFn = (key: string, params?: Record<string, string | number> | string, fallback?: string) => string;
 
+/**
+ * The step texts in both languages, next to the commands they describe.
+ *
+ * The website (apps/site) renders these same steps at build time and has no
+ * access to the app's dictionary, so the texts live here: the app's t() gets
+ * the Czech one as its fallback, the site picks its language straight from
+ * this table. agent-install.test.ts fails when the app's dictionary says
+ * something else for one of these keys.
+ */
+export const AGENT_INSTALL_TEXT = {
+  'agent_install.download': { cs: 'Stáhněte agenta', en: 'Download the agent' },
+  'agent_install.config': {
+    cs: 'Vytvořte konfiguraci s adresou serveru a klíčem',
+    en: 'Create the config with the server address and key',
+  },
+  'agent_install.config_next_to_script': {
+    cs: 'Soubor musí ležet ve stejné složce jako skript.',
+    en: 'The file must sit in the same folder as the script.',
+  },
+  'agent_install.test': {
+    cs: 'Spusťte agenta ručně a zkontrolujte výpis',
+    en: 'Run the agent by hand and check its output',
+  },
+  'agent_install.openwrt_fetch': {
+    cs: 'Když wget neumí HTTPS, použijte uclient-fetch se stejnými parametry.',
+    en: 'If wget cannot do HTTPS, use uclient-fetch with the same arguments.',
+  },
+  'agent_install.first_run': {
+    cs: 'První běh ještě nezná vytížení CPU, to agent změří až při dalším spuštění.',
+    en: 'The first run does not know the CPU load yet; the agent measures it on the next run.',
+  },
+  'agent_install.cron_minute': {
+    cs: 'Zařaďte agenta do cronu, jednou za minutu',
+    en: 'Add the agent to cron, once a minute',
+  },
+  'agent_install.cron_check': {
+    cs: 'Ověřte, že je agent naplánovaný a odesílá',
+    en: 'Check that the agent is scheduled and reporting',
+  },
+  'agent_install.cron_check_note': {
+    cs: 'První řádek musí vypsat plánovací záznam. Do minuty pak monitor v aplikaci přestane hlásit, že agent mlčí.',
+    en: 'The first line must print the schedule entry. Within a minute the monitor in the app stops reporting a silent agent.',
+  },
+  'agent_install.wifi6e': {
+    cs: 'Volitelně: podpora Wi-Fi 6E u klientů',
+    en: 'Optional: Wi-Fi 6E support of the clients',
+  },
+  'agent_install.wifi6e_note': {
+    cs: 'Bez tohoto balíčku agent nezjistí, kteří klienti umí 6 GHz.',
+    en: 'Without this package the agent cannot tell which clients support 6 GHz.',
+  },
+  'agent_install.cron_five': {
+    cs: 'Zařaďte agenta do cronu, jednou za pět minut',
+    en: 'Add the agent to cron, every five minutes',
+  },
+  'agent_install.task': {
+    cs: 'Naplánujte spouštění každých pět minut (PowerShell jako správce)',
+    en: 'Schedule a run every five minutes (PowerShell as administrator)',
+  },
+  'agent_install.docker_env': {
+    cs: 'Doplňte adresu serveru a klíč do docker-compose.agent.yml',
+    en: 'Fill the server address and key into docker-compose.agent.yml',
+  },
+  'agent_install.docker_run': { cs: 'Spusťte kontejner', en: 'Start the container' },
+  'agent_install.docker_logs': { cs: 'Zkontrolujte výpis kontejneru', en: 'Check the container output' },
+} as const satisfies Record<string, { cs: string; en: string }>;
+
+type AgentInstallTextKey = keyof typeof AGENT_INSTALL_TEXT;
+
 /** Stands in for the key on the agents page, where no monitor is chosen. */
 export const AGENT_KEY_PLACEHOLDER = 'KLIC_Z_NASTAVENI_MONITORU';
 
-/** The addresses on this server for the agents page, which has no monitor and so no key. */
-export function genericInstallTarget(origin: string): AgentInstallTarget {
+/**
+ * The addresses under `origin` when no monitor (and so no key) is chosen: the
+ * app's agents page, and the website with https://YOUR-DOMAIN. The website
+ * passes its own English placeholder for the key.
+ */
+export function genericInstallTarget(origin: string, agentKey: string = AGENT_KEY_PLACEHOLDER): AgentInstallTarget {
   const base = `${origin.replace(/\/+$/, '')}/status`;
   return {
     apiUrl: `${base}/agent_api.php`,
-    agentKey: AGENT_KEY_PLACEHOLDER,
+    agentKey,
     files: {
       openwrt: `${base}/agent_openwrt.sh`,
       shell: `${base}/agent.sh`,
@@ -49,11 +122,14 @@ function configLines(target: AgentInstallTarget): string[] {
 }
 
 export function agentInstallSteps(platform: AgentPlatform, target: AgentInstallTarget, t: TranslateFn): InstallStep[] {
+  // The Czech text is t()'s fallback, as everywhere in the app; the key is
+  // what the dictionary (and the website) translate.
+  const say = (key: AgentInstallTextKey) => t(key, AGENT_INSTALL_TEXT[key].cs);
   const cfg = configLines(target).join('\n');
-  const download = t('agent_install.download', 'Stáhněte agenta');
-  const config = t('agent_install.config', 'Vytvořte konfiguraci s adresou serveru a klíčem');
-  const nextToScript = t('agent_install.config_next_to_script', 'Soubor musí ležet ve stejné složce jako skript.');
-  const test = t('agent_install.test', 'Spusťte agenta ručně a zkontrolujte výpis');
+  const download = say('agent_install.download');
+  const config = say('agent_install.config');
+  const nextToScript = say('agent_install.config_next_to_script');
+  const test = say('agent_install.test');
 
   switch (platform) {
     case 'openwrt':
@@ -62,10 +138,7 @@ export function agentInstallSteps(platform: AgentPlatform, target: AgentInstallT
           id: 'download',
           title: download,
           command: `wget -O /usr/bin/agent_openwrt.sh ${target.files.openwrt} && chmod +x /usr/bin/agent_openwrt.sh`,
-          note: t(
-            'agent_install.openwrt_fetch',
-            'Když wget neumí HTTPS, použijte uclient-fetch se stejnými parametry.'
-          ),
+          note: say('agent_install.openwrt_fetch'),
         },
         {
           id: 'config',
@@ -77,14 +150,11 @@ export function agentInstallSteps(platform: AgentPlatform, target: AgentInstallT
           id: 'test',
           title: test,
           command: '/usr/bin/agent_openwrt.sh --verbose',
-          note: t(
-            'agent_install.first_run',
-            'První běh ještě nezná vytížení CPU, to agent změří až při dalším spuštění.'
-          ),
+          note: say('agent_install.first_run'),
         },
         {
           id: 'schedule',
-          title: t('agent_install.cron_minute', 'Zařaďte agenta do cronu, jednou za minutu'),
+          title: say('agent_install.cron_minute'),
           // Through `crontab`, not by appending to /etc/crontabs/root: that path
           // belongs to busybox crond, and Turris OS runs cronie, which reads
           // /var/spool/cron/crontabs and ignores the file. An agent installed by
@@ -108,18 +178,15 @@ export function agentInstallSteps(platform: AgentPlatform, target: AgentInstallT
         },
         {
           id: 'schedule_check',
-          title: t('agent_install.cron_check', 'Ověřte, že je agent naplánovaný a odesílá'),
+          title: say('agent_install.cron_check'),
           command: 'crontab -l | grep agent_openwrt.sh && sleep 70 && logread | grep -i agent | tail -5',
-          note: t(
-            'agent_install.cron_check_note',
-            'První řádek musí vypsat plánovací záznam. Do minuty pak monitor v aplikaci přestane hlásit, že agent mlčí.'
-          ),
+          note: say('agent_install.cron_check_note'),
         },
         {
           id: 'wifi6e',
-          title: t('agent_install.wifi6e', 'Volitelně: podpora Wi-Fi 6E u klientů'),
+          title: say('agent_install.wifi6e'),
           command: 'opkg update && opkg install hostapd-utils',
-          note: t('agent_install.wifi6e_note', 'Bez tohoto balíčku agent nezjistí, kteří klienti umí 6 GHz.'),
+          note: say('agent_install.wifi6e_note'),
         },
       ];
     case 'shell':
@@ -142,7 +209,7 @@ export function agentInstallSteps(platform: AgentPlatform, target: AgentInstallT
         { id: 'test', title: test, command: `${run} --verbose` },
         {
           id: 'schedule',
-          title: t('agent_install.cron_five', 'Zařaďte agenta do cronu, jednou za pět minut'),
+          title: say('agent_install.cron_five'),
           // `|| true`: see the OpenWrt schedule step (an empty crontab under set -e).
           command: `( crontab -l 2>/dev/null || true; echo '*/5 * * * * ${run} >/dev/null 2>&1' ) | crontab -`,
         },
@@ -171,7 +238,7 @@ export function agentInstallSteps(platform: AgentPlatform, target: AgentInstallT
         },
         {
           id: 'schedule',
-          title: t('agent_install.task', 'Naplánujte spouštění každých pět minut (PowerShell jako správce)'),
+          title: say('agent_install.task'),
           command: [
             `$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument '-ExecutionPolicy Bypass -File "C:\\bloodkings\\agent.ps1"'`,
             '$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)',
@@ -189,17 +256,17 @@ export function agentInstallSteps(platform: AgentPlatform, target: AgentInstallT
         },
         {
           id: 'config',
-          title: t('agent_install.docker_env', 'Doplňte adresu serveru a klíč do docker-compose.agent.yml'),
+          title: say('agent_install.docker_env'),
           command: `sed -i 's|STATUS_API_URL: .*|STATUS_API_URL: "${target.apiUrl}"|; s|STATUS_AGENT_KEY: .*|STATUS_AGENT_KEY: "${target.agentKey}"|' docker-compose.agent.yml`,
         },
         {
           id: 'run',
-          title: t('agent_install.docker_run', 'Spusťte kontejner'),
+          title: say('agent_install.docker_run'),
           command: 'docker compose -f docker-compose.agent.yml up -d',
         },
         {
           id: 'logs',
-          title: t('agent_install.docker_logs', 'Zkontrolujte výpis kontejneru'),
+          title: say('agent_install.docker_logs'),
           command: 'docker compose -f docker-compose.agent.yml logs -f',
         },
       ];

@@ -2,16 +2,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { LanguageProvider } from '@/context/language-context';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { setCsrfToken } from '@/api/app-api';
 import type { WanBottleneckResponse } from '@/api/types';
 import omnia from '@/api/omnia-router.fixture';
 import { WanBottleneckCard } from './wan-bottleneck-card';
 
+// The tests' history chart is echarts on a canvas, which jsdom lacks; the mock
+// keeps what it was handed, so a test can check that each test is a bar.
+const charts: { bars?: boolean; points: number }[] = [];
+vi.mock('@/components/charts/metric-chart', () => ({
+  MetricChart: ({ data, bars }: { data: { series: { points: unknown[] }[] }; bars?: boolean }) => {
+    charts.push({ bars, points: data.series[0].points.length });
+    return <div data-testid="speed-chart" />;
+  },
+}));
+
 const json = (body: unknown, ok = true, status = 200) =>
   ({ ok, status, json: () => Promise.resolve(body) }) as Response;
 
-/** Serves `answer` for the card and records every plan POST. */
-function stubApi(answer: () => unknown, saveOk = true) {
+/** Serves `answer` for the card (and `history` for its tests) and records every plan POST. */
+function stubApi(answer: () => unknown, saveOk = true, history: unknown = {}) {
   const posts: Record<string, unknown>[] = [];
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
@@ -20,6 +31,7 @@ function stubApi(answer: () => unknown, saveOk = true) {
       return Promise.resolve(saveOk ? json({ ok: true, plan: omnia.wanBottleneck.plan }) : json({}, false, 500));
     }
     if (url.includes('action=wan_bottleneck')) return Promise.resolve(json(answer()));
+    if (url.includes('action=speedtest_history')) return Promise.resolve(json(history));
     return Promise.resolve(json({}));
   });
   vi.stubGlobal('fetch', fetchMock);
@@ -29,12 +41,19 @@ function stubApi(answer: () => unknown, saveOk = true) {
 function renderCard() {
   return render(
     <LanguageProvider>
-      <WanBottleneckCard monitorId={6} />
+      <TooltipProvider>
+        <WanBottleneckCard monitorId={6} />
+      </TooltipProvider>
     </LanguageProvider>
   );
 }
 
 const base = omnia.wanBottleneck;
+
+/** The plan form lives in a dialog behind "Upravit tarif" (W2-3). */
+async function openPlan() {
+  fireEvent.click(await screen.findByRole('button', { name: /Upravit tarif|Zadat tarif/ }));
+}
 
 /** The fixture with one direction's verdict replaced - the server is the only classifier. */
 function withVerdict(dl: WanBottleneckResponse['verdict']['dl'], extra: Partial<WanBottleneckResponse> = {}) {
@@ -56,7 +75,10 @@ describe('WanBottleneckCard', () => {
       vi.fn(() => Promise.resolve(json({ error: 'boom' }, false, 500)))
     );
     renderCard();
-    expect((await screen.findByRole('alert')).textContent).toContain('Vyhodnocení linky se nepodařilo načíst.');
+    // The verdict and the tests fail on their own, and each says so.
+    const alerts = await screen.findAllByRole('alert');
+    expect(alerts.map((a) => a.textContent).join(' ')).toContain('Vyhodnocení linky se nepodařilo načíst.');
+    expect(alerts.map((a) => a.textContent).join(' ')).toContain('Naměřené rychlosti se nepodařilo načíst.');
     expect(screen.queryByText('Bez omezení')).toBeNull();
   });
 
@@ -96,7 +118,7 @@ describe('WanBottleneckCard', () => {
     renderCard();
     expect(await screen.findAllByText(/Není zadaná rychlost tarifu/)).toHaveLength(2);
     expect(screen.queryByText('Tarif')).toBeNull();
-    expect(screen.queryByText('0 Mb/s')).toBeNull();
+    expect(screen.queryByText('0 Mbit/s')).toBeNull();
   });
 
   it('the WAN port ceiling is information, not a fault', async () => {
@@ -201,7 +223,7 @@ describe('WanBottleneckCard', () => {
     await screen.findByText('Cesta paketů');
     // The Omnia: flow offloading configured AND a flowtable in the ruleset, sqm: [] = checked, nothing shapes it.
     expect(screen.getByText('zapnuto · flowtable zapnuto')).toBeTruthy();
-    expect(screen.getByText('eth2 · 2500 Mb/s')).toBeTruthy();
+    expect(screen.getByText('eth2 · 2500 Mbit/s')).toBeTruthy();
     cleanup();
 
     stubApi(() => ({ ...base, wanPath: { ...omnia.wanPath, sqm: null, flowtable_active: null } }));
@@ -210,29 +232,42 @@ describe('WanBottleneckCard', () => {
     expect(screen.getByText('zapnuto · flowtable neznámo')).toBeTruthy();
   });
 
-  it('the fixed box names the wired ceiling only when the router knows it', async () => {
+  it('the fixed caveats are a help popover that names the wired ceiling only when the router knows it', async () => {
+    // Radix positions the popover with a ResizeObserver, which jsdom lacks.
+    const noResize = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
+    vi.stubGlobal('ResizeObserver', noResize);
     // Capture C5 made the ports knowable: the conduit eth1 runs at 1000F.
     stubApi(() => base);
     renderCard();
-    expect(await screen.findByText('Co z toho nepoznáte')).toBeTruthy();
-    expect(screen.getByText('Drátové porty do LAN zvládnou nejvýš 1000 Mb/s.')).toBeTruthy();
+    // Closed, the caveats take no room: the help button carries their title.
+    const help = (await screen.findByText('Co z toho nepoznáte')).closest('button') as HTMLButtonElement;
+    expect(screen.queryByText(/Rychlost Wi-Fi ani rychlost jednotlivých zařízení/)).toBeNull();
+    fireEvent.click(help);
+    expect((await screen.findAllByText('Drátové porty do LAN zvládnou nejvýš 1000 Mbit/s.')).length).toBeGreaterThan(0);
     cleanup();
 
     // A router with no DSA, or one whose ubus answers nothing, still sends
-    // null - and then the box must say nothing rather than guess (X5).
+    // null - and then the popover must say nothing rather than guess (X5).
     stubApi(() => ({ ...base, wanPath: { ...omnia.wanPath, lan_port_cap_mbit: null } }));
+    vi.stubGlobal('ResizeObserver', noResize);
     renderCard();
-    expect(await screen.findByText('Co z toho nepoznáte')).toBeTruthy();
+    fireEvent.click((await screen.findByText('Co z toho nepoznáte')).closest('button') as HTMLButtonElement);
+    expect((await screen.findAllByText(/Rychlost Wi-Fi ani rychlost/)).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Drátové porty/)).toBeNull();
   });
 
   it('the plan form saves the three fields and nothing about a probe', async () => {
     const { posts } = stubApi(() => base);
     renderCard();
-    const down = (await screen.findByLabelText('Stahování (Mb/s)')) as HTMLInputElement;
+    await openPlan();
+    const down = (await screen.findByLabelText('Stahování (Mbit/s)')) as HTMLInputElement;
     // The stored plan is what the fields start from.
     expect(down.value).toBe('2000');
-    expect((screen.getByLabelText('Odesílání (Mb/s)') as HTMLInputElement).value).toBe('1000');
+    expect((screen.getByLabelText('Odesílání (Mbit/s)') as HTMLInputElement).value).toBe('1000');
     // Empty means "not set", which the server reads as the default 85 %.
     expect((screen.getByLabelText('Podíl tarifu, který se počítá jako dodaný (%)') as HTMLInputElement).value).toBe('');
 
@@ -252,6 +287,7 @@ describe('WanBottleneckCard', () => {
   it('this release offers no test button and no probe consent', async () => {
     stubApi(() => base);
     renderCard();
+    await openPlan();
     await screen.findByText('Rychlost tarifu');
     expect(screen.queryByText(/Spustit test/)).toBeNull();
     expect(screen.queryByRole('checkbox')).toBeNull();
@@ -261,7 +297,8 @@ describe('WanBottleneckCard', () => {
   it('an empty field clears the plan, a nonsense one is refused before anything is sent', async () => {
     const { posts } = stubApi(() => base);
     renderCard();
-    const down = (await screen.findByLabelText('Stahování (Mb/s)')) as HTMLInputElement;
+    await openPlan();
+    const down = (await screen.findByLabelText('Stahování (Mbit/s)')) as HTMLInputElement;
     fireEvent.change(down, { target: { value: '0' } });
     fireEvent.click(screen.getByRole('button', { name: 'Uložit tarif' }));
     expect((await screen.findByRole('alert')).textContent).toContain('celým číslem 1–100000');
@@ -269,7 +306,7 @@ describe('WanBottleneckCard', () => {
 
     // Cleared fields are a plan nobody set - sent as null, never as 0.
     fireEvent.change(down, { target: { value: '' } });
-    fireEvent.change(screen.getByLabelText('Odesílání (Mb/s)'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Odesílání (Mbit/s)'), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Uložit tarif' }));
     await waitFor(() => expect(posts).toHaveLength(1));
     expect(posts[0]).toEqual({ monitor_id: 6, plan_down_mbit: null, plan_up_mbit: null, plan_ok_pct: null });
@@ -278,6 +315,7 @@ describe('WanBottleneckCard', () => {
   it('a share outside 30-100 % is refused, because the classifier would read it as a contract', async () => {
     const { posts } = stubApi(() => base);
     renderCard();
+    await openPlan();
     await screen.findByText('Rychlost tarifu');
     fireEvent.change(screen.getByLabelText('Podíl tarifu, který se počítá jako dodaný (%)'), {
       target: { value: '10' },
@@ -290,7 +328,8 @@ describe('WanBottleneckCard', () => {
   it('a failed save says so and keeps what was typed', async () => {
     stubApi(() => base, false);
     renderCard();
-    const down = (await screen.findByLabelText('Stahování (Mb/s)')) as HTMLInputElement;
+    await openPlan();
+    const down = (await screen.findByLabelText('Stahování (Mbit/s)')) as HTMLInputElement;
     fireEvent.change(down, { target: { value: '900' } });
     fireEvent.click(screen.getByRole('button', { name: 'Uložit tarif' }));
     expect((await screen.findByRole('alert')).textContent).toContain('Tarif se nepodařilo uložit.');
@@ -302,7 +341,81 @@ describe('WanBottleneckCard', () => {
     stubApi(() => ({ ...base, canEdit: false }));
     renderCard();
     expect(await screen.findByText('Neprůkazné')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Upravit tarif|Zadat tarif/ })).toBeNull();
     expect(screen.queryByText('Rychlost tarifu')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Uložit tarif' })).toBeNull();
+  });
+});
+
+/** Five tests a day apart, newest first, and the period averages the server computes. */
+function historyOf(n: number) {
+  const measurements = Array.from({ length: n }, (_, i) => ({
+    ...omnia.speedtestHistory[0],
+    measuredAt: `2026-09-${String(20 - i).padStart(2, '0')}T05:23:41+02:00`,
+  }));
+  const week = {
+    days: 7,
+    samples: 7,
+    downloadMbps: 1107,
+    uploadMbps: 900,
+    pingMs: 2,
+    downloadMinMbps: 950,
+    downloadMaxMbps: 1350,
+    measuredSince: null,
+  };
+  return { measurements, averages: { week, month: { ...week, days: 30, samples: 20 } } };
+}
+
+describe('Rychlost linky: jedna karta místo dvou (W2-3)', () => {
+  beforeEach(() => setCsrfToken('t'));
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    setCsrfToken(null);
+    charts.length = 0;
+  });
+
+  it('neprůkazný verdikt řekne jednu větu týdne proti tarifu, ne stránku pomlček', async () => {
+    stubApi(() => base, true, historyOf(3));
+    renderCard();
+    // 1107 of the 2000 Mbit/s plan is 55 %; the week stands on 7 tests.
+    expect(await screen.findByText('Týden: průměr 1107 Mbit/s = 55 % tarifu · 7 měření')).toBeTruthy();
+    // Why there is no verdict is still said, once, under the line.
+    expect(screen.getByText(/nejsou data o vytížení jader/)).toBeTruthy();
+  });
+
+  it('neměřené ukazatele a důvod bez jader jsou ve sbaleném „zatím neměřeno"', async () => {
+    stubApi(() => base, true, historyOf(3));
+    renderCard();
+    const fold = (await screen.findByTestId('wan-unmeasured')) as HTMLDetailsElement;
+    expect(fold.open).toBe(false);
+    // Download 6 + upload 5 counters + the per-core load = 12.
+    expect(fold.querySelector('summary')?.textContent).toBe('12 ukazatelů zatím neměřeno');
+    expect(screen.getByText(/tenhle test spustil Turris OS/).closest('details')).toBe(fold);
+    // The CPU box itself is gone while nothing was sampled.
+    expect(screen.getByText('Vytížení jader během měření').closest('details')).toBe(fold);
+  });
+
+  it('každý test je vlastní sloupec; pod grafem poslední tři a „Zobrazit vše"', async () => {
+    stubApi(() => base, true, historyOf(5));
+    renderCard();
+    await screen.findByTestId('speed-chart');
+    // A bar per test: a line between two tests a week apart invents the speeds in between (charts-12).
+    expect(charts[charts.length - 1]).toEqual({ bars: true, points: 5 });
+    expect(screen.getByText('Posledních 3 měření')).toBeTruthy();
+    expect(screen.queryByText('Měsíc')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Zobrazit vše (5)' }));
+    expect(screen.getByText('Posledních 5 měření')).toBeTruthy();
+    // The period averages come with the full list.
+    expect(screen.getByText('Měsíc')).toBeTruthy();
+  });
+
+  it('bez tarifu týdenní řádek nic nepočítá z nuly', async () => {
+    stubApi(() => omnia.wanBottleneckNoPlan, true, historyOf(3));
+    renderCard();
+    expect(await screen.findByText('Týden: průměr 1107 Mbit/s · 7 měření')).toBeTruthy();
+    expect(screen.queryByText(/% tarifu/)).toBeNull();
   });
 });

@@ -47,8 +47,8 @@ describe('Dostupnost: pokrytí dlouhých oken (W1-B2)', () => {
     expect(await screen.findByText('(data od 12. 8.)')).toBeTruthy();
     expect(screen.getAllByText(/data od/)).toHaveLength(1);
     expect(screen.getByText('90 dní', { exact: false }).textContent).toBe('90 dní (data od 12. 8.)');
-    expect(screen.getByText('97.10 %')).toBeTruthy();
-    expect(screen.getByText('98.20 %')).toBeTruthy();
+    expect(screen.getByText('97,10 %')).toBeTruthy();
+    expect(screen.getByText('98,20 %')).toBeTruthy();
     expect(screen.getByText(/Podíl času, kdy služba běžela/)).toBeTruthy();
   });
 

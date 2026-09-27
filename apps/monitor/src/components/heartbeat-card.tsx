@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { HeartPulse, Copy, Check, RefreshCw, AlertTriangle } from 'lucide-react';
@@ -62,22 +61,22 @@ export function HeartbeatCard({ monitorId }: { monitorId: number }) {
 
   if (info === undefined) {
     return (
-      <Card className="p-6">
+      <div data-slot="well" className="bg-inset rounded-xl border border-border p-5">
         <LoadingState label={t('hb.loading', 'Načítám nastavení heartbeatu…')} />
-      </Card>
+      </div>
     );
   }
 
   if (!info) {
     return (
-      <Card className="p-6">
+      <div data-slot="well" className="bg-inset rounded-xl border border-border p-5">
         <p className="text-foreground text-sm font-semibold">
           {t('hb.unavailable_title', 'Nastavení heartbeatu se nepodařilo načíst')}
         </p>
         <p className="text-muted-foreground mt-1 text-xs">
           {t('hb.unavailable_desc', 'Adresu vidí jen přihlášený administrátor.')}
         </p>
-      </Card>
+      </div>
     );
   }
 
@@ -96,11 +95,11 @@ export function HeartbeatCard({ monitorId }: { monitorId: number }) {
         : t('hb.state_unknown', 'Zatím bez signálu');
 
   return (
-    <Card className="space-y-4 p-6">
+    <div data-slot="well" className="bg-inset rounded-xl border border-border space-y-4 p-5">
       <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
-        <HeartPulse className="size-5 text-primary" />
+        <HeartPulse className="text-muted-foreground size-5" aria-hidden="true" />
         <div className="min-w-0">
-          <h3 className="text-base font-bold">{t('hb.title', 'Heartbeat')}</h3>
+          <h3 className="text-sm font-semibold">{t('hb.title', 'Heartbeat')}</h3>
           <p className="text-muted-foreground text-xs">
             {intervalMins != null
               ? t(
@@ -199,6 +198,6 @@ export function HeartbeatCard({ monitorId }: { monitorId: number }) {
           <RefreshCw className="size-3.5" /> {t('hb.regenerate', 'Nový token')}
         </Button>
       </div>
-    </Card>
+    </div>
   );
 }

@@ -26,7 +26,7 @@ interface Region {
  * including an honest "location not given" for rows without one.
  */
 export function RegionsPanel() {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const [regions, setRegions] = React.useState<Region[] | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
@@ -105,7 +105,7 @@ export function RegionsPanel() {
                               : 'text-down'
                       }
                     >
-                      {formatPercent(r.successRate, 2)}
+                      {formatPercent(r.successRate, 2, lang)}
                     </strong>
                   </span>
                   <span>

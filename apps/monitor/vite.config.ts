@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { fileURLToPath, URL } from 'node:url';
 import { execSync } from 'node:child_process';
 import pkg from './package.json';
+import { i18nSplit } from './scripts/i18n-split';
 
 /**
  * Skutečná identita buildu pro patičku: verze z package.json + krátký git
@@ -28,7 +29,8 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },
-  plugins: [react(), tailwindcss()],
+  // i18nSplit: only the visitor's language is on the first download (PA-5).
+  plugins: [i18nSplit(), react(), tailwindcss()],
   build: {
     rolldownOptions: {
       // Two pages over the same app: public.html carries the indexable head of

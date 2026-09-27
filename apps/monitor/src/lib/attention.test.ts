@@ -12,6 +12,7 @@ import type { ApiMonitor } from '@/api/app-api';
 const labels: AttentionLabels = {
   down: 'DOWN',
   warning: 'WARN',
+  silent: 'SILENT',
   unreachable: 'UNREACHABLE',
   sslExpired: 'SSL_EXPIRED',
   sslExpiring: (d) => `SSL_${d}`,
@@ -26,6 +27,25 @@ describe('buildNeedsAttention', () => {
   it('zdravá infrastruktura nevyrobí ani jednu položku', () => {
     const rows = [mon({ id: 1, status: 'up' }), mon({ id: 2, status: 'paused' })];
     expect(buildNeedsAttention(rows, labels)).toEqual([]);
+  });
+
+  it('agent, který hlásil a zmlkl, do seznamu patří; monitor čekající na první data ne (CR-2)', () => {
+    const out = buildNeedsAttention(
+      [
+        mon({ id: 3, status: 'unknown', statusKey: 'unknown_stale', lastStatusChange: '2026-09-24T06:00:00+02:00' }),
+        mon({ id: 4, status: 'unknown', statusKey: 'unknown_new' }),
+      ],
+      labels
+    );
+    expect(out).toEqual([
+      {
+        key: 'silent-3',
+        monitorId: 3,
+        name: 'X',
+        severity: 'warning',
+        text: 'SILENT',
+      },
+    ]);
   });
 
   it('nezměřené metriky (null) nikdy nezakládají upozornění', () => {
@@ -65,6 +85,30 @@ describe('buildNeedsAttention', () => {
 
   it('certifikát platný déle než 14 dní se nehlásí', () => {
     expect(buildNeedsAttention([mon({ details: { ssl_days_remaining: 15 } })], labels)).toEqual([]);
+  });
+
+  it('mez certifikátu bere ze serverového ssl_alert_days, ne pevných 14 dní (CR-5)', () => {
+    const cert = [mon({ details: { ssl_days_remaining: 20 } })];
+    expect(buildNeedsAttention(cert, labels, { sslAlertDays: 30 })[0]).toMatchObject({
+      severity: 'warning',
+      text: 'SSL_20',
+    });
+    expect(buildNeedsAttention(cert, labels, { sslAlertDays: 7 })).toEqual([]);
+    // Nesmyslná hodnota ze serveru nevypne hlídání, platí výchozích 14 dní.
+    expect(
+      buildNeedsAttention([mon({ details: { ssl_days_remaining: 10 } })], labels, { sslAlertDays: 0 })
+    ).toHaveLength(1);
+  });
+
+  it('zastaralý agent je informace, ne varování, a řadí se až za problémy (CR-5)', () => {
+    const out = buildNeedsAttention(
+      [mon({ id: 1, name: 'A', agentUpdateAvailable: '1.8.0' }), mon({ id: 2, name: 'B', status: 'warning' })],
+      labels
+    );
+    expect(out.map((i) => [i.text, i.severity])).toEqual([
+      ['WARN', 'warning'],
+      ['AGENT_1.8.0', 'info'],
+    ]);
   });
 
   it('jeden monitor může mít víc problémů zároveň a každý dostane vlastní řádek', () => {

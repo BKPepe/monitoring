@@ -5,7 +5,8 @@ import '@fontsource-variable/inter';
 import '@fontsource-variable/jetbrains-mono';
 import './styles/theme.css';
 import { router } from './routes';
-import { LanguageProvider } from './context/language-context';
+import { LanguageProvider, prepareLanguage } from './context/language-context';
+import { readInitialLanguage } from './context/initial-language';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { installCsrfFetch } from './api/csrf-fetch';
 import { installSessionGuards } from './lib/session-guard';
@@ -23,12 +24,20 @@ installStaleBuildRecovery(__APP_VERSION__);
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('Chybí #root — zkontroluj index.html.');
 
-createRoot(rootElement).render(
-  <StrictMode>
-    <LanguageProvider>
-      <TooltipProvider delayDuration={200}>
-        <RouterProvider router={router} />
-      </TooltipProvider>
-    </LanguageProvider>
-  </StrictMode>
-);
+const render = () =>
+  createRoot(rootElement).render(
+    <StrictMode>
+      <LanguageProvider>
+        <TooltipProvider delayDuration={200}>
+          <RouterProvider router={router} />
+        </TooltipProvider>
+      </LanguageProvider>
+    </StrictMode>
+  );
+
+// An English session waits for the English half of the dictionary before the
+// first paint, so it never flashes Czech; a Czech one renders at once. If the
+// half cannot be loaded, the page still renders - in Czech - rather than not at all.
+const languageReady = prepareLanguage(readInitialLanguage());
+if (languageReady) languageReady.then(render, render);
+else render();

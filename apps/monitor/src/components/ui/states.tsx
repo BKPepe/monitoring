@@ -49,6 +49,7 @@ export function EmptyState({
   icon,
   action,
   size = 'block',
+  boxed = false,
   className,
 }: {
   title: React.ReactNode;
@@ -56,12 +57,21 @@ export function EmptyState({
   icon?: React.ReactNode;
   action?: React.ReactNode;
   size?: Size;
+  /** A dashed well around it - for an empty area inside a panel that would otherwise read as a layout gap. */
+  boxed?: boolean;
   className?: string;
 }) {
   return (
-    <div className={cn('text-muted-foreground text-center', sizing[size], className)}>
+    <div
+      className={cn(
+        'text-muted-foreground text-center',
+        sizing[size],
+        boxed && 'bg-inset rounded-lg border border-dashed border-border-strong px-4',
+        className
+      )}
+    >
       {icon && (
-        <div className="bg-muted mx-auto mb-2 flex size-9 items-center justify-center rounded-full [&>svg]:size-4">
+        <div className="bg-inset mx-auto mb-2 flex size-9 items-center justify-center rounded-full border border-border [&>svg]:size-4">
           {icon}
         </div>
       )}
@@ -114,5 +124,22 @@ export function ErrorState({
         </Button>
       )}
     </div>
+  );
+}
+
+/**
+ * The shape of content that is on its way - a figure, a row, a chart - for a
+ * panel that keeps its layout while it loads instead of collapsing to a
+ * spinner line. Hidden from screen readers: the panel's LoadingState or its
+ * aria-busy says "loading" once, not once per grey bar. It never stands in
+ * for a value that failed - that is an ErrorState.
+ */
+export function Skeleton({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      data-slot="skeleton"
+      className={cn('bg-secondary block h-4 animate-pulse rounded-md motion-reduce:animate-none', className)}
+    />
   );
 }

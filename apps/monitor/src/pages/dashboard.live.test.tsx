@@ -1,15 +1,21 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
 import { DashboardPage } from './dashboard';
+import { Header } from '@/components/layout/header';
+import { ShellProvider } from '@/components/layout/shell-context';
 
 /**
  * The dashboard's live cue is judged from the newest measurement in the
  * list and from whether the last refresh worked: a failed minute refresh
  * keeps the last good list on screen and turns the pill into a warning,
  * never a pulsing "Živě" over data nobody could refresh.
+ *
+ * The pill lives in the shell's header now (NetPulse shell): the page hands
+ * it its freshness through usePageChrome, so the test renders the header
+ * with the page, as the app does.
  */
 const json = (body: unknown, status = 200) =>
   ({ ok: status >= 200 && status < 300, status, json: () => Promise.resolve(body) }) as Response;
@@ -54,6 +60,20 @@ function api(input: RequestInfo | URL): Promise<Response> {
   return Promise.resolve(json({}));
 }
 
+// The dashboard loads four panels lazily (UX wave 2). Their first import is a
+// module transform, and inside the timed test on a busy machine it pushed the
+// run past the 5 s limit; warming them here keeps the test about the page.
+beforeAll(async () => {
+  await Promise.all([
+    import('@/components/findings-list'),
+    import('@/components/uptime-heatmap'),
+    import('@/components/regions-panel'),
+    import('@/components/dashboard-layout-editor'),
+    // The traffic card's chunk brings the chart library.
+    import('./dashboard-traffic'),
+  ]);
+}, 30_000);
+
 beforeEach(() => {
   monitorsOk = true;
   vi.useFakeTimers({ shouldAdvanceTime: true });
@@ -89,11 +109,14 @@ describe('Dashboard: pilulka čerstvosti (živě jen z časů měření)', () =>
     const { container } = render(
       <LanguageProvider>
         <MemoryRouter>
-          <DashboardPage />
+          <ShellProvider>
+            <Header />
+            <DashboardPage />
+          </ShellProvider>
         </MemoryRouter>
       </LanguageProvider>
     );
-    const pill = () => container.querySelector('[data-state]');
+    const pill = () => container.querySelector('[data-slot="pill"][data-state]');
     await waitFor(() => expect(pill()?.getAttribute('data-state')).toBe('fresh'));
     expect(pill()?.textContent).toMatch(/Živě· 4\d s/);
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactNode } from 'react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
@@ -53,6 +53,18 @@ function api(url: string): Response {
   return json({});
 }
 
+// The dashboard loads its lower panels and the traffic card (with the chart
+// library) lazily. Their first import is a module transform that, on a busy
+// machine, pushed the first test past findBy's limit; warming them here keeps
+// the test about the page.
+beforeAll(async () => {
+  await Promise.all([
+    import('@/components/findings-list'),
+    import('@/components/uptime-heatmap'),
+    import('./dashboard-traffic'),
+  ]);
+}, 30_000);
+
 beforeEach(() => {
   vi.stubGlobal(
     'fetch',
@@ -103,8 +115,9 @@ describe('Dashboard na telefonu (W1-D3)', () => {
     expect(mobileList).not.toBeNull();
     const card = mobileList!.querySelector('a[href="/infrastructure/2"]') as HTMLElement;
     const text = card.textContent ?? '';
-    expect(text.indexOf('Offline')).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf('Offline')).toBeLessThan(text.indexOf('E-shop'));
+    // The state word from the shared vocabulary (C-11): a down monitor reads "Výpadek".
+    expect(text.indexOf('Výpadek')).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('Výpadek')).toBeLessThan(text.indexOf('E-shop'));
   });
 
   it('sonda (typ node) se mezi monitory neukáže', async () => {

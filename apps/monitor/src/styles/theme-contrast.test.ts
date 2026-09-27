@@ -51,9 +51,11 @@ const tint = (fg: string, bg: string, alpha: number) => {
   );
 };
 
+// --inset and --raised are the kit's wells and lifted rows (NetPulse shell):
+// a pill or a verdict word sits on them as often as on the card.
 const GROUNDS = {
-  light: ['background', 'card', 'secondary'],
-  dark: ['background', 'card', 'secondary'],
+  light: ['background', 'card', 'secondary', 'inset', 'raised'],
+  dark: ['background', 'card', 'secondary', 'inset', 'raised'],
 } as const;
 const STATUSES = ['status-up', 'status-down', 'status-warning', 'status-info', 'status-paused'] as const;
 
@@ -159,6 +161,18 @@ describe('chart series colours', () => {
       const statuses = STATUSES.map((s) => token(s, theme).toLowerCase());
       for (const name of SERIES) {
         expect(statuses, `chart-${name}`).not.toContain(token(`chart-${name}`, theme).toLowerCase());
+      }
+    });
+  }
+});
+
+// PA-9: text links used --primary, a fill colour that is 3.7:1 as 12 px text
+// on the dark card. The link token is for text and keeps AA on every ground.
+describe('text links', () => {
+  for (const theme of ['light', 'dark'] as const) {
+    it(`--link je čitelný jako text na každém podkladu (${theme})`, () => {
+      for (const ground of ['background', 'card', 'popover', 'secondary', 'inset', 'raised'] as const) {
+        expect(contrast(token('link', theme), token(ground, theme)), `link on --${ground}`).toBeGreaterThanOrEqual(4.5);
       }
     });
   }

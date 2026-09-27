@@ -10,7 +10,6 @@ import {
   encryptionLabel,
   fiveGhzLine,
   radioGenerationLabel,
-  radioProfileLabel,
 } from './wifi-profile';
 
 /** Fills {placeholders} from params, so the test sees the numbers that reach the user. */
@@ -22,31 +21,27 @@ const t = (key: string, params?: Record<string, string | number> | string, fallb
 
 const radio = omnia.radio5g;
 
-describe('radioProfileLabel', () => {
-  it('reads HE80 on 5 GHz as "Wi-Fi 6 · 80 MHz"', () => {
-    expect(radioProfileLabel(radio, t)).toBe('Wi-Fi 6 · 80 MHz');
+// The router's service tile that printed "Wi-Fi 6 · 80 MHz" is gone (W2-3);
+// the naming rules live on in the generation label the Wi-Fi card uses.
+describe('radioGenerationLabel', () => {
+  it('reads HE on 5 GHz as "Wi-Fi 6"', () => {
+    expect(radioGenerationLabel(radio, t)).toBe('Wi-Fi 6');
   });
 
   it('calls generation 6 "Wi-Fi 6E" on 6 GHz and never on 5 GHz', () => {
-    expect(radioProfileLabel({ ...radio, band: '6GHz', width_mhz: 160 }, t)).toBe('Wi-Fi 6E · 160 MHz');
-    expect(radioProfileLabel({ ...radio, band: '5GHz', width_mhz: 160 }, t)).toBe('Wi-Fi 6 · 160 MHz');
+    expect(radioGenerationLabel({ ...radio, band: '6GHz' }, t)).toBe('Wi-Fi 6E');
+    expect(radioGenerationLabel({ ...radio, band: '5GHz' }, t)).toBe('Wi-Fi 6');
     // Wi-Fi 7 on 6 GHz is Wi-Fi 7; "6E" names one generation only.
-    expect(radioProfileLabel({ ...radio, band: '6GHz', generation: 7, width_mhz: 320 }, t)).toBe('Wi-Fi 7 · 320 MHz');
+    expect(radioGenerationLabel({ ...radio, band: '6GHz', generation: 7 }, t)).toBe('Wi-Fi 7');
   });
 
   it('has no label for an unknown mode - not "Wi-Fi 0", not "Wi-Fi null"', () => {
-    expect(radioProfileLabel({ ...radio, generation: null, width_mhz: null }, t)).toBeNull();
-    expect(radioProfileLabel({ radio: 'phy1-ap0' }, t)).toBeNull();
+    expect(radioGenerationLabel({ ...radio, generation: null }, t)).toBeNull();
+    expect(radioGenerationLabel({ radio: 'phy1-ap0' }, t)).toBeNull();
   });
 
   it('names a radio without HT the legacy way', () => {
-    expect(radioProfileLabel({ ...radio, band: '2.4GHz', generation: 0, width_mhz: 20 }, t)).toBe(
-      'starší (802.11a/b/g) · 20 MHz'
-    );
-  });
-
-  it('keeps the generation when only the width is unknown', () => {
-    expect(radioProfileLabel({ ...radio, width_mhz: null }, t)).toBe('Wi-Fi 6');
+    expect(radioGenerationLabel({ ...radio, band: '2.4GHz', generation: 0 }, t)).toBe('starší (802.11a/b/g)');
   });
 });
 

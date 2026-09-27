@@ -133,7 +133,7 @@ export function CorrelationPanel({
             <button
               type="button"
               onClick={onShowAll}
-              className="text-primary underline-offset-2 hover:underline focus-visible:ring-ring rounded focus-visible:ring-2 focus-visible:outline-none"
+              className="text-link underline-offset-2 hover:underline focus-visible:ring-ring rounded focus-visible:ring-2 focus-visible:outline-none"
             >
               {t('corr.show_all', 'Zobrazit všechny')}
             </button>

@@ -180,3 +180,14 @@ describe('Kdy se relace ověřuje znovu (W1-A7)', () => {
     expect(heard).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('Čerstvá instalace (site W1-5)', () => {
+  it('503 needs_setup vede na instalátor, ne na „Služba je nedostupná“', async () => {
+    sessionAnswer = () =>
+      Promise.resolve(json({ error: 'needs_setup', reason: 'config_missing', setupUrl: '/app/setup' }, 503));
+    await renderShell();
+
+    expect(await screen.findByText('PŘIHLAŠOVACÍ FORMULÁŘ', {}, FIRST_RENDER)).toBeTruthy();
+    expect(screen.queryByText('Služba je dočasně nedostupná')).toBeNull();
+  });
+});

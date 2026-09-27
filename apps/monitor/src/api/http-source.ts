@@ -1,3 +1,5 @@
+import { windowFor } from '@/lib/chart-window';
+import { metricTone } from '@/lib/metric-tone';
 import { insertGaps } from '@/lib/series-gaps';
 import type {
   ChartData,
@@ -10,7 +12,6 @@ import type {
   MetricRange,
   MetricSeriesResponse,
   MetricsSource,
-  MetricTone,
   PublicStatus,
   TimeRange,
   PublicStatusScope,
@@ -29,10 +30,11 @@ export function resolveUrl(path: string | null | undefined): string {
   return `${STATUS_API}/${path}`;
 }
 
+// The series hue comes from lib/metric-tone.ts - one map for every place a
+// metric is drawn (C-2); this list only says which metrics get a card.
 const CHART_METRICS: {
   key: MetricKey;
   title: string;
-  tone: MetricTone;
   yMax: number | null;
   /** 0 = measured from zero; null = the chart derives the range from the data. */
   yMin: number | null;
@@ -42,28 +44,37 @@ const CHART_METRICS: {
   // just for agents. Without this entry an agentless monitor never had any
   // chart on the "Overview & Performance" tab even though its latency
   // history really exists (the SLA report and the events table use the same data).
-  { key: 'response_time', title: 'Doba odezvy (Latency)', tone: 'latency', yMax: null, yMin: null },
-  { key: 'cpu', title: 'Využití CPU', tone: 'cpu', yMax: 100, yMin: 0 },
-  { key: 'ram', title: 'Využití paměti', tone: 'memory', yMax: 100, yMin: 0 },
-  { key: 'hdd', title: 'Zaplnění disku', tone: 'disk', yMax: 100, yMin: 0 },
-  { key: 'net', title: 'Síťový provoz (KB/s)', tone: 'network', yMax: null, yMin: 0 },
+  { key: 'response_time', title: 'Doba odezvy (Latency)', yMax: null, yMin: null },
+  { key: 'cpu', title: 'Využití CPU', yMax: 100, yMin: 0 },
+  { key: 'ram', title: 'Využití paměti', yMax: 100, yMin: 0 },
+  { key: 'hdd', title: 'Zaplnění disku', yMax: 100, yMin: 0 },
+  { key: 'net', title: 'Síťový provoz (KB/s)', yMax: null, yMin: 0 },
   // The backup link carries traffic too - and traffic over it is usually
   // metered. It was measured every minute and had no card of its own.
-  { key: 'net_lte', title: 'Provoz na LTE záloze (KB/s)', tone: 'temperature', yMax: null, yMin: 0 },
-  { key: 'iowait', title: 'Čekání na I/O', tone: 'latency', yMax: 100, yMin: 0 },
-  { key: 'swap', title: 'Využití swapu', tone: 'temperature', yMax: 100, yMin: 0 },
-  { key: 'load1', title: 'Load Average (1 min)', tone: 'cpu', yMax: null, yMin: null },
-  { key: 'ts_clients', title: 'TeamSpeak Klienti', tone: 'memory', yMax: null, yMin: 0 },
+  { key: 'net_lte', title: 'Provoz na LTE záloze (KB/s)', yMax: null, yMin: 0 },
+  { key: 'iowait', title: 'Čekání na I/O', yMax: 100, yMin: 0 },
+  { key: 'swap', title: 'Využití swapu', yMax: 100, yMin: 0 },
+  { key: 'load1', title: 'Load Average (1 min)', yMax: null, yMin: null },
+  { key: 'ts_clients', title: 'TeamSpeak Klienti', yMax: null, yMin: 0 },
   // Discord: people online. The data was collected every minute but never
   // stored into history, so Discord had no chart except latency.
-  { key: 'discord_presence', title: 'Online na Discordu', tone: 'memory', yMax: null, yMin: 0 },
-  { key: 'mc_players', title: 'Hráči online', tone: 'memory', yMax: null, yMin: 0 },
+  { key: 'discord_presence', title: 'Online na Discordu', yMax: null, yMin: 0 },
+  { key: 'mc_players', title: 'Hráči online', yMax: null, yMin: 0 },
   // RSRP is in negative dBm, so no yMax - the chart derives the range from the data.
-  { key: 'lte_rsrp', title: 'Síla LTE signálu (RSRP)', tone: 'latency', yMax: null, yMin: null },
+  { key: 'lte_rsrp', title: 'Síla LTE signálu (RSRP)', yMax: null, yMin: null },
   // A CPU lives between 40 and 70 degrees; on a fixed 0-120 axis that is a flat
   // line at the bottom, so both bounds come from the data.
-  { key: 'temperature_c', title: 'Teplota CPU (°C)', tone: 'temperature', yMax: null, yMin: null },
+  { key: 'temperature_c', title: 'Teplota CPU (°C)', yMax: null, yMin: null },
 ];
+
+/**
+ * The UI language for the server's metric labels (charts-22: an English page
+ * titled its charts "Využití CPU"). LanguageProvider keeps <html lang> in step
+ * with the chosen language, so this module needs no React context.
+ */
+function uiLang(): 'cs' | 'en' {
+  return typeof document !== 'undefined' && document.documentElement.lang === 'en' ? 'en' : 'cs';
+}
 
 /** Response of `action=metric_series_batch` - all device charts in one request. */
 interface MetricSeriesBatchResponse {
@@ -75,6 +86,12 @@ interface MetricSeriesBatchResponse {
       label: string;
       /** Days until the metric reaches 100 %; absent when there is no projection. */
       daysToFull?: number;
+      /**
+       * Mean over the same-length window one period earlier, for the card's
+       * trend (lib/trend.ts). Absent on a server that does not send it yet -
+       * the card then shows no trend rather than a made-up one.
+       */
+      previousAvg?: number | null;
     }
   >;
   error?: string;
@@ -144,7 +161,7 @@ export const httpMetricsSource: MetricsSource = {
     // A failure propagates. It used to be swallowed into [], which the page
     // showed as "no data in the database" for a server that never answered.
     const batch = await getJson<MetricSeriesBatchResponse>(
-      `api.php?action=metric_series_batch&monitor_id=${monitorId}&period=${range}`
+      `api.php?action=metric_series_batch&monitor_id=${monitorId}&period=${range}&lang=${uiLang()}`
     );
     // PHP encodes an empty map as [], so an array is a real empty answer; a
     // missing or scalar `series` is a broken one.
@@ -153,6 +170,12 @@ export const httpMetricsSource: MetricsSource = {
     }
 
     const validCharts: ChartData[] = [];
+    // The window the answer stands for, ending now: the charts pin their time
+    // axis to it so an agent that fell silent leaves visible empty space
+    // (charts-02) instead of an axis that quietly ends at its last report.
+    const chartWindow = windowFor(range, Date.now());
+    const previousAvg = (data: { previousAvg?: number | null }) =>
+      typeof data.previousAvg === 'number' && Number.isFinite(data.previousAvg) ? data.previousAvg : undefined;
 
     for (const metric of CHART_METRICS) {
       const data = batch.series[metric.key];
@@ -161,6 +184,7 @@ export const httpMetricsSource: MetricsSource = {
           id: metric.key,
           title: data.label || metric.title,
           featured: true,
+          window: chartWindow,
           yMax: metric.yMax,
           yMin: metric.yMin,
           // The "full in X days" badge finally has a number. Undefined stays
@@ -171,8 +195,9 @@ export const httpMetricsSource: MetricsSource = {
               key: metric.key,
               label: data.label || metric.title,
               unit: data.unit ?? '',
-              tone: metric.tone,
+              tone: metricTone(metric.key),
               points: toPoints(data.points),
+              previousAvg: previousAvg(data),
             },
           ],
         });
@@ -193,6 +218,7 @@ export const httpMetricsSource: MetricsSource = {
         id: key,
         title: data.label || key,
         featured: false,
+        window: chartWindow,
         yMax: null,
         // An unknown scale derives its range from the data: pinning a zero
         // floor would flatten every negative and every narrow series.
@@ -202,8 +228,9 @@ export const httpMetricsSource: MetricsSource = {
             key,
             label: data.label || key,
             unit: data.unit ?? '',
-            tone: 'latency',
+            tone: metricTone(key),
             points: toPoints(data.points),
+            previousAvg: previousAvg(data),
           },
         ],
       });
@@ -217,7 +244,7 @@ export const httpMetricsSource: MetricsSource = {
 
   async getMetricDetail(monitorId: number, metric: string): Promise<MetricDetail> {
     return getJson<MetricDetail>(
-      `api.php?action=metric_detail&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}`
+      `api.php?action=metric_detail&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&lang=${uiLang()}`
     );
   },
 
@@ -228,7 +255,7 @@ export const httpMetricsSource: MetricsSource = {
     previous = false
   ): Promise<MetricSeriesResponse> {
     const res = await getJson<MetricSeriesResponse>(
-      `api.php?action=metric_series&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&period=${range}${previous ? '&previous=1' : ''}`
+      `api.php?action=metric_series&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&period=${range}${previous ? '&previous=1' : ''}&lang=${uiLang()}`
     );
     // An empty series is a legitimate answer (the agent does not report this
     // metric), a broken shape is not - it would surface in the chart as "no
@@ -241,7 +268,7 @@ export const httpMetricsSource: MetricsSource = {
 
   async getMetricHeatmap(monitorId: number, metric: string, days: number): Promise<MetricHeatmapResponse> {
     const res = await getJson<MetricHeatmapResponse>(
-      `api.php?action=metric_heatmap&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&days=${days}`
+      `api.php?action=metric_heatmap&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&days=${days}&lang=${uiLang()}`
     );
     if (!Array.isArray(res?.days)) {
       throw new Error(res?.error ?? 'Neplatná odpověď metric_heatmap.');
@@ -256,7 +283,7 @@ export const httpMetricsSource: MetricsSource = {
     all = false
   ): Promise<MetricCorrelationsResponse> {
     const res = await getJson<MetricCorrelationsResponse>(
-      `api.php?action=metric_correlations&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&period=${range}${all ? '&all=1' : ''}`
+      `api.php?action=metric_correlations&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&period=${range}${all ? '&all=1' : ''}&lang=${uiLang()}`
     );
     if (!Array.isArray(res?.correlations)) {
       throw new Error(res?.error ?? 'Neplatná odpověď metric_correlations.');

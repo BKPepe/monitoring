@@ -1,11 +1,10 @@
 import * as React from 'react';
-import { Card } from '@/components/ui/card';
-import { HardDrive, ArrowDownToLine, ArrowUpFromLine, Pencil, Info } from 'lucide-react';
+import { ArrowDownToLine, ArrowUpFromLine, Pencil, Info } from 'lucide-react';
 import { DiskHealthList } from '@/components/disk-health-list';
 import type { AgentTools, StorageDisk } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
 import { MetricHelpIcon } from '@/components/metric-help-icon';
-import { cn } from '@/lib/utils';
+import { RangeMeter } from '@/components/meter';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface Filesystem {
@@ -100,16 +99,14 @@ export function StorageCard({
   const writeRates: Record<string, number | null> = {};
   for (const dev of devices) writeRates[dev.device] = dev.write_kbps;
 
-  const barColor = (pct: number) => (pct >= 90 ? 'bg-down' : pct >= 75 ? 'bg-warning' : 'bg-primary');
+  // Neutral until nearly full (C-9); the brand red filled every healthy mount like an alarm.
+  const fullTone = (pct: number) => (pct >= 90 ? 'down' : pct >= 75 ? 'warning' : null);
 
   return (
-    <Card className="space-y-5 p-6">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border pb-3">
-        <HardDrive className="size-5 text-primary" />
-        <h3 className="text-base font-bold">{t('storage.title', 'Úložiště')}</h3>
-        <MetricHelpIcon metric="hdd" />
-      </div>
-
+    // The storage tab's panel is the frame (NetPulse look), titled "Úložiště"
+    // with the metric's help next to the name; this is its body, so the name
+    // is not said twice.
+    <div className="space-y-5" data-slot="storage">
       {recommendations}
 
       {hasDisks && (
@@ -133,12 +130,14 @@ export function StorageCard({
                   <span className="ml-2 tabular-nums">{fs.used_pct} %</span>
                 </span>
               </div>
-              <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
-                <div
-                  className={cn('h-full rounded-full', barColor(fs.used_pct))}
-                  style={{ width: `${Math.min(100, Math.max(0, fs.used_pct))}%` }}
-                />
-              </div>
+              <RangeMeter
+                min={0}
+                max={100}
+                value={fs.used_pct}
+                tone={fullTone(fs.used_pct)}
+                label={fs.mount}
+                valueText={`${fs.used_pct} %`}
+              />
               <p className="text-muted-foreground font-mono text-3xs">
                 {fs.device}
                 {fs.fstype ? ` · ${fs.fstype}` : ''}
@@ -226,6 +225,6 @@ export function StorageCard({
           </p>
         </div>
       )}
-    </Card>
+    </div>
   );
 }

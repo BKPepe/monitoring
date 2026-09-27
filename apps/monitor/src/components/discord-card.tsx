@@ -1,4 +1,3 @@
-import { Card } from '@/components/ui/card';
 import { StatBlock } from '@/components/stat-block';
 import { MessageSquare, Volume2, Users, ExternalLink } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
@@ -55,11 +54,11 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
   };
 
   return (
-    <Card className="space-y-4 p-6">
+    <div data-slot="well" className="bg-inset rounded-xl border border-border space-y-4 p-5">
       <div className="flex items-center gap-3 border-b border-border pb-3">
         <MessageSquare className="size-5" style={{ color: '#5865F2' }} />
         <div className="min-w-0">
-          <h3 className="text-base font-bold">{d.name || t('discord.title', 'Discord server')}</h3>
+          <h3 className="text-sm font-semibold">{d.name || t('discord.title', 'Discord server')}</h3>
           <p className="text-muted-foreground text-xs">{t('discord.subtitle', 'Živý stav ze serverového widgetu.')}</p>
         </div>
         {d.instant_invite && (
@@ -67,7 +66,7 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
             href={d.instant_invite}
             target="_blank"
             rel="noreferrer"
-            className="text-primary ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-semibold hover:underline"
+            className="text-link ml-auto inline-flex shrink-0 items-center gap-1 text-xs font-semibold hover:underline"
           >
             {t('discord.invite', 'Pozvánka')} <ExternalLink className="size-3" />
           </a>
@@ -140,6 +139,6 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
           </p>
         </div>
       )}
-    </Card>
+    </div>
   );
 }

@@ -19,14 +19,25 @@ export function formatMs(value: number | null | undefined): string {
  * half-up rounding turned 99.999 % uptime - a month with an outage in it -
  * into "100.00 %", so it stops one step short ("99.99 %") instead.
  */
-export function formatPercent(value: number | null | undefined, digits = 0): string {
-  return value == null ? '—' : `${formatPercentValue(value, digits)} %`;
+export function formatPercent(value: number | null | undefined, digits = 0, lang?: string): string {
+  return value == null ? '—' : `${formatPercentValue(value, digits, lang)} %`;
 }
 
-/** The number alone, for a place that prints the unit apart ("99.99" next to "%"). */
-export function formatPercentValue(value: number, digits = 0): string {
+/**
+ * The number alone, for a place that prints the unit apart ("99.99" next to
+ * "%"). With `lang` it is written the way that language writes numbers - a
+ * Czech page printed "97.7 %" (C-5); without it, the plain fixed-point form a
+ * CSV or an attribute needs. The digits stay fixed either way: 99.90 keeps
+ * saying it was measured to two places.
+ */
+export function formatPercentValue(value: number, digits = 0, lang?: string): string {
   const shown = value < 100 && Number(value.toFixed(digits)) >= 100 ? 100 - 10 ** -digits : value;
-  return shown.toFixed(digits);
+  if (lang === undefined) return shown.toFixed(digits);
+  return new Intl.NumberFormat(lang === 'en' ? 'en-GB' : 'cs-CZ', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+    useGrouping: false,
+  }).format(Number(shown.toFixed(digits)));
 }
 
 /**

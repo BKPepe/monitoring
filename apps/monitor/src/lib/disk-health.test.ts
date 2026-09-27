@@ -13,7 +13,6 @@ import {
   uncleanShare,
   verdictSentence,
   wearLabel,
-  worstDisk,
   writtenPerDay,
 } from './disk-health';
 
@@ -241,23 +240,5 @@ describe('verdictSentence', () => {
     const { verdict } = verdictSentence(never, null, now, record);
     expect(verdict.key).toBe('storage.smart_standby_never');
     expect(calls.at(-1)?.params).toEqual({});
-  });
-});
-
-describe('worstDisk', () => {
-  it('picks the failing disk over the warm one, and a warning over a healthy disk', () => {
-    const failing: StorageDisk = { ...disk, name: 'sdb', smart: { ...disk.smart!, state: 'failing' } };
-    const missing: StorageDisk = { ...disk, name: 'sdc', smart: { state: 'not_installed' } };
-    expect(worstDisk([disk, failing, missing])?.name).toBe('sdb');
-    expect(worstDisk([disk, missing])?.name).toBe('sdc');
-  });
-
-  it('an unreadable disk outranks a healthy one: a router with one is not all good', () => {
-    const asleep: StorageDisk = { ...disk, name: 'sdb', smart: { state: 'standby', checked_at: null } };
-    expect(worstDisk([disk, asleep])?.name).toBe('sdb');
-  });
-
-  it('an empty list has no worst disk', () => {
-    expect(worstDisk([])).toBeNull();
   });
 });

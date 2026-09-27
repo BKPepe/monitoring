@@ -50,14 +50,6 @@ export function radioGenerationLabel(r: WifiRadio, t: TranslateFn): string | nul
   return isGeneration(r.generation) ? generationLabel(r.generation, r.band, t) : null;
 }
 
-/** `Wi-Fi 6 · 80 MHz`, or null when the mode is unknown - never "Wi-Fi 0" or "Wi-Fi null". */
-export function radioProfileLabel(r: WifiRadio, t: TranslateFn): string | null {
-  if (!isGeneration(r.generation)) return null;
-  const label = generationLabel(r.generation, r.band, t);
-  const width = count(r.width_mhz);
-  return width ? `${label} · ${t('net.wifi_width', { mhz: width }, `${width} MHz`)}` : label;
-}
-
 /**
  * What the card could do on THIS band, only when that is more than it runs.
  * A line that repeats the current mode would read as advice to change nothing.

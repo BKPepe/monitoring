@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/ui/panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -125,17 +125,11 @@ export function UserAuditLog() {
   };
 
   return (
-    <Card className="space-y-4 p-5">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-3">
-        <div className="min-w-0">
-          <h3 className="flex items-center gap-2 text-base font-bold">
-            <ShieldAlert className="size-4 text-primary" />
-            {t('uaudit.title', 'Auditní protokol uživatelů')}
-          </h3>
-          <p className="text-muted-foreground mt-0.5 text-xs">
-            {t('uaudit.subtitle', 'Kdo se přihlásil, kdo co změnil. Včetně neúspěšných pokusů.')}
-          </p>
-        </div>
+    <Panel
+      icon={ShieldAlert}
+      title={t('uaudit.title', 'Auditní protokol uživatelů')}
+      hint={t('uaudit.subtitle', 'Kdo se přihlásil, kdo co změnil. Včetně neúspěšných pokusů.')}
+      action={
         <Button
           variant="outline"
           size="sm"
@@ -149,13 +143,14 @@ export function UserAuditLog() {
           <RefreshCw className={refreshing ? 'size-3.5 animate-spin' : 'size-3.5'} />
           {t('common.refresh', 'Obnovit')}
         </Button>
-      </div>
-
+      }
+      bodyClassName="space-y-4"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <select
           value={filter}
           onChange={(e) => setFilterAndReset(e.target.value as typeof filter)}
-          className="bg-secondary/60 h-8 rounded-md border border-input px-2 text-xs"
+          className="bg-secondary/60 border-input hover:border-border-strong focus-visible:border-ring h-8 rounded-md border px-2 text-xs"
           aria-label={t('uaudit.filter_aria', 'Filtr záznamů')}
         >
           <option value="all">{t('uaudit.filter_all', 'Vše')}</option>
@@ -280,6 +275,6 @@ export function UserAuditLog() {
           )}
         </>
       )}
-    </Card>
+    </Panel>
   );
 }

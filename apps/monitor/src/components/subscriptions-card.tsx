@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { BellRing, Check, Save } from 'lucide-react';
-import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/ui/panel';
 import { useLanguage } from '@/context/language-context';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 
@@ -64,20 +64,15 @@ export function SubscriptionsCard() {
   };
 
   return (
-    <Card className="space-y-5 p-6">
-      <div className="flex items-center gap-3 border-b border-border pb-3">
-        <BellRing className="size-5 text-primary" />
-        <div>
-          <h3 className="text-sm font-semibold">{t('settings.subs_title', 'Odběr notifikací pro můj účet')}</h3>
-          <p className="text-muted-foreground text-3xs">
-            {t(
-              'settings.subs_desc',
-              'Zvolte, pro které monitory chcete dostávat e-mailové, SMS nebo WhatsApp notifikace při výpadku.'
-            )}
-          </p>
-        </div>
-      </div>
-
+    <Panel
+      icon={BellRing}
+      title={t('settings.subs_title', 'Odběr notifikací pro můj účet')}
+      hint={t(
+        'settings.subs_desc',
+        'Zvolte, pro které monitory chcete dostávat e-mailové, SMS nebo WhatsApp notifikace při výpadku.'
+      )}
+      bodyClassName="space-y-5"
+    >
       {error && <ErrorState size="inline" message={error} />}
 
       {subs === null ? (
@@ -124,6 +119,6 @@ export function SubscriptionsCard() {
           </div>
         </div>
       )}
-    </Card>
+    </Panel>
   );
 }

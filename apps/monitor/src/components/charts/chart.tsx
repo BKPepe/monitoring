@@ -8,11 +8,11 @@ import {
   MarkAreaComponent,
   MarkLineComponent,
   MarkPointComponent,
-  ToolboxComponent,
   TooltipComponent,
 } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsCoreOption } from 'echarts/core';
+import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
 
 /**
@@ -25,7 +25,10 @@ import { cn } from '@/lib/utils';
  * MarkLine/MarkArea and DataZoom are here ahead of time — Sprint 5 (zoom,
  * brush, event markers) will need them and registering them later means
  * hunting down why annotations silently do not draw. MarkPoint draws the dot
- * on the newest sample, and only when that sample is fresh.
+ * on the newest sample, and only when that sample is fresh. There is no
+ * ToolboxComponent (about 26 kB): PNG, CSV and reset live in a "⋯" menu
+ * outside the canvas (chart-menu.tsx), where the toolbox no longer covers
+ * the legend (charts-11) and a keyboard reaches the actions.
  */
 echarts.use([
   LineChart,
@@ -38,9 +41,44 @@ echarts.use([
   MarkLineComponent,
   MarkAreaComponent,
   MarkPointComponent,
-  ToolboxComponent,
   CanvasRenderer,
 ]);
+
+/**
+ * Czech names for the time axis (charts-22: an English "Sep" in the Czech UI).
+ * Only the time block: everything else ECharts would localise is text we
+ * write ourselves, and the full locale file is 5 kB of it. A registered locale
+ * is merged over the English default, so the rest still resolves.
+ */
+echarts.registerLocale('CS', {
+  time: {
+    month: [
+      'leden',
+      'únor',
+      'březen',
+      'duben',
+      'květen',
+      'červen',
+      'červenec',
+      'srpen',
+      'září',
+      'říjen',
+      'listopad',
+      'prosinec',
+    ],
+    monthAbbr: ['led', 'úno', 'bře', 'dub', 'kvě', 'čvn', 'čvc', 'srp', 'zář', 'říj', 'lis', 'pro'],
+    dayOfWeek: ['neděle', 'pondělí', 'úterý', 'středa', 'čtvrtek', 'pátek', 'sobota'],
+    dayOfWeekAbbr: ['ne', 'po', 'út', 'st', 'čt', 'pá', 'so'],
+  },
+} as Parameters<typeof echarts.registerLocale>[1]);
+
+/** What a chart's "⋯" menu can ask of the canvas. */
+export interface ChartHandle {
+  /** Downloads the canvas as `${name}.png` on the given background. */
+  exportPng: (name: string, background: string) => void;
+  /** Back to the whole window after a zoom. */
+  resetZoom: () => void;
+}
 
 export { echarts };
 
@@ -80,6 +118,8 @@ export interface ChartProps {
    * and the statistics another.
    */
   onZoom?: (window: { from: number; to: number } | null) => void;
+  /** Receives the export/reset handle for a menu outside the canvas. */
+  handleRef?: React.Ref<ChartHandle>;
 }
 
 export function Chart({
@@ -92,9 +132,30 @@ export function Chart({
   group,
   onPickTime,
   onZoom,
+  handleRef,
 }: ChartProps) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const instanceRef = React.useRef<echarts.ECharts | null>(null);
+  const { lang } = useLanguage();
+  // ECharts takes its locale at init only, so a language switch re-creates
+  // the instance - and every effect below that talks to it runs again.
+  const locale = lang === 'en' ? 'EN' : 'CS';
+
+  React.useImperativeHandle(
+    handleRef,
+    () => ({
+      exportPng: (name, background) => {
+        const url = instanceRef.current?.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: background });
+        if (!url) return;
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${name}.png`;
+        a.click();
+      },
+      resetZoom: () => instanceRef.current?.dispatchAction({ type: 'dataZoom', start: 0, end: 100 }),
+    }),
+    []
+  );
 
   // Init + cleanup. An ECharts instance holds the canvas and listeners — without
   // dispose() it stays in memory after unmount and stacks up on returning to the page.
@@ -103,6 +164,7 @@ export function Chart({
 
     const instance = echarts.init(containerRef.current, undefined, {
       renderer: 'canvas',
+      locale,
     });
     instanceRef.current = instance;
 
@@ -122,7 +184,7 @@ export function Chart({
       instance.dispose();
       instanceRef.current = null;
     };
-  }, [group]);
+  }, [group, locale]);
 
   // A click anywhere in the area, not just on a data point: the user aims at a
   // moment in time, not a specific sample. `zr` (ZRender) provides coordinates
@@ -140,9 +202,10 @@ export function Chart({
     };
     zr.on('click', handler);
     return () => {
-      zr.off('click', handler);
+      if (!instance.isDisposed()) zr.off('click', handler);
     };
-  }, [onPickTime]);
+    // locale and group re-create the instance: the listener goes onto the new one.
+  }, [onPickTime, locale, group]);
 
   React.useEffect(() => {
     const instance = instanceRef.current;
@@ -165,9 +228,9 @@ export function Chart({
     };
     instance.on('dataZoom', handler);
     return () => {
-      instance.off('dataZoom', handler);
+      if (!instance.isDisposed()) instance.off('dataZoom', handler);
     };
-  }, [onZoom]);
+  }, [onZoom, locale, group]);
 
   React.useEffect(() => {
     const instance = instanceRef.current;
@@ -190,7 +253,8 @@ export function Chart({
     if (wasZoomed) {
       instance.dispatchAction({ type: 'dataZoom', start: previous.start, end: previous.end });
     }
-  }, [option]);
+    // A re-created instance (locale, group) starts empty and needs the option again.
+  }, [option, locale, group]);
 
   return (
     <figure className={cn('relative', className)}>
@@ -208,8 +272,9 @@ export function Chart({
             </tr>
           </thead>
           <tbody>
-            {table.rows.map((row) => (
-              <tr key={row[0]}>
+            {table.rows.map((row, r) => (
+              // Two columns can share a label (two speed tests in one minute).
+              <tr key={`${row[0]}-${r}`}>
                 {row.map((cell, i) =>
                   i === 0 ? (
                     <th key={i} scope="row">

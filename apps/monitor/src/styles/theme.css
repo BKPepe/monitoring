@@ -24,6 +24,10 @@
      Světlejší #E5383B by dal jen 4.2:1 a spadl pod WCAG AA. */
   --primary: #a30d18;
   --primary-foreground: #ffffff;
+  /* Text links. --primary is a FILL colour: as 12 px text on the dark card it
+     was 3.7:1 (PA-9). The link token keeps >= 4.5:1 on every ground in both
+     themes (theme-contrast.test); in light it is the brand red itself. */
+  --link: #a30d18;
 
   --secondary: #eef0f3;
   --secondary-foreground: #0b0d10;
@@ -77,6 +81,7 @@
      Pořadí je závazné: CPU vždy zelená, RAM modrá, síť tyrkysová, teplota
      oranžová. Uživatel čte stejnou metriku stejnou barvou napříč celou
      aplikací, jinak musí pokaždé znovu louskat legendu.
+     Which hue a metric gets is decided by one map: lib/metric-tone.ts.
      Hodnoty tady jsou pro SVĚTLÝ podklad, tmavé varianty jsou v .dark - stejně
      jako u --status-*. Dokud tenhle blok platil pro obě témata, byla čára
      latence na bílé kartě v kontrastu ~1,2:1, tedy prakticky neviditelná. */
@@ -134,6 +139,27 @@
   --port-wan-edge: #4fb0cf;
   --port-wan-glow: rgb(79 176 207 / 0.22);
 
+  /* --- The NetPulse kit (components/ui/panel, pill, list-row, key-value,
+     health-ring and the shell). Two more grounds on top of the card:
+     --inset is a well cut into a card (the range switcher track, a KPI box, a
+     code line), --raised is a row lifted off it (a hovered or highlighted list
+     row). Both stay inside the status-contrast test, so a verdict word keeps
+     4.5:1 on them, tinted or not. The light theme is not the dark one
+     inverted: its card is the grey sheet on a white page, so the well goes
+     one step darker and the lifted row goes white. */
+  --inset: #eef0f3;
+  --raised: #ffffff;
+  /* A light edge along the top of a panel - the sheen the reference cards
+     have. On white paper a sheen would be invisible, so light mode makes the
+     top a touch whiter instead. Decoration only. */
+  --card-sheen: rgb(255 255 255 / 0.75);
+  --card-shadow: 0 1px 2px rgb(16 24 40 / 0.06);
+  --pop-shadow: 0 12px 32px -12px rgb(16 24 40 / 0.22);
+  /* The halo of a panel or a ring that is in a state (a router in warning):
+     alpha of the tone behind it. 0 in light, where a glow reads as a smudge;
+     the 1 px ring in the tone's colour stays and carries the edge alone. */
+  --tone-glow: 0;
+
   --radius: 0.625rem;
 }
 
@@ -149,6 +175,7 @@
 
   --primary: #d62b30;
   --primary-foreground: #ffffff;
+  --link: #ff6b6e;
 
   --secondary: #1f2329;
   --secondary-foreground: #e5e7eb;
@@ -215,6 +242,15 @@
   --chart-grid: rgb(255 255 255 / 0.06);
   --chart-glow: 8;
   --chart-fill: 0.3;
+  /* Dark kit grounds sit between the card (#111418) and --secondary
+     (#1f2329): a well is one step down from a hover, and both keep every
+     status colour at AA (theme-contrast.test). */
+  --inset: #15191e;
+  --raised: #191d23;
+  --card-sheen: rgb(255 255 255 / 0.035);
+  --card-shadow: inset 0 1px 0 rgb(255 255 255 / 0.03), 0 12px 32px -20px rgb(0 0 0 / 0.9);
+  --pop-shadow: 0 16px 40px -12px rgb(0 0 0 / 0.75);
+  --tone-glow: 0.28;
 }
 
 /* Mapování tokenů do Tailwind utility tříd (bg-card, text-muted-foreground…). */
@@ -227,6 +263,7 @@
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
+  --color-link: var(--link);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
   --color-muted: var(--muted);
@@ -244,6 +281,11 @@
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-border: var(--sidebar-border);
+
+  --color-inset: var(--inset);
+  --color-raised: var(--raised);
+  --shadow-card: var(--card-shadow);
+  --shadow-pop: var(--pop-shadow);
 
   --color-up: var(--status-up);
   --color-down: var(--status-down);
@@ -337,11 +379,74 @@
   }
 }
 
+/* Stripes for a day that was measured only in part (C-7 DayStrip). The
+   stripe is currentColor, so a cell picks its hue with a status text class
+   and the hatched day keeps the colour of a full one - no second palette. */
+@utility hatch {
+  background-image: repeating-linear-gradient(135deg, currentColor 0 1.5px, transparent 1.5px 4px);
+}
+
 /* The halo behind a sparkline trace, in the trace's own colour
    (currentColor). Sized by --chart-glow, which is 0 in the light theme and on
    paper, so it only exists where the theme asks for it. Decoration only. */
 .chart-glow {
   filter: drop-shadow(0 0 calc(var(--chart-glow) * 0.35px) currentColor);
+}
+
+/* --- Kit utilities -------------------------------------------------------
+   A measured figure: mono with tabular digits, so a refreshed value does not
+   shift sideways and 1 and 7 line up in a column (apps/site DESIGN.md). */
+@utility figure {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* The uppercase micro-label above a figure or a key-value row. One class
+   instead of five utilities, so a label cannot drift to 9 px on one page. */
+@utility micro-label {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+/* The sheen along the top of a panel (see --card-sheen). */
+@utility panel-sheen {
+  background-image: linear-gradient(180deg, var(--card-sheen), transparent 7rem);
+}
+
+/* A panel or a ring in a state: `tone-warning tone-edge` draws a 1 px ring
+   in the status colour and, in the dark theme, a soft halo of it. The state
+   is always said in words inside (a pill, a sentence) - the edge only makes
+   the card findable in a grid. */
+@utility tone-up {
+  --tone: var(--status-up);
+}
+@utility tone-warning {
+  --tone: var(--status-warning);
+}
+@utility tone-down {
+  --tone: var(--status-down);
+}
+@utility tone-info {
+  --tone: var(--status-info);
+}
+@utility tone-edge {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--tone, transparent) 60%, transparent),
+    0 0 28px -6px color-mix(in oklab, var(--tone, transparent) calc(var(--tone-glow) * 100%), transparent);
+}
+
+/* The phone tab bar sits over the page; the page leaves it room, including
+   the home indicator's safe area. */
+@utility pb-tabbar {
+  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+}
+@utility safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* Router port panel: the halo behind the WAN jack, the glow of a lit LED and
@@ -383,6 +488,7 @@
     --popover-foreground: #0b0d10;
     --primary: #a30d18;
     --primary-foreground: #ffffff;
+    --link: #a30d18;
     --secondary: #eef0f3;
     --secondary-foreground: #0b0d10;
     --muted: #eef0f3;
@@ -433,6 +539,12 @@
     --port-wan: #0a7896;
     --port-wan-edge: #4fb0cf;
     --port-wan-glow: rgb(79 176 207 / 0.22);
+    --inset: #eef0f3;
+    --raised: #ffffff;
+    --card-sheen: rgb(255 255 255 / 0.75);
+    --card-shadow: 0 1px 2px rgb(16 24 40 / 0.06);
+    --pop-shadow: 0 12px 32px -12px rgb(16 24 40 / 0.22);
+    --tone-glow: 0;
   }
 
   /* Skrýt veškerou navigaci, header, search bar, dialogy, sidebar, footer a akční tlačítka bez obsahu */

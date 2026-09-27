@@ -1,4 +1,7 @@
-import type { MetricPoint, MetricTone } from '@/api/types';
+import type { ChartData, MetricPoint, MetricSeries, MetricTone } from '@/api/types';
+import { formatDuration, formatMetricValue, formatNumber } from '@/lib/metric-format';
+import { distinctTones } from '@/lib/metric-tone';
+import { convertRate, isRateMetric, suggestRateUnit } from '@/lib/rate-units';
 import { insertGaps, medianStep } from '@/lib/series-gaps';
 import { escapeHtml, withAlpha } from './color';
 
@@ -57,12 +60,25 @@ export const NO_VALUE = '—';
  */
 const DENSE = 2000;
 
-/** Two decimals at most, no trailing zeros; null and NaN print as a dash, never as 0. */
-export function formatChartValue(v: number | null | undefined, unit = ''): string {
+/**
+ * Two decimals at most, no trailing zeros; null and NaN print as a dash, never
+ * as 0. With `lang` the number is written the way that language writes it
+ * ("12,35 ms" on a Czech page - V-11) and a duration in seconds reads as
+ * "3 h 12 min"; without it, the plain form a CSV cell or an attribute needs.
+ */
+export function formatChartValue(v: number | null | undefined, unit = '', lang?: string): string {
   if (v == null || !Number.isFinite(v)) return NO_VALUE;
-  const n = String(Math.round(v * 100) / 100);
+  if (lang === undefined) {
+    const n = String(Math.round(v * 100) / 100);
+    return unit ? `${n} ${unit}` : n;
+  }
+  if (unit === 's') return formatDuration(v, lang);
+  const n = formatNumber(v, lang, 2);
   return unit ? `${n} ${unit}` : n;
 }
+
+/** The UI language behind a chart locale ('cs-CZ' / 'en-GB'). */
+const langOf = (locale: string) => (locale.startsWith('en') ? 'en' : 'cs');
 
 /** Locale-formatted timestamp, the same shape every other time in the app uses. */
 export function formatChartTime(ms: number, locale: string): string {
@@ -72,7 +88,8 @@ export function formatChartTime(ms: number, locale: string): string {
 /** 12 000 -> 12 k. Keeps a long axis label from eating the plot area. */
 function compact(value: number, locale: string): string {
   if (!Number.isFinite(value)) return NO_VALUE;
-  if (Math.abs(value) < 1000) return String(Math.round(value * 100) / 100);
+  // In the page's language: "0.5" under a Czech chart was the V-11 bug.
+  if (Math.abs(value) < 1000) return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value);
   return new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
 
@@ -165,6 +182,13 @@ export interface LineInput {
   stack?: string;
   /** Mark the newest point - only when the caller verified it is fresh. */
   endDot?: boolean;
+  /**
+   * Hold each value until the next one (no smoothing): a count or a state
+   * jumps between values, and a curve would claim the values in between.
+   */
+  step?: boolean;
+  /** A dot on every sample - for a sparse series, where each point is a fact of its own. */
+  symbols?: boolean;
 }
 
 /**
@@ -189,11 +213,12 @@ export function lineSeries(theme: ChartTheme, s: LineInput) {
     // [timestamp, value]; null stays null, so a gap is a break, not a drop to zero.
     data: points.map((p) => [p.t, p.v]),
     connectNulls: false,
-    showSymbol: false,
+    showSymbol: s.symbols === true,
     symbol: 'circle',
-    symbolSize: 8,
-    smooth: dense ? false : 0.3,
+    symbolSize: s.symbols ? 5 : 8,
+    smooth: dense || s.step ? false : 0.3,
     smoothMonotone: 'x' as const,
+    ...(s.step ? { step: 'end' as const } : {}),
     // LTTB keeps the extremes; 'average' would smooth away exactly the spike
     // the operator opened the chart for.
     sampling: 'lttb' as const,
@@ -242,14 +267,39 @@ const axisText = (theme: ChartTheme) => ({ color: theme.textMuted, fontSize: 10,
  */
 export function timeAxes(
   theme: ChartTheme,
-  { unit, yMin, yMax, locale }: { unit: string; yMin?: number | null; yMax?: number | null; locale: string }
+  {
+    unit,
+    yMin,
+    yMax,
+    locale,
+    window,
+  }: {
+    unit: string;
+    yMin?: number | null;
+    yMax?: number | null;
+    locale: string;
+    /**
+     * The period the chart stands for. The axis is pinned to it (charts-02):
+     * an agent that went silent at five used to end its "24 h" chart at five,
+     * looking healthy, instead of showing the empty evening.
+     */
+    window?: { from: number; to: number } | null;
+  }
 ) {
   return {
     xAxis: {
       type: 'time' as const,
+      min: window?.from,
+      max: window?.to,
       axisLine: { lineStyle: { color: theme.grid } },
       axisTick: { show: false },
-      axisLabel: { ...axisText(theme), hideOverlap: true },
+      axisLabel: {
+        ...axisText(theme),
+        hideOverlap: true,
+        // Day boundaries as "23. 9." in Czech and "23 Sep" in English
+        // (charts-22: an English "Sep" in the Czech UI).
+        formatter: langOf(locale) === 'en' ? { day: '{d} {MMM}' } : { day: '{d}. {M}.' },
+      },
       splitLine: { show: false },
     },
     yAxis: valueAxis(theme, { unit, yMin, yMax, locale }),
@@ -270,14 +320,15 @@ export function valueAxis(
     scale: yMin === null,
     axisLine: { show: false },
     axisTick: { show: false },
-    // The unit belongs on the axis; a percentage carries it on every tick.
-    name: unit && unit !== '%' ? unit : undefined,
+    // The unit belongs on the axis; a percentage and a duration carry it on every tick.
+    name: unit && unit !== '%' && unit !== 's' ? unit : undefined,
     nameLocation: 'end' as const,
     nameGap: 8,
     nameTextStyle: { ...axisText(theme), align: 'left' as const },
     axisLabel: {
       ...axisText(theme),
-      formatter: (value: number) => `${compact(value, locale)}${unit === '%' ? ' %' : ''}`,
+      formatter: (value: number) =>
+        unit === 's' ? formatDuration(value, langOf(locale)) : `${compact(value, locale)}${unit === '%' ? ' %' : ''}`,
     },
     splitLine: { lineStyle: { color: theme.grid, width: 1, type: 'solid' as const } },
   };
@@ -333,4 +384,125 @@ export function tooltipRow(theme: ChartTheme, color: string, name: string, value
     `<b style="font-family:${theme.fontMono};font-variant-numeric:tabular-nums;font-weight:600">${escapeHtml(value)}</b>` +
     `<span style="color:${theme.textMuted}">${escapeHtml(name)}</span></div>`
   );
+}
+
+/** Below this many measured points each sample gets a dot: 14 daily speed tests are 14 facts, not a curve. */
+export const SYMBOL_BELOW = 60;
+
+/** Measured points only - a null is not a sample. */
+export function measuredCount(points: readonly MetricPoint[]): number {
+  return points.reduce((n, p) => (p.v == null || !Number.isFinite(p.v) ? n : n + 1), 0);
+}
+
+/** Whole numbers with no unit: players, clients, leases. They change in steps, never along a slope. */
+export function isIntegerCount(s: MetricSeries): boolean {
+  if (s.unit !== '') return false;
+  const values = s.points.map((p) => p.v).filter((v): v is number => v != null);
+  return values.length > 0 && values.every(Number.isInteger);
+}
+
+/**
+ * The axis starts at zero and nothing is negative - the only case where the
+ * wash under a line is honest. Filled down to a floor derived from the data,
+ * 2 dB of jitter looked like a wall (charts-13).
+ */
+export function isZeroBased(data: ChartData): boolean {
+  return (
+    (data.yMin === undefined || data.yMin === 0) &&
+    data.series.every((s) => s.points.every((p) => p.v == null || p.v >= 0))
+  );
+}
+
+/**
+ * The chart as it is shown: throughput in the unit that reads, and measured
+ * series of one chart in hues that never repeat.
+ *
+ * Rates (charts-23): the agents report KB/s, and a gigabit line peaking at
+ * "125 000 KB/s" is not a number anyone recognises. Every KB/s series moves
+ * to one shared unit chosen by the primary series' average, and the day's
+ * range, the bands and the previous-period mean move with it.
+ *
+ * Hues (C-2): WAN and LTE traffic are both "network"; in one chart they were
+ * two lines of the same teal. The forecast and the previous-period overlay
+ * keep their own series' hue on purpose.
+ *
+ * Idempotent, so the card, its chart and its stats strip can each apply it.
+ */
+export function displayData(data: ChartData): ChartData {
+  const own = data.series.filter((s) => !s.predicted && !s.past);
+  const picked = distinctTones(own.map((s) => s.tone));
+  const toned = own.some((s, i) => s.tone !== picked[i])
+    ? data.series.map((s) => (s.predicted || s.past ? s : { ...s, tone: picked[own.indexOf(s)] }))
+    : data.series;
+
+  const primary = toned[0];
+  if (!primary || !isRateMetric(primary.unit)) return toned === data.series ? data : { ...data, series: toned };
+  const values = primary.points.map((p) => p.v).filter((v): v is number => v != null);
+  const unit = suggestRateUnit(values.length ? values.reduce((sum, v) => sum + v, 0) / values.length : null);
+  if (unit === 'KB/s') return toned === data.series ? data : { ...data, series: toned };
+  const conv = (s: MetricSeries): MetricSeries =>
+    isRateMetric(s.unit)
+      ? {
+          ...s,
+          unit,
+          points: s.points.map((p) => ({ t: p.t, v: convertRate(p.v, unit) })),
+          previousAvg: s.previousAvg == null ? s.previousAvg : convertRate(s.previousAvg, unit),
+        }
+      : s;
+  return {
+    ...data,
+    series: toned.map(conv),
+    range: data.range?.map((r) => ({ ...r, min: convertRate(r.min, unit), max: convertRate(r.max, unit) })),
+    bands: data.bands?.map((b) => ({
+      ...b,
+      from: convertRate(b.from, unit) ?? b.from,
+      to: convertRate(b.to, unit) ?? b.to,
+    })),
+  };
+}
+
+/** The last measured moment of the measured (not forecast, not past) series. */
+export function lastMeasuredAt(data: ChartData): number | null {
+  let last: number | null = null;
+  for (const s of data.series) {
+    if (s.predicted || s.past) continue;
+    for (const p of s.points) if (p.v != null && (last == null || p.t > last)) last = p.t;
+  }
+  return last;
+}
+
+/**
+ * The stretch at the end of the window with no measurement, or null. The
+ * chart shades it and says "bez dat od HH:MM": silence is information.
+ *
+ * Shorter than two and a half samples (or 90 s) is ordinary cadence, not
+ * silence - the same rule insertGaps uses for a hole inside the line.
+ */
+export function silentTail(data: ChartData): { from: number; to: number } | null {
+  const win = data.window;
+  const last = lastMeasuredAt(data);
+  if (!win || last == null) return null;
+  const step = medianStep(data.series[0]?.points.filter((p) => p.v != null) ?? []) ?? 60_000;
+  return win.to - last > Math.max(step * 2.5, 90_000) ? { from: Math.max(last, win.from), to: win.to } : null;
+}
+
+type Translate = (key: string, params?: Record<string, string | number> | string, fallback?: string) => string;
+
+/**
+ * "Varování od 65 % · Kritické od 80 %" - the band names live beside the
+ * chart, not on the plot, where both labels sat on top of the line (charts-20).
+ */
+export function bandCaption(data: ChartData, lang: string, t: Translate): string | null {
+  const bands = data.bands ?? [];
+  if (bands.length === 0) return null;
+  const unit = data.series[0]?.unit ?? '';
+  return bands
+    .map((b) =>
+      t(
+        'chart.band_from',
+        { label: b.label, value: formatMetricValue(b.from, unit, lang, false) },
+        '{label} od {value}'
+      )
+    )
+    .join(' · ');
 }

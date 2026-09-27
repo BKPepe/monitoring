@@ -1,33 +1,25 @@
+import * as React from 'react';
 import { Link } from 'react-router';
-import { cn, formatPercent } from '@/lib/utils';
-import type { DayStatus, UptimeHistoryRow } from '@/data/model';
+import type { UptimeHistoryRow } from '@/data/model';
 import { useLanguage } from '@/context/language-context';
+import { DayStrip, DayStripLegend } from '@/components/day-strip';
 
-// Tokens, not raw palette hues: these cells sit on both themes, and the ring
-// used to be picked from a different scale than the fill it surrounds.
-const cellClass: Record<DayStatus, string> = {
-  up: 'bg-up hover:ring-2 hover:ring-up/80',
-  warning: 'bg-warning hover:ring-2 hover:ring-warning/80',
-  down: 'bg-down hover:ring-2 hover:ring-down/80',
-  // The paused token, as in the health bar: bg-muted made a paused day the
-  // same near-white as an unmeasured one.
-  paused: 'bg-paused/60 hover:ring-2 hover:ring-paused/80',
-  maintenance: 'bg-info/70 hover:ring-2 hover:ring-info/80',
-  nodata: 'bg-muted/40 border border-dashed border-border hover:ring-2 hover:ring-muted-foreground/60',
-};
-
+/**
+ * The dashboard's 30-day history: one DayStrip per monitor (C-7), so a day
+ * reads the same here as on the public page and in the SLA report.
+ */
 export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
   const { t } = useLanguage();
   const dayCount = rows[0]?.days.length ?? 0;
-
-  const statusLabel: Record<DayStatus, string> = {
-    up: t('heatmap.status_up', 'Dostupné (100 %)'),
-    warning: t('heatmap.status_warning', 'Zhoršená latence'),
-    down: t('heatmap.status_down', 'Výpadek služby (Offline)'),
-    paused: t('common.paused', 'Pozastaveno'),
-    maintenance: t('heatmap.status_maintenance', 'Plánovaná údržba'),
-    nodata: t('heatmap.status_nodata', 'Bez měření'),
-  };
+  const caption = t('heatmap.caption', { days: dayCount }, `Denní dostupnost monitorů za posledních ${dayCount} dní`);
+  // Opens at the newest day. On a phone the box starts scrolled to the left,
+  // so the recent red and amber days - the reason each row is listed - sat
+  // off-screen and every strip looked green (V-08).
+  const box = React.useRef<HTMLDivElement>(null);
+  React.useLayoutEffect(() => {
+    const el = box.current;
+    if (el && el.scrollWidth > el.clientWidth) el.scrollLeft = el.scrollWidth;
+  }, [rows]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -35,147 +27,41 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
           inside its own box keeps the page from moving sideways, and the box
           takes focus so a keyboard can move it too. */}
       <div
+        ref={box}
         className="focus-visible:ring-ring overflow-x-auto overflow-y-visible py-2 focus-visible:ring-2 focus-visible:outline-none"
         tabIndex={0}
         role="region"
-        aria-label={t('heatmap.caption', { days: dayCount }, `Denní dostupnost monitorů za posledních ${dayCount} dní`)}
+        aria-label={caption}
       >
-        <table className="w-full border-separate border-spacing-y-2 text-sm overflow-visible">
-          <caption className="sr-only">
-            {t('heatmap.caption', { days: dayCount }, `Denní dostupnost monitorů za posledních ${dayCount} dní`)}
-          </caption>
+        <table className="w-full border-separate border-spacing-y-2 text-sm">
+          <caption className="sr-only">{caption}</caption>
           <tbody>
-            {rows.map((row, rowIdx) => {
-              const isTopRow = rowIdx <= 1;
-
-              return (
-                <tr key={row.monitorId} className="overflow-visible">
-                  <th
-                    scope="row"
-                    className="text-muted-foreground w-48 pr-3 text-left text-xs font-normal whitespace-nowrap"
+            {rows.map((row, rowIdx) => (
+              <tr key={row.monitorId}>
+                <th scope="row" className="w-48 pr-3 text-left text-xs font-normal whitespace-nowrap">
+                  <Link
+                    to={`/infrastructure/${row.monitorId}`}
+                    className="text-foreground font-semibold hover:underline"
                   >
-                    <Link
-                      to={`/infrastructure/${row.monitorId}`}
-                      className="hover:underline text-foreground font-semibold text-xs"
-                    >
-                      {row.name}
-                    </Link>
-                  </th>
-                  <td className="overflow-visible">
-                    <div className="flex gap-[4px] overflow-visible">
-                      {row.days.map((day, idx) => {
-                        const isNearRight = idx > row.days.length - 5;
-                        const isNearLeft = idx < 4;
-
-                        return (
-                          <div key={day.date} className="group relative flex-1">
-                            {/* Every cell was a link with no name: thirty of them
-                                per row, announced as "link, link, link" and
-                                readable only by hovering with a mouse. The name
-                                carries the day, the state and the number. */}
-                            <Link
-                              to={`/infrastructure/${row.monitorId}`}
-                              aria-label={`${row.name} · ${day.date} · ${statusLabel[day.status]}${
-                                day.uptimePct != null ? ` · ${formatPercent(day.uptimePct, 1)}` : ''
-                              }`}
-                              title={`${day.date} · ${statusLabel[day.status]}${
-                                day.uptimePct != null ? ` · ${formatPercent(day.uptimePct, 1)}` : ''
-                              }`}
-                              className={cn(
-                                'block h-8 min-w-[14px] cursor-pointer rounded-[4px]',
-                                'focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none',
-                                cellClass[day.status]
-                              )}
-                            />
-
-                            {/* The same card as every chart tooltip. It opens on keyboard
-                                focus as well as hover - the cell is a link a keyboard
-                                reaches, and a readout only a mouse could open was one
-                                a keyboard user never got. */}
-                            <div
-                              className={cn(
-                                'bg-popover text-popover-foreground border-border-strong pointer-events-none absolute z-50 hidden w-64 flex-col gap-1.5 rounded-[10px] border p-3 text-xs group-focus-within:flex group-hover:flex',
-                                isTopRow ? 'top-full mt-2.5' : 'bottom-full mb-2.5',
-                                isNearRight ? 'right-0' : isNearLeft ? 'left-0' : 'left-1/2 -translate-x-1/2'
-                              )}
-                            >
-                              <div className="flex items-center justify-between border-b border-border pb-1.5">
-                                <span className="text-foreground font-mono text-xs font-semibold">{day.date}</span>
-                                {day.uptimePct != null ? (
-                                  <span
-                                    className={cn(
-                                      'rounded-md px-2 py-0.5 font-mono text-xs font-semibold',
-                                      day.uptimePct >= 99.5
-                                        ? 'bg-up/15 text-up'
-                                        : day.uptimePct >= 95
-                                          ? 'bg-warning/15 text-warning'
-                                          : 'bg-down/15 text-down'
-                                    )}
-                                  >
-                                    {formatPercent(day.uptimePct, 1)} Uptime
-                                  </span>
-                                ) : (
-                                  <span className="bg-muted text-muted-foreground rounded-md px-2 py-0.5 text-xs font-semibold">
-                                    {t('heatmap.no_data_badge', 'Bez dat')}
-                                  </span>
-                                )}
-                              </div>
-
-                              <div className="flex items-center justify-between text-xs pt-0.5">
-                                <span className="text-muted-foreground">
-                                  {t('heatmap.monitor_status', 'Stav monitoru:')}
-                                </span>
-                                <span
-                                  className={cn(
-                                    'font-semibold',
-                                    day.status === 'down'
-                                      ? 'text-down'
-                                      : day.status === 'warning'
-                                        ? 'text-warning'
-                                        : day.status === 'nodata' || day.status === 'paused'
-                                          ? 'text-muted-foreground'
-                                          : 'text-up'
-                                  )}
-                                >
-                                  {statusLabel[day.status]}
-                                </span>
-                              </div>
-
-                              <div className="border-border text-muted-foreground border-t pt-1 font-sans text-xs leading-relaxed">
-                                {day.detail ??
-                                  (day.status === 'down'
-                                    ? t('heatmap.detail_down', 'Detekován výpadek.')
-                                    : day.status === 'warning'
-                                      ? t('heatmap.detail_warning', 'Zhoršená odezva zaznamenána.')
-                                      : day.status === 'maintenance'
-                                        ? t('heatmap.detail_maintenance', 'Plánovaná údržba.')
-                                        : day.status === 'paused'
-                                          ? t('heatmap.detail_paused', 'Monitor byl pozastaven.')
-                                          : day.status === 'nodata'
-                                            ? t('heatmap.detail_nodata', 'Pro tento den nejsou žádná měření.')
-                                            : t('heatmap.detail_up', 'Všechny testy dostupnosti proběhly bez chyb.'))}
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
+                    {row.name}
+                  </Link>
+                </th>
+                <td>
+                  <DayStrip
+                    days={row.days}
+                    label={`${row.name} · ${caption}`}
+                    href={`/infrastructure/${row.monitorId}`}
+                    // The top rows open downwards, or the card edge cuts the detail off.
+                    popoverSide={rowIdx <= 1 ? 'bottom' : 'top'}
+                  />
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 pt-1 text-xs sm:pl-48">
-        {(Object.keys(statusLabel) as DayStatus[]).map((status) => (
-          <span key={status} className="text-muted-foreground flex items-center gap-2 font-medium text-xs">
-            <span className={cn('size-3.5 rounded-[4px]', cellClass[status])} />
-            {statusLabel[status]}
-          </span>
-        ))}
-      </div>
+      <DayStripLegend className="sm:pl-48" />
     </div>
   );
 }

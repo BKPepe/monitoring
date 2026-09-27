@@ -7,26 +7,31 @@
  */
 
 export type MonitorStatus = 'up' | 'down' | 'warning' | 'paused' | 'maintenance';
-/** 'nodata' = the day was never measured; 'paused' = the monitor was deliberately off. */
-export type DayStatus = 'up' | 'down' | 'warning' | 'paused' | 'maintenance' | 'nodata';
-
-export interface HealthMetric {
-  key: string;
-  label: string;
-  value: string;
-  tone?: 'latency' | 'cpu' | 'memory' | 'disk';
-  caption?: string;
-  delta?: { direction: 'up' | 'down'; value: string };
-  goodDirection?: 'up' | 'down';
-  series?: number[];
-}
+/**
+ * One day of `action=daily_uptime` (C-7). 'nodata' = not one second measured;
+ * 'partial' = nothing worse, but less than 90 % of the day was measured. The
+ * server no longer sends 'paused' for an unmeasured day - that word belongs
+ * to a monitor the owner switched off.
+ */
+export type DayStatus = 'up' | 'down' | 'warning' | 'maintenance' | 'partial' | 'nodata';
 
 export interface DayUptime {
   date: string;
+  /** The calendar day, 'Y-m-d'. */
+  day?: string;
   status: DayStatus;
-  /** null = no check ran that day (no invented 0 %). */
+  /** (up + warning) / measured; null = nothing was measured (no invented 0 %). */
   uptimePct: number | null;
-  /** The day's real description from monitor_logs (failed check count, outage duration). */
+  /** The day's average response in ms; null until something answered. */
+  avgMs?: number | null;
+  /** Share of the day that was measured or in maintenance; null = unknown (a day rebuilt from check counts). */
+  coveragePct?: number | null;
+  measuredSecs?: number;
+  expectedSecs?: number | null;
+  downMin?: number;
+  degradedMin?: number;
+  maintenanceMin?: number;
+  /** The server's sentence about the day, in the request's language. */
   detail?: string;
 }
 
@@ -46,6 +51,20 @@ export interface TimelineEvent {
   atIso?: string | null;
   severity: 'up' | 'down' | 'warning' | 'info';
   resolution?: 'Resolved' | 'Info' | 'Open';
+  /**
+   * 'check' = one row of the check log (a routine pass is noise next to a
+   * change); absent = a change, a note or an action. The collapsed timeline
+   * (C-10) hides routine passes by default.
+   */
+  kind?: 'check';
+  /** Which outage a check belongs to; a collapsed run never crosses it. */
+  episode?: string | null;
+  /**
+   * The outage is running right now, as the data proves it (public page:
+   * no recorded end and the monitor down now). Set on one row per outage, so
+   * the "Probíhá" chip - the one thing a red dot cannot say - shows once.
+   */
+  ongoing?: boolean;
   location?: string;
   method?: string;
   /** The measured latency of that particular check; null = unmeasured. */

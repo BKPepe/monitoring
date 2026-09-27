@@ -1,5 +1,4 @@
 import * as React from 'react';
-import { Card } from '@/components/ui/card';
 import { Activity, Check, X, ChevronDown } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
@@ -49,30 +48,30 @@ export function CheckPipeline({ monitorId }: { monitorId: number }) {
 
   if (error) {
     return (
-      <Card className="p-6">
+      <div data-slot="well" className="bg-inset rounded-xl border border-border p-5">
         <p className="text-muted-foreground text-sm">{error}</p>
-      </Card>
+      </div>
     );
   }
 
   if (data === null) {
     return (
-      <Card className="p-6">
+      <div data-slot="well" className="bg-inset rounded-xl border border-border p-5">
         <LoadingState label={t('pipeline.loading', 'Načítám rozpad kontroly…')} />
-      </Card>
+      </div>
     );
   }
 
   if (!data.stages) {
     return (
-      <Card className="p-6">
+      <div data-slot="well" className="bg-inset rounded-xl border border-border p-5">
         <p className="text-foreground text-sm font-semibold">
           {t('pipeline.none_title', 'Rozpad kontroly zatím není k dispozici')}
         </p>
         <p className="text-muted-foreground mt-1 text-xs">
           {t('pipeline.none_desc', 'Uloží se při nejbližší HTTP kontrole tohoto cíle.')}
         </p>
-      </Card>
+      </div>
     );
   }
 
@@ -94,11 +93,11 @@ export function CheckPipeline({ monitorId }: { monitorId: number }) {
   }, 0);
 
   return (
-    <Card className="space-y-4 p-6">
+    <div data-slot="well" className="bg-inset rounded-xl border border-border space-y-4 p-5">
       <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
-        <Activity className="size-5 text-primary" />
+        <Activity className="text-muted-foreground size-5" aria-hidden="true" />
         <div className="min-w-0">
-          <h3 className="text-base font-bold">{t('pipeline.title', 'Rozpad kontroly')}</h3>
+          <h3 className="text-sm font-semibold">{t('pipeline.title', 'Rozpad kontroly')}</h3>
           <p className="text-muted-foreground text-xs">
             {t('pipeline.subtitle', 'Kolik času zabrala která fáze poslední kontroly.')}
           </p>
@@ -200,6 +199,6 @@ export function CheckPipeline({ monitorId }: { monitorId: number }) {
             ` · ${t('pipeline.measured', { ms: data.responseMs }, `naměřená odezva ${data.responseMs} ms`)}`}
         </p>
       )}
-    </Card>
+    </div>
   );
 }

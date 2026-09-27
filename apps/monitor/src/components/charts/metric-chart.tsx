@@ -1,15 +1,23 @@
 import * as React from 'react';
 import type { EChartsCoreOption } from 'echarts/core';
-import { Chart } from './chart';
+import { Chart, type ChartHandle } from './chart';
+import { ChartMenu, type MetricChartActions } from './chart-menu';
 import { escapeHtml, withAlpha } from './color';
 import {
+  bandCaption,
   crosshair,
+  displayData,
   formatChartTime,
   formatChartValue,
   isFresh,
+  isIntegerCount,
+  isZeroBased,
   lineSeries,
+  measuredCount,
   NO_VALUE,
+  silentTail,
   summarizeSeries,
+  SYMBOL_BELOW,
   timeAxes,
   tooltipBase,
   tooltipHeader,
@@ -20,6 +28,7 @@ import { useChartTheme, useNow, usePrefersReducedMotion } from './use-chart-them
 import type { ChartData, ChartEvent } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
 import { insertGaps, medianStep } from '@/lib/series-gaps';
+import { cn } from '@/lib/utils';
 
 type TranslateFn = (key: string, params?: Record<string, string | number> | string, fallback?: string) => string;
 
@@ -30,9 +39,18 @@ type TranslateFn = (key: string, params?: Record<string, string | number> | stri
  * here, in its sparkline and in its heatmap: the user recognises a metric by
  * its colour, not by reading the legend. Everything that makes the look -
  * line, wash, glow, axes, tooltip card - comes from chart-style.ts.
+ *
+ * What it says is held to the data: the time axis is pinned to the window,
+ * with the silent end shaded "bez dat od HH:MM"; a sparse series gets a dot
+ * per sample, a count or a state steps; the wash only sits on an axis that
+ * starts at zero; throughput is in Mbit/s; numbers are in the page's language.
+ *
+ * There is no canvas toolbox. PNG, CSV and reset sit in a "⋯" menu: in the
+ * card header when a ChartCard passes `actionsRef`, otherwise in the chart's
+ * own top-right corner.
  */
 export function MetricChart({
-  data,
+  data: raw,
   height = 200,
   group,
   onPickTime,
@@ -40,6 +58,7 @@ export function MetricChart({
   minimap = false,
   legend = true,
   bars = false,
+  actionsRef,
 }: {
   data: ChartData;
   height?: number;
@@ -66,10 +85,19 @@ export function MetricChart({
    * between. A day without a row simply has no column.
    */
   bars?: boolean;
+  /**
+   * Set by a card that draws the menu and the band caption in its own header;
+   * the chart then draws neither itself.
+   */
+  actionsRef?: React.Ref<MetricChartActions>;
 }) {
   const theme = useChartTheme();
   const { t, lang } = useLanguage();
   const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
+  const chartRef = React.useRef<ChartHandle>(null);
+  // Throughput in Mbit/s rather than "125 000 KB/s", and no two measured
+  // series in one hue - for the axis, the tooltip and the export alike.
+  const data = React.useMemo(() => displayData(raw), [raw]);
   const now = useNow();
   // The newest sample of the first series decides the end dot; it is a
   // boolean in the option's dependencies, so the 30-second clock only
@@ -111,10 +139,25 @@ export function MetricChart({
     URL.revokeObjectURL(url);
   }, [data]);
 
+  const actions = React.useMemo<MetricChartActions>(
+    () => ({
+      exportPng: () => chartRef.current?.exportPng(data.id, theme.surface),
+      exportCsv,
+      resetZoom: () => chartRef.current?.resetZoom(),
+    }),
+    [data.id, theme.surface, exportCsv]
+  );
+  React.useImperativeHandle(actionsRef, () => actions, [actions]);
+
   const option = React.useMemo<EChartsCoreOption>(() => {
     const unit = data.series[0]?.unit ?? '';
     const seriesColor = theme.series[data.series[0]?.tone ?? 'latency'];
-    const axes = timeAxes(theme, { unit, yMin: data.yMin, yMax: data.yMax, locale });
+    const axes = timeAxes(theme, { unit, yMin: data.yMin, yMax: data.yMax, locale, window: data.window });
+    const zeroBased = isZeroBased(data);
+    // Daily averages (90 d / 1 y carry a range) are never a step line - they are not counts.
+    const daily = (data.range?.length ?? 0) > 0;
+    const tail = silentTail(data);
+    const clock = (ms: number) => new Date(ms).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
 
     return {
       // The bezier and the entry animation are what makes thirteen 30-day
@@ -122,7 +165,7 @@ export function MetricChart({
       animation: !reducedMotion && totalPoints < 2000,
       animationDuration: 300,
       grid: { top: 28, right: 12, bottom: minimap ? 58 : 24, left: 44 },
-      // Zoom: dragging inside the chart (inside) and area selection (toolbox lens).
+      // Zoom: dragging inside the chart (inside); the "⋯" menu resets it.
       // Charts in a group zoom together (echarts.connect).
       dataZoom: [
         { type: 'inside', throttle: 50, zoomOnMouseWheel: 'ctrl', moveOnMouseWheel: false },
@@ -153,35 +196,6 @@ export function MetricChart({
             ]
           : []),
       ],
-      toolbox: {
-        show: true,
-        top: 0,
-        right: 0,
-        itemSize: 12,
-        itemGap: 6,
-        // Quiet until pointed at: the tools are for the operator who wants
-        // them, not a row of icons competing with the data.
-        iconStyle: { borderColor: withAlpha(theme.textMuted, 0.6) },
-        emphasis: { iconStyle: { borderColor: theme.text } },
-        feature: {
-          // ECharts draws these tooltips itself, so they need the translated
-          // text handed in.
-          dataZoom: {
-            yAxisIndex: 'none',
-            title: { zoom: t('chart.tool_zoom', 'Zoom výběrem'), back: t('chart.tool_zoom_back', 'Zpět') },
-          },
-          restore: { title: t('chart.tool_restore', 'Obnovit') },
-          saveAsImage: { title: t('chart.tool_png', 'Uložit PNG'), name: data.id, backgroundColor: theme.surface },
-          myCsv: {
-            show: true,
-            title: t('chart.tool_csv', 'Export CSV'),
-            // A document-with-arrow icon (a simple SVG path, so no icon
-            // package needs dragging into the canvas).
-            icon: 'path://M4 2h10l6 6v14H4V2z M14 2v6h6 M9 13h6 M12 10v6',
-            onclick: exportCsv,
-          },
-        },
-      },
       tooltip: {
         ...tooltipBase(theme),
         // Columns: the hovered column is the target. Lines: a crosshair that
@@ -189,7 +203,7 @@ export function MetricChart({
         trigger: bars ? 'item' : 'axis',
         axisPointer: bars ? undefined : crosshair(theme, locale),
         formatter: (params: unknown) =>
-          tooltipHtml(params, { data, theme, locale, unit, window: tooltipWindow, t, bars }),
+          tooltipHtml(params, { data, theme, locale, lang, unit, window: tooltipWindow, t, bars }),
       },
       xAxis: axes.xAxis,
       yAxis: axes.yAxis,
@@ -204,28 +218,50 @@ export function MetricChart({
                 points: s.points,
                 // A wash per series is mud when two lines overlap - except when
                 // they are stacked, where each band is its own share of the total.
-                area: data.series.length === 1 || data.stacked === true,
+                // And only from zero: a wash down to a floor taken from the data
+                // turns jitter into a wall (charts-13).
+                area: (data.series.length === 1 || data.stacked === true) && zeroBased,
                 dashed: s.predicted,
                 past: s.past,
                 stack: data.stacked ? 'bk-total' : undefined,
                 endDot: i === 0 && fresh && !s.predicted && !s.past,
+                step: s.step === true || (!daily && isIntegerCount(s)),
+                symbols: measuredCount(s.points) < SYMBOL_BELOW,
               }),
-              // Bands, periods, events and notes belong to the first series
-              // only - drawn twice they darken.
-              ...(i === 0 ? decorations(data, theme, locale) : {}),
+              // Bands, periods, events, notes and the silent tail belong to the
+              // first series only - drawn twice they darken.
+              ...(i === 0
+                ? decorations(
+                    data,
+                    theme,
+                    locale,
+                    tail
+                      ? {
+                          ...tail,
+                          label: t('chart.no_data_since', { time: clock(tail.from) }, `bez dat od ${clock(tail.from)}`),
+                        }
+                      : null
+                  )
+                : {}),
             })),
           ],
     };
-  }, [data, theme, reducedMotion, exportCsv, minimap, t, locale, tooltipWindow, totalPoints, fresh, bars]);
+  }, [data, theme, reducedMotion, minimap, t, locale, lang, tooltipWindow, totalPoints, fresh, bars]);
 
   const showLegend = legend && data.series.length > 1;
+  const caption = actionsRef ? null : bandCaption(data, lang, t);
 
   return (
-    <div>
+    <div className="relative">
+      {!actionsRef && (
+        <div className="absolute top-0 right-0 z-10">
+          <ChartMenu actions={actions} />
+        </div>
+      )}
       {showLegend && (
         // An HTML row, not the canvas legend: it wraps on a phone instead of
-        // running into the toolbox, and a screen reader can read it.
-        <ul className="text-muted-foreground mb-1 flex flex-wrap gap-x-4 gap-y-1 text-2xs">
+        // running into the menu, and a screen reader can read it.
+        <ul className={cn('text-muted-foreground mb-1 flex flex-wrap gap-x-4 gap-y-1 text-2xs', !actionsRef && 'pr-9')}>
           {data.series.map((s) => (
             <li key={s.key} className="flex items-center gap-1.5">
               <span
@@ -242,15 +278,17 @@ export function MetricChart({
         // A theme switch needs new canvas colours — a remount is the most
         // reliable way without leftovers of the old theme.
         key={theme.key}
+        handleRef={chartRef}
         option={option}
         height={height}
         group={group}
         ariaLabel={t('chart.aria_over_time', { title: data.title }, `${data.title} v čase`)}
-        summary={describe(data, t)}
-        table={bars ? tableOf(data, locale) : undefined}
+        summary={describe(data, t, lang)}
+        table={bars ? tableOf(data, locale, lang) : undefined}
         onPickTime={onPickTime}
         onZoom={onZoom}
       />
+      {caption && <p className="text-muted-foreground mt-1 text-2xs">{caption}</p>}
     </div>
   );
 }
@@ -295,13 +333,14 @@ function tooltipHtml(
     data: ChartData;
     theme: ChartTheme;
     locale: string;
+    lang: string;
     unit: string;
     window: number;
     t: TranslateFn;
     bars: boolean;
   }
 ): string {
-  const { data, theme, locale, unit, window, t } = ctx;
+  const { data, theme, locale, lang, unit, window, t } = ctx;
   const all = (Array.isArray(params) ? params : [params]) as {
     seriesName?: string;
     value?: [number, number | null];
@@ -311,9 +350,11 @@ function tooltipHtml(
   const rows = all.filter((r) => !BAND_SERIES.has(String(r.seriesName ?? '')));
   const first = rows[0];
   const at = Number(first?.axisValue ?? (Array.isArray(first?.value) ? first.value[0] : NaN));
-  // A per-day column is a day, not a minute.
+  // A per-day column is a day, not a minute; a column that stands for one
+  // moment (a single speed test) keeps its time.
+  const midnight = Number.isFinite(at) && new Date(at).getHours() === 0 && new Date(at).getMinutes() === 0;
   const header = Number.isFinite(at)
-    ? ctx.bars
+    ? ctx.bars && midnight
       ? new Date(at).toLocaleDateString(locale, { dateStyle: 'medium' })
       : formatChartTime(at, locale)
     : '';
@@ -322,7 +363,7 @@ function tooltipHtml(
   const lines = rows.map((r) => {
     const raw = Array.isArray(r.value) ? r.value[1] : null;
     const name = String(r.seriesName ?? '');
-    return tooltipRow(theme, colorOf(name), name, formatChartValue(raw, unit));
+    return tooltipRow(theme, colorOf(name), name, formatChartValue(raw, unit, lang));
   });
   // Everything that HAPPENED within half a sample of this moment.
   const near = [
@@ -337,7 +378,7 @@ function tooltipHtml(
   const spreadLine =
     spread && (spread.min != null || spread.max != null)
       ? `<div style="color:${theme.textMuted};margin-top:2px">${escapeHtml(t('chart.tooltip_range', 'Rozsah dne'))}: ` +
-        `<span style="font-family:${theme.fontMono}">${formatChartValue(spread.min)}–${formatChartValue(spread.max)} ${escapeHtml(unit)}</span>` +
+        `<span style="font-family:${theme.fontMono}">${escapeHtml(formatChartValue(spread.min, '', lang))}–${escapeHtml(formatChartValue(spread.max, unit, lang))}</span>` +
         (spread.samples != null
           ? ` · ${escapeHtml(t('chart.tooltip_samples', { n: spread.samples }, `${spread.samples} měření`))}`
           : '') +
@@ -412,7 +453,12 @@ function rangeAt(range: ChartData['range'], at: number, window: number) {
  * Threshold bands, shaded periods, events and notes - everything drawn on top
  * of the first series that is not the measurement itself.
  */
-function decorations(data: ChartData, theme: ChartTheme, locale: string) {
+function decorations(
+  data: ChartData,
+  theme: ChartTheme,
+  locale: string,
+  tail: { from: number; to: number; label: string } | null
+) {
   const { events, annotations, bands, periods } = data;
   // Events (measured facts) and notes (human claims) share one markLine -
   // ECharts allows a single markLine per series, so the styling rides on each
@@ -448,7 +494,7 @@ function decorations(data: ChartData, theme: ChartTheme, locale: string) {
     // Time ranges (the router on its LTE backup) ride the same markArea as
     // vertical shading: a band spans values, a period spans time.
     markArea:
-      bands?.length || periods?.length
+      bands?.length || periods?.length || tail
         ? {
             silent: true,
             itemStyle: { opacity: 1 },
@@ -459,8 +505,10 @@ function decorations(data: ChartData, theme: ChartTheme, locale: string) {
               fontSize: 10,
             },
             data: [
+              // The band names are in the caption beside the chart (bandCaption),
+              // not on the plot, where both labels sat on the line (charts-20).
               ...(bands ?? []).map((b) => [
-                { yAxis: b.from, itemStyle: { color: theme.band[b.tone] }, name: b.label },
+                { yAxis: b.from, itemStyle: { color: theme.band[b.tone] }, name: b.label, label: { show: false } },
                 { yAxis: b.to },
               ]),
               // The caption sits on the first period only: with several short
@@ -474,6 +522,21 @@ function decorations(data: ChartData, theme: ChartTheme, locale: string) {
                 },
                 { xAxis: p.to },
               ]),
+              // The silent end of the window: shaded and captioned, so an agent
+              // that stopped reporting never looks like a quiet, healthy line.
+              ...(tail
+                ? [
+                    [
+                      {
+                        xAxis: tail.from,
+                        itemStyle: { color: withAlpha(theme.textMuted, 0.12) },
+                        name: tail.label,
+                        label: { show: true, position: 'insideTop' as const },
+                      },
+                      { xAxis: tail.to },
+                    ],
+                  ]
+                : []),
             ],
           }
         : undefined,
@@ -508,15 +571,15 @@ function decorations(data: ChartData, theme: ChartTheme, locale: string) {
  * invisible to a screen reader and a chart full of gaps otherwise reads as a
  * full one.
  */
-function describe(data: ChartData, t: TranslateFn): string {
+function describe(data: ChartData, t: TranslateFn, lang: string): string {
   const parts = data.series.map((s) => {
     const sum = summarizeSeries(s.points);
     if (sum.count === 0) {
       return t('chart.summary_no_data', { label: s.label }, `${s.label}: žádná data`);
     }
-    const min = formatChartValue(sum.min);
-    const max = formatChartValue(sum.max);
-    const avg = formatChartValue(sum.avg);
+    const min = formatChartValue(sum.min, '', lang);
+    const max = formatChartValue(sum.max, '', lang);
+    const avg = formatChartValue(sum.avg, '', lang);
     const stats = t(
       'chart.summary_stats',
       { label: s.label, min, max, avg, unit: s.unit },
@@ -531,16 +594,18 @@ function describe(data: ChartData, t: TranslateFn): string {
 }
 
 /** Per-day totals as rows, one column per series - a missing day reads as a dash. */
-function tableOf(data: ChartData, locale: string) {
+function tableOf(data: ChartData, locale: string, lang: string) {
   const times = [...new Set(data.series.flatMap((s) => s.points.map((p) => p.t)))].sort((a, b) => a - b);
   const byTime = data.series.map((s) => new Map(s.points.map((p) => [p.t, p.v])));
   return {
     columns: ['', ...data.series.map((s) => `${s.label} (${s.unit})`)],
     rows: times.map((tm) => [
-      new Date(tm).toLocaleDateString(locale),
+      new Date(tm).getHours() === 0 && new Date(tm).getMinutes() === 0
+        ? new Date(tm).toLocaleDateString(locale)
+        : formatChartTime(tm, locale),
       ...byTime.map((m) => {
         const v = m.get(tm);
-        return v == null ? NO_VALUE : formatChartValue(v);
+        return v == null ? NO_VALUE : formatChartValue(v, '', lang);
       }),
     ]),
   };

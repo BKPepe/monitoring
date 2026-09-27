@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/ui/panel';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -80,25 +80,20 @@ export function PresetManager() {
   };
 
   return (
-    <Card className="p-6 space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
-        <div className="flex items-center gap-3">
-          <Layers className="size-5 text-primary" />
-          <div>
-            <h3 className="text-base font-bold">{t('presets.title', 'Presety metrik')}</h3>
-            <p className="text-muted-foreground text-xs">
-              {t(
-                'presets.subtitle',
-                'Pojmenovaná sada zobrazených metrik a prahů. Přiřadíte ji více monitorům a měníte na jednom místě.'
-              )}
-            </p>
-          </div>
-        </div>
+    <Panel
+      icon={Layers}
+      title={t('presets.title', 'Presety metrik')}
+      hint={t(
+        'presets.subtitle',
+        'Pojmenovaná sada zobrazených metrik a prahů. Přiřadíte ji více monitorům a měníte na jednom místě.'
+      )}
+      action={
         <Button size="sm" onClick={() => setEditing('new')} className="gap-1.5 font-semibold">
           <Plus className="size-4" /> {t('presets.new', 'Nový preset')}
         </Button>
-      </div>
-
+      }
+      bodyClassName="space-y-4"
+    >
       {error && <ErrorState size="inline" message={error} />}
       {notice && <p className="text-up text-xs font-semibold">{notice}</p>}
 
@@ -162,7 +157,7 @@ export function PresetManager() {
           }}
         />
       )}
-    </Card>
+    </Panel>
   );
 }
 

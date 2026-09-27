@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState } from 'react';
+import { readInitialLanguage } from './initial-language';
 
 export type Language = 'cs' | 'en';
 
@@ -15,7 +16,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'nav.websites': { cs: 'Weby & HTTP', en: 'Websites & HTTP' },
   'nav.status-pages': { cs: 'Status Stránky', en: 'Status Pages' },
   'nav.incidents': { cs: 'Incidenty', en: 'Incidents' },
-  'nav.insights': { cs: 'Zjištění', en: 'Findings' },
+  'nav.insights': { cs: 'Upozornění', en: 'Alerts' },
   'nav.reports': { cs: 'SLA Výkazy', en: 'Reports & SLA' },
   'nav.users': { cs: 'Uživatelé', en: 'Users' },
   'nav.api-agents': { cs: 'API & Agenti', en: 'API & Agents' },
@@ -58,7 +59,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'common.last_change': { cs: 'Poslední změna stavu', en: 'Last Status Change' },
   'asset.ago_days': { cs: 'Před {d} dny', en: '{d} days ago' },
   'asset.ago_months': { cs: 'Před {m} měsíci', en: '{m} months ago' },
-  'common.uptime': { cs: 'Uptime', en: 'Uptime' },
   'common.cpu': { cs: 'Využití CPU', en: 'CPU Usage' },
   'common.ram': { cs: 'Využití RAM', en: 'RAM Usage' },
   'common.hdd': { cs: 'Využití disku', en: 'Disk Usage' },
@@ -100,7 +100,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'help.how': { cs: 'Jak:', en: 'How:' },
   'help.source': { cs: 'Odkud:', en: 'Source:' },
   'help.caveat': { cs: 'Pozor:', en: 'Note:' },
-  'storage.title': { cs: 'Úložiště', en: 'Storage' },
   'storage.filesystems': { cs: 'Připojené oddíly', en: 'Mounted filesystems' },
   'storage.devices': { cs: 'Provoz po discích', en: 'Per-disk traffic' },
   'storage.device': { cs: 'Zařízení', en: 'Device' },
@@ -381,7 +380,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'wan.bar_plan': { cs: 'Tarif', en: 'Plan' },
   'wan.bar_port': { cs: 'Port', en: 'Port' },
   'wan.bar_sqm': { cs: 'SQM', en: 'SQM' },
-  'wan.title': { cs: 'Kde končí rychlost linky', en: 'Where the line speed ends' },
   'wan.subtitle': {
     cs: 'Vyhodnocuje monitoring z měření rychlosti a z vytížení routeru. Měří se z routeru po drátě.',
     en: 'Evaluated here from speed measurements and the router load. Measured from the router, over the wire.',
@@ -446,16 +444,16 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'How much the router forwards to the devices behind it. The test terminates on the router.',
   },
   'wan.limits_lan': {
-    cs: 'Drátové porty do LAN zvládnou nejvýš {mbit} Mb/s.',
-    en: 'The wired LAN ports do at most {mbit} Mb/s.',
+    cs: 'Drátové porty do LAN zvládnou nejvýš {mbit} Mbit/s.',
+    en: 'The wired LAN ports do at most {mbit} Mbit/s.',
   },
   'wan.plan_title': { cs: 'Rychlost tarifu', en: 'Plan speed' },
   'wan.plan_hint': {
     cs: 'Bez tarifu se nic neoznačí za pomalé – verdikt pak jen popisuje, co se naměřilo.',
     en: 'Without a plan nothing is called slow – the verdict then only describes what was measured.',
   },
-  'wan.plan_down': { cs: 'Stahování (Mb/s)', en: 'Download (Mb/s)' },
-  'wan.plan_up': { cs: 'Odesílání (Mb/s)', en: 'Upload (Mb/s)' },
+  'wan.plan_down': { cs: 'Stahování (Mbit/s)', en: 'Download (Mbit/s)' },
+  'wan.plan_up': { cs: 'Odesílání (Mbit/s)', en: 'Upload (Mbit/s)' },
   'wan.plan_ok_pct': {
     cs: 'Podíl tarifu, který se počítá jako dodaný (%)',
     en: 'Share of the plan that counts as delivered (%)',
@@ -602,10 +600,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'For periods longer than 30 days each point is a daily sum - raw measurements are purged after 30 days.',
   },
   'metric.average_step': { cs: 'Průměrný přírůstek', en: 'Average increase' },
-  'metric.events_note': {
-    cs: 'Svislé čáry v grafu jsou události ({count} za 30 dní); najetím se zobrazí která.',
-    en: 'Vertical lines in the chart are events ({count} in 30 days); hover to see which.',
-  },
   // Hour-by-day heatmap on the metric detail.
   'metric.heatmap_title': { cs: 'Denní rytmus (30 dní)', en: 'Daily rhythm (30 days)' },
   'metric.heatmap_note': {
@@ -734,8 +728,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.rss': { cs: 'RSS kanál výpadků', en: 'Outage RSS feed' },
   'public.no_history': { cs: 'Historie zatím není k dispozici', en: 'No history available yet' },
   'public.uptime_strip_aria': {
-    cs: 'Dostupnost po dnech, posledních 30 dní',
-    en: 'Daily availability, last 30 days',
+    cs: 'Dostupnost po dnech, posledních {days} dní',
+    en: 'Daily availability, last {days} days',
   },
   'public.discord_online': { cs: '{n} online', en: '{n} online' },
   'public.incidents': { cs: 'Incidenty', en: 'Incidents' },
@@ -991,10 +985,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'This status page does not exist or is not public.',
   },
   'dashboard.title': { cs: 'Přehled stavu', en: 'Status Overview' },
-  'dashboard.subtitle': {
-    cs: 'Přehled všech vašich monitorovaných služeb, domén a serverů v reálném čase.',
-    en: 'Real-time overview of all monitored services, domains, and servers.',
-  },
   'dashboard.total_monitors': { cs: 'Monitorů celkem', en: 'Total Monitors' },
   'dashboard.monitors_hint': { cs: '{healthy} běží · mimo provoz {down}', en: '{healthy} running · {down} down' },
   'dashboard.healthy_pct': { cs: 'Zdravých', en: 'Healthy' },
@@ -1037,7 +1027,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Zatím nesledujete žádnou službu.',
     en: 'You are not monitoring any service yet.',
   },
-  'dashboard.infra_health': { cs: 'Zdraví infrastruktury', en: 'Infrastructure Health' },
+  'dashboard.infra_health': { cs: 'Stavy monitorů', en: 'Monitor states' },
   'common.paused': { cs: 'Pozastaveno', en: 'Paused' },
   'common.retry': { cs: 'Zkusit znovu', en: 'Try again' },
   'common.maintenance': { cs: 'Údržba', en: 'Maintenance' },
@@ -1045,10 +1035,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   'dashboard.no_monitors': { cs: 'Žádný monitor neodpovídá filtru.', en: 'No monitors match the filter.' },
 
   // Infrastructure
-  'infra.title': { cs: 'Správa Infrastruktury & Zařízení', en: 'Infrastructure & Device Management' },
+  'infra.title': { cs: 'Infrastruktura', en: 'Infrastructure' },
   'infra.subtitle': {
-    cs: 'Kompletní přehled sledovaných serverů, routerů (OpenWrt), herních portů (Minecraft), hlasových služeb (TeamSpeak) a webů.',
-    en: 'Complete overview of monitored servers, routers (OpenWrt), game ports (Minecraft), voice services (TeamSpeak), and websites.',
+    cs: 'Servery, routery, weby, herní a hlasové služby - každé sledované zařízení.',
+    en: 'Servers, routers, websites, game and voice services - every monitored device.',
   },
   'infra.add_agent': { cs: 'Přidat nový monitor', en: 'Add New Monitor' },
   'infra.load_error': { cs: 'Seznam zařízení se nepodařilo načíst.', en: 'Failed to load the device list.' },
@@ -1281,10 +1271,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Notes for team administrators...',
   },
   'infra.save_monitor_btn': { cs: 'Uložit monitor a nastavení', en: 'Save Monitor & Settings' },
-  'infra.search_placeholder': {
-    cs: 'Hledat router, Minecraft, TeamSpeak nebo web...',
-    en: 'Search router, Minecraft, TeamSpeak, or web...',
-  },
+  'infra.search_placeholder': { cs: 'Hledat podle názvu nebo adresy…', en: 'Search by name or address…' },
   'infra.loading_devices': { cs: 'Načítám zařízení…', en: 'Loading devices…' },
   // Filtering by status, arrived at from the health ring on the dashboard.
   'infra.filtered_count': { cs: '{count} zařízení', en: '{count} devices' },
@@ -1314,12 +1301,12 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.event_degraded': { cs: 'Zhoršená odezva', en: 'Degraded Response' },
   'asset.event_ok': { cs: 'Kontrola proběhla v pořádku', en: 'Check completed successfully' },
   'asset.event_duration': { cs: ' (trvání {min} min)', en: ' (duration {min} min)' },
-  'asset.ssl_expired': { cs: '🔴 SSL Certifikát VYPRŠEL!', en: '🔴 SSL Certificate EXPIRED!' },
-  'asset.ssl_valid_expiry': { cs: '🟢 Platný (Vyprší za {days} dní)', en: '🟢 Valid (Expires in {days} days)' },
-  'asset.ssl_valid': { cs: '🟢 Platný SSL/TLS Certifikát', en: '🟢 Valid SSL/TLS Certificate' },
+  'asset.ssl_expired': { cs: 'SSL certifikát vypršel!', en: 'SSL certificate expired!' },
+  'asset.ssl_valid_expiry': { cs: 'Platný (vyprší za {days} dní)', en: 'Valid (expires in {days} days)' },
+  'asset.ssl_valid': { cs: 'Platný SSL/TLS certifikát', en: 'Valid SSL/TLS certificate' },
   'asset.ssl_issuer': { cs: 'Vydavatel:', en: 'Issuer:' },
   'asset.ssl_valid_until': { cs: 'Platnost do:', en: 'Valid Until:' },
-  'asset.tab_overview': { cs: 'Přehled & Výkon', en: 'Overview & Performance' },
+  'asset.tab_overview': { cs: 'Přehled', en: 'Overview' },
   'asset.tab_processes': { cs: 'Nejvytíženější procesy', en: 'Top Processes' },
   'asset.tab_processes_short': { cs: 'Procesy', en: 'Processes' },
   'asset.processes_top_hint': {
@@ -1405,14 +1392,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Tracking NVMe cell wear, uncorrectable errors, and reallocated sectors via the smartctl interface.',
   },
   'asset.edit_monitor_title': { cs: 'Upravit nastavení monitoru', en: 'Edit Monitor Settings' },
-  'asset.events_history': {
-    cs: 'Historie událostí & Protokol měření ({name})',
-    en: 'Event History & Measurement Log ({name})',
-  },
-  'asset.events_history_desc': {
-    cs: 'Záznamy kontrol, detekovaných služeb a změny stavu v čase.',
-    en: 'Records of checks, discovered services, and status changes over time.',
-  },
   'asset.system_timeline': { cs: 'Systémové události (30 dní)', en: 'System Events (30 days)' },
   'asset.system_timeline_desc': {
     cs: 'Změny stavu, vzdálené akce, SSL varování a překročené limity z monitor_events.',
@@ -1427,8 +1406,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.tl_threshold': { cs: 'Překročen limit', en: 'Threshold Exceeded' },
   'asset.tl_monitor_added': { cs: 'Monitor přidán', en: 'Monitor Added' },
   'asset.tl_monitor_updated': { cs: 'Monitor upraven', en: 'Monitor Updated' },
-  'asset.summary_title': { cs: 'Souhrn stavu', en: 'Executive Summary' },
-  'asset.params_title': { cs: 'Parametry monitoru / serveru', en: 'Monitor / Server Parameters' },
+  'asset.summary_title': { cs: 'Souhrn stavu', en: 'Status summary' },
   // A service watched by an agent has no process list of its own - the ranking
   // is collected on the server it runs under, and the card says so with a link
   // instead of claiming that no agent is connected.
@@ -1469,28 +1447,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   'common.protocol': { cs: 'Protokol', en: 'Protocol' },
   'asset.ts3_clients': { cs: 'Připojení klienti TS3', en: 'Connected TS3 Clients' },
   'asset.ts3_clients_value': { cs: '{online} / {max} uživatelů', en: '{online} / {max} users' },
-  'asset.ts3_serverquery': { cs: 'TeamSpeak 3 ServerQuery', en: 'TeamSpeak 3 ServerQuery' },
   // No port numbers: "9987/8200" was TeamSpeak's default plus one specific
   // server's value, yet the row claimed it about every one. The real port
   // is in the monitor parameters on the same page.
-  'asset.ts3_serverquery_value': {
-    cs: '{online} / {max} uživatelů online',
-    en: '{online} / {max} users online',
-  },
-  'asset.summary_text': {
-    cs: 'Monitor {name} ({type}) běží na cíli {target}. Metriky se pravidelně ukládají a vyhodnocují v databázi.',
-    en: 'Monitor {name} ({type}) runs against target {target}. Metrics are stored and evaluated in the database on a regular basis.',
-  },
-  'asset.all_tests_ok': { cs: 'Všechny testy OK', en: 'All tests OK' },
-  'asset.outage_detected': { cs: 'Detekován výpadek', en: 'Outage detected' },
   'asset.protocol_type': { cs: 'Typ protokolu', en: 'Protocol Type' },
-  'asset.net_throughput': { cs: 'Síťový průtok (Rx/Tx)', en: 'Network Throughput (Rx/Tx)' },
-  'asset.disk_read': { cs: 'Čtení z disku', en: 'Disk Read' },
-  'asset.disk_write': { cs: 'Zápis na disk', en: 'Disk Write' },
-  'asset.inode_usage': { cs: 'Využití Inodů (fs)', en: 'Inode Usage (fs)' },
-  'asset.swap_usage': { cs: 'Využití Swapu', en: 'Swap Usage' },
-  'asset.tcp_retrans': { cs: 'TCP Retransmissions (/proc/net/snmp)', en: 'TCP Retransmissions (/proc/net/snmp)' },
-  'asset.conntrack': { cs: 'Conntrack Spojení (Sockets)', en: 'Conntrack Connections (Sockets)' },
   'asset.moment_ago': { cs: 'Před chvílí', en: 'Just now' },
   'asset.ago_seconds': { cs: 'Před {s} s', en: '{s}s ago' },
   'asset.ago_minutes': { cs: 'Před {m} min', en: '{m}m ago' },
@@ -1526,7 +1486,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'websites.name_label': { cs: 'Název webu / služby', en: 'Website / Service Name' },
   'websites.name_placeholder': { cs: 'např. Moje Doména', en: 'e.g. My Domain' },
   'websites.url_label': { cs: 'URL Adresa (HTTP/HTTPS)', en: 'URL Address (HTTP/HTTPS)' },
-  'websites.http_response': { cs: 'Odezva HTTP:', en: 'HTTP Response:' },
+  'websites.http_response': { cs: 'Odezva HTTP', en: 'HTTP response' },
   'websites.http_status': { cs: 'Stav HTTP:', en: 'HTTP Status:' },
   'websites.cpanel_resources': { cs: 'Zdroje hostingu (sdílené účtem):', en: 'Hosting resources (shared by account):' },
   'websites.ssl_none_read': {
@@ -1540,11 +1500,11 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: '{count} certificates expire within 30 days',
   },
   'websites.ssl_soonest': { cs: 'Nejbližší expirace za {days} dní', en: 'Soonest expiry in {days} days' },
-  'websites.ssl_label': { cs: 'SSL certifikát:', en: 'SSL certificate:' },
+  'websites.ssl_label': { cs: 'SSL certifikát', en: 'SSL certificate' },
   'websites.ssl_not_read': { cs: 'zatím nepřečten', en: 'not read yet' },
   'websites.ssl_state_expired': { cs: 'Vypršel!', en: 'Expired!' },
   'websites.ssl_state_valid': { cs: 'Platný — vyprší za {days} dní', en: 'Valid — expires in {days} days' },
-  'websites.sla_label': { cs: 'SLA dostupnost:', en: 'SLA availability:' },
+  'websites.sla_label': { cs: 'SLA dostupnost', en: 'SLA availability' },
   'websites.sla_goal': { cs: 'cíl {goal} %', en: 'target {goal} %' },
   'websites.sla_since': { cs: '{days} dní', en: '{days} days' },
   'websites.sla_7d': { cs: '7 dní', en: '7 days' },
@@ -1563,10 +1523,10 @@ const translations: Record<string, { cs: string; en: string }> = {
 
   // Incidents
   'incidents.loading': { cs: 'Načítám stav incidentů...', en: 'Loading incident status...' },
-  'incidents.title': { cs: 'Správa Incidentů a Výpadků', en: 'Incidents & Outages Management' },
+  'incidents.title': { cs: 'Incidenty', en: 'Incidents' },
   'incidents.subtitle': {
-    cs: 'Přehled výpadků cílových služeb, historie incidentů a stav měřících agentů.',
-    en: 'Overview of target service outages, incident history, and probing agent status.',
+    cs: 'Co je rozbité teď, co bylo a odkud se měří.',
+    en: 'What is broken now, what was, and where the checks come from.',
   },
   'incidents.create': { cs: 'Nahlásit nový incident', en: 'Report New Incident' },
   'incidents.active_outages': { cs: 'Probíhající výpadky cílových služeb', en: 'Active Service Outages' },
@@ -1726,7 +1686,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: '{period} (data od {date}): starší dny v databázi nejsou, čísla níže pokrývají jen změřenou dobu.',
     en: '{period} (data from {date}): older days are not in the database, the numbers below cover only the measured time.',
   },
-  'reports.title': { cs: 'SLA Výkazy & Statistika Dle Serverů', en: 'SLA Reports & Per-Server Statistics' },
+  'reports.title': { cs: 'SLA Výkazy', en: 'Reports & SLA' },
   'reports.subtitle': {
     cs: 'Reálná data z monitorovací databáze — uptime, výpadky, doba obnovení (MTTR) a důvody výpadků.',
     en: 'Real data from the monitoring database — uptime, outages, recovery time (MTTR), and outage causes.',
@@ -1744,7 +1704,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'reports.csv_mttr': { cs: 'MTTR (s)', en: 'MTTR (s)' },
   'reports.export_csv': { cs: 'Exportovat CSV', en: 'Export CSV' },
   'reports.overall_sla': { cs: 'Celkové plnění SLA', en: 'Overall SLA Compliance' },
-  'reports.sla_target_value': { cs: 'SLA Cíl: {goal} %', en: 'SLA Target: {goal}%' },
+  'reports.sla_target_value': { cs: 'SLA cíl: {goal}', en: 'SLA target: {goal}' },
   'reports.monitored_count': { cs: 'Sledované servery/weby', en: 'Monitored Servers/Websites' },
   'reports.total_count': { cs: '{count} celkem', en: '{count} total' },
   'reports.sla_compliant_count': { cs: '{ok} / {total} splňuje SLA', en: '{ok} / {total} meeting SLA' },
@@ -1756,8 +1716,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'SLA Compliance by Individual Server and Website',
   },
   'reports.sla_per_monitor_desc': {
-    cs: 'Reálná dostupnost z databáze za posledních {days} dní. Klikněte na řádek pro detail výpadku.',
-    en: 'Real availability from the database over the last {days} days. Click a row for outage detail.',
+    cs: 'Za posledních {days} dní, nejhorší nahoře. Výpadek se měří proti rozpočtu, který cíl SLA dovoluje za změřenou dobu. Název otevře podrobnosti.',
+    en: 'Over the last {days} days, worst first. Downtime is measured against the allowance the SLA goal gives over the measured time. The name opens the details.',
   },
   'reports.period_30': { cs: '30 dní', en: '30 days' },
   'reports.period_90': { cs: 'Kvartál', en: 'Quarter' },
@@ -1801,7 +1761,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'reports.outage_field_end': { cs: 'Konec:', en: 'End:' },
   'reports.outage_field_duration': { cs: 'Trvání:', en: 'Duration:' },
   'reports.outage_field_status': { cs: 'Stav:', en: 'Status:' },
-  'reports.outage_ongoing': { cs: 'Stále probíhá ⚠️', en: 'Still ongoing ⚠️' },
+  'reports.outage_ongoing': { cs: 'dosud', en: 'ongoing' },
   'reports.resolved_badge': { cs: 'Vyřešeno', en: 'Resolved' },
   'reports.ongoing_badge': { cs: 'Probíhá', en: 'Ongoing' },
   'reports.reason_label': { cs: 'Důvod:', en: 'Reason:' },
@@ -1914,7 +1874,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
 
   // API & Agents
-  'api_agents.title': { cs: 'API Klíče, Bezpečnost & Správa Agentů', en: 'API Keys, Security & Agent Management' },
+  'api_agents.title': { cs: 'API & Agenti', en: 'API & Agents' },
   'api_agents.subtitle': {
     cs: 'Verze agentů, kontrola bezpečnostních aktualizací, HMAC klíče a instalace.',
     en: 'Agent versions, security update checks, HMAC keys, and installation.',
@@ -1958,26 +1918,23 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Stav verzí & Automatické aktualizace agentů ({count})',
     en: 'Version Status & Automatic Agent Updates ({count})',
   },
-  'api_agents.status_outdated': {
-    cs: '🔴 Zjištěna neaktuální verze agenta!',
-    en: '🔴 Outdated agent version detected!',
-  },
+  'api_agents.status_outdated': { cs: 'Zjištěna neaktuální verze agenta', en: 'Outdated agent version detected' },
   'api_agents.status_auto_update_off': {
-    cs: '⚠️ U některých agentů vypnuty auto-updates',
-    en: '⚠️ Auto-updates disabled on some agents',
+    cs: 'U některých agentů vypnuty auto-updates',
+    en: 'Auto-updates disabled on some agents',
   },
   'api_agents.status_all_ok': {
-    cs: 'Všichni agenti aktuální & auto-updates OK ✅',
-    en: 'All agents up to date & auto-updates OK ✅',
+    cs: 'Všichni agenti aktuální, auto-updates OK',
+    en: 'All agents up to date, auto-updates OK',
   },
   'api_agents.loading': { cs: 'Načítám agenty…', en: 'Loading agents…' },
   'api_agents.no_agents': { cs: 'Žádní registrovaní agenti v databázi.', en: 'No registered agents in the database.' },
   'api_agents.inactive': { cs: 'Neaktivní', en: 'Inactive' },
   'api_agents.version_outdated': {
-    cs: '🔴 v{version} (Neaktuální — Doporučeno v{latest})',
-    en: '🔴 v{version} (Outdated — Recommended v{latest})',
+    cs: 'v{version} (Neaktuální — Doporučeno v{latest})',
+    en: 'v{version} (Outdated — Recommended v{latest})',
   },
-  'api_agents.version_current': { cs: '🟢 v{version} (Aktuální verze)', en: '🟢 v{version} (Current Version)' },
+  'api_agents.version_current': { cs: 'v{version} (Aktuální verze)', en: 'v{version} (Current Version)' },
   'api_agents.version_unreported': { cs: 'Verze nehlášena', en: 'Version not reported' },
   'api_agents.auto_update_on': { cs: 'Auto-updates: Zapnuto', en: 'Auto-updates: On' },
   'api_agents.auto_update_off': { cs: 'Auto-updates: VYPNUTO', en: 'Auto-updates: OFF' },
@@ -2074,12 +2031,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'setup.forgot_submit': { cs: 'Odeslat', en: 'Submit' },
 
   // Settings
-  'settings.title': { cs: 'Nastavení Systému & Notifikací', en: 'System & Notification Settings' },
+  'settings.title': { cs: 'Nastavení', en: 'Settings' },
   'settings.subtitle': {
     cs: 'Správa parametrů platformy, notifikačních kanálů, OAuth integrací a brandingu.',
     en: 'Manage platform parameters, notification channels, OAuth integrations, and branding.',
   },
-  'settings.notifications': { cs: 'Notifikace & Upozornění', en: 'Notifications & Alerts' },
   'settings.load_error': { cs: 'Nepodařilo se načíst nastavení z API.', en: 'Failed to load settings from the API.' },
   'settings.save_error': { cs: 'Chyba při ukládání.', en: 'Error while saving.' },
   'settings.digest_unknown_result': { cs: 'Neznámý výsledek.', en: 'Unknown result.' },
@@ -2252,9 +2208,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'settings.test_discord': { cs: 'Test Discord', en: 'Test Discord' },
   'settings.test_telegram': { cs: 'Test Telegram', en: 'Test Telegram' },
   'settings.test_slack': { cs: 'Test Slack', en: 'Test Slack' },
-  'chart.tool_zoom': { cs: 'Zoom výběrem', en: 'Zoom to selection' },
-  'chart.tool_zoom_back': { cs: 'Zpět', en: 'Back' },
-  'chart.tool_restore': { cs: 'Obnovit', en: 'Reset' },
+  'chart.tool_restore': { cs: 'Zrušit přiblížení', en: 'Reset zoom' },
   'chart.tool_png': { cs: 'Uložit PNG', en: 'Save PNG' },
   'chart.tool_csv': { cs: 'Export CSV', en: 'Export CSV' },
   'chart.aria_over_time': { cs: '{title} v čase', en: '{title} over time' },
@@ -2335,8 +2289,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Confirm an outage only after N failed checks',
   },
   'settings.confirm_failures_hint': {
-    cs: 'Jedna neúspěšná kontrola je jedna neúspěšná kontrola: zopakované spojení, pomalá odpověď DNS, zahozený paket. 1 = hlásit hned při první (dosavadní chování). Každá neúspěšná kontrola se zapíše do historie i tak, čeká jen verdikt.',
-    en: 'One failed check is one failed check: a retried connection, a slow DNS answer, a dropped packet. 1 = alert on the first one (the behaviour so far). Every failed check is recorded either way; only the verdict waits.',
+    cs: '1 = hlásit hned při první neúspěšné kontrole. Jedna neúspěšná kontrola bývá zopakované spojení, pomalá odpověď DNS nebo zahozený paket. Každá se zapíše do historie i tak, čeká jen verdikt.',
+    en: '1 = alert on the first failed check. One failed check is often a retried connection, a slow DNS answer or a dropped packet. Every one is recorded either way; only the verdict waits.',
   },
   'proctop.hint': {
     cs: 'Průměr a špička za období, ne jen poslední hlášení. Proces, který si skočí každých deset minut, se ve snímku nikdy neukáže.',
@@ -2488,8 +2442,34 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Histogram: nejčastější pásmo {band} {unit} ({count}×).',
     en: 'Histogram: most frequent band {band} {unit} ({count}×).',
   },
-  'heatmap.status_nodata': { cs: 'Bez měření', en: 'Not measured' },
-  'heatmap.detail_nodata': { cs: 'Pro tento den nejsou žádná měření.', en: 'No measurements for this day.' },
+  'metric.analysis': { cs: 'Rozbor', en: 'Analysis' },
+  'metric.analysis_constant': {
+    cs: 'Hodnota se za celé období nezměnila: denní rytmus, rozložení ani souvislosti s jinými metrikami z ní nic nevyčtou.',
+    en: 'The value did not change all period: the daily rhythm, the distribution and the correlations cannot tell anything from it.',
+  },
+  'metric.analysis_few': {
+    cs: 'Jen {n} různé hodnoty: denní rytmus, rozložení ani souvislosti k větě nahoře skoro nic nepřidají.',
+    en: 'Only {n} different values: the daily rhythm, the distribution and the correlations add little to the sentence above.',
+  },
+  'metric.constant_few': { cs: 'Celé období jen {values}', en: 'The whole period only {values}' },
+  'metric.constant_one': { cs: 'Celé období {value}', en: 'The whole period: {value}' },
+  'metric.constant_range': { cs: 'Celé období mezi {min} a {max}', en: 'The whole period between {min} and {max}' },
+  'metric.events_in_window': {
+    cs: 'Svislé čáry v grafu jsou události ({count} v zobrazeném období); najetím se zobrazí která.',
+    en: 'Vertical lines are events ({count} in the period shown); hover to see which.',
+  },
+  'metric.forecast_clipped': { cs: 'plno za {days} dní →', en: 'full in {days} days →' },
+  'metric.gaps_one': { cs: '{n} přerušení', en: '{n} break' },
+  'metric.gaps_other': { cs: '{n} přerušení', en: '{n} breaks' },
+  'metric.heatmap_since': {
+    cs: 'Měří se od {date}; dny před tím v mřížce nejsou.',
+    en: 'Measured since {date}; the days before are left out of the grid.',
+  },
+  'metric.list_and': { cs: ' a ', en: ' and ' },
+  'metric.related_all': { cs: 'Všechny metriky ({n})', en: 'All metrics ({n})' },
+  'metric.samples_few': { cs: '{n} měření', en: '{n} samples' },
+  'metric.samples_one': { cs: '{n} měření', en: '{n} sample' },
+  'metric.samples_other': { cs: '{n} měření', en: '{n} samples' },
   'speed.history_title': { cs: 'Naměřená rychlost v čase', en: 'Measured speed over time' },
   'reports.not_measured': { cs: 'Bez měření', en: 'Not measured' },
   'net.lte_quality': { cs: 'Kvalita LTE signálu', en: 'LTE signal quality' },
@@ -3250,6 +3230,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'events.prev_page': { cs: 'Předchozí', en: 'Previous' },
   'events.next_page': { cs: 'Další', en: 'Next' },
   'events.page_indicator': { cs: 'Strana {current} / {total}', en: 'Page {current} / {total}' },
+
   'incidents.all_scope': { cs: 'Všechny služby (Globální incident)', en: 'All services (Global incident)' },
   'incidents.public_notice': {
     cs: 'Prohlížení incidentů je veřejné. Pro ruční zakládání a úpravu incidentů se přihlaste.',
@@ -3265,7 +3246,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'sidebar.main_nav_aria': { cs: 'Hlavní navigace', en: 'Main Navigation' },
   'sidebar.expand_nav': { cs: 'Rozbalit navigaci', en: 'Expand Navigation' },
   'sidebar.collapse_nav': { cs: 'Sbalit navigaci', en: 'Collapse Navigation' },
-  'sidebar.collapse_label': { cs: 'Sbalit', en: 'Collapse' },
 
   'breadcrumb.aria': { cs: 'Drobečková navigace', en: 'Breadcrumb' },
 
@@ -3324,8 +3304,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'routes.reload_btn': { cs: 'Obnovit načtení', en: 'Retry Loading' },
 
   // Uptime Heatmap
-  'heatmap.status_up': { cs: 'Dostupné (100 %)', en: 'Available (100%)' },
-  'heatmap.no_data_badge': { cs: 'Bez dat', en: 'No data' },
   'incidents.action_failed': { cs: 'Akce se nezdařila.', en: 'Action failed.' },
   'incidents.ack_by': { cs: 'Převzal: {user}', en: 'Acknowledged by: {user}' },
   'incidents.ack_btn': { cs: 'Převzít incident', en: 'Acknowledge' },
@@ -3351,7 +3329,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Postmortem: what happened, why, and what we will change…',
   },
   'incidents.postmortem_save': { cs: 'Uložit postmortem', en: 'Save postmortem' },
-  'nav.services': { cs: 'Služby', en: 'Services' },
   'services.title': { cs: 'Služby', en: 'Services' },
   'services.subtitle': {
     cs: 'Procesy a služby hlídané agenty napříč všemi stroji.',
@@ -3398,23 +3375,10 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Spojení běží, ale sílu signálu router nehlásí — modem ji nevystavuje ani přes ModemManager, ani přes HTTP API na své bráně. U modemu v mPCIe slotu pomůže doinstalovat balíček modemmanager nebo uqmi; modem připojený jako ethernet (HiLink) tudy signál nedá.',
     en: 'The link is up but the router reports no signal strength — the modem exposes it neither through ModemManager nor through an HTTP API on its gateway. For a modem in an mPCIe slot, installing modemmanager or uqmi helps; an ethernet-attached (HiLink) modem will not deliver signal that way.',
   },
-  'asset.router_services_title': { cs: 'Síťové služby routeru', en: 'Router network services' },
-  'asset.router_services_desc': {
-    cs: 'Konektivita, DNS, firewall, Wi-Fi a VPN podle dat od agenta.',
-    en: 'Connectivity, DNS, firewall, Wi-Fi and VPN as reported by the agent.',
-  },
-  'rsvc.fw_accepted': { cs: 'Propuštěno', en: 'Accepted' },
-  'rsvc.fw_dropped': { cs: 'Zahozeno', en: 'Dropped' },
-  'rsvc.fw_rejected': { cs: 'Odmítnuto', en: 'Rejected' },
-  'rsvc.link_speed': { cs: 'Rychlost linky', en: 'Link speed' },
   'rsvc.wan_latency': { cs: 'Odezva k bráně', en: 'Gateway latency' },
   'rsvc.mwan3': { cs: 'Multi-WAN (mwan3)', en: 'Multi-WAN (mwan3)' },
-  'rsvc.mwan3_gw': { cs: 'Aktivní brána', en: 'Active gateway' },
-  'rsvc.mwan3_degraded': { cs: '{count} mimo provoz', en: '{count} offline' },
   'rsvc.bandwidth': { cs: 'Šířka pásma', en: 'Bandwidth' },
-  'rsvc.wan': { cs: 'Připojení WAN', en: 'WAN connection' },
   'rsvc.wan_no_internet': { cs: 'Nahoře, ale bez internetu', en: 'Up, but no internet' },
-  'rsvc.wan_internet_ok': { cs: 'Ping ven přes WAN: OK', en: 'Echo out through WAN: OK' },
   'settings.test_failed': { cs: 'Test selhal', en: 'Test failed' },
   'settings.test_failed_on': { cs: 'Test kanálu {channel} selhal', en: 'Test of channel {channel} failed' },
   'settings.test_uses_saved': {
@@ -3429,7 +3393,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.event_recovered': { cs: 'Služba obnovena', en: 'Service recovered' },
   'status.unknown': { cs: 'Neznámý', en: 'Unknown' },
   'dashboard.outages': { cs: 'Výpadky', en: 'Outages' },
-  'dashboard.down_for': { cs: 'Výpadek', en: 'Down' },
   'asset.down_for': { cs: 'Výpadek trvá', en: 'Down for' },
   'asset.data_as_of': { cs: 'Data z posledního hlášení', en: 'Data as of the last report' },
   'infra.agent_silent': { cs: 'Agent mlčí, naposledy', en: 'Agent silent, last seen' },
@@ -3441,7 +3404,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.link_today': { cs: 'Dnes', en: 'Today' },
   'net.link_7d': { cs: '7 dní', en: '7 days' },
   'net.link_30d': { cs: '30 dní', en: '30 days' },
-  'net.link_no_data': { cs: 'zatím bez dat', en: 'no data yet' },
   'net.link_primary': { cs: 'Primární (WAN)', en: 'Primary (WAN)' },
   'net.link_backup': { cs: 'Záloha (LTE)', en: 'Backup (LTE)' },
   'net.link_unknown_primary': {
@@ -3456,7 +3418,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.link_since_before': { cs: 'před začátkem okna', en: 'before the window' },
   'net.link_still': { cs: 'dosud', en: 'still' },
   'net.link_period_label': { cs: 'Primární linka mimo provoz', en: 'Primary link down' },
-  'rsvc.lte': { cs: 'LTE / mobilní záloha', en: 'LTE / mobile backup' },
   // The LTE tile's verdict comes from the modem's own SIM/registration report,
   // not from the interface flag (which is up with no SIM in a HiLink modem).
   'rsvc.lte_backup_ok': { cs: 'Záloha funkční', en: 'Backup working' },
@@ -3476,28 +3437,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'rsvc.registration': { cs: 'Registrace v síti', en: 'Network registration' },
   'rsvc.registered': { cs: 'přihlášen', en: 'registered' },
   'rsvc.not_registered': { cs: 'nepřihlášen', en: 'not registered' },
-  'rsvc.dns': { cs: 'DNS resolver', en: 'DNS resolver' },
-  'rsvc.firewall': { cs: 'Firewall & NAT', en: 'Firewall & NAT' },
-  'rsvc.wifi': { cs: 'Wi-Fi', en: 'Wi-Fi' },
-  'rsvc.vpn': { cs: 'VPN tunely', en: 'VPN tunnels' },
-  'rsvc.sqm': { cs: 'SQM (řízení fronty)', en: 'SQM (queue management)' },
-  'rsvc.protocol': { cs: 'Protokol', en: 'Protocol' },
-  'rsvc.device': { cs: 'Rozhraní', en: 'Interface' },
-  'rsvc.uptime': { cs: 'Spojení běží', en: 'Link up for' },
-  'rsvc.servers': { cs: 'Servery', en: 'Servers' },
-  'rsvc.dns_latency': { cs: 'Odezva dotazu', en: 'Query latency' },
-  'rsvc.conntrack': { cs: 'Sledovaná spojení', en: 'Tracked connections' },
-  'rsvc.clients': { cs: 'Připojení klienti', en: 'Connected clients' },
-  'rsvc.radios': { cs: '{count} rádia', en: '{count} radios' },
-  'rsvc.peers': { cs: 'protějšků', en: 'peers' },
   'rsvc.active': { cs: 'Aktivní', en: 'Active' },
   'rsvc.inactive': { cs: 'Vypnutý', en: 'Disabled' },
-  'rsvc.configured': { cs: 'Nastaveno', en: 'Configured' },
-  'rsvc.unknown': { cs: 'Neznámý stav', en: 'Unknown state' },
-  'rsvc.empty': {
-    cs: 'Agent zatím neposlal žádné údaje o síťových službách routeru.',
-    en: 'The agent has not reported any router network service data yet.',
-  },
   'rsvc.lte_rssi_only': {
     cs: 'Modem hlásí RSSI, ale ne RSRP — tuhle hodnotu prostě nevyplňuje. Pro sílu signálu se řiďte RSSI.',
     en: 'The modem reports RSSI but not RSRP - it simply leaves that field empty. Use RSSI as the signal strength.',
@@ -3506,10 +3447,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'incidents.history_title': { cs: 'Historie výpadků', en: 'Outage history' },
   'incidents.history_badge': { cs: 'Vyřešeno', en: 'Resolved' },
   'incidents.history_more': { cs: 'Zobrazit dalších {count}', en: 'Show {count} more' },
-  'rsvc.lte_no_signal': {
-    cs: 'Sílu signálu se nepodařilo zjistit — modem ji nehlásí přes ModemManager (uqmi/mmcli) ani přes HTTP API na své bráně.',
-    en: 'Signal strength could not be read — the modem reports it neither through ModemManager (uqmi/mmcli) nor through an HTTP API on its gateway.',
-  },
   'rsvc.sqm_off_hint': {
     cs: 'Bez SQM se při plném vytížení linky zhoršuje odezva (bufferbloat).',
     en: 'Without SQM, latency degrades when the link saturates (bufferbloat).',
@@ -3683,7 +3620,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Přihlášení se teď nepodařilo ověřit. Nejste odhlášeni - zkuste to za chvíli znovu.',
     en: 'Your sign-in could not be verified right now. You are not signed out - try again in a moment.',
   },
-  'sp.title': { cs: 'Veřejné status stránky', en: 'Public status pages' },
+  'sp.title': { cs: 'Status Stránky', en: 'Status Pages' },
   'sp.subtitle': {
     cs: 'Vyberte, které služby uvidí veřejnost, a pod jakou adresou.',
     en: 'Choose which services the public sees, and at which address.',
@@ -3767,6 +3704,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Agent is outdated — version {version} is available',
   },
   'attention.metric_high': { cs: '{metric} na {value} %', en: '{metric} at {value} %' },
+  'attention.silent': { cs: 'Agent přestal hlásit data', en: 'The agent stopped reporting' },
   'dashboard.metric_worst': { cs: 'Nejvyšší {label}', en: 'Highest {label}' },
   'dashboard.customize': { cs: 'Upravit rozložení', en: 'Customize layout' },
   // FreshnessPill states; the age beside them ("34 s") needs no translation.
@@ -3807,8 +3745,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.cloud_provider': { cs: 'Cloud', en: 'Cloud' },
   'asset.timezone': { cs: 'Časová zóna', en: 'Timezone' },
   'asset.reboot_required': {
-    cs: '⚠ Server čeká na restart (aktualizace jádra)',
-    en: '⚠ Server pending reboot (kernel update)',
+    cs: 'Server čeká na restart (aktualizace jádra)',
+    en: 'Server pending reboot (kernel update)',
   },
   'asset.missing_processes': { cs: 'Neběží hlídané procesy', en: 'Watched processes not running' },
   'asset.ts3_process_title': { cs: 'Proces ts3server', en: 'ts3server process' },
@@ -3833,7 +3771,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.wifi_gen_6e': { cs: 'Wi-Fi 6E', en: 'Wi-Fi 6E' },
   'net.wifi_gen_6plus': { cs: 'Wi-Fi 6 nebo novější', en: 'Wi-Fi 6 or newer' },
   'net.wifi_gen_legacy': { cs: 'starší (802.11a/b/g)', en: 'legacy (802.11a/b/g)' },
-  'net.wifi_width': { cs: '{mhz} MHz', en: '{mhz} MHz' },
   'net.wifi_card_supports': {
     cs: 'Karta na tomto pásmu umí: {gen}, až {mhz} MHz',
     en: 'On this band the card supports: {gen}, up to {mhz} MHz',
@@ -3984,7 +3921,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.handshake': { cs: 'handshake před', en: 'handshake' },
   'net.no_handshake': { cs: 'bez handshake', en: 'no handshake' },
   'net.ifaces_title': { cs: 'Rozhraní', en: 'Interfaces' },
-  'net.link_title': { cs: 'SQM & LTE', en: 'SQM & LTE' },
   'net.sqm_off': { cs: 'Vypnuto', en: 'Off' },
   'net.sqm_dropped': { cs: 'SQM zahozeno', en: 'SQM dropped' },
   'net.lte_band': { cs: 'Pásmo / operátor', en: 'Band / carrier' },
@@ -4047,6 +3983,12 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: '{received} of {expected} minutes ({pct} %)',
   },
   'net.just_now': { cs: 'před chvílí', en: 'just now' },
+  'net.lte_backup_state': { cs: 'Stav zálohy', en: 'Backup state' },
+  'net.port_speed': { cs: 'Rychlost portu', en: 'Port speed' },
+  'net.vpn_title': { cs: 'VPN', en: 'VPN' },
+  'net.wan_internet': { cs: 'Ping ven přes WAN', en: 'Ping out over the WAN' },
+  'net.wan_internet_fail': { cs: 'neodpovídá', en: 'no answer' },
+  'net.wan_internet_ok': { cs: 'odpovídá', en: 'answers' },
   'infra.unreachable_title': {
     cs: 'Tento cíl není z hostingu dosažitelný',
     en: 'This target is not reachable from the hosting',
@@ -4115,35 +4057,14 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.ra_failed': { cs: 'Akci se nepodařilo zařadit.', en: 'Failed to queue the action.' },
   'asset.ra_working': { cs: 'Zařazuji…', en: 'Queueing…' },
   'dashboard.insights_title': { cs: 'Zjištění ze systému', en: 'System Insights' },
-  'dashboard.insights_subtitle': {
-    cs: 'Automatická analýza trendů a anomálií napříč infrastrukturou.',
-    en: 'Automatic analysis of trends and anomalies across your infrastructure.',
-  },
-  'asset.health_score_label': { cs: 'Health Score', en: 'Health Score' },
-  'asset.score_excellent': { cs: 'Výborné', en: 'Excellent' },
-  'asset.score_good': { cs: 'Dobré', en: 'Good' },
-  'asset.score_poor': { cs: 'Vyžaduje pozornost', en: 'Needs attention' },
   'chart_card.delta_title': {
-    cs: 'Změna průměru za zobrazené období (konec vs. začátek)',
-    en: 'Average change over the shown period (end vs. start)',
+    cs: 'Změna průměru proti stejně dlouhému předchozímu období',
+    en: 'Change of the average against the previous period of the same length',
   },
-  'header.unread_count': { cs: '{count} nepřečtených', en: '{count} unread' },
   'footer.api_unreachable': { cs: 'Nedostupné', en: 'Unreachable' },
-  'heatmap.status_warning': { cs: 'Zhoršená latence', en: 'Degraded Latency' },
-  'heatmap.status_down': { cs: 'Výpadek služby (Offline)', en: 'Service Outage (Offline)' },
-  'heatmap.status_maintenance': { cs: 'Plánovaná údržba', en: 'Scheduled Maintenance' },
   'heatmap.caption': {
     cs: 'Denní dostupnost monitorů za posledních {days} dní',
     en: 'Daily monitor availability over the last {days} days',
-  },
-  'heatmap.monitor_status': { cs: 'Stav monitoru:', en: 'Monitor Status:' },
-  'heatmap.detail_down': { cs: 'Detekován výpadek.', en: 'Outage detected.' },
-  'heatmap.detail_warning': { cs: 'Zhoršená odezva zaznamenána.', en: 'Degraded response recorded.' },
-  'heatmap.detail_maintenance': { cs: 'Plánovaná údržba.', en: 'Scheduled maintenance.' },
-  'heatmap.detail_paused': { cs: 'Monitor byl pozastaven.', en: 'The monitor was paused.' },
-  'heatmap.detail_up': {
-    cs: 'Všechny testy dostupnosti proběhly bez chyb.',
-    en: 'All availability checks passed without errors.',
   },
 
   // Timeline
@@ -4177,6 +4098,9 @@ const translations: Record<string, { cs: string; en: string }> = {
   'audit_log.status_error': { cs: 'CHYBA', en: 'ERROR' },
   'audit_log.status_warning': { cs: 'VAROVÁNÍ', en: 'WARNING' },
   'infra.edit_settings': { cs: 'Upravit nastavení', en: 'Edit Settings' },
+
+  // Audit Log
+
   'infra.service_profiles_title': {
     cs: 'Zobrazované sekce dashboardu (Service Profiles):',
     en: 'Displayed Dashboard Sections (Service Profiles):',
@@ -4309,6 +4233,20 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'asset.archived_restoring': { cs: 'Obnovuji…', en: 'Restoring…' },
   'asset.archived_restore': { cs: 'Obnovit z archivu', en: 'Restore from the archive' },
+  'asset.actions_menu': { cs: 'Akce zařízení', en: 'Device actions' },
+  'asset.check_log_open': { cs: 'Otevřít protokol kontrol →', en: 'Open the check log →' },
+  'asset.device_uptime': { cs: 'Uptime zařízení', en: 'Device uptime' },
+  'asset.flat_title': { cs: 'Beze změny v tomto období', en: 'Unchanged in this period' },
+  'asset.flat_value': { cs: '{value}, beze změny', en: '{value}, unchanged' },
+  'asset.online_for': { cs: 'Online nepřetržitě', en: 'Online without a break' },
+  'asset.router_storage_desc': {
+    cs: 'Disky, oddíly a jejich zdraví podle dat od agenta.',
+    en: 'Disks, partitions and their health as the agent reports them.',
+  },
+  'asset.state_lasts': { cs: '{state} trvá', en: '{state} for' },
+  'asset.summary_failed': { cs: 'Souhrn stavu se nepodařilo načíst.', en: 'The status summary could not be loaded.' },
+  'asset.summary_loading': { cs: 'Načítám souhrn stavu…', en: 'Loading the status summary…' },
+  'asset.tab_storage': { cs: 'Úložiště', en: 'Storage' },
   'uaudit.monitor_archived': { cs: 'Monitor archivován', en: 'Monitor archived' },
   'uaudit.monitor_restored': { cs: 'Monitor obnoven z archivu', en: 'Monitor restored' },
   'uaudit.agent_key_viewed': { cs: 'Zobrazen klíč agenta', en: 'Agent key viewed' },
@@ -4318,17 +4256,43 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Really delete this monitor including its entire measurement history? This cannot be undone.',
   },
   'infra.delete_failed': { cs: 'Smazání monitoru selhalo.', en: 'Failed to delete the monitor.' },
+  'infra.in_state': { cs: 've stavu {time}', en: 'in this state for {time}' },
   'dashboard.monitors_load_error': {
     cs: 'Seznam monitorů se nepodařilo načíst.',
     en: 'Failed to load the monitor list.',
   },
   'dashboard.uptime_load_error': { cs: 'Chyba při načítání denní dostupnosti.', en: 'Error loading daily uptime.' },
   'dashboard.col_monitor_name': { cs: 'Monitor', en: 'Monitor' },
+  'dashboard.col_in_state': { cs: 'Ve stavu', en: 'In state' },
+  'dashboard.first_run_title': { cs: 'Zatím nic nesledujete', en: 'Nothing is monitored yet' },
+  'dashboard.first_run_hint': {
+    cs: 'Přidejte web, server nebo herní službu, nebo připojte router. Přehled se naplní po první kontrole.',
+    en: 'Add a website, a server or a game service, or connect a router. The overview fills in after the first check.',
+  },
+  'dashboard.first_run_add': { cs: 'Přidat první monitor', en: 'Add your first monitor' },
+  'dashboard.first_run_router': { cs: 'Připojit router', en: 'Connect a router' },
+  'dashboard.history_all_clean': {
+    cs: 'Všech {n}: {days} dní bez výpadku',
+    en: 'All {n}: {days} days without an outage',
+  },
+  'dashboard.history_more_one': {
+    cs: '{n} další: {days} dní bez výpadku',
+    en: '{n} more: {days} days without an outage',
+  },
+  'dashboard.history_more_few': {
+    cs: '{n} další: {days} dní bez výpadku',
+    en: '{n} more: {days} days without an outage',
+  },
+  'dashboard.history_more_other': {
+    cs: '{n} dalších: {days} dní bez výpadku',
+    en: '{n} more: {days} days without an outage',
+  },
+  'dashboard.history_more_problems': { cs: 'Další se zhoršenými dny: {n}', en: 'More with bad days: {n}' },
   'incidents.save_btn': { cs: 'Uložit incident', en: 'Save Incident' },
+  'incidents.check_log': { cs: 'Protokol kontrol', en: 'Check log' },
   'websites.save_btn': { cs: 'Uložit a spustit monitoring', en: 'Save & Start Monitoring' },
 
   // Footer
-  'footer.operational': { cs: 'Operational', en: 'Operational' },
   'footer.docs': { cs: 'Dokumentace', en: 'Documentation' },
   'footer.support': { cs: 'Podpora & Kontakt', en: 'Support & Contact' },
   'footer.docs_title': { cs: 'Dokumentace & Nápověda', en: 'Documentation & Help' },
@@ -4370,12 +4334,9 @@ const translations: Record<string, { cs: string; en: string }> = {
   'app_shell.close_nav': { cs: 'Zavřít navigaci', en: 'Close Navigation' },
 
   // Header
-  'header.open_nav': { cs: 'Otevřít navigaci', en: 'Open Navigation' },
   'header.switch_light': { cs: 'Přepnout na světlý motiv', en: 'Switch to Light Theme' },
   'header.switch_dark': { cs: 'Přepnout na tmavý motiv', en: 'Switch to Dark Theme' },
   'header.notifications_aria': { cs: 'Upozornění', en: 'Notifications' },
-  'header.unread_alerts': { cs: '{count} nepřečtených upozornění', en: '{count} unread alerts' },
-  'header.active_alerts': { cs: 'aktivní', en: 'active' },
   'header.all_ok': { cs: 'Vše OK', en: 'All OK' },
   'header.outage_label': { cs: 'Výpadek', en: 'Outage' },
   'header.target_unresponsive': { cs: '{target} neodpovídá.', en: '{target} is not responding.' },
@@ -4388,7 +4349,6 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Všechny monitorované uzly fungují bez závad.',
     en: 'All monitored nodes are running without issues.',
   },
-  'header.view_all_incidents': { cs: 'Zobrazit všechny incidenty', en: 'View All Incidents' },
 
   // Odchozi zpravy (outgoing message log)
   'outgoing.title': { cs: 'Odchozí zprávy', en: 'Outgoing messages' },
@@ -4511,7 +4471,261 @@ const translations: Record<string, { cs: string; en: string }> = {
   'not_found.public_title': { cs: 'Stránka nenalezena', en: 'Page not found' },
   'not_found.go_public': { cs: 'Stav služeb', en: 'Service status' },
   'not_found.doc_title': { cs: 'Stránka nenalezena · Blood Kings', en: 'Page not found · Blood Kings' },
+  // Shared building blocks of UX wave 2 (app-core): day strip, findings,
+  // metric groups, chart menu, fleet verdict, status vocabulary.
+  'chart.band_from': { cs: '{label} od {value}', en: '{label} from {value}' },
+  'chart.menu': { cs: 'Akce grafu', en: 'Chart actions' },
+  'chart.no_data_since': { cs: 'bez dat od {time}', en: 'no data since {time}' },
+  'day.coverage': { cs: 'měřeno {measured} z {expected}', en: 'measured {measured} of {expected}' },
+  'day.degraded_min': { cs: 'zhoršeno {time}', en: 'degraded {time}' },
+  'day.down': { cs: 'Výpadek', en: 'Outage' },
+  'day.down_min': { cs: 'výpadek {time}', en: 'down {time}' },
+  'day.maintenance': { cs: 'Údržba', en: 'Maintenance' },
+  'day.maintenance_min': { cs: 'údržba {time}', en: 'maintenance {time}' },
+  'day.nodata': { cs: 'Bez měření', en: 'Not measured' },
+  'day.partial': { cs: 'Měřeno jen zčásti', en: 'Partly measured' },
+  'day.up': { cs: 'Bez výpadku', en: 'No outage' },
+  'day.uptime': { cs: 'Dostupnost {pct}', en: 'Availability {pct}' },
+  'day.warning': { cs: 'Zhoršená odezva', en: 'Degraded' },
+  'findings.all_link': { cs: 'Všechna upozornění ({n}) →', en: 'All alerts ({n}) →' },
+  'findings.error': {
+    cs: 'Zjištění se nepodařilo načíst. Nevíme, jestli je vše v pořádku.',
+    en: 'Findings could not be loaded. We cannot tell whether everything is fine.',
+  },
+  'findings.incomplete': {
+    cs: 'Seznam není úplný: {sources} se nepodařilo načíst.',
+    en: 'The list is incomplete: {sources} could not be loaded.',
+  },
+  'findings.loading': { cs: 'Načítám zjištění…', en: 'Loading findings…' },
+  'findings.none': { cs: 'Nic k řešení - žádné zjištění.', en: 'Nothing to act on - no findings.' },
+  'findings.others_clean': { cs: 'Ostatní zařízení bez nálezů ({n})', en: 'Other devices without findings ({n})' },
+  'findings.source_attention': { cs: 'stav zařízení', en: 'device states' },
+  'findings.source_insight': { cs: 'trendy a odchylky', en: 'trends and anomalies' },
+  'findings.source_router': { cs: 'doporučení pro routery', en: 'router recommendations' },
+  'findings.title': { cs: 'Upozornění', en: 'Alerts' },
+  'iftraffic.rejected': {
+    cs: 'Vyřazené dny: {n}. Hlásily víc bajtů, než linka za 24 h přenese – chyba počítadla, ne provoz.',
+    en: 'Days left out: {n}. They reported more bytes than the link can carry in 24 h – a counter artefact, not traffic.',
+  },
+  'metric_group.agent': { cs: 'Agent', en: 'Agent' },
+  'metric_group.dns': { cs: 'DNS', en: 'DNS' },
+  'metric_group.firewall_vpn': { cs: 'Firewall a VPN', en: 'Firewall and VPN' },
+  'metric_group.lte': { cs: 'LTE', en: 'LTE' },
+  'metric_group.memory_disk': { cs: 'Paměť a disk', en: 'Memory and disk' },
+  'metric_group.other': { cs: 'Ostatní', en: 'Other' },
+  'metric_group.system': { cs: 'Systém', en: 'System' },
+  'metric_group.unchanged_few': { cs: '{n} metriky se nezměnily', en: '{n} metrics did not change' },
+  'metric_group.unchanged_one': { cs: '{n} metrika se nezměnila', en: '{n} metric did not change' },
+  'metric_group.unchanged_other': { cs: '{n} metrik se nezměnilo', en: '{n} metrics did not change' },
+  'metric_group.wan': { cs: 'WAN', en: 'WAN' },
+  'metric_group.wifi': { cs: 'Wi-Fi', en: 'Wi-Fi' },
+  'net.wifi_gens_title': { cs: 'Klienti podle generace', en: 'Clients by generation' },
+  'net.wifi_signal_range': {
+    cs: 'Signál klientů od nejslabšího po typický',
+    en: 'Client signal from the weakest to the typical',
+  },
+  'net.wifi_weak_tick': { cs: '−75 dBm: slabý klient', en: '−75 dBm: weak client' },
+  'sparkline.too_few': { cs: 'Málo dat na průběh', en: 'Too little data for a trend' },
+  'speed.show_all': { cs: 'Zobrazit vše ({n})', en: 'Show all ({n})' },
+  'speed.show_less': { cs: 'Zobrazit méně', en: 'Show less' },
+  'stat.delta_pp': { cs: 'p. b.', en: 'pp' },
+  'status.bar_empty': { cs: 'Žádný monitor', en: 'No monitors' },
+  'status.key_down': { cs: 'Výpadek', en: 'Down' },
+  'status.key_unknown_new': { cs: 'Čeká na první data', en: 'Waiting for first data' },
+  'status.key_unknown_stale': { cs: 'Agent mlčí', en: 'Agent is silent' },
+  'timeline.changes': { cs: 'Změny', en: 'Changes' },
+  'timeline.no_changes': {
+    cs: 'Žádné změny - jen běžné kontroly. Najdete je pod „Vše“.',
+    en: 'No changes - only routine checks. They are under "All".',
+  },
+  'timeline.run_count': { cs: '{n}× za sebou', en: '{n}× in a row' },
+  'timeline.run_down': { cs: 'Výpadek', en: 'Outage' },
+  'timeline.run_warning': { cs: 'Zhoršení', en: 'Degraded' },
+  'wan.plan_edit': { cs: 'Upravit tarif', en: 'Edit plan' },
+  'wan.plan_enter': { cs: 'Zadat tarif', en: 'Enter plan' },
+  'wan.samples_one': { cs: '{n} měření', en: '{n} test' },
+  'wan.samples_other': { cs: '{n} měření', en: '{n} tests' },
+  'wan.unmeasured_few': { cs: '{n} ukazatele zatím neměřeny', en: '{n} indicators not measured yet' },
+  'wan.unmeasured_one': { cs: '{n} ukazatel zatím neměřen', en: '{n} indicator not measured yet' },
+  'wan.unmeasured_other': { cs: '{n} ukazatelů zatím neměřeno', en: '{n} indicators not measured yet' },
+  'wan.week_avg': { cs: 'Týden: průměr {avg} · {samples}', en: 'Week: average {avg} · {samples}' },
+  'wan.week_avg_plan': {
+    cs: 'Týden: průměr {avg} = {pct} % tarifu · {samples}',
+    en: 'Week: average {avg} = {pct} % of the plan · {samples}',
+  },
+  'day.keys_hint': { cs: 'šipkami vlevo a vpravo po dnech', en: 'left and right arrow keys move by day' },
+  // NetPulse shell and component kit (components/layout, components/ui, health-ring)
+  'kit.view_all': { cs: 'Zobrazit vše', en: 'View all' },
+  'kit.no_value': { cs: 'neměřeno', en: 'not measured' },
+  'health.score': { cs: 'Skóre zdraví', en: 'Health score' },
+  'health.aria': { cs: '{name}: {score} ze 100, {grade}', en: '{name}: {score} out of 100, {grade}' },
+  'health.aria_none': { cs: '{name}: nedostatek dat', en: '{name}: not enough data' },
+  'health.grade_good': { cs: 'Dobré', en: 'Good' },
+  'health.grade_fair': { cs: 'Ucházející', en: 'Fair' },
+  'health.grade_poor': { cs: 'Slabé', en: 'Poor' },
+  'health.no_data': { cs: 'Nedostatek dat', en: 'Not enough data' },
+  'health.breakdown_label': { cs: 'Složky skóre', en: 'Score components' },
+  'health.unmeasured': {
+    cs: 'Neměřeno, do skóre nepočítáno: {list}',
+    en: 'Not measured, left out of the score: {list}',
+  },
+  'health.row_title': {
+    cs: 'Váha {weight} ze 100 · ubírá {deduction} b.',
+    en: 'Weight {weight} of 100 · takes off {deduction} pts',
+  },
+  'health.row_title_plain': { cs: 'Váha {weight} ze 100', en: 'Weight {weight} of 100' },
+  'health.c_availability': { cs: 'Dostupnost', en: 'Availability' },
+  'health.c_latency': { cs: 'Odezva', en: 'Latency' },
+  'health.c_alerts': { cs: 'Upozornění', en: 'Alerts' },
+  'health.c_freshness': { cs: 'Čerstvost dat', en: 'Data freshness' },
+  'health.c_cpu_ram': { cs: 'CPU a RAM', en: 'CPU and RAM' },
+  'health.c_disk': { cs: 'Disky', en: 'Disks' },
+  'health.c_temperature': { cs: 'Teploty', en: 'Temperatures' },
+  'shell.server_status': { cs: 'Server monitoringu', en: 'Monitoring server' },
+  'shell.api_ok': { cs: 'Odpovídá', en: 'Responding' },
+  'nav.findings_badge': { cs: 'Upozornění k řešení: {count}', en: 'Alerts to act on: {count}' },
+  'nav.more': { cs: 'Více', en: 'More' },
+  'nav.tabbar_aria': { cs: 'Hlavní sekce', en: 'Main sections' },
+  'sidebar.admin_group': { cs: 'Správa', en: 'Administration' },
+  'sidebar.language': { cs: 'Jazyk', en: 'Language' },
+  'header.back': { cs: 'Zpět', en: 'Back' },
+  'header.refresh': { cs: 'Obnovit data', en: 'Refresh data' },
+  'header.refreshing': { cs: 'Obnovuji…', en: 'Refreshing…' },
+  'header.bell_count': { cs: 'Upozornění k řešení: {count}', en: 'Alerts to act on: {count}' },
+  'header.count_unknown': {
+    cs: 'Počet upozornění se nepodařilo zjistit',
+    en: 'The number of alerts could not be loaded',
+  },
+  'header.findings_incomplete': {
+    cs: 'Některý zdroj upozornění neodpověděl - počty mohou být vyšší.',
+    en: 'A source of alerts did not answer - the counts may be higher.',
+  },
+  'header.outages_list': { cs: 'Výpadky', en: 'Outages' },
+  'header.view_all_alerts': { cs: 'Všechna upozornění', en: 'All alerts' },
+  'page.asset_detail': { cs: 'Detail zařízení', en: 'Device detail' },
+  'page.metric_detail': { cs: 'Detail metriky', en: 'Metric detail' },
+  'page.check_log': { cs: 'Protokol kontrol', en: 'Check log' },
+
+  // PAGES-A redesign (NetPulse overview, device detail, metric detail)
+  'health.deductions_title': { cs: 'Co ubírá body', en: 'What costs points' },
+  'health.deduction_sr': { cs: 'ubírá {points} b.', en: 'costs {points} pts' },
+  // The hero's sentence (lib/fleet-verdict): the monitors' problem states only.
+  'dashboard.verdict_down_one': { cs: '{n} výpadek', en: '{n} outage' },
+  'dashboard.verdict_down_few': { cs: '{n} výpadky', en: '{n} outages' },
+  'dashboard.verdict_down_other': { cs: '{n} výpadků', en: '{n} outages' },
+  'dashboard.verdict_stale_one': { cs: '{n} agent mlčí', en: '{n} silent agent' },
+  'dashboard.verdict_stale_few': { cs: '{n} agenti mlčí', en: '{n} silent agents' },
+  'dashboard.verdict_stale_other': { cs: '{n} agentů mlčí', en: '{n} silent agents' },
+  'dashboard.verdict_warning_one': { cs: '{n} varování', en: '{n} warning' },
+  'dashboard.verdict_warning_other': { cs: '{n} varování', en: '{n} warnings' },
+  'dashboard.verdict_maintenance': { cs: '{n} v údržbě', en: '{n} in maintenance' },
+  'dashboard.verdict_clear': { cs: 'Žádný výpadek ani varování', en: 'No outages or warnings' },
+  'dashboard.network_health': { cs: 'Zdraví sítě', en: 'Network health' },
+  'dashboard.health_loading': { cs: 'Počítám skóre zdraví…', en: 'Computing the health score…' },
+  'dashboard.health_failed': { cs: 'Skóre zdraví se nepodařilo načíst.', en: 'The health score could not be loaded.' },
+  'dashboard.health_refresh_failed': {
+    cs: 'Obnovení skóre selhalo, ukazuje se poslední známé.',
+    en: 'Refreshing the score failed; the last known one is shown.',
+  },
+  'dashboard.health_scored': { cs: 'Hodnoceno {scored} z {total} zařízení', en: '{scored} of {total} devices scored' },
+  'dashboard.traffic_title': { cs: 'Síťový provoz na WAN', en: 'WAN traffic' },
+  'dashboard.latency_title': { cs: 'Odezva', en: 'Latency' },
+  'dashboard.traffic_failed': { cs: 'Průběh se nepodařilo načíst.', en: 'The trace could not be loaded.' },
+  'dashboard.no_fresh_sample': { cs: 'bez čerstvého měření', en: 'no fresh sample' },
+  'dashboard.devices_title': { cs: 'Routery a servery', en: 'Routers and servers' },
+  'dashboard.device_health': { cs: 'Zdraví: {name}', en: 'Health: {name}' },
+  'dashboard.device_clients': { cs: 'Wi-Fi klienti', en: 'Wi-Fi clients' },
+  'dashboard.device_disk': { cs: 'Disk', en: 'Disk' },
+  'dashboard.device_temp': { cs: 'Teplota', en: 'Temp.' },
+  'asset.breadcrumb': { cs: 'Umístění', en: 'Location' },
+  'asset.archived_pill': { cs: 'Archivováno', en: 'Archived' },
+  'asset.health_caption': { cs: 'Zdraví: {name}', en: 'Health: {name}' },
+  'asset.health_failed': {
+    cs: 'Skóre zdraví se nepodařilo zjistit.',
+    en: 'The health score could not be determined.',
+  },
+  'asset.info_title': { cs: 'Parametry', en: 'Parameters' },
+  'asset.perf_title': { cs: 'Výkon', en: 'Performance' },
+  'asset.latency_aria': { cs: '{name}: {value} ms', en: '{name}: {value} ms' },
+  'asset.latency_aria_none': { cs: '{name}: neměřeno', en: '{name}: not measured' },
+  'asset.latency_limit': { cs: 'limit {limit} ms', en: 'limit {limit} ms' },
+  'asset.latency_last': { cs: 'poslední měření', en: 'last measurement' },
+  'asset.jitter': { cs: 'Jitter', en: 'Jitter' },
+  'asset.jitter_title': {
+    cs: 'Průměrná změna mezi dvěma po sobě jdoucími měřeními (přes výpadek se nepočítá)',
+    en: 'The average change between two consecutive measurements (not across a gap)',
+  },
+  'asset.wan_title': { cs: 'WAN', en: 'WAN' },
+  'asset.wan_no_internet_short': { cs: 'Bez internetu', en: 'No internet' },
+  'asset.wifi_title': { cs: 'Wi-Fi rádia', en: 'Wi-Fi radios' },
+  'asset.wifi_details': { cs: 'Podrobnosti', en: 'Details' },
+  'asset.wifi_channel': { cs: 'kanál {n}', en: 'channel {n}' },
+  'asset.wifi_busy': { cs: 'Obsazení kanálu', en: 'Channel busy' },
+  'asset.clients_title': { cs: 'Klienti', en: 'Clients' },
+  'asset.clients_wifi': { cs: 'Wi-Fi celkem', en: 'Wi-Fi total' },
+  'asset.clients_dhcp': { cs: 'DHCP výpůjčky', en: 'DHCP leases' },
+  'asset.clients_privacy': {
+    cs: 'Jen počty: agent neposílá jména ani adresy zařízení.',
+    en: 'Counts only: the agent sends no device names or addresses.',
+  },
+  'asset.disk_used': { cs: 'Zaplnění', en: 'Used' },
+  'asset.smart_word': { cs: 'SMART', en: 'SMART' },
+  'asset.smart_ok_word': { cs: 'v pořádku', en: 'OK' },
+  'asset.smart_failing_word': { cs: 'selhává', en: 'failing' },
+  'asset.smart_check_word': { cs: 'ke kontrole', en: 'check' },
+  'asset.smart_unknown_word': { cs: 'neměřeno', en: 'not measured' },
+  'metric.stats_title': { cs: 'Za zvolené období', en: 'Over the selected period' },
+  'metric.chart_title': { cs: 'Průběh', en: 'Trend' },
+  'infra.health_caption': { cs: 'Zdraví: {name}', en: 'Health: {name}' },
+  'infra.limit_tick': { cs: 'limit {value} %', en: 'limit {value} %' },
 };
+
+/**
+ * The English half of the dictionary, when it has to be fetched.
+ *
+ * In the source - tests, the dev server - both languages sit in
+ * `translations` above and there is nothing to fetch. The production build
+ * (apps/monitor/scripts/i18n-split.ts) keeps only the Czech half in this
+ * module and moves the English one into its own chunk, which this function
+ * then imports. The dictionary was the largest piece of the first download,
+ * and a visitor reads one language (PA-5, release owner's request).
+ */
+function loadEnglishHalf(): Promise<Record<string, string>> | null {
+  // bk-i18n-split: the build puts the import of the English half here.
+  return null;
+}
+
+let englishPending: Promise<void> | null = null;
+let englishReady = false;
+
+/**
+ * What must arrive before `lang` can be shown: null when it can be shown
+ * right away (Czech, or the source build), otherwise the load to wait for.
+ * t() stays synchronous: nothing switches to English before this resolves.
+ */
+export function prepareLanguage(lang: Language): Promise<void> | null {
+  if (lang !== 'en' || englishReady) return null;
+  const load = loadEnglishHalf();
+  if (!load) {
+    englishReady = true;
+    return null;
+  }
+  englishPending ??= load.then(
+    (english) => {
+      for (const [key, text] of Object.entries(english)) {
+        const entry = translations[key];
+        if (entry) entry.en = text;
+      }
+      englishReady = true;
+    },
+    (error: unknown) => {
+      // A later switch may try again (a deploy removed the chunk, a flaky line).
+      englishPending = null;
+      throw error;
+    }
+  );
+  return englishPending;
+}
 
 const LanguageContext = createContext<LanguageContextType>({
   lang: 'cs',
@@ -4520,15 +4734,9 @@ const LanguageContext = createContext<LanguageContextType>({
 });
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  // localStorage may not exist (tests, private mode with storage blocked) -
-  // without the guard the whole app would crash on mount reading the language.
-  const [lang, setLangState] = useState<Language>(() => {
-    try {
-      return localStorage.getItem('bk_lang') === 'en' ? 'en' : 'cs';
-    } catch {
-      return 'cs';
-    }
-  });
+  // ?lang= first, then the stored choice (site W1-8); storage may be blocked,
+  // which readInitialLanguage survives instead of crashing the mount.
+  const [lang, setLangState] = useState<Language>(() => readInitialLanguage());
 
   // <html lang> decides which phonemes and hyphenation a screen reader uses.
   // It was hardcoded to Czech in index.html, so an English session was still
@@ -4538,12 +4746,19 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   }, [lang]);
 
   const setLang = (newLang: Language) => {
-    setLangState(newLang);
-    try {
-      localStorage.setItem('bk_lang', newLang);
-    } catch {
-      // The language fails to persist - the session continues in memory.
-    }
+    const apply = () => {
+      setLangState(newLang);
+      try {
+        localStorage.setItem('bk_lang', newLang);
+      } catch {
+        // The language fails to persist - the session continues in memory.
+      }
+    };
+    // English is switched to once its half of the dictionary is here; a
+    // failed load leaves the page as it is rather than half translated.
+    const pending = prepareLanguage(newLang);
+    if (pending) pending.then(apply, (error: unknown) => console.error('[i18n] English did not load', error));
+    else apply();
   };
 
   // useCallback: t is passed into effect dependencies across the app -

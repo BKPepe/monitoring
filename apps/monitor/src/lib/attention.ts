@@ -1,11 +1,17 @@
 import type { ApiMonitor } from '@/api/app-api';
+import { monitorStatusKey } from '@/lib/status';
 
 export interface AttentionItem {
   key: string;
   /** monitors.id - the /infrastructure/:id segment, never an asset_id (W1-D2). */
   monitorId: number;
   name: string;
-  severity: 'down' | 'warning';
+  /**
+   * 'info' = worth knowing, nothing is wrong (an agent update) - the same
+   * scale the server's findings feed uses (bk_attention_reasons), so the
+   * dashboard list and the feed never disagree on how bad a row is (CR-5).
+   */
+  severity: 'down' | 'warning' | 'info';
   text: string;
 }
 
@@ -13,6 +19,8 @@ export interface AttentionItem {
 export interface AttentionLabels {
   down: string;
   warning: string;
+  /** An agent that reported and went quiet (unknown_stale, decision 5.10). */
+  silent: string;
   unreachable: string;
   sslExpired: string;
   sslExpiring: (days: number) => string;
@@ -55,8 +63,22 @@ export function thresholdFor(m: ApiMonitor, metric: 'cpu' | 'ram' | 'hdd'): numb
   const effective = m.effectiveThresholds?.[metric];
   return typeof effective === 'number' && effective > 0 ? effective : METRIC_ATTENTION_THRESHOLD;
 }
-/** How many days before certificate expiry alerts start. */
+/**
+ * How many days before certificate expiry alerts start when the caller does
+ * not know the server's `ssl_alert_days` - the server's own default.
+ */
 export const SSL_ATTENTION_DAYS = 14;
+
+export interface AttentionOptions {
+  /**
+   * The server's ssl_alert_days (websites_overview.sslAlertDays). A fixed 14
+   * here while cron alerted at 30 meant a mail about a certificate the
+   * dashboard still called fine (CR-5).
+   */
+  sslAlertDays?: number | null;
+}
+
+const SEVERITY_RANK: Record<AttentionItem['severity'], number> = { down: 0, warning: 1, info: 2 };
 
 /**
  * Builds the list for the "Needs attention" section.
@@ -68,14 +90,43 @@ export const SSL_ATTENTION_DAYS = 14;
  * and its certificate expires too) - by design, every problem needs
  * its own row.
  */
-export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLabels): AttentionItem[] {
+export function buildNeedsAttention(
+  monitors: ApiMonitor[],
+  labels: AttentionLabels,
+  options: AttentionOptions = {}
+): AttentionItem[] {
   const items: AttentionItem[] = [];
+  const sslLimit =
+    typeof options.sslAlertDays === 'number' && options.sslAlertDays > 0 ? options.sslAlertDays : SSL_ATTENTION_DAYS;
 
   for (const m of monitors) {
     if (m.status === 'down') {
-      items.push({ key: `down-${m.id}`, monitorId: m.id, name: m.name, severity: 'down', text: labels.down });
+      items.push({
+        key: `down-${m.id}`,
+        monitorId: m.id,
+        name: m.name,
+        severity: 'down',
+        text: labels.down,
+      });
     } else if (m.status === 'warning') {
-      items.push({ key: `warn-${m.id}`, monitorId: m.id, name: m.name, severity: 'warning', text: labels.warning });
+      items.push({
+        key: `warn-${m.id}`,
+        monitorId: m.id,
+        name: m.name,
+        severity: 'warning',
+        text: labels.warning,
+      });
+    } else if (monitorStatusKey(m) === 'unknown_stale') {
+      // The verdict above counts a silent agent as a problem; the list that
+      // names the problems must name it too, or the first screen says
+      // "1 agent mlčí" over "Nic nevyžaduje pozornost".
+      items.push({
+        key: `silent-${m.id}`,
+        monitorId: m.id,
+        name: m.name,
+        severity: 'warning',
+        text: labels.silent,
+      });
     }
 
     if (m.unreachableTarget) {
@@ -89,7 +140,7 @@ export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLab
     }
 
     const sslDays = m.details?.ssl_days_remaining;
-    if (typeof sslDays === 'number' && sslDays <= SSL_ATTENTION_DAYS) {
+    if (typeof sslDays === 'number' && sslDays <= sslLimit) {
       items.push({
         key: `ssl-${m.id}`,
         monitorId: m.id,
@@ -100,11 +151,12 @@ export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLab
     }
 
     if (m.agentUpdateAvailable) {
+      // An older agent still measures correctly: worth knowing, not a problem.
       items.push({
         key: `agent-${m.id}`,
         monitorId: m.id,
         name: m.name,
-        severity: 'warning',
+        severity: 'info',
         text: labels.agentUpdate(m.agentUpdateAvailable),
       });
     }
@@ -130,8 +182,8 @@ export function buildNeedsAttention(monitors: ApiMonitor[], labels: AttentionLab
     }
   }
 
-  // Outages first, then warnings; within a severity, by name.
+  // Outages first, then warnings, then information; within a severity, by name.
   return items.sort((a, b) =>
-    a.severity === b.severity ? a.name.localeCompare(b.name) : a.severity === 'down' ? -1 : 1
+    a.severity === b.severity ? a.name.localeCompare(b.name) : SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
   );
 }

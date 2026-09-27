@@ -31,7 +31,7 @@ describe('Dostupnost: okno s výpadkem nikdy neukáže 100 %', () => {
       </LanguageProvider>
     );
 
-    expect(await screen.findByText('100.00 %')).toBeTruthy();
-    expect(screen.getAllByText('99.99 %')).toHaveLength(2);
+    expect(await screen.findByText('100,00 %')).toBeTruthy();
+    expect(screen.getAllByText('99,99 %')).toHaveLength(2);
   });
 });

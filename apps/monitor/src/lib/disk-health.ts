@@ -199,19 +199,3 @@ export function verdictSentence(
   }
   return { verdict, text: t(verdict.key, params, verdict.key) };
 }
-
-/**
- * The disk that needs attention first. A failure outranks a warning, a state
- * nobody could read outranks a healthy one - a router with one unreadable
- * disk is not "all good".
- */
-const TONE_RANK: Record<HealthTone, number> = { down: 0, warning: 1, muted: 2, up: 3 };
-
-export function worstDisk(disks: StorageDisk[]): StorageDisk | null {
-  let worst: { disk: StorageDisk; rank: number } | null = null;
-  for (const disk of disks) {
-    const rank = TONE_RANK[diskVerdict(disk).tone];
-    if (!worst || rank < worst.rank) worst = { disk, rank };
-  }
-  return worst ? worst.disk : null;
-}

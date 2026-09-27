@@ -133,7 +133,8 @@ describe('asset detail per monitor type', () => {
   it('leaves out the tiles an agent_service can never fill', async () => {
     stubFetch([service, parent]);
     renderDetail();
-    expect(await screen.findByText('Uptime')).toBeTruthy();
+    // Time since the last status change, named for what it is (honest-21).
+    expect(await screen.findByText('Online nepřetržitě')).toBeTruthy();
     // bk_apply_agent_service_result() logs response_time NULL on every row,
     // and a watched process has no filesystem of its own.
     expect(screen.queryByText('Odezva')).toBeNull();
@@ -145,8 +146,9 @@ describe('asset detail per monitor type', () => {
     renderDetail();
     // The dashboard has read the process rankings all along; the detail page
     // showed two dashes next to them.
-    expect(await screen.findByText('18.4 %')).toBeTruthy();
-    expect(screen.getByText('3120.5 MB')).toBeTruthy();
+    // Czech number format (C-5): a decimal comma, and whole megabytes grouped.
+    expect(await screen.findByText('18,4 %')).toBeTruthy();
+    expect(screen.getByText(/^3\s121 MB$/)).toBeTruthy();
   });
 
   it('sends the reader to the parent server for the process list', async () => {
@@ -170,10 +172,12 @@ describe('asset detail per monitor type', () => {
   it('prints a human type instead of the stored enum', async () => {
     stubFetch([service, parent]);
     renderDetail();
-    expect(await screen.findByText('Typ: Služba pod agentem')).toBeTruthy();
-    expect(screen.queryByText('Typ: AGENT_SERVICE')).toBeNull();
-    // The parameter row repeated it, and `os` merely echoed the type there.
-    expect(screen.getByText('Typ protokolu')).toBeTruthy();
+    const row = (await screen.findByText('Typ protokolu')).parentElement as HTMLElement;
+    expect(row.textContent).toContain('Služba pod agentem');
+    expect(screen.queryByText(/AGENT_SERVICE/)).toBeNull();
+    // Said once (clutter-17): the "Typ: …" chip in the summary repeated this row.
+    expect(screen.queryByText(/^Typ: /)).toBeNull();
+    // `os` merely echoed the type in the parameter list.
     expect(screen.queryByText('Operační systém')).toBeNull();
   });
 
@@ -196,7 +200,7 @@ describe('asset detail per monitor type', () => {
     expect(
       await screen.findByText('Tento typ monitoru neukládá časové řady - sleduje se jen dostupnost.')
     ).toBeTruthy();
-    expect(screen.getByText('Uptime')).toBeTruthy();
+    expect(screen.getByText('Online nepřetržitě')).toBeTruthy();
     for (const label of ['Odezva', 'Využití CPU', 'Využití RAM', 'Využití disku']) {
       expect(screen.queryByText(label), label).toBeNull();
     }

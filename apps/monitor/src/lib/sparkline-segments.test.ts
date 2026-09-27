@@ -1,64 +1,90 @@
 import { describe, expect, it } from 'vitest';
-import { sparklineSegments } from './sparkline-segments';
+import { defaultMinRange, sparklineGeometry, type SparkSample } from './sparkline-segments';
 
 const W = 100;
 const H = 28;
+const minute = 60_000;
+/** One sample per minute, `null` where nothing was measured. */
+const perMinute = (values: (number | null)[]): SparkSample[] => values.map((v, i) => ({ t: i * minute, v }));
 
-describe('sparklineSegments', () => {
-  it('draws one line when everything was measured', () => {
-    const segments = sparklineSegments([1, 2, 3, 4], W, H);
+describe('sparklineGeometry', () => {
+  it('nakreslí jednu čáru, když bylo změřeno všechno', () => {
+    const { segments } = sparklineGeometry(perMinute([1, 2, 3, 4]), W, H);
     expect(segments).toHaveLength(1);
     expect(segments[0]).toHaveLength(4);
   });
 
-  // The whole point: a collection outage must not be drawn as a smooth line
-  // between the last measurement before it and the first one after.
-  it('splits the line at a gap instead of joining across it', () => {
-    const segments = sparklineSegments([1, 2, null, null, 5, 6], W, H);
+  it('přeruší čáru v díře místo spojení přes ni', () => {
+    const { segments } = sparklineGeometry(perMinute([1, 2, null, null, 5, 6]), W, H);
     expect(segments).toHaveLength(2);
+  });
+
+  it('dlouhý krok mezi vzorky je díra, i když v datech žádná null není', () => {
+    // The endpoints return only rows that have a value: a two-hour outage
+    // arrives as two neighbouring samples.
+    const samples = [...perMinute([1, 2, 3, 4]), { t: 120 * minute, v: 5 }, { t: 121 * minute, v: 6 }];
+    const { segments } = sparklineGeometry(samples, W, H);
+    expect(segments).toHaveLength(2);
+    // ...and the hole is as wide as the outage: the second run sits at the right edge.
+    expect(segments[1][0].x).toBeCloseTo((120 / 121) * W);
+  });
+
+  it('osa x je čas okna - ticho na konci okna zůstane prázdné', () => {
+    const window = { from: 0, to: 60 * minute };
+    const { segments } = sparklineGeometry(perMinute([1, 2, 3, 4]), W, H, { window });
+    const lastX = segments[0][segments[0].length - 1].x;
+    expect(lastX).toBeCloseTo((3 / 60) * W);
+  });
+
+  it('vzorky mimo okno nekreslí', () => {
+    const window = { from: 2 * minute, to: 3 * minute };
+    const { segments, first, last } = sparklineGeometry(perMinute([9, 9, 1, 2, 9]), W, H, { window });
     expect(segments[0]).toHaveLength(2);
-    expect(segments[1]).toHaveLength(2);
+    expect([first, last]).toEqual([1, 2]);
   });
 
-  it('keeps the x position of a point after a gap, so time stays linear', () => {
-    const segments = sparklineSegments([0, null, null, 10], W, H);
-    // The last sample is the fourth of four: it belongs at the right edge,
-    // not at the second position it would take after dropping the nulls.
-    expect(segments).toHaveLength(0); // ...and a lone point on each side is no line
-    const withPairs = sparklineSegments([0, 1, null, null, 9, 10], W, H);
-    expect(withPairs[1][1].x).toBeCloseTo(W);
-    expect(withPairs[0][0].x).toBeCloseTo(0);
+  it('šum kolem stálé hodnoty zůstane plochý', () => {
+    // 12.4-12.6 % used to fill the whole height.
+    const { segments } = sparklineGeometry(perMinute([12.4, 12.6, 12.4, 12.6]), W, H, { minRange: 10 });
+    const ys = segments[0].map((p) => p.y);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(H * 0.05);
   });
 
-  it('drops a lone measurement between gaps rather than drawing a dot', () => {
-    expect(sparklineSegments([1, 2, null, 7, null, 3, 4], W, H)).toHaveLength(2);
+  it('skutečnou změnu nakreslí přes celou výšku', () => {
+    const { segments } = sparklineGeometry(perMinute([0, 100]), W, H);
+    expect(segments[0][1].y).toBeCloseTo(2);
+    expect(segments[0][0].y).toBeCloseTo(H - 2);
   });
 
-  it('has nothing to draw when fewer than two samples were measured', () => {
-    expect(sparklineSegments([null, null, null], W, H)).toEqual([]);
-    expect(sparklineSegments([5], W, H)).toEqual([]);
-    expect(sparklineSegments([5, null], W, H)).toEqual([]);
-  });
-
-  it('treats NaN and Infinity as not measured, never as a value', () => {
-    const segments = sparklineSegments([1, 2, NaN, 4, 5], W, H);
-    expect(segments).toHaveLength(2);
-    expect(sparklineSegments([1, 2, Infinity, 4, 5], W, H)).toHaveLength(2);
-  });
-
-  it('keeps a constant series inside the box instead of dividing by zero', () => {
-    const [segment] = sparklineSegments([3, 3, 3], W, H);
-    for (const point of segment) {
-      expect(Number.isFinite(point.y)).toBe(true);
+  it('konstantní řada zůstane uvnitř rámečku', () => {
+    const { segments } = sparklineGeometry(perMinute([0, 0, 0]), W, H);
+    for (const point of segments[0]) {
       expect(point.y).toBeGreaterThanOrEqual(0);
       expect(point.y).toBeLessThanOrEqual(H);
     }
   });
 
-  it('puts the maximum above the minimum, inside the padded box', () => {
-    const [segment] = sparklineSegments([0, 100], W, H);
-    expect(segment[1].y).toBeLessThan(segment[0].y);
-    expect(segment[1].y).toBeCloseTo(2);
-    expect(segment[0].y).toBeCloseTo(H - 2);
+  it('osamělé měření mezi dírami není čára', () => {
+    expect(sparklineGeometry(perMinute([1, 2, null, 7, null, 3, 4]), W, H).segments).toHaveLength(2);
+  });
+
+  it('z méně než dvou měření nic nekreslí a neuvádí hodnoty', () => {
+    expect(sparklineGeometry(perMinute([null, 5, null]), W, H)).toEqual({ segments: [], first: null, last: null });
+  });
+
+  it('NaN a Infinity nejsou hodnota', () => {
+    expect(sparklineGeometry(perMinute([1, 2, Number.NaN, 4, 5]), W, H).segments).toHaveLength(2);
+  });
+
+  it('vrátí první a poslední naměřenou hodnotu pro popisky', () => {
+    const { first, last } = sparklineGeometry(perMinute([null, 3, 4, 8, null]), W, H);
+    expect([first, last]).toEqual([3, 8]);
+  });
+});
+
+describe('defaultMinRange', () => {
+  it('je pětina úrovně řady, u nuly jednotka', () => {
+    expect(defaultMinRange([-100, -98])).toBe(20);
+    expect(defaultMinRange([0, 0])).toBe(1);
   });
 });

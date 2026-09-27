@@ -55,7 +55,7 @@ afterEach(() => {
 });
 
 describe('Dashboard: uptime za 30 dní s výpadkem', () => {
-  it('99,999 % (pět sekund výpadku) ukáže 99.99, ne 100.00', async () => {
+  it('99,999 % (pět sekund výpadku) ukáže 99,99, ne 100', async () => {
     render(
       <LanguageProvider>
         <MemoryRouter>
@@ -64,8 +64,9 @@ describe('Dashboard: uptime za 30 dní s výpadkem', () => {
       </LanguageProvider>
     );
 
-    const label = await screen.findByText('Uptime (30 dní)', { selector: 'p' });
-    const card = label.parentElement?.parentElement as HTMLElement;
-    await waitFor(() => expect(card.querySelector('span.text-2xl')?.textContent).toBe('99.99'));
+    const label = await screen.findByText('Uptime (30 dní)');
+    const block = label.closest('[data-slot="stat-block"]') as HTMLElement;
+    // The figure in the UI language (cs: decimal comma), the unit after it.
+    await waitFor(() => expect(block.querySelector('p > span.font-mono')?.textContent).toBe('99,99 %'));
   });
 });

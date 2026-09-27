@@ -3,6 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import * as React from 'react';
 import { HelpCircle } from 'lucide-react';
+import { RangeMeter } from '@/components/meter';
 import { useLanguage } from '@/context/language-context';
 import { signalTone, type SignalRating } from '@/lib/signal-quality';
 import { signalAdvice, signalLevelLabel, signalWhat } from '@/lib/signal-texts';
@@ -22,6 +23,7 @@ export function SignalReading({
   helpKey,
   to,
   hint,
+  meter,
 }: {
   label: string;
   /** Formatted measurement, e.g. "-84 dBm". Null renders nothing at all. */
@@ -33,6 +35,8 @@ export function SignalReading({
   to?: string;
   /** A quieter line under the row: what the number includes, or what it is not. */
   hint?: React.ReactNode;
+  /** A scale of its own for a reading without a rating (e.g. a span of client signals). */
+  meter?: React.ReactNode;
 }) {
   const { t } = useLanguage();
   if (value == null) return null;
@@ -40,7 +44,8 @@ export function SignalReading({
   const levelLabel = rating ? signalLevelLabel(t, rating.level) : null;
   const advice = rating ? signalAdvice(t, rating.advice) : '';
   const what = helpKey ? signalWhat(t, helpKey) : '';
-  const shown = <span className="font-mono font-medium">{value}</span>;
+  // A measurement: mono, tabular digits (apps/site DESIGN.md).
+  const shown = <span className="font-mono font-medium tabular-nums">{value}</span>;
 
   return (
     <div className="border-border/40 border-b py-1.5 text-xs last:border-0">
@@ -101,6 +106,21 @@ export function SignalReading({
           )}
         </span>
       </div>
+      {/* The reading on its scale (C-9): how far from fine, which the level
+          label alone cannot say. Only a rated reading has a scale. */}
+      {rating && (
+        <RangeMeter
+          mode="marker"
+          min={rating.meter.min}
+          max={rating.meter.max}
+          value={rating.value}
+          zones={rating.meter.zones}
+          label={label}
+          valueText={value}
+          className="mt-1.5 mb-0.5"
+        />
+      )}
+      {!rating && meter && <div className="mt-1.5 mb-0.5">{meter}</div>}
       {hint && <p className="text-muted-foreground pt-0.5 text-2xs">{hint}</p>}
     </div>
   );

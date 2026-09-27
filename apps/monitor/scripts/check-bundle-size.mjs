@@ -34,7 +34,10 @@ const ASSETS = join(DIST, 'assets');
 // 800 -> 801: agent 0.1.9 on top of the live fixes is 142 B over, all dictionary strings; UX wave 2 loads one language.
 // 801 -> 802: the router port panel (phase 1) adds 21 short cs+en dictionary entries, 1.3 kB, all on
 // the critical path because the dictionary is; the panel's own code is in the lazy asset-detail chunk.
-const CRITICAL_JS_LIMIT_KB = 802;
+// 802 -> 800 (UX wave 2, PA-5): the build splits the dictionary by language (scripts/i18n-split.ts),
+// the English half is a lazy chunk, and the critical path measured 705 kB. Back to 800 - never raise
+// it again to make room; find the weight instead.
+const CRITICAL_JS_LIMIT_KB = 800;
 
 /** Strop pro CSS na kritické cestě. Blokuje vykreslení stejně jako skript. */
 const CRITICAL_CSS_LIMIT_KB = 120;

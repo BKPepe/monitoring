@@ -1,4 +1,3 @@
-import { Card } from '@/components/ui/card';
 import { StatBlock } from '@/components/stat-block';
 import { Gamepad2, Users, Gauge, MessageSquare } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
@@ -35,11 +34,11 @@ export function MinecraftCard({ d }: { d: Record<string, any> }) {
   const fill = online != null && max != null && max > 0 ? (online / max) * 100 : null;
 
   return (
-    <Card className="space-y-4 p-6">
+    <div data-slot="well" className="bg-inset rounded-xl border border-border space-y-4 p-5">
       <div className="flex items-center gap-3 border-b border-border pb-3">
-        <Gamepad2 className="size-5 text-primary" />
+        <Gamepad2 className="text-muted-foreground size-5" aria-hidden="true" />
         <div className="min-w-0">
-          <h3 className="text-base font-bold">{t('mc.title', 'Minecraft server')}</h3>
+          <h3 className="text-sm font-semibold">{t('mc.title', 'Minecraft server')}</h3>
           <p className="text-muted-foreground text-xs">
             {d.version
               ? t('mc.version', { version: d.version }, `Verze ${d.version}`)
@@ -114,6 +113,6 @@ export function MinecraftCard({ d }: { d: Record<string, any> }) {
           )}
         </StatBlock>
       </div>
-    </Card>
+    </div>
   );
 }

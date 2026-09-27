@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { StatusDot } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -11,17 +10,12 @@ import {
 } from '@/components/ui/dialog';
 import { FileText, HelpCircle, ExternalLink, Mail, MessageSquare } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
-import { usePublicStatus } from '@/api/use-asset-charts';
 import { versionCommitUrl } from '@/lib/version';
 
 export function Footer({ version }: { version: string }) {
   const { t } = useLanguage();
   const [showDocsModal, setShowDocsModal] = useState(false);
   const [showSupportModal, setShowSupportModal] = useState(false);
-  // The badge used to be hardcoded green "Operational" - it kept glowing
-  // even while the API was down, which is exactly the class of fabricated
-  // reassurance this app must not show.
-  const { data: apiStatus, error: apiError, loading: apiLoading } = usePublicStatus();
 
   return (
     <>
@@ -39,23 +33,8 @@ export function Footer({ version }: { version: string }) {
         </a>
 
         <div className="ml-auto flex flex-wrap items-center gap-x-6 gap-y-2">
-          <span className="flex items-center gap-1.5">
-            API Status
-            {apiLoading ? (
-              <span className="text-muted-foreground">{t('footer.api_checking', 'Zjišťuji…')}</span>
-            ) : apiError || !apiStatus ? (
-              <>
-                <StatusDot variant="down" />
-                <span className="text-down font-medium">{t('footer.api_unreachable', 'Nedostupné')}</span>
-              </>
-            ) : (
-              <>
-                <StatusDot variant="up" />
-                <span className="text-up font-medium">{t('footer.operational', 'Operational')}</span>
-              </>
-            )}
-          </span>
-
+          {/* The API status moved to the sidebar's server card (layout/
+              server-status-card), which refreshes it every minute. */}
           <button
             type="button"
             onClick={() => setShowDocsModal(true)}
@@ -111,7 +90,7 @@ export function Footer({ version }: { version: string }) {
                   'footer.docs_section2_desc_prefix',
                   'Pro měření CPU, RAM a zaplnění diskových oddílů na Linux/OpenWrt serverech použijte jednorázový instalační skript v sekci'
                 )}{' '}
-                <a href="/app/api-agents" className="text-primary underline">
+                <a href="/app/api-agents" className="text-link underline">
                   {t('nav.api-agents', 'API & Agenti')}
                 </a>
                 .
@@ -167,7 +146,7 @@ export function Footer({ version }: { version: string }) {
                   href="https://discord.gg/2bcsnte"
                   target="_blank"
                   rel="noreferrer"
-                  className="text-primary inline-flex items-center gap-1 font-mono text-2xs hover:underline"
+                  className="text-link inline-flex items-center gap-1 font-mono text-2xs hover:underline"
                 >
                   {t('footer.join_discord', 'Připojit se k Discordu')} <ExternalLink className="size-3" />
                 </a>

@@ -1,37 +1,61 @@
-import { useState, useRef, useEffect } from 'react';
-import { Link } from 'react-router';
-import { Bell, Menu, Moon, Sun, AlertTriangle, CheckCircle2, ArrowRight } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { Link, useLocation } from 'react-router';
+import { AlertTriangle, ArrowLeft, ArrowRight, Bell, CheckCircle2, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { SearchCommand, type SearchResult } from '@/components/ui/search-command';
-import { useTheme } from '@/lib/use-theme';
+import { ListRow, ListRows } from '@/components/ui/list-row';
+import { Pill } from '@/components/ui/pill';
+import { FreshnessPill } from '@/components/freshness-pill';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
 import { ErrorState, LoadingState } from '@/components/ui/states';
+import { routeMeta } from './nav-config';
+import { useShellChrome } from './shell-context';
+import { attentionCount, type CountState, type FindingCounts } from './use-shell-counts';
 
+/**
+ * The NetPulse header: the back arrow on a detail page, the page's title,
+ * search, refresh, the freshness pill of the page's data and the alerts bell.
+ *
+ * The title is the route's name (or the page's own, via usePageChrome). It is
+ * not a heading: the page's PageHeader holds the one <h1>, and two h1s would
+ * give a screen reader two page names. The pill appears only when the page
+ * registered its data's timestamp - a fixed "LIVE" is what main removed.
+ */
 export function Header({
   searchResults,
   onSearchSelect,
-  alertCount: propAlertCount,
-  alertCountKnown = true,
-  onOpenMobileNav,
+  findings = null,
+  findingsState = 'loading',
+  openIncidents = null,
+  incidentsState = 'loading',
+  onRefresh,
 }: {
   searchResults?: SearchResult[];
   onSearchSelect?: (result: SearchResult) => void;
-  alertCount?: number;
-  /** false when the last incidents call failed: the count is then a stale number, not a fresh zero. */
-  alertCountKnown?: boolean;
-  onOpenMobileNav?: () => void;
+  /** The findings summary (action=findings&summary=1) the shell polls. */
+  findings?: FindingCounts | null;
+  findingsState?: CountState;
+  /** Open incident records. */
+  openIncidents?: number | null;
+  incidentsState?: CountState;
+  /** Refetch the page (and the counts); a promise keeps the arrow spinning. */
+  onRefresh?: () => unknown;
 }) {
-  const { theme, toggle } = useTheme();
-  const { lang, setLang, t } = useLanguage();
+  const { t } = useLanguage();
+  const bellCountId = useId();
+  const popoverId = useId();
+  const location = useLocation();
+  const chrome = useShellChrome();
+  const meta = routeMeta(location.pathname);
+  const title = chrome.title ?? (meta ? t(meta.titleKey, meta.fallback) : '');
+
   const [showNotifications, setShowNotifications] = useState(false);
   const [activeAlerts, setActiveAlerts] = useState<any[]>([]);
   // The bell used to count ALL historical down events as "active" - it would
   // glow with e.g. 20 long-resolved outages with no way to dismiss them.
-  // Genuinely ongoing outages (propAlertCount) always glow.
   // Read state lives on the server with the user - localStorage held only for
-  // one browser, so "mark all as read" never took effect on another computer
-  // (or after clearing browser data).
+  // one browser, so "mark all as read" never took effect on another computer.
   const [readUpToId, setReadUpToId] = useState<number>(0);
   useEffect(() => {
     let active = true;
@@ -59,7 +83,7 @@ export function Header({
 
   // A failed events call used to leave the list empty, and an empty list drew
   // the green "every node works" box - an all-clear from a server that never
-  // answered (W1-A). The box now needs a fresh successful answer.
+  // answered (W1-A). The box needs fresh successful answers from every source.
   const [eventsState, setEventsState] = useState<'loading' | 'ok' | 'failed'>('loading');
   useEffect(() => {
     let active = true;
@@ -81,11 +105,16 @@ export function Header({
       active = false;
     };
   }, [showNotifications]);
-  const allClearKnown = eventsState === 'ok' && alertCountKnown;
 
+  const attention = attentionCount(findings);
   const unreadAlerts = activeAlerts.filter((e) => typeof e.id === 'number' && e.id > readUpToId);
-  const currentlyDown = propAlertCount ?? 0;
-  const alertCount = Math.max(unreadAlerts.length, currentlyDown);
+  // One number on the bell: whatever asks for action now - the findings that
+  // are critical or warning, an open incident, an outage not yet read. They
+  // overlap (an ongoing outage is all three), so the bell takes the largest,
+  // never the sum.
+  const alertCount = Math.max(attention ?? 0, openIncidents ?? 0, unreadAlerts.length);
+  const countUnknown = findingsState === 'failed' || incidentsState === 'failed';
+  const allClearKnown = eventsState === 'ok' && findingsState === 'ok' && incidentsState === 'ok' && alertCount === 0;
 
   const markAllRead = () => {
     const maxId = activeAlerts.reduce((mx, e) => (typeof e.id === 'number' && e.id > mx ? e.id : mx), readUpToId);
@@ -98,193 +127,254 @@ export function Header({
     }).catch(() => {});
   };
 
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    if (!onRefresh || refreshing) return;
+    setRefreshing(true);
+    try {
+      await onRefresh();
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  // A count from a source that failed is a floor: said with the number, not instead of it.
+  const unknownText = t('header.count_unknown', 'Počet upozornění se nepodařilo zjistit');
+  const bellLabel =
+    alertCount > 0
+      ? t('header.bell_count', { count: alertCount }, `Upozornění k řešení: ${alertCount}`) +
+        (countUnknown ? `. ${unknownText}` : '')
+      : countUnknown
+        ? unknownText
+        : null;
+
   return (
-    <header className="bg-background/80 sticky top-0 z-30 flex h-16 shrink-0 items-center gap-3 border-b border-border px-4 backdrop-blur-md print:hidden">
-      <Button
-        variant="ghost"
-        size="icon"
-        className="lg:hidden"
-        onClick={onOpenMobileNav}
-        aria-label={t('header.open_nav', 'Otevřít navigaci')}
-      >
-        <Menu />
-      </Button>
+    <header className="bg-background/80 sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-border px-4 backdrop-blur-md sm:h-16 sm:gap-3 sm:px-6 print:hidden">
+      {meta?.parent && (
+        <Link
+          to={meta.parent}
+          aria-label={t('header.back', 'Zpět')}
+          title={t('header.back', 'Zpět')}
+          className="text-muted-foreground hover:text-foreground hover:bg-accent focus-visible:ring-ring grid size-9 shrink-0 place-items-center rounded-lg border border-border transition-colors focus-visible:ring-2 focus-visible:outline-none"
+        >
+          <ArrowLeft aria-hidden="true" className="size-4" />
+        </Link>
+      )}
+      <p className="min-w-0 flex-1 truncate text-base font-semibold tracking-tight sm:text-lg" data-slot="page-title">
+        {title}
+      </p>
 
       {/* On a phone the search is an icon: as a full-width field it pushed
-          the theme switch and the bell off a 390 px screen (W1-D3). */}
-      <div className="min-w-0 sm:mx-auto sm:w-full sm:max-w-md">
+          the bell off a 390 px screen (W1-D3). */}
+      <div className="min-w-0 shrink-0 sm:w-56 xl:w-72">
         <SearchCommand results={searchResults} onSelect={onSearchSelect} />
       </div>
 
-      <div className="ml-auto flex items-center gap-2 relative" ref={dropdownRef}>
-        {/* CS / EN language switcher */}
-        <div className="flex items-center rounded-md border border-border bg-secondary/50 p-0.5 text-xs font-semibold">
-          <button
-            type="button"
-            onClick={() => setLang('cs')}
-            className={cn(
-              // A 22px target is below what a thumb can hit reliably; 44px is
-              // the size a finger expects. The pressed state was carried by a
-              // background colour alone, which says nothing out loud.
-              'focus-visible:ring-ring min-h-11 min-w-11 rounded px-2 py-1 text-2xs transition-colors focus-visible:ring-2 focus-visible:outline-none sm:min-h-0 sm:min-w-0',
-              lang === 'cs' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-            )}
-            aria-pressed={lang === 'cs'}
-            aria-label={t('settings.lang_cs', 'Čeština')}
-            title={t('settings.lang_cs', 'Čeština')}
+      <div className="relative flex shrink-0 items-center gap-1.5 sm:gap-2" ref={dropdownRef}>
+        {onRefresh && (
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => void refresh()}
+            disabled={refreshing}
+            aria-label={refreshing ? t('header.refreshing', 'Obnovuji…') : t('header.refresh', 'Obnovit data')}
+            title={t('header.refresh', 'Obnovit data')}
           >
-            CS
-          </button>
-          <button
-            type="button"
-            onClick={() => setLang('en')}
-            className={cn(
-              'focus-visible:ring-ring min-h-11 min-w-11 rounded px-2 py-1 text-2xs transition-colors focus-visible:ring-2 focus-visible:outline-none sm:min-h-0 sm:min-w-0',
-              lang === 'en' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
-            )}
-            aria-pressed={lang === 'en'}
-            aria-label="English"
-            title="English"
-          >
-            EN
-          </button>
-        </div>
+            <RefreshCw aria-hidden="true" className={cn(refreshing && 'animate-spin motion-reduce:animate-none')} />
+          </Button>
+        )}
 
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={toggle}
-          aria-label={
-            theme === 'dark'
-              ? t('header.switch_light', 'Přepnout na světlý motiv')
-              : t('header.switch_dark', 'Přepnout na tmavý motiv')
-          }
-        >
-          {theme === 'dark' ? <Moon /> : <Sun />}
-        </Button>
+        {chrome.freshness && (
+          <FreshnessPill
+            at={chrome.freshness.at}
+            intervalSecs={chrome.freshness.intervalSecs}
+            failed={chrome.freshness.failed}
+            okAt={chrome.freshness.okAt}
+            compact
+          />
+        )}
 
-        {/* Bell notification button + Dropdown */}
         <div className="relative">
           <Button
-            variant="ghost"
+            variant="outline"
             size="icon"
             className="relative cursor-pointer"
             aria-label={t('header.notifications_aria', 'Upozornění')}
             // A button that opens a panel has to say so, and the panel has to
             // close on Escape - otherwise a keyboard user opens it and has no
             // way back except Tab through everything inside.
-            aria-haspopup="menu"
             aria-expanded={showNotifications}
+            aria-controls={showNotifications ? popoverId : undefined}
+            aria-describedby={bellLabel ? bellCountId : undefined}
             onKeyDown={(e) => {
               if (e.key === 'Escape' && showNotifications) setShowNotifications(false);
             }}
             onClick={() => setShowNotifications(!showNotifications)}
           >
-            <Bell />
-            {alertCount > 0 && (
-              <>
-                <span className="bg-destructive text-destructive-foreground absolute top-1 right-1 grid size-4 place-items-center rounded-full text-3xs font-semibold">
-                  {alertCount > 9 ? '9+' : alertCount}
-                </span>
-                <span className="sr-only">
-                  {t('header.unread_alerts', { count: alertCount }, `${alertCount} nepřečtených upozornění`)}
-                </span>
-              </>
+            <Bell aria-hidden="true" />
+            {alertCount > 0 ? (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  'figure absolute -top-1.5 -right-1.5 grid h-4.5 min-w-4.5 place-items-center rounded-full px-1 text-3xs font-bold',
+                  findings && findings.critical > 0
+                    ? 'bg-down text-down-foreground'
+                    : 'bg-warning text-warning-foreground'
+                )}
+              >
+                {alertCount > 9 ? '9+' : alertCount}
+              </span>
+            ) : (
+              countUnknown && (
+                // Unknown is not zero: a hollow ring, not a number and not silence.
+                <span
+                  aria-hidden="true"
+                  className="border-warning bg-background absolute -top-1 -right-1 size-2.5 rounded-full border-2"
+                />
+              )
             )}
           </Button>
+          {bellLabel && (
+            <span id={bellCountId} className="sr-only">
+              {bellLabel}
+            </span>
+          )}
 
-          {/* Notification popover menu */}
           {showNotifications && (
             <div
-              role="menu"
+              id={popoverId}
+              role="region"
               aria-label={t('header.notifications_aria', 'Upozornění')}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') setShowNotifications(false);
               }}
-              className="absolute right-0 mt-2 w-80 sm:w-96 rounded-xl bg-card border border-border shadow-2xl p-4 z-50 animate-in fade-in-50 zoom-in-95"
+              className="bg-popover text-popover-foreground shadow-pop animate-in fade-in-50 zoom-in-95 fixed inset-x-3 top-16 z-50 rounded-xl border border-border p-4 sm:absolute sm:inset-x-auto sm:top-auto sm:right-0 sm:mt-2 sm:w-96"
             >
-              <div className="flex items-center justify-between border-b border-border pb-3 mb-3">
+              <div className="mb-3 flex items-center justify-between gap-2 border-b border-border pb-3">
                 <div className="flex items-center gap-2">
-                  <Bell className="size-4 text-primary" />
-                  <h4 className="font-bold text-sm">{t('settings.notifications', 'Notifikace & Upozornění')}</h4>
+                  <Bell aria-hidden="true" className="text-muted-foreground size-4" />
+                  <h2 className="text-sm font-semibold">{t('header.notifications_aria', 'Upozornění')}</h2>
                 </div>
-                <span className="text-2xs text-muted-foreground font-mono">
-                  {currentlyDown > 0
-                    ? `${currentlyDown} ${t('header.active_alerts', 'aktivní')}`
-                    : unreadAlerts.length > 0
-                      ? t('header.unread_count', { count: unreadAlerts.length }, `${unreadAlerts.length} nepřečtených`)
-                      : allClearKnown
-                        ? t('header.all_ok', 'Vše OK')
-                        : '—'}
+                <span className="text-muted-foreground figure text-2xs">
+                  {alertCount > 0
+                    ? t('header.bell_count', { count: alertCount }, `Upozornění k řešení: ${alertCount}`)
+                    : allClearKnown
+                      ? t('header.all_ok', 'Vše OK')
+                      : '—'}
                 </span>
               </div>
 
-              <div className="space-y-2.5 max-h-64 overflow-y-auto pr-1">
+              {/* What the findings feed counts, by severity - the way into the list. */}
+              {findings && (findings.critical > 0 || findings.warning > 0 || findings.info > 0) && (
+                <Link
+                  to="/insights"
+                  onClick={() => setShowNotifications(false)}
+                  className="hover:bg-raised focus-visible:ring-ring -mx-1 mb-3 flex flex-wrap items-center gap-1.5 rounded-lg px-1 py-1 focus-visible:ring-2 focus-visible:outline-none"
+                >
+                  {findings.critical > 0 && (
+                    <Pill tone="down" dot>
+                      {findings.critical} {t('rec.severity_critical', 'Kritické')}
+                    </Pill>
+                  )}
+                  {findings.warning > 0 && (
+                    <Pill tone="warning" dot>
+                      {findings.warning} {t('rec.severity_warning', 'Varování')}
+                    </Pill>
+                  )}
+                  {findings.info > 0 && (
+                    <Pill tone="info">
+                      {findings.info} {t('rec.severity_info', 'Pro informaci')}
+                    </Pill>
+                  )}
+                  <ArrowRight aria-hidden="true" className="text-muted-foreground ml-auto size-3.5" />
+                </Link>
+              )}
+              {countUnknown && <ErrorState tone="warning" className="mb-3" message={unknownText} />}
+              {findingsState === 'incomplete' && (
+                <ErrorState
+                  tone="warning"
+                  className="mb-3"
+                  message={t(
+                    'header.findings_incomplete',
+                    'Některý zdroj upozornění neodpověděl - počty mohou být vyšší.'
+                  )}
+                />
+              )}
+
+              <div className="max-h-72 overflow-y-auto">
                 {activeAlerts.length > 0 ? (
-                  activeAlerts.map((evt) => (
-                    <div
-                      key={evt.id}
-                      className={cn(
-                        'p-3 rounded-lg border flex items-start gap-3 text-xs',
-                        evt.id > readUpToId ? 'bg-down/10 border-down/20' : 'bg-secondary/40 border-border opacity-70'
-                      )}
-                    >
-                      <AlertTriangle
-                        className={cn(
-                          'size-4 shrink-0 mt-0.5',
-                          evt.id > readUpToId ? 'text-down' : 'text-muted-foreground'
-                        )}
-                      />
-                      <div>
-                        <p className={cn('font-semibold', evt.id > readUpToId ? 'text-down' : 'text-foreground')}>
-                          🔴 {t('header.outage_label', 'Výpadek')}: {evt.monitorName}
-                        </p>
-                        <p className="text-muted-foreground mt-0.5">
-                          {evt.errorMsg ||
-                            t('header.target_unresponsive', { target: evt.target }, `${evt.target} neodpovídá.`)}
-                        </p>
-                        <span className="text-3xs text-muted-foreground block mt-1">{evt.time}</span>
-                      </div>
-                    </div>
-                  ))
+                  <ListRows label={t('header.outages_list', 'Výpadky')}>
+                    {activeAlerts.map((evt) => {
+                      const unread = typeof evt.id === 'number' && evt.id > readUpToId;
+                      return (
+                        <ListRow
+                          key={evt.id}
+                          icon={AlertTriangle}
+                          iconTone={unread ? 'down' : 'neutral'}
+                          highlight={unread ? 'down' : null}
+                          title={`${t('header.outage_label', 'Výpadek')}: ${evt.monitorName}`}
+                          subtitle={
+                            evt.errorMsg ||
+                            t('header.target_unresponsive', { target: evt.target }, `${evt.target} neodpovídá.`)
+                          }
+                          meta={evt.time}
+                          className={cn(!unread && 'opacity-80')}
+                        />
+                      );
+                    })}
+                  </ListRows>
                 ) : allClearKnown ? (
-                  <div className="p-3 rounded-lg bg-up/10 border border-up/20 flex items-center gap-3 text-xs font-medium text-up">
-                    <CheckCircle2 className="size-4 shrink-0" />
+                  <div className="bg-up/10 text-up flex items-center gap-3 rounded-lg border border-up/20 p-3 text-xs font-medium">
+                    <CheckCircle2 aria-hidden="true" className="size-4 shrink-0" />
                     <span>{t('header.all_nodes_ok', 'Všechny monitorované uzly fungují bez závad.')}</span>
                   </div>
                 ) : eventsState === 'loading' ? (
                   <LoadingState size="inline" label={t('header.alerts_loading', 'Načítám upozornění...')} />
-                ) : (
+                ) : eventsState === 'failed' || countUnknown ? (
                   <ErrorState
                     message={t('header.alerts_failed', 'Upozornění se nepodařilo načíst. Stav uzlů teď není známý.')}
                   />
-                )}
+                ) : null}
               </div>
 
-              <div className="border-t border-border mt-3 pt-2 flex items-center justify-between gap-2">
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
                 {unreadAlerts.length > 0 ? (
                   <button
                     type="button"
                     onClick={markAllRead}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-muted-foreground hover:text-foreground"
+                    className="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-xs font-semibold"
                   >
-                    <CheckCircle2 className="size-3.5" /> {t('header.mark_all_read', 'Označit vše jako přečtené')}
+                    <CheckCircle2 aria-hidden="true" className="size-3.5" />{' '}
+                    {t('header.mark_all_read', 'Označit vše jako přečtené')}
                   </button>
                 ) : (
                   <span />
                 )}
-                <Link
-                  to="/incidents"
-                  onClick={() => setShowNotifications(false)}
-                  className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-                >
-                  {t('header.view_all_incidents', 'Zobrazit všechny incidenty')} <ArrowRight className="size-3" />
-                </Link>
+                <div className="flex items-center gap-3">
+                  <Link
+                    to="/incidents"
+                    onClick={() => setShowNotifications(false)}
+                    className="text-link text-xs font-semibold hover:underline"
+                  >
+                    {t('nav.incidents', 'Incidenty')}
+                  </Link>
+                  <Link
+                    to="/insights"
+                    onClick={() => setShowNotifications(false)}
+                    className="text-link inline-flex items-center gap-1 text-xs font-semibold hover:underline"
+                  >
+                    {t('header.view_all_alerts', 'Všechna upozornění')}{' '}
+                    <ArrowRight aria-hidden="true" className="size-3" />
+                  </Link>
+                </div>
               </div>
             </div>
           )}
         </div>
       </div>
+      <span className="sr-only" aria-live="polite">
+        {refreshing ? t('header.refreshing', 'Obnovuji…') : ''}
+      </span>
     </header>
   );
 }

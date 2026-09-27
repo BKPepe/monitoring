@@ -87,7 +87,7 @@ const ROW_TONE: Record<ReturnType<typeof severityTone>, string> = {
   info: 'border-info/30 bg-info/10',
 };
 
-function CommandBlock({ command }: { command: string }) {
+export function CommandBlock({ command }: { command: string }) {
   const { t } = useLanguage();
   const [copied, setCopied] = React.useState(false);
 
@@ -179,7 +179,7 @@ function RecommendationRow({
 }
 
 /** A muted item stays on the page with who muted it and why - a mute nobody can see is a lost finding. */
-function MutedRow({
+export function MutedRow({
   item,
   locale,
   busy,
@@ -230,7 +230,7 @@ function MutedRow({
   );
 }
 
-function MuteDialog({
+export function MuteDialog({
   monitorId,
   item,
   onClose,

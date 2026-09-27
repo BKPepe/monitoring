@@ -26,7 +26,7 @@
 import * as React from 'react';
 import { Cable, Clock, HardDrive, Usb } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/ui/panel';
 import { EmptyState } from '@/components/ui/states';
 import { useLanguage } from '@/context/language-context';
 import { buildPortPanel, rateLabel, type PortGroup, type PortPanel, type PortState } from '@/lib/router-ports/model';
@@ -205,25 +205,25 @@ export function RouterPortPanel({
         });
 
   return (
-    <Card className="space-y-4 p-4 sm:p-6">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h4 className="text-lg font-bold tracking-tight">{t('ports.title', 'Porty routeru')}</h4>
-          {subtitle.length > 0 && <p className="text-muted-foreground text-sm tabular-nums">{subtitle.join(' · ')}</p>}
-        </div>
-        {panel.reportAgeSecs !== null && (
+    <Panel
+      icon={Cable}
+      title={t('ports.title', 'Porty routeru')}
+      hint={subtitle.length > 0 ? subtitle.join(' · ') : undefined}
+      action={
+        panel.reportAgeSecs !== null ? (
           <span
             className={cn(
-              'mt-1 flex shrink-0 items-center gap-1 font-mono text-2xs tabular-nums',
+              'flex shrink-0 items-center gap-1 font-mono text-2xs tabular-nums',
               panel.stale ? 'text-paused' : 'text-muted-foreground'
             )}
           >
             <Clock aria-hidden="true" className="size-3" />
             {t('ports.as_of', { ago: ageLabel(panel.reportAgeSecs) }, `stav před ${ageLabel(panel.reportAgeSecs)}`)}
           </span>
-        )}
-      </div>
-
+        ) : undefined
+      }
+      bodyClassName="space-y-4"
+    >
       {panel.groups.length === 0 ? (
         <LanEmpty panel={panel} t={t} />
       ) : (
@@ -317,6 +317,6 @@ export function RouterPortPanel({
           )}
         </>
       )}
-    </Card>
+    </Panel>
   );
 }

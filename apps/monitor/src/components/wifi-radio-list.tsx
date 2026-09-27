@@ -1,4 +1,5 @@
 import { SignalReading } from '@/components/signal-reading';
+import { RangeMeter, RatioBar, type RatioPart } from '@/components/meter';
 import { Badge } from '@/components/ui/badge';
 import type { WifiBand, WifiRadio } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
@@ -15,11 +16,43 @@ import {
   radioGenerationLabel,
 } from '@/lib/wifi-profile';
 import { pluralForm } from '@/lib/plural';
+import { formatNumber } from '@/lib/metric-format';
 
 /** Suffix of the per-band metric keys (`wifi_noise_5g`, `wifi_busy_24g`, ...). */
 const BAND_METRIC: Record<WifiBand, string> = { '2.4GHz': '24g', '5GHz': '5g', '6GHz': '6g' };
 
 const num = (value: unknown): number | null => (typeof value === 'number' && Number.isFinite(value) ? value : null);
+
+type TranslateFn = ReturnType<typeof useLanguage>['t'];
+
+/** The agent counts a client as weak at -75 dBm and below (`-le -75`). */
+const WEAK_DBM = -75;
+/** The scale of the client signal meter: -95 dBm is barely a link, -30 dBm is next to the antenna. */
+const SIGNAL_SCALE = { min: -95, max: -30 } as const;
+
+/**
+ * The connected clients by Wi-Fi generation, as parts of one bar (W2-3):
+ * "3× Wi-Fi 6 · 1× Wi-Fi 5" as a line of text said the same thing, but not
+ * at a glance. Only generations that hold a client get a part; null when the
+ * radio did not learn them (the folded line says why).
+ */
+function generationParts(r: WifiRadio, t: TranslateFn): RatioPart[] | null {
+  const gen = r.clients_gen;
+  if (!gen || !num(r.clients)) return null;
+  const viaUbus = gen.source === 'ubus';
+  const parts: RatioPart[] = [
+    { key: 'wifi7', label: t('net.wifi_gen', { n: 7 }, 'Wi-Fi 7'), value: viaUbus ? null : num(gen.wifi7) },
+    {
+      key: 'wifi6',
+      label: viaUbus ? t('net.wifi_gen_6plus', 'Wi-Fi 6 nebo novější') : t('net.wifi_gen', { n: 6 }, 'Wi-Fi 6'),
+      value: num(gen.wifi6),
+    },
+    { key: 'wifi5', label: t('net.wifi_gen', { n: 5 }, 'Wi-Fi 5'), value: num(gen.wifi5) },
+    { key: 'wifi4', label: t('net.wifi_gen', { n: 4 }, 'Wi-Fi 4'), value: num(gen.wifi4) },
+    { key: 'legacy', label: t('net.wifi_gen_legacy', 'starší (802.11a/b/g)'), value: num(gen.legacy) },
+  ].filter((p) => p.value !== null && p.value > 0);
+  return parts.length > 0 ? parts : null;
+}
 
 /**
  * Encryption that is a problem to act on, not a detail: an open network, WEP,
@@ -91,6 +124,7 @@ export function WifiRadioList({
         const median = num(r.signal_median);
         const weakest = num(r.signal_min);
         const rate = num(r.bitrate_tx_avg_mbps);
+        const gens = generationParts(r, t);
 
         // Absent key = an agent before 0.1.7, which never looked; null = it looked and could not tell.
         const hasEncryption = r.encryption !== undefined;
@@ -158,6 +192,21 @@ export function WifiRadioList({
                 label={t('net.wifi_signal_min', 'Nejslabší klient')}
                 value={weakest !== null ? `${weakest} dBm` : null}
                 rating={null}
+                // From the weakest to the typical client on one scale, with the
+                // agent's "weak" line as a tick: how far the spread reaches
+                // below it says more than the two numbers apart (W2-3).
+                meter={
+                  weakest !== null && median !== null ? (
+                    <RangeMeter
+                      min={SIGNAL_SCALE.min}
+                      max={SIGNAL_SCALE.max}
+                      range={[weakest, median]}
+                      ticks={[{ at: WEAK_DBM, label: t('net.wifi_weak_tick', '−75 dBm: slabý klient') }]}
+                      label={t('net.wifi_signal_range', 'Signál klientů od nejslabšího po typický')}
+                      valueText={`${weakest} … ${median} dBm`}
+                    />
+                  ) : undefined
+                }
                 // The agent counts `-le -75`, so -75 itself is in: "pod −75" contradicted
                 // a weakest client of exactly -75 dBm counted as weak.
                 hint={
@@ -173,11 +222,18 @@ export function WifiRadioList({
               />
               <SignalReading
                 label={t('net.wifi_rate_avg', 'Průměrná rychlost spojení ke klientům')}
-                value={rate !== null ? `${rate} Mbit/s` : null}
+                value={rate !== null ? `${formatNumber(rate, lang, 1)} Mbit/s` : null}
                 rating={null}
                 hint={t('net.wifi_rate_caveat', 'rychlost linky posledních rámců, ne propustnost internetu')}
               />
             </div>
+
+            {gens && (
+              // The WPA split rides along in the tooltip: how the same clients signed in.
+              <div className="mt-1.5 pl-1" title={clientSecurityLine(r, t) ?? undefined} data-testid="wifi-generations">
+                <RatioBar parts={gens} label={t('net.wifi_gens_title', 'Klienti podle generace')} />
+              </div>
+            )}
 
             {notes.length > 0 && (
               <details data-testid="wifi-capabilities" className="mt-1 pl-1">

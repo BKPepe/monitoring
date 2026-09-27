@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Badge } from '@/components/ui/badge';
+import { Pill } from '@/components/ui/pill';
+import { cn } from '@/lib/utils';
 import { useLanguage } from '@/context/language-context';
 
 export type Freshness = 'fresh' | 'late' | 'stale' | 'failed';
@@ -42,11 +43,16 @@ export function FreshnessPill({
   intervalSecs,
   failed = false,
   okAt = null,
+  compact = false,
+  className,
 }: {
   at: number | null;
   intervalSecs: number;
   failed?: boolean;
   okAt?: number | null;
+  /** Below sm only the state word shows (the header on a phone); the age stays in the tooltip and for screen readers. */
+  compact?: boolean;
+  className?: string;
 }) {
   const { t, lang } = useLanguage();
   // Only the age text moves with this clock; the data itself is the caller's.
@@ -75,16 +81,21 @@ export function FreshnessPill({
         : new Date(okAt).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
       : ageText(age);
 
+  // The NetPulse LIVE pill: the state word in capitals, the age in plain
+  // mono beside it (units stay lower case - "7 min", not "7 MIN").
   return (
-    <Badge
-      variant={VARIANT[state]}
+    <Pill
+      tone={VARIANT[state]}
       dot
       pulse={state === 'fresh'}
       data-state={state}
       title={at === null ? undefined : new Date(at).toLocaleString(locale)}
+      className={className}
     >
       {label}
-      {detail && <span className="font-mono tabular-nums">· {detail}</span>}
-    </Badge>
+      {detail && (
+        <span className={cn('figure tracking-normal normal-case', compact && 'max-sm:sr-only')}>· {detail}</span>
+      )}
+    </Pill>
   );
 }

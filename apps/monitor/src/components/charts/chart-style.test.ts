@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import type { ChartData, MetricSeries } from '@/api/types';
 import {
+  bandCaption,
+  displayData,
   formatChartValue,
+  isIntegerCount,
+  isZeroBased,
+  silentTail,
   isFresh,
   lineSeries,
   NO_VALUE,
@@ -195,5 +201,130 @@ describe('a missing value prints as a dash', () => {
     expect(row).toContain('—');
     expect(row).not.toContain('<img');
     expect(row).toContain('&lt;img');
+  });
+});
+
+const series = (
+  key: string,
+  unit: string,
+  values: (number | null)[],
+  tone: MetricSeries['tone'] = 'cpu'
+): MetricSeries => ({
+  key,
+  label: key,
+  unit,
+  tone,
+  points: values.map((v, i) => ({ t: at(i), v })),
+});
+const chartOf = (over: Partial<ChartData> = {}): ChartData => ({
+  id: 'cpu',
+  title: 'CPU',
+  yMax: 100,
+  yMin: 0,
+  series: [series('cpu', '%', [10, 12, 11, 13])],
+  ...over,
+});
+// The dictionary is not loaded here: the fallback with its params filled in, like the provider does.
+const tr = (_key: string, params?: Record<string, string | number> | string, fallback?: string) => {
+  let text = typeof params === 'string' ? params : (fallback ?? _key);
+  if (params && typeof params === 'object') {
+    for (const [k, v] of Object.entries(params)) text = text.replace(`{${k}}`, String(v));
+  }
+  return text;
+};
+
+describe('čísla a osy v jazyce stránky (V-11, charts-22)', () => {
+  it('formatChartValue s jazykem píše desetinnou čárku a trvání v sekundách jako hodiny', () => {
+    expect(formatChartValue(12.3456, 'ms', 'cs')).toBe('12,35 ms');
+    expect(formatChartValue(12.3456, 'ms', 'en')).toBe('12.35 ms');
+    expect(formatChartValue(3 * 3600 + 12 * 60, 's', 'cs')).toBe('3 h 12 min');
+    expect(formatChartValue(null, 's', 'cs')).toBe(NO_VALUE);
+  });
+
+  it('osa x končí oknem, ne daty, a dny píše „23. 9.“ česky, „23 Sep“ anglicky', () => {
+    const window = { from: at(0), to: at(600) };
+    const cs = timeAxes(theme, { unit: '%', locale: 'cs-CZ', window }).xAxis;
+    expect([cs.min, cs.max]).toEqual([window.from, window.to]);
+    expect(cs.axisLabel.formatter).toEqual({ day: '{d}. {M}.' });
+    expect(timeAxes(theme, { unit: '%', locale: 'en-GB' }).xAxis.axisLabel.formatter).toEqual({ day: '{d} {MMM}' });
+  });
+
+  it('trvání v sekundách nemá jednotku v názvu osy, popisky ji nesou samy', () => {
+    const y = timeAxes(theme, { unit: 's', locale: 'cs-CZ' }).yAxis;
+    expect(y.name).toBeUndefined();
+    expect(y.axisLabel.formatter(7200)).toBe('2 h');
+  });
+});
+
+describe('co graf smí tvrdit (C-5)', () => {
+  it('schodovitá čára se nevyhlazuje, řídká řada má tečky', () => {
+    const s = lineSeries(theme, {
+      name: 'Hráči',
+      color: '#000000',
+      points: [{ t: at(0), v: 1 }],
+      step: true,
+      symbols: true,
+    });
+    expect(s.step).toBe('end');
+    expect(s.smooth).toBe(false);
+    expect(s.showSymbol).toBe(true);
+  });
+
+  it('počty bez jednotky poznají jen celá čísla', () => {
+    expect(isIntegerCount(series('mc', '', [3, 4, 2]))).toBe(true);
+    expect(isIntegerCount(series('load', '', [0.5, 1]))).toBe(false);
+    expect(isIntegerCount(series('cpu', '%', [3, 4]))).toBe(false);
+  });
+
+  it('plocha pod čarou patří jen na osu od nuly bez záporných hodnot (charts-13)', () => {
+    expect(isZeroBased(chartOf())).toBe(true);
+    expect(isZeroBased(chartOf({ yMin: null, series: [series('rsrp', 'dBm', [-98, -97])] }))).toBe(false);
+  });
+
+  it('ticho na konci okna najde, běžnou kadenci za ticho nepovažuje', () => {
+    expect(silentTail(chartOf({ window: { from: at(-60), to: at(180) } }))).toEqual({ from: at(3), to: at(180) });
+    expect(silentTail(chartOf({ window: { from: at(-60), to: at(4) } }))).toBeNull();
+    expect(silentTail(chartOf())).toBeNull();
+  });
+
+  it('názvy pásem skládá do jedné věty pod graf (charts-20)', () => {
+    const bands: ChartData['bands'] = [
+      { from: 65, to: 80, tone: 'warning', label: 'Varování' },
+      { from: 80, to: 100, tone: 'critical', label: 'Kritické' },
+    ];
+    expect(bandCaption(chartOf({ bands }), 'cs', tr)).toBe('Varování od 65 % · Kritické od 80 %');
+    expect(bandCaption(chartOf(), 'cs', tr)).toBeNull();
+  });
+});
+
+describe('displayData: jednotky a odstíny, jak je graf ukáže', () => {
+  it('propustnost v KB/s převede na Mbit/s i s pásmy a průměrem minulého období (charts-23)', () => {
+    const data = chartOf({
+      yMax: null,
+      series: [{ ...series('net', 'KB/s', [1500, 1600, 1700], 'network'), previousAvg: 1000 }],
+      bands: [{ from: 1000, to: 2000, tone: 'warning', label: 'Varování' }],
+    });
+    const shown = displayData(data);
+    expect(shown.series[0].unit).toBe('Mbit/s');
+    expect(shown.series[0].points[0].v).toBe(12.29);
+    expect(shown.series[0].previousAvg).toBe(8.19);
+    expect(shown.bands?.[0].from).toBe(8.19);
+    // Idempotent: the card, the chart and the stats strip may each apply it.
+    expect(displayData(shown)).toEqual(shown);
+  });
+
+  it('nečinnou linku nechá v KB/s a nulu nevymyslí', () => {
+    const data = chartOf({ series: [series('net', 'KB/s', [1, null, 2], 'network')] });
+    expect(displayData(data)).toBe(data);
+  });
+
+  it('dvě měřené řady téhož odstínu rozliší, předpověď si odstín ponechá (C-2)', () => {
+    const wan = series('net', 'Mbit/s', [1, 2], 'network');
+    const lte = series('net_lte', 'Mbit/s', [0, 1], 'network');
+    const forecast = { ...series('net_f', 'Mbit/s', [2, 3], 'network'), predicted: true };
+    const tones = displayData(chartOf({ series: [wan, lte, forecast] })).series.map((s) => s.tone);
+    expect(tones[0]).toBe('network');
+    expect(tones[1]).not.toBe('network');
+    expect(tones[2]).toBe('network');
   });
 });

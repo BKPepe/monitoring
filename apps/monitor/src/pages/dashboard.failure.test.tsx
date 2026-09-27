@@ -44,12 +44,15 @@ function api(overrides: Record<string, Handler> = {}) {
 const never = () => new Promise<Response>(() => {});
 const fail = () => Promise.resolve(json({ error: 'database_unavailable' }, 500));
 
-/** The value line of the KPI tile labelled `label`. */
+/** The value of a KPI cell: the mono figure under its label, whatever size the layout gives it. */
+const VALUE = 'p > span.font-mono';
+
+/** The KPI tile labelled `label` (C-1: one StatBlock kind). */
 function tile(label: string): HTMLElement {
-  const labels = screen.getAllByText(label, { selector: 'p' });
+  const labels = screen.getAllByText(label, { selector: 'span' });
   for (const l of labels) {
-    const card = l.parentElement?.parentElement;
-    if (card?.querySelector('span.text-2xl, [data-testid="metric-tile-skeleton"]')) return card as HTMLElement;
+    const card = l.closest('[data-slot="stat-block"]');
+    if (card?.querySelector(`${VALUE}, [data-testid="stat-block-skeleton"]`)) return card as HTMLElement;
   }
   throw new Error(`no tile ${label}`);
 }
@@ -99,8 +102,11 @@ describe('Dashboard: žádné nuly před daty ani po selhání (W1-A4)', () => {
     vi.stubGlobal('fetch', vi.fn(api({ monitors: never, public_status: never })));
     renderPage();
 
-    await waitFor(() => expect(screen.getAllByTestId('metric-tile-skeleton').length).toBe(4));
+    await waitFor(() => expect(screen.getAllByTestId('stat-block-skeleton').length).toBe(4));
     expect(screen.queryByText(NO_OUTAGES)).toBeNull();
+    // The hero's sentence holds its line with a placeholder, no verdict yet (V-18).
+    expect(screen.getByTestId('fleet-verdict-sentence').dataset.state).toBe('loading');
+    expect(screen.queryByText('Žádný výpadek ani varování')).toBeNull();
     expect(within(tile('Výpadky')).queryByText('0')).toBeNull();
   });
 
@@ -111,16 +117,23 @@ describe('Dashboard: žádné nuly před daty ani po selhání (W1-A4)', () => {
 
     const error = await screen.findByText(/Souhrnná čísla nejsou k dispozici/);
     expect(screen.queryByText(NO_OUTAGES)).toBeNull();
-    expect(tile('Výpadky').querySelector('span.text-2xl')?.textContent).toBe('—');
-    expect(tile('Monitorů celkem').querySelector('span.text-2xl')?.textContent).toBe('—');
+    expect(tile('Výpadky').querySelector(VALUE)?.textContent).toBe('—');
+    expect(tile('Monitorů celkem').querySelector(VALUE)?.textContent).toBe('—');
     expect(within(tile('Výpadky')).getByText('Stav nelze zjistit')).toBeTruthy();
+    // The hero's sentence says the state is unknown, never a verdict from no list (V-18).
+    const verdict = screen.getByTestId('fleet-verdict-sentence');
+    expect(verdict.dataset.state).toBe('unknown');
+    expect(verdict.textContent).toBe('Stav nelze zjistit');
+    // No counted tabs or footer either (V-18): "Vše (0)" and "Zobrazeno 0 z 0" are zeros nobody measured.
+    expect(document.body.textContent).not.toMatch(/\(0\)|Zobrazeno 0 z 0/);
 
     healthy = true;
     fireEvent.click(
       within(error.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: 'Zkusit znovu' })
     );
-    await waitFor(() => expect(tile('Výpadky').querySelector('span.text-2xl')?.textContent).toBe('1'));
+    await waitFor(() => expect(tile('Výpadky').querySelector(VALUE)?.textContent).toBe('1'));
     expect(screen.queryByText(/Souhrnná čísla nejsou k dispozici/)).toBeNull();
+    expect(screen.getByTestId('fleet-verdict-sentence').textContent).toBe('1 výpadek');
   });
 
   it('historie vrací 500: chyba, ne nekonečné „Načítám historii“', async () => {
@@ -136,7 +149,7 @@ describe('Dashboard: žádné nuly před daty ani po selhání (W1-A4)', () => {
     renderPage();
 
     await waitFor(() => expect(within(tile('Uptime (30 dní)')).getByText('Stav nelze zjistit')).toBeTruthy());
-    expect(tile('Uptime (30 dní)').querySelector('span.text-2xl')?.textContent).toBe('—');
+    expect(tile('Uptime (30 dní)').querySelector(VALUE)?.textContent).toBe('—');
     expect(screen.queryByText('Zatím žádná data za 30 dní')).toBeNull();
   });
 });

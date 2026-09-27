@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Card } from '@/components/ui/card';
+import { CalendarCheck } from 'lucide-react';
+import { Panel } from '@/components/ui/panel';
 import { ErrorState } from '@/components/ui/states';
 import { useLanguage } from '@/context/language-context';
 import { coverageStart, formatCoverageDay } from '@/lib/window-coverage';
@@ -61,8 +62,7 @@ export function AvailabilityWindows({ monitorId }: { monitorId: number }) {
 
   if (failed) {
     return (
-      <Card className="space-y-2 p-5">
-        <h3 className="text-sm font-semibold">{t('avail.title', 'Dostupnost')}</h3>
+      <Panel icon={CalendarCheck} title={t('avail.title', 'Dostupnost')}>
         <ErrorState
           message={t('avail.load_failed', 'Dostupnost se nepodařilo načíst.')}
           onRetry={() => {
@@ -70,7 +70,7 @@ export function AvailabilityWindows({ monitorId }: { monitorId: number }) {
             setAttempt((n) => n + 1);
           }}
         />
-      </Card>
+      </Panel>
     );
   }
 
@@ -91,12 +91,11 @@ export function AvailabilityWindows({ monitorId }: { monitorId: number }) {
   if (cells.every((c) => c.value == null)) return null;
 
   return (
-    <Card className="space-y-2 p-5">
-      <h3 className="text-sm font-semibold">{t('avail.title', 'Dostupnost')}</h3>
+    <Panel icon={CalendarCheck} title={t('avail.title', 'Dostupnost')} bodyClassName="space-y-3">
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {cells.map((cell) => (
-          <div key={cell.label}>
-            <p className="text-muted-foreground text-2xs font-medium">
+          <div key={cell.label} className="bg-inset min-w-0 rounded-lg border border-border p-3">
+            <p className="micro-label">
               {cell.label}
               {cell.since && (
                 <span className="font-normal">
@@ -105,18 +104,20 @@ export function AvailabilityWindows({ monitorId }: { monitorId: number }) {
                 </span>
               )}
             </p>
+            {/* Colour only below the mark (C-1): a green 100 % beside the
+                other figures read as one more status badge. */}
             <p
               className={
                 cell.value == null
-                  ? 'text-muted-foreground tabular-nums text-lg font-bold'
+                  ? 'figure text-muted-foreground mt-1 text-lg font-semibold'
                   : cell.value >= 99.9
-                    ? 'text-up tabular-nums text-lg font-bold'
+                    ? 'figure mt-1 text-lg font-semibold'
                     : cell.value >= 99
-                      ? 'text-warning tabular-nums text-lg font-bold'
-                      : 'text-down tabular-nums text-lg font-bold'
+                      ? 'figure text-warning mt-1 text-lg font-semibold'
+                      : 'figure text-down mt-1 text-lg font-semibold'
               }
             >
-              {formatPercent(cell.value, 2)}
+              {formatPercent(cell.value, 2, lang)}
             </p>
           </div>
         ))}
@@ -127,6 +128,6 @@ export function AvailabilityWindows({ monitorId }: { monitorId: number }) {
           'Podíl času, kdy služba běžela, v každém okně. Čas, kdy se neměřilo, se do podílu nepočítá, mlčící agent se počítá jako výpadek. Prázdné okno znamená, že se v něm neměřilo - ne stoprocentní dostupnost.'
         )}
       </p>
-    </Card>
+    </Panel>
   );
 }

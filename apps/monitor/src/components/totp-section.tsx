@@ -1,9 +1,9 @@
 import * as React from 'react';
 import { ShieldCheck, ShieldOff } from 'lucide-react';
-import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/ui/panel';
+import { Pill } from '@/components/ui/pill';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { useLanguage } from '@/context/language-context';
 import { ErrorState } from '@/components/ui/states';
 
@@ -107,23 +107,18 @@ export function TotpSection({
   };
 
   return (
-    <Card className="space-y-3 p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-semibold">
-          {enabled ? (
-            <ShieldCheck className="text-up size-4" />
-          ) : (
-            <ShieldOff className="text-muted-foreground size-4" />
-          )}
-          {t('totp.title', 'Dvoufázové ověření (2FA)')}
-        </h3>
-        {enabled !== null && (
-          <Badge variant={enabled ? 'up' : 'neutral'}>
+    <Panel
+      icon={enabled ? ShieldCheck : ShieldOff}
+      title={t('totp.title', 'Dvoufázové ověření (2FA)')}
+      chip={
+        enabled !== null ? (
+          <Pill tone={enabled ? 'up' : 'neutral'} dot={enabled}>
             {enabled ? t('totp.on', 'Zapnuto') : t('totp.off', 'Vypnuto')}
-          </Badge>
-        )}
-      </div>
-
+          </Pill>
+        ) : undefined
+      }
+      bodyClassName="space-y-3"
+    >
       {error && <ErrorState size="inline" message={error} />}
 
       {phase === 'idle' && enabled === false && (
@@ -297,6 +292,6 @@ export function TotpSection({
           </div>
         </form>
       )}
-    </Card>
+    </Panel>
   );
 }

@@ -188,7 +188,7 @@ describe('Dostupnost a provoz po dnech: chyba místo zmizení (W1-A5)', () => {
     fireEvent.click(
       within(error.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: 'Zkusit znovu' })
     );
-    expect(await screen.findByText('100.00 %')).toBeTruthy();
+    expect(await screen.findByText('100,00 %')).toBeTruthy();
   });
 
   it('interface_traffic_daily vrací 500: panel ukáže chybu, nezmizí', async () => {

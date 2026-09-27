@@ -1,7 +1,7 @@
 import type { MetricSeries, MetricTone } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
 import { insertGaps } from '@/lib/series-gaps';
-import { formatChartValue, summarizeSeries } from './chart-style';
+import { displayData, formatChartValue, summarizeSeries } from './chart-style';
 
 /** The line key beside a series name - the mark carries the colour, the text stays ink. */
 const keyClass: Record<MetricTone, string> = {
@@ -30,9 +30,12 @@ export function ChartStats({
   series: MetricSeries[];
   window?: { from: number; to: number } | null;
 }) {
-  const { t } = useLanguage();
-  const multi = series.length > 1;
-  const rows = series.map((s) => ({
+  const { t, lang } = useLanguage();
+  // The unit and the hues of the chart above it (Mbit/s, distinct lines);
+  // a no-op when the caller already passed display data.
+  const shown = displayData({ id: '', title: '', yMax: null, series }).series;
+  const multi = shown.length > 1;
+  const rows = shown.map((s) => ({
     s,
     // insertGaps: a day the source never reported has no row at all, and it
     // is as much a break as a null is.
@@ -82,8 +85,11 @@ export function ChartStats({
               ) : (
                 [sum.max, sum.avg, sum.min].map((v, i) => (
                   <td key={i} className="font-semibold whitespace-nowrap">
-                    {formatChartValue(v)}
-                    <span className="text-muted-foreground ml-1 font-sans text-3xs font-normal">{s.unit}</span>
+                    {/* A duration in seconds reads as "3 h 12 min" and carries its own units. */}
+                    {formatChartValue(v, s.unit === 's' ? 's' : '', lang)}
+                    {s.unit !== 's' && (
+                      <span className="text-muted-foreground ml-1 font-sans text-3xs font-normal">{s.unit}</span>
+                    )}
                   </td>
                 ))
               )}

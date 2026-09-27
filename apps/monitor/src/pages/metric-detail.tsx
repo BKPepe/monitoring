@@ -6,16 +6,18 @@ import {
   BarChart3,
   Crosshair,
   LayoutGrid,
+  LineChart,
   Network,
   GitCompareArrows,
   PenLine,
   ScrollText,
+  Sigma,
   StickyNote,
   Trash2,
-  TrendingDown,
-  TrendingUp,
 } from 'lucide-react';
-import { Card } from '@/components/ui/card';
+import { Panel } from '@/components/ui/panel';
+import { Pill } from '@/components/ui/pill';
+import { usePageChrome } from '@/components/layout/shell-context';
 import { Button } from '@/components/ui/button';
 import { Breadcrumb } from '@/components/ui/breadcrumb';
 import { MetricChart } from '@/components/charts/metric-chart';
@@ -23,7 +25,10 @@ import { HeatmapPanel } from '@/components/charts/heatmap-panel';
 import { HistogramPanel } from '@/components/charts/histogram-panel';
 import { CorrelationPanel } from '@/components/charts/correlation-panel';
 import { RangePills } from '@/components/charts/range-pills';
-import { computeSeriesDelta, goodDirectionFor } from '@/components/charts/series-delta';
+import { StatBlock } from '@/components/stat-block';
+import { windowFor } from '@/lib/chart-window';
+import { metricTone } from '@/lib/metric-tone';
+import { trendDelta } from '@/lib/trend';
 import { MetricHelpIcon } from '@/components/metric-help-icon';
 import { ProcessCulprits } from '@/components/process-culprits';
 import { resolveSource } from '@/api/source';
@@ -36,7 +41,6 @@ import type {
   MetricHeatmapResponse,
   MetricRange,
   MetricSeriesResponse,
-  MetricTone,
 } from '@/api/types';
 import { useLanguage } from '@/context/language-context';
 import { convertRate, formatRate, isRateMetric, suggestRateUnit, RATE_UNITS, type RateUnit } from '@/lib/rate-units';
@@ -48,11 +52,13 @@ import { betterDirection } from '@/lib/metric-direction';
 import { metricVerdict } from '@/lib/metric-verdict';
 import { lteVerdict, rateSignalMetric, signalTone } from '@/lib/signal-quality';
 import { signalAdvice, signalLevelLabel } from '@/lib/signal-texts';
-import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 import { LogErrorLines } from '@/components/log-error-lines';
 import { readLogLines, type LogLinesView } from '@/lib/log-lines';
+import { formatMetricValue, formatNumber } from '@/lib/metric-format';
+import { metricSubsystem } from '@/lib/metric-groups';
+import { pluralForm } from '@/lib/plural';
 
 /**
  * Level 3 - detail of a single metric.
@@ -108,6 +114,8 @@ export function MetricDetailPage() {
   const [corrAllFor, setCorrAllFor] = React.useState<string | null>(null);
   const corrQuestion = `${monId}|${metric}|${range}`;
   const corrAll = corrAllFor === corrQuestion;
+  // Same idea for the related chips: "Všechny metriky" is asked per metric.
+  const [relatedAllFor, setRelatedAllFor] = React.useState<string | null>(null);
   const [detail, setDetail] = React.useState<MetricDetail | null>(null);
   const [series, setSeries] = React.useState<MetricSeriesResponse | null>(null);
   /** When the series was received, so "it stops early" is judged against a fixed moment. */
@@ -333,7 +341,7 @@ export function MetricDetailPage() {
     return best ? Math.round(best.t / 1000) : null;
   }, [rawPoints, series]);
 
-  const tone = toneFor(metric);
+  const tone = metricTone(metric);
   // A 90-day or one-year window over a shorter history (W1-B2): the daily
   // rollup starts where the monitor's data starts, and the note says where
   // instead of letting the axis quietly shrink to the measured weeks.
@@ -368,6 +376,53 @@ export function MetricDetailPage() {
   );
 
   /**
+   * A metric that sat still (W2-4, charts-21): the value never moved, or it
+   * only jumped between at most three values. Eight tiles, a heatmap, a
+   * histogram and a correlation list about one number were the clutter the
+   * audit counted; the page says it in one sentence and keeps the rest behind
+   * "Rozbor". Decided on what the chart draws: the server's count for raw
+   * samples, the drawn points on a daily rollup. At least two samples per
+   * value, so three lone samples read as "little data", not as "constant".
+   */
+  const levels = React.useMemo(() => {
+    const seen = new Set<number>();
+    for (const p of points) if (p.v != null) seen.add(Math.round(p.v * 100) / 100);
+    return [...seen].sort((a, b) => a - b);
+  }, [points]);
+  const drawnCount = points.filter((p) => p.v != null).length;
+  const distinct =
+    series?.resolution !== 'daily' && typeof series?.distinctValues === 'number'
+      ? series.distinctValues
+      : levels.length;
+  const constant = distinct >= 1 && distinct <= 3 && drawnCount > distinct * 2;
+
+  /**
+   * The heatmap from the first day with a sample (W2-4, charts-25): the grid
+   * stays dense over 30 days on the server, and a metric added last week used
+   * to open on three weeks of dashed "no sample" rows that read as silence.
+   * null first day (nothing measured) or an older server: the grid as sent.
+   */
+  const heatmapShown = React.useMemo(() => {
+    const first = heatmap?.firstSampleDay;
+    if (!heatmap || !first) return null;
+    return { ...heatmap, days: heatmap.days.filter((d) => d.day >= first) };
+  }, [heatmap]);
+  const heatmapSince =
+    heatmap?.firstSampleDay && heatmap.days.length > 0 && heatmap.days[0].day < heatmap.firstSampleDay
+      ? formatCoverageDay(heatmap.firstSampleDay, lang)
+      : null;
+  /**
+   * "load5 moves with load1" is not a finding (charts-29). The server leaves
+   * the subject's own family out; this guard keeps an older answer from
+   * listing it anyway.
+   */
+  const corrShown = React.useMemo(() => {
+    const own = corr?.family;
+    if (!corr || !own) return null;
+    return { ...corr, correlations: corr.correlations.filter((row) => row.family !== own) };
+  }, [corr]);
+
+  /**
    * The same metric one period earlier, laid over the current window.
    *
    * "Is this normal for a Tuesday?" had no answer in the app: there was no way
@@ -377,6 +432,8 @@ export function MetricDetailPage() {
    * is another day's measurement and must never be read as this window's.
    */
   const [compare, setCompare] = React.useState(false);
+  // "Rozbor" of a constant metric: its panels mount only once it is opened.
+  const [analysisOpen, setAnalysisOpen] = React.useState(false);
   /**
    * The comparison is keyed by the question it answers. A plain state slot
    * would keep last week's curve on screen for a moment after the period or
@@ -388,8 +445,12 @@ export function MetricDetailPage() {
     key: string;
     series: MetricSeriesResponse;
   } | null>(null);
+  // Fetched whether or not the overlay is on: the "Aktuální" tile's trend
+  // compares with this window, and used to appear only after somebody pressed
+  // the toggle (C-3, app-core request). A rollup window has no fixed length.
+  const comparable = periodLengthMs(range) != null;
   React.useEffect(() => {
-    if (!compare) return;
+    if (!comparable) return;
     let active = true;
     const key = compareKey;
     resolveSource()
@@ -404,7 +465,14 @@ export function MetricDetailPage() {
     return () => {
       active = false;
     };
-  }, [compare, compareKey, monId, metric, range]);
+  }, [comparable, compareKey, monId, metric, range]);
+
+  /** The previous window in this window's units - what the trend reads, overlay or not. */
+  const previousPoints = React.useMemo(() => {
+    const raw = compareState?.key === compareKey ? compareState.series.points : null;
+    if (!raw?.length) return null;
+    return raw.map(([, v]) => (isRate ? convertRate(v, activeUnit) : v));
+  }, [compareState, compareKey, isRate, activeUnit]);
 
   const comparisonSeries = React.useMemo(() => {
     const points = compareState?.key === compareKey ? compareState.series.points : null;
@@ -436,18 +504,28 @@ export function MetricDetailPage() {
     const days = series?.daysToFull;
     const last = [...points].reverse().find((p) => p.v != null);
     if (typeof days !== 'number' || days <= 0 || !last || last.v == null) return null;
+    const full = last.t + days * 86_400_000;
+    // The axis is pinned to the window (C-5), so a "full" day weeks away used
+    // to stretch it (charts-24). The line now stops at the window's edge, at
+    // the value it has there, and its legend says where it is heading.
+    const edge = seriesAt != null ? windowFor(range, seriesAt).to : null;
+    const clipped = edge != null && full > edge;
+    const endT = clipped ? Math.max(last.t, edge) : full;
+    const endV = clipped ? last.v + ((100 - last.v) * (endT - last.t)) / (full - last.t) : 100;
     return {
       key: `${metric}-forecast`,
-      label: t('metric.forecast_label', { days }, `Odhad zaplnění (za ${days} dní)`),
+      label: clipped
+        ? t('metric.forecast_clipped', { days }, `full in ${days} days →`)
+        : t('metric.forecast_label', { days }, `Odhad zaplnění (za ${days} dní)`),
       unit,
       tone,
       predicted: true,
       points: [
         { t: last.t, v: last.v },
-        { t: last.t + days * 86_400_000, v: 100 },
+        { t: endT, v: Math.round(endV * 10) / 10 },
       ],
     };
-  }, [series, points, metric, unit, tone, t]);
+  }, [series, points, metric, unit, tone, t, seriesAt, range]);
 
   // Memoised on its inputs: a fresh object on every render meant a fresh
   // ECharts option and setOption(notMerge), which threw away the zoom the
@@ -462,8 +540,12 @@ export function MetricDetailPage() {
             // Percentages are read against their full scale; everything else
             // (latency, temperature, load, negative dBm) gets a derived range.
             yMin: sourceUnit === '%' ? 0 : null,
+            // The axis spans the selected period up to the moment the data
+            // arrived, so a series that stops early ends in visible silence.
+            window: seriesAt != null ? windowFor(range, seriesAt) : undefined,
             series: [
-              { key: metric, label: detail.metric.label, unit, tone, points },
+              // A handful of values is drawn as steps: it jumps, it does not glide.
+              { key: metric, label: detail.metric.label, unit, tone, points, step: constant },
               // Where this is heading, drawn as a dashed line so it can never
               // be mistaken for a measurement. Only for a metric the server
               // actually projects, and only while the projection is inside the
@@ -534,6 +616,9 @@ export function MetricDetailPage() {
       series,
       forecastSeries,
       comparisonSeries,
+      seriesAt,
+      range,
+      constant,
       t,
     ]
   );
@@ -586,19 +671,64 @@ export function MetricDetailPage() {
     }
     return points.filter((p) => p.v != null).length;
   }, [points, series]);
+  const constantSentence = constant
+    ? (() => {
+        const level = (v: number) => formatMetricValue(v, unit, lang, false);
+        const and = t('metric.list_and', ' a ');
+        const list = levels.map(level);
+        const head =
+          list.length === 1
+            ? t('metric.constant_one', { value: list[0] }, `The whole period: ${list[0]}`)
+            : list.length <= 3
+              ? t(
+                  'metric.constant_few',
+                  { values: `${list.slice(0, -1).join(', ')}${and}${list[list.length - 1]}` },
+                  'The whole period only {values}'
+                )
+              : t(
+                  'metric.constant_range',
+                  { min: list[0], max: list[list.length - 1] },
+                  `The whole period between ${list[0]} and ${list[list.length - 1]}`
+                );
+        const samplesForm = pluralForm(lang, sampleCount);
+        const samples =
+          samplesForm === 'one'
+            ? t('metric.samples_one', { n: sampleCount }, `${sampleCount} sample`)
+            : samplesForm === 'few'
+              ? t('metric.samples_few', { n: sampleCount }, `${sampleCount} samples`)
+              : t('metric.samples_other', { n: sampleCount }, `${sampleCount} samples`);
+        const gaps =
+          gapCount === null
+            ? null
+            : pluralForm(lang, gapCount) === 'one'
+              ? t('metric.gaps_one', { n: gapCount }, `${gapCount} break`)
+              : t('metric.gaps_other', { n: gapCount }, `${gapCount} breaks`);
+        return [head, samples, gaps].filter(Boolean).join(' · ');
+      })()
+    : null;
   const verdict = metricVerdict({
     metricKey: metric,
     current: stats.current,
     values: points.map((p) => p.v).filter((v): v is number => v != null),
     thresholds: detail?.thresholds ?? { warning: null, critical: null },
   });
-  const delta = computeSeriesDelta(chartData?.series[0]);
-  const goodDir = goodDirectionFor(tone);
-  const deltaGood = delta && goodDir ? delta.direction === goodDir : null;
+  // Against the same window one period earlier, loaded with the page (not
+  // only with the overlay). The old head-vs-tail quarter compared a night with
+  // an evening (charts-07); no comparison is better than that one.
+  const delta = trendDelta({
+    metricKey: metric,
+    unit,
+    current: points.map((p) => p.v),
+    previous: previousPoints,
+    thresholds: detail?.thresholds,
+  });
 
   const backTo = detailId ? `/infrastructure/${detailId}` : '/infrastructure';
 
   const protocolSplit = (detail?.related ?? []).filter((r) => r.key === 'net_ipv4' || r.key === 'net_ipv6');
+
+  // The header names the metric (the route alone says only "Detail metriky").
+  usePageChrome({ title: detail ? `${detail.metric.label} · ${detail.monitor.name}` : undefined });
 
   if (error && !detail) {
     return (
@@ -609,83 +739,174 @@ export function MetricDetailPage() {
         >
           <ArrowLeft className="size-3.5" /> {t('metric.back', 'Zpět na zařízení')}
         </Link>
-        <Card className="p-8 text-center">
+        <Panel bodyClassName="p-8 text-center">
           <p className="text-sm font-semibold">{t('metric.load_failed', 'Metriku se nepodařilo načíst')}</p>
           <p className="text-muted-foreground mt-1 text-xs">{error}</p>
-        </Card>
+        </Panel>
       </div>
     );
   }
 
-  return (
-    <div className="space-y-5">
-      <Breadcrumb
-        items={[
-          { label: t('nav.infrastructure', 'Infrastruktura'), to: '/infrastructure' },
-          { label: detail?.monitor.name ?? '…', to: backTo },
-          { label: detail?.metric.label ?? metric },
-        ]}
-      />
+  const drawnWindow = chartData?.window;
+  const eventsShown = (detail?.events ?? []).filter(
+    (e) => !drawnWindow || (e.t >= drawnWindow.from && e.t <= drawnWindow.to)
+  ).length;
 
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="flex items-center gap-2 text-xl font-semibold tracking-tight">
-            {detail?.metric.label ?? metric}
-            <MetricHelpIcon metric={metric} className="size-4" />
-          </h1>
-          <p className="text-muted-foreground text-xs">{detail?.monitor.name}</p>
-          {/* What is measured, on what, and from where - visible, not hidden in
+  // The 8 closest first (W2-4): metrics of the same subsystem, then the rest
+  // in the server's order. A router reports sixty; a wall of chips is how
+  // the one worth clicking got lost.
+  const ownSubsystem = metricSubsystem(metric);
+  const relatedSorted = [...(detail?.related ?? [])].sort(
+    (a, b) => Number(metricSubsystem(b.key) === ownSubsystem) - Number(metricSubsystem(a.key) === ownSubsystem)
+  );
+  const relatedShown = relatedAllFor === `${monId}|${metric}` ? relatedSorted : relatedSorted.slice(0, RELATED_SHOWN);
+
+  // Built once, drawn either in place or inside "Rozbor" (W2-4).
+  const analysis = (
+    <>
+      {!linesReplaceCharts && (
+        <>
+          {/* Daily rhythm - its own 30-day window on purpose, see the effect above. */}
+          <Panel icon={LayoutGrid} title={t('metric.heatmap_title', 'Denní rytmus (30 dní)')} bodyClassName="space-y-3">
+            {heatmap !== null ? (
+              <HeatmapPanel
+                data={heatmapShown ?? heatmap}
+                tone={tone}
+                unit={unit}
+                convert={isRate ? (v) => convertRate(v, activeUnit) : undefined}
+              />
+            ) : (
+              <div className="text-muted-foreground grid h-32 place-items-center text-xs">
+                {heatmapFailed
+                  ? t('metric.heatmap_failed', 'Heatmapu se nepodařilo načíst')
+                  : t('metric.loading', 'Načítám měření…')}
+              </div>
+            )}
+            {heatmapSince && (
+              <p className="text-muted-foreground text-2xs" data-testid="heatmap-since">
+                {t(
+                  'metric.heatmap_since',
+                  { date: heatmapSince },
+                  `Measured since ${heatmapSince}; the days before are left out of the grid.`
+                )}
+              </p>
+            )}
+            <p className="text-muted-foreground text-2xs leading-relaxed">
+              {t(
+                'metric.heatmap_note',
+                'Jedno pole je průměr jedné hodiny (u počítadel přírůstek za hodinu). Barevná škála jde od nejnižší po nejvyšší naměřenou hodnotu (viz čísla u legendy), ne od nuly - jinak by se u metriky kolísající v úzkém pásmu žádný rytmus neukázal. Okno je vždy posledních 30 dní bez ohledu na zvolené období grafu - starší syrová měření se mažou.'
+              )}
+            </p>
+          </Panel>
+
+          {/* What else moved with this metric. Hidden entirely when the metric is
+            out of scope (response_time is not stored with the agent's rows) -
+            an empty card would suggest "nothing correlates", which is a claim
+            nobody measured. */}
+          {corrAvailable !== false && (
+            <Panel icon={GitCompareArrows} title={t('corr.title', 'Co se hýbalo spolu s touto metrikou')}>
+              {corr ? (
+                <CorrelationPanel
+                  data={corrShown ?? corr}
+                  detailId={detailId ?? monId}
+                  monitorId={monId}
+                  showingAll={corrAll}
+                  onShowAll={() => setCorrAllFor(corrQuestion)}
+                />
+              ) : (
+                <LoadingState label={t('metric.loading', 'Načítám měření…')} size="inline" />
+              )}
+            </Panel>
+          )}
+        </>
+      )}
+
+      {/* Value distribution - the average of a bimodal load lies, the histogram does not. */}
+      <Panel icon={BarChart3} title={t('metric.hist_title', 'Rozložení hodnot')} bodyClassName="space-y-3">
+        <HistogramPanel points={shownPoints} unit={unit} tone={tone} />
+        <p className="text-muted-foreground text-2xs leading-relaxed">
+          {t(
+            'metric.hist_note',
+            'Kolik měření zvoleného období padlo do jednotlivých pásem hodnot. Dva vrcholy znamenají střídání dvou režimů - to průměr v grafu nahoře neukáže.'
+          )}
+        </p>
+      </Panel>
+    </>
+  );
+
+  return (
+    <div className="space-y-6">
+      {/* The header card: where the metric sits, what it is and on what,
+          and the controls that scope everything below it. */}
+      <Panel bodyClassName="flex flex-col gap-4">
+        <Breadcrumb
+          items={[
+            { label: t('nav.infrastructure', 'Infrastruktura'), to: '/infrastructure' },
+            { label: detail?.monitor.name ?? '…', to: backTo },
+            { label: detail?.metric.label ?? metric },
+          ]}
+        />
+
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+              {detail?.metric.label ?? metric}
+              <MetricHelpIcon metric={metric} className="size-4" />
+            </h1>
+            <p className="text-muted-foreground text-sm">{detail?.monitor.name}</p>
+            {/* What is measured, on what, and from where - visible, not hidden in
               a tooltip. "6 ms" says nothing until the page names the target and
               the vantage point, and "disk usage" until it names the partition. */}
-          {help && (
-            <p className="text-muted-foreground mt-1 max-w-2xl text-2xs leading-relaxed">
-              {help.what} <span className="text-foreground/80">{help.how}</span>{' '}
-              {detail?.monitor.target && (
-                <>
-                  {t('metric.on_target', 'Cíl')}:{' '}
-                  <span className="font-mono">
-                    {detail.monitor.target}
-                    {detail.monitor.port ? `:${detail.monitor.port}` : ''}
-                  </span>
-                  .{' '}
-                </>
-              )}
-              {detail?.monitor.checkedFrom
-                ? t(
-                    'metric.measured_from',
-                    { place: detail.monitor.checkedFrom },
-                    `Měřeno z: ${detail.monitor.checkedFrom}.`
-                  )
-                : help.source}
-              {help.caveat && <span className="text-foreground/80"> {help.caveat}</span>}
-            </p>
-          )}
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          {isRate && <UnitPicker value={activeUnit} onChange={setRateUnit} />}
-          {/* Two curves on one chart: this window and the one before it, laid
+            {help && (
+              <p className="text-muted-foreground mt-1 max-w-2xl text-2xs leading-relaxed">
+                {help.what} <span className="text-foreground/80">{help.how}</span>{' '}
+                {detail?.monitor.target && (
+                  <>
+                    {t('metric.on_target', 'Cíl')}:{' '}
+                    <span className="font-mono">
+                      {detail.monitor.target}
+                      {detail.monitor.port ? `:${detail.monitor.port}` : ''}
+                    </span>
+                    .{' '}
+                  </>
+                )}
+                {detail?.monitor.checkedFrom
+                  ? t(
+                      'metric.measured_from',
+                      { place: detail.monitor.checkedFrom },
+                      `Měřeno z: ${detail.monitor.checkedFrom}.`
+                    )
+                  : help.source}
+                {help.caveat && <span className="text-foreground/80"> {help.caveat}</span>}
+              </p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            {isRate && <UnitPicker value={activeUnit} onChange={setRateUnit} />}
+            {/* Two curves on one chart: this window and the one before it, laid
               on top of each other so "is this normal for a Tuesday?" can be
               answered by looking. Only for the periods whose length is fixed -
               a rollup window is not a fixed number of days. */}
-          {periodLengthMs(range) != null && (
-            <Button
-              size="sm"
-              variant={compare ? 'primary' : 'outline'}
-              aria-pressed={compare}
-              onClick={() => setCompare((v) => !v)}
-              className="text-xs"
-            >
-              {t('metric.compare_toggle', 'Porovnat s předchozím obdobím')}
-            </Button>
-          )}
-          <RangePills
-            value={range}
-            options={RANGES}
-            onChange={setRange}
-            label={t('asset.time_range', 'Časový rozsah')}
-          />
+            {periodLengthMs(range) != null && (
+              <Button
+                size="sm"
+                variant={compare ? 'primary' : 'outline'}
+                aria-pressed={compare}
+                onClick={() => setCompare((v) => !v)}
+                className="text-xs"
+              >
+                {t('metric.compare_toggle', 'Porovnat s předchozím obdobím')}
+              </Button>
+            )}
+            <RangePills
+              value={range}
+              options={RANGES}
+              onChange={setRange}
+              label={t('asset.time_range', 'Časový rozsah')}
+            />
+          </div>
         </div>
-      </div>
+      </Panel>
 
       {zoomWindow && (
         <p className="text-muted-foreground text-2xs">
@@ -700,78 +921,79 @@ export function MetricDetailPage() {
         </p>
       )}
 
-      {/* Layer 1 - what is happening. Numbers before the chart, not after it. */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatTile label={t('metric.current', 'Aktuální')} value={stats.current} unit={unit}>
-          {delta && (
-            <span
-              className={cn(
-                'inline-flex items-center gap-1 text-xs font-semibold',
-                deltaGood === null ? 'text-muted-foreground' : deltaGood ? 'text-up' : 'text-down'
-              )}
-            >
-              {delta.direction === 'up' ? <TrendingUp className="size-3.5" /> : <TrendingDown className="size-3.5" />}
-              {delta.pct} %
-            </span>
-          )}
-        </StatTile>
-        <StatTile label={t('metric.typical', 'Obvykle (medián)')} value={stats.p50} unit={unit} />
-        {/* Which tail is the bad one follows the metric. On a dBm scale p95 is
-            the BEST five percent, so calling it "the worse end" - as this page
-            did - was backwards. */}
-        {/* Traffic and headcounts have no bad end - the direction module exists
-            to refuse that judgement, so the labels must not sneak it back in. */}
-        <StatTile
-          label={
-            direction === 'neutral'
-              ? t('metric.p95_neutral', 'Horní pásmo (p95)')
-              : direction === 'higher'
-                ? t('metric.worse_end_low', 'Horší konec (p5)')
-                : t('metric.worse_end_high', 'Horší konec (p95)')
-          }
-          value={direction === 'higher' ? worseTail : stats.p95}
-          unit={unit}
-        />
-        <StatTile
-          label={
-            direction === 'neutral'
-              ? t('metric.peak_neutral', 'Špička')
-              : direction === 'higher'
-                ? t('metric.worst_low', 'Nejhorší')
-                : t('metric.worst_high', 'Nejhorší (špička)')
-          }
-          value={worstValue}
-          unit={unit}
-        />
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatTile
-          label={detail?.metric.step ? t('metric.average_step', 'Průměrný přírůstek') : t('metric.average', 'Průměr')}
-          value={stats.avg}
-          unit={unit}
-        />
-        <StatTile
-          label={direction === 'neutral' ? t('metric.min_neutral', 'Minimum') : t('metric.best_high', 'Nejlepší')}
-          value={direction === 'higher' ? stats.max : stats.min}
-          unit={unit}
-        />
-        {/* A window with holes must say so - the chart shows breaks, the number
-            says how many, and both come from the same points. */}
-        <StatTile label={t('metric.gaps', 'Přerušení měření')} value={gapCount} unit={t('metric.gaps_unit', 'x')} />
-        {/* Zero samples is "nothing was measured", which StatTile already
-            renders as a dash - it must not read as a measured zero. */}
-        <StatTile label={t('metric.samples', 'Měření v období')} value={sampleCount > 0 ? sampleCount : null} unit="" />
-      </div>
+      {/* Layer 1 - what is happening. Numbers before the chart, not after it.
+          A metric that sat still gets one sentence instead of eight equal tiles (W2-4). */}
+      {constantSentence ? (
+        <Panel padding="sm" data-testid="metric-constant">
+          <p className="figure text-sm font-semibold">{constantSentence}</p>
+        </Panel>
+      ) : (
+        <Panel icon={Sigma} title={t('metric.stats_title', 'Za zvolené období')}>
+          <div className="grid grid-cols-2 gap-3 *:min-w-0 lg:grid-cols-4">
+            <StatTile label={t('metric.current', 'Aktuální')} value={stats.current} unit={unit} delta={delta} />
+            <StatTile label={t('metric.typical', 'Obvykle (medián)')} value={stats.p50} unit={unit} />
+            {/* Which tail is the bad one follows the metric. On a dBm scale p95 is
+                the BEST five percent, so calling it "the worse end" - as this page
+                did - was backwards. */}
+            {/* Traffic and headcounts have no bad end - the direction module exists
+                to refuse that judgement, so the labels must not sneak it back in. */}
+            <StatTile
+              label={
+                direction === 'neutral'
+                  ? t('metric.p95_neutral', 'Horní pásmo (p95)')
+                  : direction === 'higher'
+                    ? t('metric.worse_end_low', 'Horší konec (p5)')
+                    : t('metric.worse_end_high', 'Horší konec (p95)')
+              }
+              value={direction === 'higher' ? worseTail : stats.p95}
+              unit={unit}
+            />
+            <StatTile
+              label={
+                direction === 'neutral'
+                  ? t('metric.peak_neutral', 'Špička')
+                  : direction === 'higher'
+                    ? t('metric.worst_low', 'Nejhorší')
+                    : t('metric.worst_high', 'Nejhorší (špička)')
+              }
+              value={worstValue}
+              unit={unit}
+            />
+            <StatTile
+              label={
+                detail?.metric.step ? t('metric.average_step', 'Průměrný přírůstek') : t('metric.average', 'Průměr')
+              }
+              value={stats.avg}
+              unit={unit}
+            />
+            <StatTile
+              label={direction === 'neutral' ? t('metric.min_neutral', 'Minimum') : t('metric.best_high', 'Nejlepší')}
+              value={direction === 'higher' ? stats.max : stats.min}
+              unit={unit}
+            />
+            {/* A window with holes must say so - the chart shows breaks, the number
+                says how many, and both come from the same points. */}
+            <StatTile label={t('metric.gaps', 'Přerušení měření')} value={gapCount} unit={t('metric.gaps_unit', 'x')} />
+            {/* Zero samples is "nothing was measured", which StatTile already
+                renders as a dash - it must not read as a measured zero. */}
+            <StatTile
+              label={t('metric.samples', 'Měření v období')}
+              value={sampleCount > 0 ? sampleCount : null}
+              unit=""
+            />
+          </div>
+        </Panel>
+      )}
 
       {/* Is that good? Answered against a threshold somebody set, against the
           metric's own physical scale, or against this window - and it says
           which of the three, because they are not the same claim. */}
       {(signalRating || (verdict && verdict.kind !== 'none')) && (
-        <Card className="flex flex-wrap items-center gap-x-3 gap-y-1.5 p-4 text-xs">
+        <Panel padding="sm" bodyClassName="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs">
           <span className="font-semibold">{t('metric.is_it_good', 'Je to v pořádku?')}</span>
           {signalRating ? (
             <>
-              <Badge variant={signalTone(signalRating.level)}>{signalLevelLabel(t, signalRating.level)}</Badge>
+              <Pill tone={signalTone(signalRating.level)}>{signalLevelLabel(t, signalRating.level)}</Pill>
               <span className="text-muted-foreground">
                 {signalAdvice(t, signalAdviceKey ?? signalRating.advice) ||
                   t('signal.nothing_to_do', 'Není co zlepšovat.')}
@@ -780,7 +1002,7 @@ export function MetricDetailPage() {
           ) : (
             verdict && (
               <>
-                <Badge variant={verdict.tone === 'neutral' ? 'info' : verdict.tone}>
+                <Pill tone={verdict.tone === 'neutral' ? 'info' : verdict.tone}>
                   {
                     {
                       threshold_ok: t('metric.verdict_threshold_ok', 'pod nastaveným prahem'),
@@ -791,7 +1013,7 @@ export function MetricDetailPage() {
                       none: t('metric.verdict_none', 'bez měřítka'),
                     }[verdict.kind]
                   }
-                </Badge>
+                </Pill>
                 <span className="text-muted-foreground">
                   {/* Each wording names the number it actually compared with. The
                       warning band is derived from the configured limit, and the
@@ -830,11 +1052,16 @@ export function MetricDetailPage() {
               </>
             )
           )}
-        </Card>
+        </Panel>
       )}
 
       {/* Layer 2 - why. */}
-      <Card className="space-y-3 p-5">
+      <Panel
+        icon={LineChart}
+        title={t('metric.chart_title', 'Průběh')}
+        hint={detail ? `${detail.metric.label} · ${detail.monitor.name}` : undefined}
+        bodyClassName="space-y-3"
+      >
         {isAdmin && points.length > 0 && (
           <div className="flex items-center justify-end gap-2">
             {annMode && !annDraftTs && (
@@ -990,30 +1217,31 @@ export function MetricDetailPage() {
                   )}
             </p>
           )}
-          {detail && detail.events.length > 0 && (
+          {/* Counted inside the drawn window (charts-25): "12 za 30 dní" under a
+              24-hour chart that shows one of them sent the reader looking for eleven. */}
+          {eventsShown > 0 && (
             <p>
               {t(
-                'metric.events_note',
-                { count: detail.events.length },
-                `Svislé čáry v grafu jsou události (${detail.events.length} za 30 dní); najetím se zobrazí která.`
+                'metric.events_in_window',
+                { count: eventsShown },
+                `Vertical lines are events (${eventsShown} in the period shown); hover to see which.`
               )}
             </p>
           )}
         </div>
-      </Card>
+      </Panel>
 
       {/* Chart notes. Only rendered once the list actually loaded - `anns`
           staying null means the window could not be read, and "no notes"
           must not be claimed about it. */}
       {anns !== null && anns.length > 0 && (
-        <Card className="space-y-3 p-5">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <StickyNote className="size-4 text-primary" />
-            {t('ann.list_title', 'Poznámky v grafu')}
-          </h2>
+        <Panel icon={StickyNote} title={t('ann.list_title', 'Poznámky v grafu')} bodyClassName="space-y-3">
           <ul className="space-y-2">
             {anns.map((a) => (
-              <li key={a.id} className="flex items-start gap-3 rounded-lg border border-border px-3 py-2 text-xs">
+              <li
+                key={a.id}
+                className="bg-inset flex items-start gap-3 rounded-lg border border-border px-3 py-2 text-xs"
+              >
                 <span className="text-muted-foreground shrink-0 tabular-nums">
                   {new Date(a.ts * 1000).toLocaleString(locale)}
                 </span>
@@ -1044,15 +1272,15 @@ export function MetricDetailPage() {
               'Poznámky se v grafu kreslí jako plné svislé čáry vlastní barvou; tečkované čáry jsou naměřené události (výpadky, restarty).'
             )}
           </p>
-        </Card>
+        </Panel>
       )}
 
       {(linesReplaceCharts || logLines === 'failed') && (
-        <Card className="space-y-3 p-5" data-testid="log-lines-card">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <ScrollText className="size-4 text-primary" />
-            {t('metric.log_lines_title', 'Chybové řádky z posledního hlášení')}
-          </h2>
+        <Panel
+          data-testid="log-lines-card"
+          icon={ScrollText}
+          title={t('metric.log_lines_title', 'Chybové řádky z posledního hlášení')}
+        >
           {logLines === 'failed' ? (
             <ErrorState
               message={t('metric.log_lines_failed', 'Řádky z logu se nepodařilo načíst.')}
@@ -1061,89 +1289,41 @@ export function MetricDetailPage() {
           ) : (
             logLines !== null && <LogErrorLines view={logLines} open />
           )}
-        </Card>
+        </Panel>
       )}
 
-      {!linesReplaceCharts && (
-        <>
-          {/* Daily rhythm - its own 30-day window on purpose, see the effect above. */}
-          <Card className="space-y-3 p-5">
-            <h2 className="flex items-center gap-2 text-sm font-semibold">
-              <LayoutGrid className="size-4 text-primary" />
-              {t('metric.heatmap_title', 'Denní rytmus (30 dní)')}
-            </h2>
-            {heatmap !== null ? (
-              <HeatmapPanel
-                data={heatmap}
-                tone={tone}
-                unit={unit}
-                convert={isRate ? (v) => convertRate(v, activeUnit) : undefined}
-              />
-            ) : (
-              <div className="text-muted-foreground grid h-32 place-items-center text-xs">
-                {heatmapFailed
-                  ? t('metric.heatmap_failed', 'Heatmapu se nepodařilo načíst')
-                  : t('metric.loading', 'Načítám měření…')}
-              </div>
-            )}
-            <p className="text-muted-foreground text-2xs leading-relaxed">
-              {t(
-                'metric.heatmap_note',
-                'Jedno pole je průměr jedné hodiny (u počítadel přírůstek za hodinu). Barevná škála jde od nejnižší po nejvyšší naměřenou hodnotu (viz čísla u legendy), ne od nuly - jinak by se u metriky kolísající v úzkém pásmu žádný rytmus neukázal. Okno je vždy posledních 30 dní bez ohledu na zvolené období grafu - starší syrová měření se mažou.'
-              )}
-            </p>
-          </Card>
-
-          {/* What else moved with this metric. Hidden entirely when the metric is
-            out of scope (response_time is not stored with the agent's rows) -
-            an empty card would suggest "nothing correlates", which is a claim
-            nobody measured. */}
-          {corrAvailable !== false && (
-            <Card className="space-y-3 p-5">
-              <h2 className="flex items-center gap-2 text-sm font-semibold">
-                <GitCompareArrows className="size-4 text-primary" />
-                {t('corr.title', 'Co se hýbalo spolu s touto metrikou')}
-              </h2>
-              {corr ? (
-                <CorrelationPanel
-                  data={corr}
-                  detailId={detailId ?? monId}
-                  monitorId={monId}
-                  showingAll={corrAll}
-                  onShowAll={() => setCorrAllFor(corrQuestion)}
-                />
-              ) : (
-                <LoadingState label={t('metric.loading', 'Načítám měření…')} size="inline" />
-              )}
-            </Card>
-          )}
-        </>
+      {/* Rhythm, correlations and distribution. For a metric that sat still
+          they add nothing, so they wait behind "Rozbor" with the reason. */}
+      {constant ? (
+        <details
+          className="bg-card shadow-card panel-sheen rounded-xl border border-border px-5 py-3"
+          data-testid="metric-analysis"
+          onToggle={(e) => setAnalysisOpen(e.currentTarget.open)}
+        >
+          <summary className="cursor-pointer text-sm font-semibold">{t('metric.analysis', 'Rozbor')}</summary>
+          <p className="text-muted-foreground mt-1 text-2xs leading-relaxed">
+            {distinct === 1
+              ? t(
+                  'metric.analysis_constant',
+                  'Hodnota se za celé období nezměnila: denní rytmus, rozložení ani souvislosti s jinými metrikami z ní nic nevyčtou.'
+                )
+              : t(
+                  'metric.analysis_few',
+                  { n: distinct },
+                  `Only ${distinct} different values: the daily rhythm, the distribution and the correlations add little to the sentence above.`
+                )}
+          </p>
+          {analysisOpen && <div className="mt-3 space-y-5">{analysis}</div>}
+        </details>
+      ) : (
+        analysis
       )}
-
-      {/* Value distribution - the average of a bimodal load lies, the histogram does not. */}
-      <Card className="space-y-3 p-5">
-        <h2 className="flex items-center gap-2 text-sm font-semibold">
-          <BarChart3 className="size-4 text-primary" />
-          {t('metric.hist_title', 'Rozložení hodnot')}
-        </h2>
-        <HistogramPanel points={shownPoints} unit={unit} tone={tone} />
-        <p className="text-muted-foreground text-2xs leading-relaxed">
-          {t(
-            'metric.hist_note',
-            'Kolik měření zvoleného období padlo do jednotlivých pásem hodnot. Dva vrcholy znamenají střídání dvou režimů - to průměr v grafu nahoře neukáže.'
-          )}
-        </p>
-      </Card>
 
       {/* The "why" layer proper: a chart shows that CPU hit 90 % at 19:40 and
           nothing about what caused it. Only offered for metrics where a
           process can be the culprit. */}
       {(metric === 'cpu' || metric === 'ram') && detail && (
-        <Card className="space-y-3 p-5">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <Crosshair className="size-4 text-primary" />
-            {t('culprits.title', 'Co v tu chvíli běželo')}
-          </h2>
+        <Panel icon={Crosshair} title={t('culprits.title', 'Co v tu chvíli běželo')} bodyClassName="space-y-3">
           <p className="text-muted-foreground text-2xs">
             {pickedAt
               ? t(
@@ -1163,7 +1343,7 @@ export function MetricDetailPage() {
               starts. It used to render nothing until the user discovered that
               the chart is clickable. */}
           <ProcessCulprits monitorId={monId} kind={metric === 'ram' ? 'ram' : 'cpu'} at={pickedAt ?? peakAt} />
-        </Card>
+        </Panel>
       )}
 
       {/* Protocol split. Deliberately its own block with a warning: `net` is
@@ -1172,20 +1352,16 @@ export function MetricDetailPage() {
           Presenting them as parts of one number would show a sum that does not
           add up. */}
       {metric === 'net' && detail && protocolSplit.length > 0 && (
-        <Card className="space-y-3 p-5">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <Network className="size-4 text-primary" />
-            {t('metric.protocol_split', 'Podle protokolu')}
-          </h2>
+        <Panel icon={Network} title={t('metric.protocol_split', 'Podle protokolu')} bodyClassName="space-y-3">
           <div className="flex flex-wrap gap-2">
             {protocolSplit.map((r) => (
               <Link
                 key={r.key}
                 to={`/infrastructure/${detailId ?? monId}/metric/${monId}/${r.key}`}
-                className="hover:border-primary/60 hover:bg-secondary/50 rounded-lg border border-border px-3 py-2 text-xs transition-colors"
+                className="bg-inset hover:bg-raised focus-visible:ring-ring rounded-lg border border-border px-3 py-2 text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
               >
                 <span className="font-medium">{r.key === 'net_ipv4' ? 'IPv4' : 'IPv6'}</span>
-                <span className="text-muted-foreground ml-2 tabular-nums">{formatRate(r.latest, activeUnit)}</span>
+                <span className="text-muted-foreground figure ml-2">{formatRate(r.latest, activeUnit)}</span>
               </Link>
             ))}
           </div>
@@ -1195,61 +1371,61 @@ export function MetricDetailPage() {
               'Tenhle graf měří provoz na WAN rozhraní, zatímco počty podle protokolu jdou přes všechna rozhraní včetně LAN. Součet IPv4 a IPv6 proto bývá vyšší a není to chyba měření.'
             )}
           </p>
-        </Card>
+        </Panel>
       )}
 
       {/* Layer 3 - what to do. Only metrics this device actually reports. */}
       {detail && detail.related.length > 0 && (
-        <Card className="space-y-3 p-5">
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <Activity className="size-4 text-primary" />
-            {t('metric.related', 'Další metriky tohoto zařízení')}
-          </h2>
+        <Panel icon={Activity} title={t('metric.related', 'Další metriky tohoto zařízení')} bodyClassName="space-y-3">
           <div className="flex flex-wrap gap-2">
-            {detail.related.map((r) => (
+            {relatedShown.map((r) => (
               <Link
                 key={r.key}
                 to={`/infrastructure/${detailId ?? monId}/metric/${monId}/${r.key}`}
-                className="hover:border-primary/60 hover:bg-secondary/50 rounded-lg border border-border px-3 py-2 text-xs transition-colors"
+                className="bg-inset hover:bg-raised focus-visible:ring-ring rounded-lg border border-border px-3 py-2 text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none"
               >
                 <span className="font-medium">{r.label}</span>
-                <span className="text-muted-foreground ml-2 tabular-nums">
-                  {r.latest} {r.unit}
-                </span>
+                <span className="text-muted-foreground figure ml-2">{formatMetricValue(r.latest, r.unit, lang)}</span>
               </Link>
             ))}
           </div>
-        </Card>
+          {relatedSorted.length > relatedShown.length && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-xs"
+              onClick={() => setRelatedAllFor(`${monId}|${metric}`)}
+            >
+              {t('metric.related_all', { n: relatedSorted.length }, `All metrics (${relatedSorted.length})`)}
+            </Button>
+          )}
+        </Panel>
       )}
     </div>
   );
 }
 
+/** A page-level StatBlock; unmeasured is a dash, never a zero. */
 function StatTile({
   label,
   value,
   unit,
-  children,
+  delta,
 }: {
   label: string;
   value: number | null;
   unit: string;
-  children?: React.ReactNode;
+  delta?: React.ComponentProps<typeof StatBlock>['delta'];
 }) {
+  const { lang } = useLanguage();
+  // Through Intl (C-5): a raw number printed "Průměr 22.04 %" on a Czech page.
   return (
-    <Card className="p-4">
-      <p className="text-muted-foreground text-2xs font-medium">{label}</p>
-      <div className="mt-1 flex items-baseline gap-2">
-        {/* Unmeasured is a dash, never a zero. */}
-        <span className="text-2xl font-bold tracking-tight tabular-nums">
-          {value === null ? '—' : value}
-          {value !== null && unit ? (
-            <span className="text-muted-foreground ml-1 text-sm font-medium">{unit}</span>
-          ) : null}
-        </span>
-        {children}
-      </div>
-    </Card>
+    <StatBlock
+      label={label}
+      value={value == null ? null : formatNumber(value, lang, 2)}
+      secondary={unit || undefined}
+      delta={delta}
+    />
   );
 }
 
@@ -1272,6 +1448,9 @@ function UnitPicker({ value, onChange }: { value: RateUnit; onChange: (u: RateUn
     </label>
   );
 }
+
+/** Related metrics listed before "Všechny metriky". */
+const RELATED_SHOWN = 8;
 
 const RANGES: MetricRange[] = ['15m', '1h', '6h', '24h', '7d', '30d', '90d', '1y'];
 
@@ -1372,14 +1551,4 @@ function buildBands(
     bands.unshift({ from: scale(warning), to: crit, tone: 'warning', label: t('metric.band_warning', 'Varování') });
   }
   return bands;
-}
-
-/** Series colour by metric - the same as on the device cards. */
-function toneFor(metric: string): MetricTone {
-  if (metric.startsWith('cpu') || metric.startsWith('load')) return 'cpu';
-  if (metric.startsWith('ram') || metric.startsWith('swap')) return 'memory';
-  if (metric.startsWith('hdd') || metric.startsWith('disk') || metric.startsWith('inode')) return 'disk';
-  if (metric.startsWith('net') || metric.startsWith('tcp') || metric.startsWith('dns')) return 'network';
-  if (metric.startsWith('temp')) return 'temperature';
-  return 'latency';
 }

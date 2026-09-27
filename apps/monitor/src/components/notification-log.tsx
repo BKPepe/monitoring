@@ -1,6 +1,7 @@
 import * as React from 'react';
-import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+import { Send } from 'lucide-react';
+import { Panel } from '@/components/ui/panel';
+import { Pill } from '@/components/ui/pill';
 import { useLanguage } from '@/context/language-context';
 import { useSession } from '@/api/use-session';
 import { kindLabel } from '@/lib/outgoing-message';
@@ -55,17 +56,19 @@ export function NotificationLog({ monitorId }: { monitorId: number }) {
   const failed = entries.filter((e) => !e.ok).length;
 
   return (
-    <Card className="space-y-3 p-6">
-      <div className="border-border flex flex-wrap items-center justify-between gap-2 border-b pb-3">
-        <div>
-          <h3 className="text-base font-bold">{t('notif.title', 'Odeslané notifikace')}</h3>
-          <p className="text-muted-foreground text-xs">
-            {t('notif.desc', 'Co o tomhle monitoru odešlo, kterým kanálem a jestli to kanál přijal.')}
-          </p>
-        </div>
-        {failed > 0 && <Badge variant="down">{t('notif.failed', { n: failed }, `${failed} neodesláno`)}</Badge>}
-      </div>
-
+    <Panel
+      icon={Send}
+      title={t('notif.title', 'Odeslané notifikace')}
+      hint={t('notif.desc', 'Co o tomhle monitoru odešlo, kterým kanálem a jestli to kanál přijal.')}
+      chip={
+        failed > 0 ? (
+          <Pill tone="down" dot>
+            {t('notif.failed', { n: failed }, `${failed} neodesláno`)}
+          </Pill>
+        ) : undefined
+      }
+      bodyClassName="space-y-3"
+    >
       {entries.length === 0 ? (
         <p className="text-muted-foreground text-xs">
           {t('notif.empty', 'Za posledních 90 dní o tomhle monitoru nic neodešlo.')}
@@ -75,14 +78,14 @@ export function NotificationLog({ monitorId }: { monitorId: number }) {
           {entries.map((e) => (
             <li
               key={e.id}
-              className="border-border/40 flex flex-wrap items-center gap-x-3 gap-y-1 border-b py-1.5 text-xs last:border-0"
+              className="border-border flex flex-wrap items-center gap-x-3 gap-y-1 border-b py-2 text-xs last:border-0"
             >
-              <span className="text-muted-foreground w-36 shrink-0 font-mono text-2xs">
+              <span className="text-muted-foreground figure w-36 shrink-0 text-2xs">
                 {new Date(e.atIso).toLocaleString(locale)}
               </span>
-              <Badge variant={e.ok ? 'up' : 'down'} className="text-3xs">
+              <Pill tone={e.ok ? 'up' : 'down'} size="sm">
                 {e.channel}
-              </Badge>
+              </Pill>
               {/* What kind of message it was. Alerts are no longer the only
                   thing logged, so "down" alone stopped being the whole story;
                   a row written before the kind existed simply has none. */}
@@ -100,6 +103,6 @@ export function NotificationLog({ monitorId }: { monitorId: number }) {
           ))}
         </ul>
       )}
-    </Card>
+    </Panel>
   );
 }

@@ -96,6 +96,14 @@ export interface MetricSeries {
   points: MetricPoint[];
   /** The series is a prediction, not a measurement — drawn dashed. */
   predicted?: boolean;
+  /** Draw as steps: a metric with a handful of values jumps between them, it does not glide (W2-4). */
+  step?: boolean;
+  /**
+   * Mean of the same metric over the window one period earlier, when the
+   * server sent it - what the card's trend compares against (lib/trend.ts).
+   * Absent = no comparison, and no trend is shown.
+   */
+  previousAvg?: number | null;
   /**
    * The same metric one period earlier, laid over this window. Drawn dotted
    * and dimmed: it is measured data, but not of the window on the axis, and
@@ -178,6 +186,12 @@ export interface ChartData {
    * where two fills do not overlap into mud.
    */
   stacked?: boolean;
+  /**
+   * The period the chart stands for, in ms (lib/chart-window.ts). The time axis
+   * is pinned to it, so silence at the end of the window stays visible instead
+   * of the axis ending where the data ends. Absent = the axis fits the data.
+   */
+  window?: { from: number; to: number };
 }
 
 /** The periods `api.php` accepts in the `period` parameter. */
@@ -207,6 +221,11 @@ export interface MetricSeriesResponse {
   dailyRange?: { ts: number; min: number | null; max: number | null; samples: number }[];
   /** Days until the metric reaches 100 %; absent when there is no projection. */
   daysToFull?: number;
+  /**
+   * How many different values the series holds (W2-4): 3 or fewer and the
+   * page says it in one sentence instead of nine panels. Absent on an older server.
+   */
+  distinctValues?: number;
   error?: string;
 }
 
@@ -254,6 +273,13 @@ export interface MetricHeatmapResponse {
     /** How many samples each cell's value stands on. */
     samples: number[];
   }[];
+  /**
+   * First day with a sample (`YYYY-MM-DD`), null = none in the window (W2-4).
+   * The grid stays dense over `requestedDays`; the page drops the rows before
+   * this day instead of drawing weeks of "no data" for a new metric.
+   */
+  firstSampleDay?: string | null;
+  requestedDays?: number;
   error?: string;
 }
 
@@ -282,7 +308,11 @@ export interface MetricCorrelationsResponse {
     pairs: number;
     /** Why `r` is null: `constant` | `few_samples`. */
     reason: string | null;
+    /** Family of related columns (load 1/5/15, the RAM columns...); null = a family of its own. */
+    family?: string | null;
   }[];
+  /** The subject's own family - never compared with itself (W2-4, charts-29). */
+  family?: string | null;
   error?: string;
 }
 
@@ -941,4 +971,59 @@ export interface WebsitesOverviewResponse {
   /** The server's ssl_alert_days: cron alerts on a certificate this many days before it expires. */
   sslAlertDays?: number;
   monitors?: Record<string, unknown>;
+}
+
+/**
+ * One finding of `action=findings` (C-12): the attention reasons, the
+ * insights and the router recommendations in one feed, worst first.
+ */
+export type FindingSource = 'status' | 'certificate' | 'check' | 'metric' | 'agent' | 'insight' | 'router';
+
+export interface Finding {
+  /** `<source>:<monitorId>:<kind>`. */
+  key: string;
+  source: FindingSource;
+  kind: string;
+  severity: 'critical' | 'warning' | 'info';
+  monitorId: number;
+  monitorName: string;
+  monitorType: string;
+  /** The server's sentences, in the request's language. */
+  title: string;
+  detail: string | null;
+  action: string | null;
+  /** ISO; null when the source does not know since when. */
+  since: string | null;
+  /** A router recommendation carries its full item: command, mute state. */
+  rec?: RouterRecommendation;
+  muted?: boolean;
+}
+
+export interface FindingsDevice {
+  monitorId: number;
+  monitorName: string;
+  monitorType: string;
+  worst: Finding['severity'];
+  critical: number;
+  warning: number;
+  info: number;
+  total: number;
+}
+
+export interface FindingsResponse {
+  findings: Finding[];
+  total: number;
+  offset: number;
+  counts: { critical: number; warning: number; info: number };
+  /** Every device with a finding, worst first, over the whole list (not just this page). */
+  devices: FindingsDevice[];
+  /** Devices looked at: the rest of them had nothing to report. */
+  monitorsChecked: number;
+  /** Router items the owner muted. */
+  muted: Finding[];
+  canMute: boolean;
+  /** Non-empty = the list is incomplete: a source failed and must be named, not read as "nothing found". */
+  sourceErrors: { source: 'attention' | 'router' | 'insight'; monitorId: number | null; error: string }[];
+  insightsCachedAt: number | null;
+  generatedAt: string;
 }

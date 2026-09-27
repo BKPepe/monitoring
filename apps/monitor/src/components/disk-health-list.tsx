@@ -1,6 +1,8 @@
 import * as React from 'react';
 import { HardDrive } from 'lucide-react';
-import { Sparkline, type SparklineTone } from '@/components/sparkline';
+import type { MetricTone } from '@/api/types';
+import { Sparkline } from '@/components/sparkline';
+import { RangeMeter } from '@/components/meter';
 import { StatBlock } from '@/components/stat-block';
 import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
 import { appApi } from '@/api/app-api';
@@ -416,15 +418,16 @@ function DiskPartitions({ disk }: { disk: StorageDisk }) {
               </span>
             </div>
             {used !== null && (
-              <div className="bg-muted h-1.5 w-full overflow-hidden rounded-full">
-                <div
-                  className={cn(
-                    'h-full rounded-full',
-                    used >= 90 ? 'bg-down' : used >= 75 ? 'bg-warning' : 'bg-primary'
-                  )}
-                  style={{ width: `${Math.min(100, Math.max(0, used))}%` }}
-                />
-              </div>
+              // Neutral until it is nearly full (C-9): the brand red used to
+              // fill every healthy partition like an alarm.
+              <RangeMeter
+                min={0}
+                max={100}
+                value={used}
+                tone={used >= 90 ? 'down' : used >= 75 ? 'warning' : null}
+                label={part.mount || part.name}
+                valueText={`${used} %`}
+              />
             )}
           </li>
         );
@@ -461,20 +464,33 @@ function EmmcLine({ disk }: { disk: StorageDisk }) {
 /** Sparklines of the three numbers that only mean something over months. */
 function DiskHistory({ days }: { days: StorageHistoryDay[] }) {
   const { t } = useLanguage();
-  // Oldest first: a sparkline reads left to right like every other chart here.
-  const oldestFirst = [...days].reverse();
-  const all: { label: string; data: (number | null)[]; tone: SparklineTone }[] = [
-    { label: t('storage.temperature', 'Teplota'), data: oldestFirst.map((d) => d.tempMax), tone: 'temperature' },
+  // Placed on the calendar, not by index: a month with a two-week gap in
+  // reporting draws the gap (C-4). Local midnight, parsed with the 'T' form
+  // that Safari accepts.
+  const at = (d: StorageHistoryDay) => Date.parse(`${d.day}T00:00:00`);
+  const all: { label: string; points: { t: number; v: number | null }[]; tone: MetricTone; unit: string }[] = [
+    {
+      label: t('storage.temperature', 'Teplota'),
+      points: days.map((d) => ({ t: at(d), v: d.tempMax })),
+      tone: 'temperature',
+      unit: '°C',
+    },
     {
       label: t('storage.written_total', 'Zapsáno za život disku'),
-      data: oldestFirst.map((d) => (d.hostWrittenBytes === null ? null : d.hostWrittenBytes / 1073741824)),
+      points: days.map((d) => ({ t: at(d), v: d.hostWrittenBytes === null ? null : d.hostWrittenBytes / 1073741824 })),
       tone: 'disk',
+      unit: 'GB',
     },
-    { label: t('storage.wear', 'Opotřebení'), data: oldestFirst.map((d) => d.wearPct), tone: 'disk' },
+    {
+      label: t('storage.wear', 'Opotřebení'),
+      points: days.map((d) => ({ t: at(d), v: d.wearPct })),
+      tone: 'disk',
+      unit: '%',
+    },
   ];
   // A series that measured nothing at all is left out; an empty chart would
   // read as a flat line at zero.
-  const series = all.filter((s) => s.data.some((v) => v !== null));
+  const series = all.filter((s) => s.points.some((p) => p.v !== null));
 
   if (series.length === 0) return null;
   return (
@@ -482,7 +498,9 @@ function DiskHistory({ days }: { days: StorageHistoryDay[] }) {
       {series.map((s) => (
         <div key={s.label}>
           <p className="text-muted-foreground text-2xs">{s.label}</p>
-          <Sparkline data={s.data} tone={s.tone} />
+          {/* First and last value beside the trace: without an axis the
+              shape had no scale (charts-28), and one day is "málo dat". */}
+          <Sparkline points={s.points} tone={s.tone} unit={s.unit} labels />
         </div>
       ))}
     </div>

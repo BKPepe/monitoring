@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -117,7 +117,7 @@ describe('WifiRadioList', () => {
 
   it('the link rate says it is a link rate, not the speed of the internet', () => {
     renderRadios([radio5g]);
-    expect(screen.getByText('736.8 Mbit/s')).toBeTruthy();
+    expect(screen.getByText('736,8 Mbit/s')).toBeTruthy();
     expect(screen.getByText('rychlost linky posledních rámců, ne propustnost internetu')).toBeTruthy();
   });
 });
@@ -182,5 +182,32 @@ describe('Wi-Fi karta: nejdřív měření, drobnosti sbalené (W1-C2)', () => {
     cleanup();
     renderRadios([{ ...radio5g, clients: 10 }]);
     expect(screen.getByText('10 klientů')).toBeTruthy();
+  });
+});
+
+describe('Wi-Fi: generace a signál na stupnici (W2-3)', () => {
+  afterEach(cleanup);
+
+  it('klienti podle generace jsou jeden dělený pruh, rozdělení WPA je v jeho tooltipu', () => {
+    renderRadios([radio5g]);
+    const box = screen.getByTestId('wifi-generations');
+    expect(box.getAttribute('title')).toBe('Přihlášení klientů: 4× WPA3 · 0× WPA2');
+    const bar = within(box).getByRole('img');
+    // Only generations that hold a client get a part: 2× Wi-Fi 6, 1× Wi-Fi 5, 1× Wi-Fi 4.
+    expect(bar.getAttribute('aria-label')).toBe('Klienti podle generace: Wi-Fi 6 2, Wi-Fi 5 1, Wi-Fi 4 1');
+  });
+
+  it('signál klientů je rozsah od nejslabšího po typický s ryskou −75 dBm', () => {
+    renderRadios([radio5g]);
+    // A span is not one meter value (PA-4): an image whose name carries the span.
+    const meter = screen.getByRole('img', { name: 'Signál klientů od nejslabšího po typický: -75 … -54 dBm' });
+    expect(meter.querySelector('[data-slot="meter-range"]')).not.toBeNull();
+    expect(meter.querySelector('[data-slot="meter-tick"]')?.getAttribute('title')).toBe('−75 dBm: slabý klient');
+  });
+
+  it('rádio, které generace nezjistilo, pruh nekreslí (řádek ve sbaleném říká proč)', () => {
+    renderRadios([{ ...radio5g, clients_gen: null }]);
+    expect(screen.queryByTestId('wifi-generations')).toBeNull();
+    expect(screen.getByText(/Generace klientů: neznámá/)).toBeTruthy();
   });
 });

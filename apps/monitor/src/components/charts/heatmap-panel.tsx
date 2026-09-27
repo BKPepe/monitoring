@@ -88,7 +88,9 @@ export function HeatmapPanel({
   const span = max - min;
   const fillFor = (v: number) => withAlpha(color, span > 0 ? 0.12 + 0.88 * ((v - min) / span) : 0.55);
 
-  const fmt = (v: number) => (Math.abs(v) >= 100 ? Math.round(v).toLocaleString(locale) : v.toFixed(2));
+  // In the page's language: toFixed printed "0.25" on a Czech page (V-11).
+  const fmt = (v: number) =>
+    Math.abs(v) >= 100 ? Math.round(v).toLocaleString(locale) : v.toLocaleString(locale, { maximumFractionDigits: 2 });
 
   const dayLabel = (iso: string) => {
     const d = new Date(`${iso}T00:00:00`);

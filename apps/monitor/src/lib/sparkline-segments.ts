@@ -1,61 +1,108 @@
+import { insertGaps } from './series-gaps';
+
 /**
- * Geometry of a sparkline that can express a gap.
+ * Geometry of a sparkline (C-4).
  *
- * A missing measurement is `null`, and a null ENDS the current line. Joining
- * the ends across it would draw a straight line through a collection outage,
- * which reads as "the value moved smoothly" - the one thing that certainly did
- * not happen (project rule: a gap in the data must look like a gap).
+ * Three rules, each one a bug the earlier index-based version had:
+ * - x is TIME, not the sample index. Six hours with a two-hour outage in the
+ *   middle drew as a line with a one-sample notch; now the hole is as wide as
+ *   the outage, and a window that ends in silence ends in empty space.
+ * - A missing measurement ends the line. Joining across it draws a smooth
+ *   change nobody measured (project rule: a gap must look like a gap). Long
+ *   steps between samples count as gaps too, by the same cadence rule the big
+ *   charts use (lib/series-gaps.ts).
+ * - The y range has a floor. Scaling every row to its own min and max turned
+ *   12.4-12.6 % CPU into a full-height barcode; a series that barely moves now
+ *   draws as a line that barely moves.
  *
- * Pure on purpose: the SVG in components/sparkline.tsx only formats what this
- * returns, so the rule itself is unit-tested.
+ * Pure on purpose: components/sparkline.tsx only formats what this returns.
  */
 export interface SparkPoint {
   x: number;
   y: number;
 }
 
+export interface SparkSample {
+  /** Timestamp in ms. */
+  t: number;
+  v: number | null | undefined;
+}
+
+export interface SparkOptions {
+  /** The period the sparkline stands for; defaults to the first..last sample. */
+  window?: { from: number; to: number } | null;
+  /**
+   * The smallest y span drawn, in the metric's own unit. Defaults to a fifth
+   * of the series' magnitude, so noise stays small against the level.
+   */
+  minRange?: number;
+  /** Vertical breathing room so the extremes do not touch the edges. */
+  pad?: number;
+}
+
+export interface SparkGeometry {
+  /** One polyline per run of measured samples (a run needs two points). */
+  segments: SparkPoint[][];
+  /** First and last measured value inside the window, for the edge labels. */
+  first: number | null;
+  last: number | null;
+}
+
 function isMeasured(v: number | null | undefined): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
-/**
- * @param data One entry per sample; null (or NaN/Infinity) = not measured.
- * @param width Viewport width the x coordinates are spread over.
- * @param height Viewport height; y is inverted (0 = top) as SVG expects.
- * @param pad Vertical breathing room so the extremes do not touch the edges.
- * @returns One array of points per run of measured samples. Runs shorter than
- *   two points are dropped - a single point is not a line, and drawing it as a
- *   dot would give one lucky sample the weight of a trend.
- */
-export function sparklineSegments(
-  data: (number | null | undefined)[],
+/** Default y floor: 20 % of the level, never zero (a flat zero series still needs a scale). */
+export function defaultMinRange(values: readonly number[]): number {
+  if (values.length === 0) return 1;
+  const magnitude = Math.max(...values.map(Math.abs));
+  return magnitude > 0 ? magnitude * 0.2 : 1;
+}
+
+export function sparklineGeometry(
+  samples: readonly SparkSample[],
   width: number,
   height: number,
-  pad = 2
-): SparkPoint[][] {
-  const measured = data.filter(isMeasured);
-  if (measured.length < 2) return [];
+  options: SparkOptions = {}
+): SparkGeometry {
+  const empty: SparkGeometry = { segments: [], first: null, last: null };
+  const { window, pad = 2 } = options;
 
-  const min = Math.min(...measured);
-  const max = Math.max(...measured);
-  // A constant series would otherwise divide by zero and vanish at an edge.
-  const range = max - min || 1;
+  const inWindow = samples
+    .filter((s) => Number.isFinite(s.t) && (!window || (s.t >= window.from && s.t <= window.to)))
+    .map((s) => ({ t: s.t, v: isMeasured(s.v) ? s.v : null }))
+    .sort((a, b) => a.t - b.t);
+  const measured = inWindow.filter((s) => s.v != null).map((s) => s.v as number);
+  if (measured.length < 2) return empty;
+
+  const from = window ? window.from : inWindow[0].t;
+  const to = window ? window.to : inWindow[inWindow.length - 1].t;
+  const span = to - from;
+  if (!(span > 0)) return empty;
+
+  let min = Math.min(...measured);
+  let max = Math.max(...measured);
+  const floor = options.minRange ?? defaultMinRange(measured);
+  if (max - min < floor) {
+    const mid = (min + max) / 2;
+    min = mid - floor / 2;
+    max = mid + floor / 2;
+  }
   const usable = Math.max(0, height - 2 * pad);
-  const lastIndex = Math.max(1, data.length - 1);
-
-  const x = (i: number) => (i / lastIndex) * width;
-  const y = (v: number) => height - ((v - min) / range) * usable - pad;
+  const x = (t: number) => ((t - from) / span) * width;
+  const y = (v: number) => height - pad - ((v - min) / (max - min)) * usable;
 
   const segments: SparkPoint[][] = [];
   let current: SparkPoint[] = [];
-  data.forEach((value, i) => {
-    if (!isMeasured(value)) {
+  for (const s of insertGaps(inWindow)) {
+    if (s.v == null) {
       if (current.length > 1) segments.push(current);
       current = [];
-      return;
+      continue;
     }
-    current.push({ x: x(i), y: y(value) });
-  });
+    current.push({ x: x(s.t), y: y(s.v) });
+  }
   if (current.length > 1) segments.push(current);
-  return segments;
+
+  return { segments, first: measured[0], last: measured[measured.length - 1] };
 }

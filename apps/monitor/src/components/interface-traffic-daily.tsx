@@ -1,5 +1,6 @@
 import * as React from 'react';
-import { Card } from '@/components/ui/card';
+import { CalendarDays } from 'lucide-react';
+import { Panel } from '@/components/ui/panel';
 import { ErrorState, LoadingState } from '@/components/ui/states';
 import { MetricChart } from '@/components/charts/metric-chart';
 import { ChartStats } from '@/components/charts/chart-stats';
@@ -9,13 +10,18 @@ import type { ChartData } from '@/api/types';
 
 interface Day {
   date: string;
+  /** null = not reported, or rejected below (never a zero). */
   rxBytes: number | null;
   txBytes: number | null;
+  /** Which side the server refused: more bytes than the link carries in 24 h is a counter artefact (charts-15). */
+  rejected?: ('rx' | 'tx')[];
 }
 interface Iface {
   iface: string;
   total: number;
   days: Day[];
+  /** The link speed the rejection used; null = unknown (the server then assumes 10 Gbit/s). */
+  linkMbit?: number | null;
 }
 
 /** Bytes per day are unreadable as bytes; the axis speaks in gigabytes. */
@@ -71,8 +77,7 @@ export function InterfaceTrafficDaily({ monitorId }: { monitorId: number }) {
   if (!signedIn) return null;
   if (failed) {
     return (
-      <Card className="space-y-2 p-5">
-        <h3 className="text-sm font-semibold">{t('iftraffic.title', 'Provoz po dnech (30 dní)')}</h3>
+      <Panel icon={CalendarDays} title={t('iftraffic.title', 'Provoz po dnech (30 dní)')}>
         <ErrorState
           message={t('iftraffic.load_failed', 'Provoz po dnech se nepodařilo načíst.')}
           onRetry={() => {
@@ -80,32 +85,43 @@ export function InterfaceTrafficDaily({ monitorId }: { monitorId: number }) {
             setAttempt((n) => n + 1);
           }}
         />
-      </Card>
+      </Panel>
     );
   }
   if (!interfaces) {
     // The same frame the answer will fill, so the page does not jump when it lands.
     return (
-      <Card className="space-y-2 p-5">
-        <h3 className="text-sm font-semibold">{t('iftraffic.title', 'Provoz po dnech (30 dní)')}</h3>
+      <Panel icon={CalendarDays} title={t('iftraffic.title', 'Provoz po dnech (30 dní)')}>
         <LoadingState size="inline" label={t('metric.loading', 'Načítám měření…')} />
-      </Card>
+      </Panel>
     );
   }
   const shown = interfaces.filter((i) => i.days.length >= 2 && i.total > 0).slice(0, 3);
   if (shown.length === 0) return null;
+  // Days the server refused are said out loud: a missing column alone would
+  // read as a day without traffic.
+  const rejected = shown.reduce((n, i) => n + i.days.filter((d) => (d.rejected?.length ?? 0) > 0).length, 0);
 
   return (
-    <Card className="space-y-4 p-5">
-      <div>
-        <h3 className="text-sm font-semibold">{t('iftraffic.title', 'Provoz po dnech (30 dní)')}</h3>
-        <p className="text-muted-foreground text-2xs leading-relaxed">
+    <Panel
+      icon={CalendarDays}
+      title={t('iftraffic.title', 'Provoz po dnech (30 dní)')}
+      hint={t(
+        'iftraffic.hint',
+        'Součet za každý den a rozhraní, jak ho hlásí agent. Chybějící den znamená, že se ten den nehlásilo, ne nulový provoz.'
+      )}
+
+      bodyClassName="space-y-4"
+    >
+      {rejected > 0 && (
+        <p className="text-muted-foreground text-2xs leading-relaxed" data-testid="iftraffic-rejected">
           {t(
-            'iftraffic.hint',
-            'Součet za každý den a rozhraní, jak ho hlásí agent. Chybějící den znamená, že se ten den nehlásilo, ne nulový provoz.'
+            'iftraffic.rejected',
+            { n: rejected },
+            `Vyřazené dny: ${rejected}. Hlásily víc bajtů, než linka za 24 h přenese – chyba počítadla, ne provoz.`
           )}
         </p>
-      </div>
+      )}
       {shown.map((iface) => {
         const chart: ChartData = {
           id: `iface-${iface.iface}`,
@@ -141,11 +157,15 @@ export function InterfaceTrafficDaily({ monitorId }: { monitorId: number }) {
           // agent never reported has no row and so no column - never a zero.
           <div key={iface.iface} className="space-y-1">
             <p className="text-muted-foreground font-mono text-2xs">{iface.iface}</p>
-            <MetricChart data={chart} height={150} bars legend={false} />
+            {/* overflow-x-clip: see speedtest-card - the bar chart's hidden data
+                table is wider than a phone. */}
+            <div className="overflow-x-clip">
+              <MetricChart data={chart} height={150} bars legend={false} />
+            </div>
             <ChartStats series={chart.series} />
           </div>
         );
       })}
-    </Card>
+    </Panel>
   );
 }

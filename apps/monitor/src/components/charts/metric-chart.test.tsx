@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import type { ChartData } from '@/api/types';
 
 /**
@@ -131,5 +131,105 @@ describe('MetricChart option', () => {
     expect(summary).toContain('minimum 10 %');
     expect(summary).toContain('průměr 20 %');
     expect(summary).toContain('B: žádná data');
+  });
+});
+
+type Line = Record<string, any>;
+const firstLine = (option: Record<string, any>): Line =>
+  option.series.find((s: Line) => s.type === 'line' && !String(s.name).startsWith('__range'));
+
+describe('MetricChart: co graf smí tvrdit (C-5)', () => {
+  it('osu x připne na zvolené okno a ticho na konci vystínuje „bez dat od“ (charts-02)', () => {
+    const window = { from: NOW - 24 * 60 * MIN, to: NOW };
+    // The agent's last report is three hours old; the axis still ends now.
+    const { option } = draw(
+      chart(
+        minutes(10, (i) => i, NOW - 3 * 60 * MIN),
+        { window }
+      )
+    );
+    expect(option.xAxis.min).toBe(window.from);
+    expect(option.xAxis.max).toBe(window.to);
+    const tail = firstLine(option).markArea.data.find((d: Line[]) => String(d[0].name).startsWith('bez dat od'));
+    expect(tail?.[0].label.show).toBe(true);
+  });
+
+  it('nemá toolbox na plátně; PNG, CSV a reset jsou v menu „⋯“ (charts-11)', () => {
+    const { option } = draw(chart(minutes(10, (i) => i)));
+    expect(option).not.toHaveProperty('toolbox');
+    expect(screen.getByRole('button', { name: 'Akce grafu' })).toBeTruthy();
+  });
+
+  it('řídkou řadu kreslí s tečkami, hustou bez nich', () => {
+    expect(firstLine(draw(chart(minutes(10, (i) => i))).option).showSymbol).toBe(true);
+    cleanup();
+    expect(firstLine(draw(chart(minutes(120, (i) => i % 7))).option).showSymbol).toBe(false);
+  });
+
+  it('počty bez jednotky kreslí schodovitě a nevyhlazuje je, procenta vyhlazuje', () => {
+    const players = draw(
+      chart([], {
+        yMax: null,
+        series: [{ key: 'mc', label: 'Hráči', unit: '', tone: 'memory', points: minutes(8, (i) => i % 3) }],
+      })
+    );
+    expect(firstLine(players.option).step).toBe('end');
+    expect(firstLine(players.option).smooth).toBe(false);
+    cleanup();
+    expect(firstLine(draw(chart(minutes(8, (i) => i))).option).step).toBeUndefined();
+  });
+
+  it('plochu kreslí jen nad osou od nuly - dBm plochu nemá (charts-13)', () => {
+    expect(firstLine(draw(chart(minutes(8, (i) => i))).option).areaStyle).toBeDefined();
+    cleanup();
+    const dbm = draw(
+      chart([], {
+        yMin: null,
+        yMax: null,
+        series: [
+          { key: 'rsrp', label: 'RSRP', unit: 'dBm', tone: 'latency', points: minutes(8, (i) => -98 + (i % 2)) },
+        ],
+      })
+    );
+    expect(firstLine(dbm.option).areaStyle).toBeUndefined();
+  });
+
+  it('názvy pásem nepíše do grafu, ale pod něj (charts-20)', () => {
+    const bands: ChartData['bands'] = [
+      { from: 65, to: 80, tone: 'warning', label: 'Varování' },
+      { from: 80, to: 100, tone: 'critical', label: 'Kritické' },
+    ];
+    const { option } = draw(
+      chart(
+        minutes(8, (i) => i),
+        { bands }
+      )
+    );
+    const areas = firstLine(option).markArea.data as Line[][];
+    expect(areas.filter((d) => d[0].yAxis != null).every((d) => d[0].label?.show === false)).toBe(true);
+    expect(screen.getByText('Varování od 65 % · Kritické od 80 %')).toBeTruthy();
+  });
+
+  it('dvě řady téhož odstínu (WAN a LTE) dostanou různé barvy (C-2)', () => {
+    const { option } = draw(
+      chart([], {
+        yMax: null,
+        series: [
+          { key: 'net', label: 'WAN', unit: 'KB/s', tone: 'network', points: minutes(8, (i) => i) },
+          { key: 'net_lte', label: 'LTE', unit: 'KB/s', tone: 'network', points: minutes(8, (i) => i) },
+        ],
+      })
+    );
+    const colors = option.series.filter((s: Line) => s.type === 'line').map((s: Line) => s.lineStyle.color);
+    expect(colors[0]).not.toBe(colors[1]);
+  });
+
+  it('čísla v popisku píše česky s desetinnou čárkou (V-11)', () => {
+    const points = minutes(8, (i) => 12.5 + i);
+    const { option } = draw(chart(points));
+    const html: string = option.tooltip.formatter([
+      { seriesName: 'CPU', value: [points[0].t, 12.5], axisValue: points[0].t },
+    ]);
+    expect(html).toContain('12,5 %');
   });
 });

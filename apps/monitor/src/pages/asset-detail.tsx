@@ -5,23 +5,42 @@ import {
   Clock,
   Cpu,
   Globe,
-  MessageSquare,
+  HardDrive,
   Mic,
   Pencil,
-  Router as RouterIcon,
   Server,
   Settings2,
   ShieldCheck,
-  Gamepad2,
   Archive,
   ArchiveRestore,
+  Compass,
+  House,
+  Lock,
+  Plug,
+  RadioTower,
+  Shield,
+  Split,
+  Wifi,
+  Wrench,
+  OctagonAlert,
+  TriangleAlert,
+  Activity,
+  ClipboardList,
+  Info,
+  type LucideIcon,
 } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Badge, StatusDot, statusVariant } from '@/components/ui/badge';
+import { Panel } from '@/components/ui/panel';
+import { Pill, type PillTone } from '@/components/ui/pill';
+import { IconTile } from '@/components/ui/icon-tile';
+import { KeyValueList } from '@/components/ui/key-value';
+import { usePageChrome } from '@/components/layout/shell-context';
+import type { ScoredHealth } from '@/components/health-deductions';
+import { Badge, StatusDot } from '@/components/ui/badge';
 import { SignalReading } from '@/components/signal-reading';
 import { AvailabilityWindows } from '@/components/availability-windows';
 import { NotificationLog } from '@/components/notification-log';
-import { MaintenanceToggle } from '@/components/maintenance-toggle';
+import { MaintenanceToggle, useMaintenanceToggle } from '@/components/maintenance-toggle';
+import { OverflowMenu, type OverflowMenuItem } from '@/components/ui/overflow-menu';
 import { useSession } from '@/api/use-session';
 import { InterfaceTrafficDaily } from '@/components/interface-traffic-daily';
 import { ProcessTop } from '@/components/process-top';
@@ -35,17 +54,18 @@ import { Sparkline } from '@/components/sparkline';
 import { RangePills } from '@/components/charts/range-pills';
 import { lteBackupState } from '@/lib/lte-backup';
 import { wanLinkState } from '@/lib/wan-link';
-import { computeSeriesDelta, goodDirectionFor } from '@/components/charts/series-delta';
-import type { ChartData, LinkTrafficResponse, RecommendationArea } from '@/api/types';
+import { StatBlock, breachTone } from '@/components/stat-block';
+import { metricSeverity, thresholdFor } from '@/lib/attention';
+import { trendDelta, type TrendDelta } from '@/lib/trend';
+import type { ChartData, FindingSource, LinkTrafficResponse, MetricPoint, RecommendationArea } from '@/api/types';
 import { resolveSource } from '@/api/source';
-import { Timeline } from '@/components/timeline';
+import { CollapsedTimeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/model';
 import { useAssetCharts } from '@/api/use-asset-charts';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { useLanguage } from '@/context/language-context';
 import { cn, formatMs, formatPercent, formatUptime } from '@/lib/utils';
-import { RouterServices } from '@/components/router-services';
 import { DiscordCard } from '@/components/discord-card';
 import { MinecraftCard } from '@/components/minecraft-card';
 import { CheckPipeline } from '@/components/check-pipeline';
@@ -53,8 +73,9 @@ import { TeamspeakCard } from '@/components/teamspeak-card';
 import { HeartbeatCard } from '@/components/heartbeat-card';
 import { StorageCard } from '@/components/storage-card';
 import { SpeedtestCard } from '@/components/speedtest-card';
-import { WanBottleneckCard } from '@/components/wan-bottleneck-card';
-import { ErrorState, LoadingState } from '@/components/ui/states';
+import { useWanBottleneck, WanBottleneckCard } from '@/components/wan-bottleneck-card';
+import { RatioBar } from '@/components/meter';
+import { EmptyState, ErrorState, LoadingState, Skeleton } from '@/components/ui/states';
 import { RouterRecommendations, useRouterRecommendations } from '@/components/router-recommendations';
 import { RouterPortPanel } from '@/components/router-ports/port-panel';
 import { WifiRadioList } from '@/components/wifi-radio-list';
@@ -62,6 +83,24 @@ import { LogErrorLines } from '@/components/log-error-lines';
 import { logWindow, readLogLines } from '@/lib/log-lines';
 import { seriesForTile } from '@/lib/tile-series';
 import { timelineSeverity, timelineTitle } from '@/lib/timeline-events';
+import { countAttention } from '@/lib/timeline-collapse';
+import { groupMetrics, latestValue, subsystemTitle } from '@/lib/metric-groups';
+import { formatDuration, formatMetricValue, formatNumber, localeFor } from '@/lib/metric-format';
+import { monitorStatusKey, statusLabel, statusMeta, type StatusKey } from '@/lib/status';
+import { planOverview, valueRange } from '@/lib/asset-charts';
+import { MetricHelpIcon } from '@/components/metric-help-icon';
+import {
+  AssetHeaderPanel,
+  ClientsPanel,
+  LatencyPanel,
+  PerformancePanel,
+  StorageSummaryPanel,
+  WanPanel,
+  WifiSummaryPanel,
+  pickPerformance,
+} from './asset-detail-panels';
+import { FindingsList } from '@/components/findings-list';
+import { MetricGroup } from '@/components/metric-group';
 import { isTeamSpeakMonitor, monitorTypeLabel, monitorTypeProfile, type MonitorTypeProfile } from '@/lib/monitor-type';
 import { parseMonitorId } from '@/lib/monitor-route';
 import { NotFoundPage } from '@/pages/not-found';
@@ -87,8 +126,11 @@ interface HealthMetric {
   /** One quiet line under the value: what the number does not say by itself. */
   hint?: string;
   /** Mini trend for the chosen period (from already-loaded chart data - no extra fetch). */
-  series?: (number | null)[];
-  delta?: { pct: number; direction: 'up' | 'down'; good: boolean | null };
+  series?: { points: MetricPoint[]; unit: string; window?: { from: number; to: number } };
+  /** Against the same window one period earlier (lib/trend.ts); absent when the server sent no comparison. */
+  delta?: TrendDelta;
+  /** The value crossed the monitor's own limit (C-1: colour only on a breach). */
+  breach?: 'down' | 'warning' | null;
 }
 
 interface AssetDetail {
@@ -97,12 +139,17 @@ interface AssetDetail {
   kind: string;
   subtitle: string;
   status: MonitorStatus;
+  /** The C-11 key: splits "unknown" into a new monitor and a silent agent. */
+  statusKey: StatusKey;
   breadcrumb: string[];
   health: HealthMetric[];
-  summary: string;
   summaryChips: { label: string; variant: 'up' | 'warning' | 'info' | 'down' }[];
-  /** `hint` shows under the value - the answer to "what changed and why". */
-  info: { label: string; value: string; hint?: string }[];
+  /** `hint` shows under the value - the answer to "what changed and why"; `prose` = words, not a figure. */
+  info: { label: string; value: string; hint?: string; prose?: boolean }[];
+  /** The last check's response in ms; null = not measured. */
+  responseMs: number | null;
+  /** The latency limit set on the monitor (admin view); null = none or not visible. */
+  latencyLimitMs: number | null;
   smartStatus?: string | null;
   cpanelStats?: Record<string, { formatted?: string }> | null;
   cpanelStatsError?: { error?: string; hint?: string | null; since?: string } | null;
@@ -122,7 +169,7 @@ interface AssetDetail {
   events: TimelineEvent[];
   /** Merged top-CPU + top-RAM processes from the agent; null = the agent does not report that dimension. */
   processes: { name: string; cpu: number | null; memory: number | null }[];
-  related: { name: string; kind: string; status: MonitorStatus; detail: string }[];
+  related: { name: string; kind: string; statusKey: StatusKey; detail: string }[];
   /** What this monitor TYPE can ever report - decides which tiles and cards exist at all. */
   typeProfile: MonitorTypeProfile;
   /** The agent monitor this one runs under; null when it has none (or none is loaded). */
@@ -137,9 +184,17 @@ interface AssetDetail {
  */
 interface ServerInsights {
   summary: string;
-  healthScore: { score: number } | null;
+  /** The state sentence alone (C-11); null = an older server, `summary` stands in. */
+  statusSentence: string | null;
+  /**
+   * The health score 0-100 (SCORE, formulaVersion 1) with its components and
+   * named deductions. null = the server could not compute it (said in the
+   * header); undefined = an older server that does not send it (no ring).
+   * The TS3-only `healthScore` of the same answer is not read any more.
+   */
+  health: ScoredHealth | null | undefined;
+  /** Knowledge tips (critical/warn). Trends and anomalies are in the findings feed (C-12) instead. */
   tips: { severity: 'critical' | 'warn' | string; text: string }[];
-  insights: { text: string }[];
   /** System-level timeline (status changes, remote actions, SSL warnings, ...)
    *  from monitor_events/agent_actions - a different granularity than the
    *  per-check rows in `events`, so it's rendered as its own section. */
@@ -187,6 +242,12 @@ export function AssetDetailPage() {
     errorMsg: string | null;
   } | null>(null);
   const [serverInsights, setServerInsights] = React.useState<ServerInsights | null>(null);
+  const [insightsFailed, setInsightsFailed] = React.useState(false);
+
+  // Which device the page last loaded: a reload of the same one (after a
+  // maintenance toggle, a restore) keeps the page on screen instead of
+  // replacing it with a full-page spinner.
+  const loadedIdRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
     let active = true;
@@ -195,7 +256,7 @@ export function AssetDetailPage() {
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (loadedIdRef.current !== idNum) setLoading(true);
 
     appApi
       .getMonitors()
@@ -217,9 +278,10 @@ export function AssetDetailPage() {
         const siblings = match
           ? list.filter((m: ApiMonitor) => m.id !== match.id && m.assetId != null && m.assetId === match.assetId)
           : [];
-        setAsset(match ? buildDynamicAsset(match, t, siblings) : null);
+        setAsset(match ? buildDynamicAsset(match, t, siblings, lang) : null);
         setRawMonitor(match ?? null);
         setLoadFailed(false);
+        loadedIdRef.current = idNum;
       })
       .catch(() => {
         if (active) {
@@ -235,7 +297,7 @@ export function AssetDetailPage() {
     return () => {
       active = false;
     };
-  }, [idNum, t, reloadToken]);
+  }, [idNum, t, lang, reloadToken]);
 
   // The effects below key on the asset ID, not the object - refreshing an object
   // with the same ID must not refetch events or insights.
@@ -261,6 +323,11 @@ export function AssetDetailPage() {
    * null when it cannot find the row. Null renders nothing rather than
    * borrowing another event's text.
    */
+  // The Události tab's own list: status changes, remote actions, limits.
+  const systemEvents = React.useMemo(
+    () => (serverInsights ? mapInsightsTimeline(serverInsights.timeline, t) : []),
+    [serverInsights, t]
+  );
   const statusChangeHint = React.useMemo(() => {
     if (!statusChange) return undefined;
     const label =
@@ -319,6 +386,8 @@ export function AssetDetailPage() {
             atIso: typeof e.timeIso === 'string' ? e.timeIso : null,
             severity: e.isDown ? 'down' : e.rawStatus === 'warning' ? 'warning' : e.isRecovery ? 'up' : 'info',
             resolution: e.isDown ? 'Open' : e.isRecovery ? 'Resolved' : 'Info',
+            // One row of the check log: a routine pass hides behind "Vše" (C-10).
+            kind: 'check',
             location: e.location,
             method: e.type,
             responseMs: typeof e.responseTime === 'number' ? e.responseTime : null,
@@ -339,19 +408,34 @@ export function AssetDetailPage() {
     fetch(`/status/api.php?action=monitor_insights&monitor_id=${loadedAssetId}&lang=${lang}`, {
       credentials: 'include',
     })
-      .then((res) => (res.ok ? res.json() : null))
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
       .then((data) => {
-        if (!active || !data || typeof data.summary !== 'string') return;
+        if (!active) return;
+        if (!data || typeof data.summary !== 'string') throw new Error('invalid monitor_insights');
         setServerInsights({
           summary: data.summary,
-          healthScore:
-            data.healthScore && typeof data.healthScore.score === 'number' ? { score: data.healthScore.score } : null,
+          // The state alone, without the top concern the findings list names
+          // anyway; absent on a server that does not send it yet.
+          statusSentence: typeof data.statusSentence === 'string' && data.statusSentence ? data.statusSentence : null,
+          health:
+            data.health === undefined
+              ? undefined
+              : data.health && typeof data.health === 'object' && Array.isArray(data.health.components)
+                ? (data.health as ScoredHealth)
+                : null,
           tips: Array.isArray(data.tips) ? data.tips : [],
-          insights: Array.isArray(data.insights) ? data.insights : [],
           timeline: Array.isArray(data.timeline) ? data.timeline : [],
         });
+        setInsightsFailed(false);
       })
-      .catch(() => {});
+      // The summary used to vanish without a word when this failed; a missing
+      // verdict must say it is missing (W1-A5).
+      .catch(() => {
+        if (active) setInsightsFailed(true);
+      });
 
     return () => {
       active = false;
@@ -386,6 +470,25 @@ export function AssetDetailPage() {
     [routerMonitorId, recommendations, showAllRecommendations]
   );
 
+  // The header names the device and judges its data by the last report
+  // (cron cadence, like the dashboard: live up to 10 min).
+  usePageChrome({
+    title: asset?.name,
+    freshness:
+      asset && !asset.archived ? { at: asset.lastCheck ? Date.parse(asset.lastCheck) : null, intervalSecs: 300 } : null,
+  });
+
+  const openTab = React.useCallback((next: string, anchor?: string) => {
+    setTab(next);
+    if (!anchor) return;
+    // The section exists only once its tab has rendered.
+    window.requestAnimationFrame(() => {
+      const el = document.getElementById(anchor);
+      el?.scrollIntoView({ block: 'start' });
+      el?.focus({ preventScroll: true });
+    });
+  }, []);
+
   if (idNum === null) return <NotFoundPage />;
 
   if (loading) {
@@ -403,7 +506,7 @@ export function AssetDetailPage() {
 
   if (!asset) {
     return (
-      <Card className="grid place-items-center gap-4 p-12 text-center">
+      <Panel bodyClassName="grid place-items-center gap-4 p-12 text-center">
         <div className="space-y-1">
           <p className="font-semibold text-base">{t('asset.not_found', 'Zařízení nenalezeno')}</p>
           <p className="text-muted-foreground text-sm">
@@ -419,7 +522,7 @@ export function AssetDetailPage() {
             <ArrowLeft className="size-4" /> {t('asset.back', 'Zpět na přehled infrastruktury')}
           </Link>
         </Button>
-      </Card>
+      </Panel>
     );
   }
 
@@ -432,43 +535,52 @@ export function AssetDetailPage() {
   const isWeb = ['WEB', 'HTTP', 'HTTPS'].includes(upperKind);
   const isTeamspeak = ['TEAMSPEAK', 'VOICE'].includes(upperKind);
   const isHeartbeat = upperKind === 'HEARTBEAT';
+  // A router's and a server's third tab is about their disks (W2-3); its
+  // header and content follow the tab's name, not the web target's (V-14).
+  const isStorage = isRouter || isServerKind(asset.kind);
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <Link
-          to="/infrastructure"
-          className="hover:text-foreground font-semibold flex items-center gap-1 transition-colors"
-        >
-          <ArrowLeft className="size-3.5" /> {t('nav.infrastructure', 'Infrastruktura')}
-        </Link>
-        {asset.breadcrumb
-          .filter((c) => c !== 'Infrastructure' && c !== 'Infrastruktura')
-          .map((crumb) => (
-            <React.Fragment key={crumb}>
-              <span>/</span>
-              <span>{crumb}</span>
-            </React.Fragment>
-          ))}
-        <span>/</span>
-        <span className="text-foreground font-medium">{asset.name}</span>
-      </div>
-
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <Hero asset={asset} />
-        </div>
-        {/* One click, not "open the form, tick a box, save the whole monitor" -
-            which is what a maintenance window used to cost at the moment speed
-            matters most. */}
-        {!asset.archived && (
-          <MaintenanceToggle
-            monitorId={Number(asset.id)}
-            active={rawMonitor?.maintenance === true}
-            onChanged={() => setReloadToken((n) => n + 1)}
-          />
-        )}
-      </div>
+      <AssetHeaderPanel
+        name={asset.name}
+        kind={asset.kind}
+        subtitle={asset.subtitle}
+        breadcrumb={asset.breadcrumb}
+        statusKey={asset.statusKey}
+        maintenance={rawMonitor?.maintenance === true}
+        archived={asset.archived}
+        health={
+          serverInsights
+            ? { status: 'ok', health: serverInsights.health }
+            : insightsFailed
+              ? { status: 'failed' }
+              : { status: 'loading' }
+        }
+        actions={
+          <div className="flex items-center gap-2">
+            <HeroActions asset={asset} />
+            {/* One click, not "open the form, tick a box, save the whole monitor" -
+                which is what a maintenance window used to cost at the moment
+                speed matters most. */}
+            {!asset.archived && (
+              <div className="hidden md:block">
+                <MaintenanceToggle
+                  monitorId={Number(asset.id)}
+                  active={rawMonitor?.maintenance === true}
+                  onChanged={() => setReloadToken((n) => n + 1)}
+                />
+              </div>
+            )}
+            {/* Phone: Akce, Upravit and Údržba in one menu - three buttons wrapped
+                under the title and pushed the tabs a screen down (W2-2). */}
+            <PhoneActions
+              asset={asset}
+              maintenanceActive={rawMonitor?.maintenance === true}
+              onChanged={() => setReloadToken((n) => n + 1)}
+            />
+          </div>
+        }
+      />
 
       {asset.archived && (
         <ArchivedNotice
@@ -490,17 +602,28 @@ export function AssetDetailPage() {
             sticking 4rem below the top of that container left a 64px band the
             content slid through in the open. */}
         <div className="bg-background/95 sticky top-0 z-20 -mx-1 flex flex-wrap items-center justify-between gap-4 border-b border-border px-1 pb-3 pt-1 backdrop-blur-sm">
-          <TabsList className="bg-secondary/40 max-w-full flex-nowrap overflow-x-auto p-1">
-            <TabsTrigger value="overview">{t('asset.tab_overview', 'Přehled & Výkon')}</TabsTrigger>
+          {/* Short labels that never wrap (clutter-27): on a phone "Přehled &
+              Výkon" broke over three lines and "Události (204)" was cut. */}
+          <TabsList className="bg-secondary/40 max-w-full flex-nowrap overflow-x-auto p-1 *:whitespace-nowrap">
+            <TabsTrigger value="overview">{t('asset.tab_overview', 'Přehled')}</TabsTrigger>
             <TabsTrigger value="processes">
-              {t('asset.tab_processes_short', 'Procesy')} ({asset.processes.length})
+              {t('asset.tab_processes_short', 'Procesy')}
+              <TabCount n={asset.processes.length} />
             </TabsTrigger>
             {hasNetworkData(asset.rawDetails) && (
               <TabsTrigger value="network">{t('asset.tab_network', 'Síť')}</TabsTrigger>
             )}
-            <TabsTrigger value="services">{t('asset.tab_services', 'Služby & Certifikáty')}</TabsTrigger>
+            <TabsTrigger value="services">
+              {/* A router's and a server's tab holds their disks; certificates
+                  and protocol checks are what a web target has. */}
+              {isStorage ? t('asset.tab_storage', 'Úložiště') : t('asset.tab_services', 'Služby & Certifikáty')}
+            </TabsTrigger>
             <TabsTrigger value="events">
-              {t('asset.tab_events', 'Události')} ({events.length})
+              {/* Counts what needs a look, not two hundred passed checks (C-10). */}
+              {t('asset.tab_events', 'Události')}
+              {/* What the tab itself lists (V-15): the check log moved to its
+                  own page, so its failures made "Události 5" over "Vše (4)". */}
+              <TabCount n={countAttention(systemEvents)} />
             </TabsTrigger>
           </TabsList>
           <RangePicker value={range} onChange={setRange} />
@@ -509,7 +632,7 @@ export function AssetDetailPage() {
           {asset.lastCheck && (
             <p className="text-muted-foreground basis-full text-2xs">
               {t('asset.data_as_of', 'Data z posledního hlášení')}: {timeAgo(asset.lastCheck, t)} (
-              {new Date(asset.lastCheck).toLocaleString('cs-CZ')})
+              {new Date(asset.lastCheck).toLocaleString(localeFor(lang))})
             </p>
           )}
         </div>
@@ -520,6 +643,7 @@ export function AssetDetailPage() {
             range={range}
             events={events}
             serverInsights={serverInsights}
+            insightsFailed={insightsFailed}
             statusChangeHint={statusChangeHint}
             recommendations={
               isRouter ? (
@@ -530,6 +654,7 @@ export function AssetDetailPage() {
                 />
               ) : null
             }
+            onOpenTab={openTab}
           />
         </TabsContent>
 
@@ -538,12 +663,10 @@ export function AssetDetailPage() {
             <NetworkTab
               d={asset.rawDetails}
               monitorId={Number(asset.id)}
-              reportedAt={asset.lastCheck ? Math.floor(Date.parse(asset.lastCheck) / 1000) || null : null}
               recommendations={isRouter ? compactRecommendations : undefined}
-              // Where the line speed ends - only a router has a WAN to judge (X21).
-              wanBottleneck={isRouter ? <WanBottleneckCard monitorId={asset.id} /> : undefined}
-              // A router's link speed belongs to its network, not to its services (X21).
-              speedtest={isRouter ? <SpeedtestCard monitorId={asset.id} /> : undefined}
+              // Where the line speed ends and the tests behind it - only a
+              // router has a WAN to judge (X21), and its speed belongs to its network.
+              router={isRouter}
             />
           </TabsContent>
         )}
@@ -554,22 +677,19 @@ export function AssetDetailPage() {
           <div className="mb-4">
             <ProcessTop monitorId={Number(asset.id)} />
           </div>
-          <Card className="p-6 space-y-4">
-            <div className="flex items-center gap-3 border-b border-border pb-3">
-              <Cpu className="size-5 text-primary" />
-              <div>
-                <h3 className="font-bold text-base">
-                  {t('asset.process_load', { name: asset.name }, `Zátěž procesů serveru (${asset.name})`)}
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  {t('asset.process_load_desc', 'Aktuálně spotřebovávaná paměť RAM a zátěž procesoru.')}
-                </p>
-              </div>
-            </div>
+          <Panel
+            icon={Cpu}
+            title={t('asset.process_load', { name: asset.name }, `Zátěž procesů serveru (${asset.name})`)}
+            hint={t('asset.process_load_desc', 'Aktuálně spotřebovávaná paměť RAM a zátěž procesoru.')}
+            bodyClassName="space-y-4"
+          >
             {asset.rawDetails?.ts3_process && (
-              <div className="p-3 rounded-lg bg-up/10 border border-up/25 text-xs space-y-1">
-                <p className="font-bold text-up">🎙 {t('asset.ts3_process_title', 'Proces ts3server')}</p>
-                <p className="font-mono text-muted-foreground">
+              <div className="bg-inset space-y-1 rounded-lg border border-border p-3 text-xs">
+                <p className="flex items-center gap-1.5 font-bold">
+                  <Mic aria-hidden="true" className="size-3.5 shrink-0" />
+                  {t('asset.ts3_process_title', 'Proces ts3server')}
+                </p>
+                <p className="font-mono tabular-nums text-muted-foreground">
                   PID {asset.rawDetails.ts3_process.pid ?? '—'}
                   {asset.rawDetails.ts3_process.cpu != null && ` · CPU ${asset.rawDetails.ts3_process.cpu} %`}
                   {asset.rawDetails.ts3_process.ram_mb != null && ` · RAM ${asset.rawDetails.ts3_process.ram_mb} MB`}
@@ -590,9 +710,9 @@ export function AssetDetailPage() {
                   </p>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
                     {Object.entries(asset.cpanelStats).map(([key, val]) => (
-                      <div key={key} className="p-2.5 rounded-lg bg-secondary/40 border border-border">
+                      <div key={key} className="bg-inset rounded-lg border border-border p-2.5">
                         <p className="text-muted-foreground capitalize">{key}</p>
-                        <p className="font-mono font-semibold">{val?.formatted ?? '—'}</p>
+                        <p className="font-mono tabular-nums font-semibold">{val?.formatted ?? '—'}</p>
                       </div>
                     ))}
                   </div>
@@ -601,17 +721,18 @@ export function AssetDetailPage() {
                 // cPanel collection is configured but failing - say so loudly
                 // instead of pretending there's simply nothing to show.
                 <div role="alert" className="rounded-lg border-2 border-down/60 bg-down/10 p-4 space-y-1 text-xs">
-                  <p className="font-bold text-down">
-                    ⛔ {t('asset.cpanel_error_title', 'Sběr cPanel statistik selhává')}
+                  <p className="flex items-center gap-1.5 font-bold text-down">
+                    <OctagonAlert aria-hidden="true" className="size-3.5 shrink-0" />
+                    {t('asset.cpanel_error_title', 'Sběr cPanel statistik selhává')}
                   </p>
                   <p className="text-down font-mono">{asset.cpanelStatsError.error}</p>
                   {asset.cpanelStatsError.since && (
                     <p className="text-muted-foreground">
-                      {t('collection.since', 'od')} {new Date(asset.cpanelStatsError.since).toLocaleString('cs-CZ')}
+                      {t('collection.since', 'od')}{' '}
+                      {new Date(asset.cpanelStatsError.since).toLocaleString(localeFor(lang))}
                     </p>
                   )}
                   <p className="text-muted-foreground">
-                    💡{' '}
                     {asset.cpanelStatsError.hint ??
                       t(
                         'asset.cpanel_error_hint',
@@ -632,10 +753,10 @@ export function AssetDetailPage() {
                 {/* Mobile: one process per row, values under the name. */}
                 <div className="flex flex-col gap-1.5 md:hidden">
                   {asset.processes.map((proc) => (
-                    <div key={proc.name} className="rounded-lg border border-border px-3 py-2">
+                    <div key={proc.name} className="bg-inset rounded-lg border border-border px-3 py-2">
                       <p className="truncate font-mono text-xs font-semibold">{proc.name}</p>
-                      <div className="text-muted-foreground mt-0.5 flex gap-4 font-mono text-2xs">
-                        <span>CPU {formatPercent(proc.cpu, 1)}</span>
+                      <div className="text-muted-foreground mt-0.5 flex gap-4 font-mono tabular-nums text-2xs">
+                        <span>CPU {formatPercent(proc.cpu, 1, lang)}</span>
                         {/* Unmeasured memory = a dash, not a bare "MB". */}
                         <span>RAM {proc.memory == null ? '—' : `${proc.memory} MB`}</span>
                       </div>
@@ -656,8 +777,10 @@ export function AssetDetailPage() {
                       {asset.processes.map((proc) => (
                         <TableRow key={proc.name}>
                           <TableCell className="font-mono text-xs font-semibold">{proc.name}</TableCell>
-                          <TableCell className="text-right font-mono">{formatPercent(proc.cpu, 1)}</TableCell>
-                          <TableCell className="text-right font-mono">
+                          <TableCell className="text-right font-mono tabular-nums">
+                            {formatPercent(proc.cpu, 1, lang)}
+                          </TableCell>
+                          <TableCell className="text-right font-mono tabular-nums">
                             {proc.memory == null ? '—' : `${proc.memory} MB`}
                           </TableCell>
                         </TableRow>
@@ -667,41 +790,40 @@ export function AssetDetailPage() {
                 </div>
               </>
             )}
-          </Card>
+          </Panel>
         </TabsContent>
 
         <TabsContent value="services">
-          <Card className="p-6 space-y-4">
-            <div className="flex items-center gap-3 border-b border-border pb-3">
-              <ShieldCheck className="size-5 text-up" />
-              <div>
-                <h3 className="font-bold text-base">
-                  {isRouter
-                    ? t('asset.router_services_title', 'Síťové služby routeru')
-                    : isDiscord
-                      ? t('asset.discord_services_title', 'Discord server')
-                      : isMinecraft
-                        ? t('asset.mc_services_title', 'Minecraft server')
-                        : t('asset.services_title', 'Stav Služeb & Šifrovací Certifikáty')}
-                </h3>
-                <p className="text-xs text-muted-foreground">
-                  {isRouter
-                    ? t('asset.router_services_desc', 'Konektivita, DNS, firewall, Wi-Fi a VPN podle dat od agenta.')
-                    : isDiscord
-                      ? t(
-                          'asset.discord_services_desc',
-                          'Kdo je online, hlasové kanály a členové ze serverového widgetu.'
-                        )
-                      : isMinecraft
-                        ? t('asset.mc_services_desc', 'MOTD, hráči a výkon serveru z dotazu na herní port.')
-                        : t('asset.services_desc', 'Stav protokolů a šifrovacích certifikátů.')}
-                </p>
-              </div>
-            </div>
-
-            {/* A router certifies no website - the TLS certificate card
-                only took space. What the router does have is shown instead. */}
-            {isRouter && <RouterServices d={asset.rawDetails ?? {}} />}
+          <Panel
+            icon={isStorage ? HardDrive : ShieldCheck}
+            title={
+              isStorage ? (
+                <>
+                  {t('asset.tab_storage', 'Úložiště')}
+                  <MetricHelpIcon metric="hdd" />
+                </>
+              ) : isDiscord ? (
+                t('asset.discord_services_title', 'Discord server')
+              ) : isMinecraft ? (
+                t('asset.mc_services_title', 'Minecraft server')
+              ) : (
+                t('asset.services_title', 'Stav Služeb & Šifrovací Certifikáty')
+              )
+            }
+            hint={
+              isStorage
+                ? t('asset.router_storage_desc', 'Disky, oddíly a jejich zdraví podle dat od agenta.')
+                : isDiscord
+                  ? t('asset.discord_services_desc', 'Kdo je online, hlasové kanály a členové ze serverového widgetu.')
+                  : isMinecraft
+                    ? t('asset.mc_services_desc', 'MOTD, hráči a výkon serveru z dotazu na herní port.')
+                    : t('asset.services_desc', 'Stav protokolů a šifrovacích certifikátů.')
+            }
+            bodyClassName="space-y-4"
+          >
+            {/* A router certifies no website, and what its service chips said
+                (WAN, LTE, VPN, SQM, firewall) are rows of the Network tab's
+                sections now (W2-3): this tab holds its disks. */}
             {isDiscord && <DiscordCard d={asset.rawDetails ?? {}} />}
             {isMinecraft && <MinecraftCard d={asset.rawDetails ?? {}} />}
             {isWeb && <CheckPipeline monitorId={asset.id} />}
@@ -719,7 +841,10 @@ export function AssetDetailPage() {
 
             {/* A heartbeat has no target to connect to - a certificate
                 nor "the protocol uses no TLS" makes sense for it. */}
+            {/* A cPanel account can still carry its site's certificate; an
+                agent machine's card only ever said "N/A". */}
             {!isRouter &&
+              upperKind !== 'VPS' &&
               !isDiscord &&
               !isMinecraft &&
               !isHeartbeat &&
@@ -738,12 +863,12 @@ export function AssetDetailPage() {
                 ].includes(upperKind);
                 return (
                   <div className="grid gap-4 md:grid-cols-2">
-                    <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
+                    <div className="bg-inset space-y-2 rounded-lg border border-border p-4">
                       <p className="font-semibold text-sm">{t('asset.ssl_cert', 'TLS/SSL Certifikát')}</p>
                       {isNoSsl ? (
                         <>
                           <p className="text-xs text-muted-foreground font-medium">N/A</p>
-                          <p className="text-2xs text-muted-foreground font-mono">
+                          <p className="text-2xs text-muted-foreground">
                             {upperKind === 'ROUTER'
                               ? t('asset.proto_router', 'OpenWrt Router telemetrie (ubus / Linux agent bez TLS)')
                               : upperKind === 'MINECRAFT'
@@ -758,25 +883,27 @@ export function AssetDetailPage() {
                           <p
                             className={cn(
                               'text-xs font-semibold flex items-center gap-1.5',
-                              (asset.sslCert.days_remaining ?? 99) <= 14
-                                ? 'text-warning'
-                                : (asset.sslCert.days_remaining ?? 99) <= 0
-                                  ? 'text-down'
+                              // Expired first: "<= 14" also matched a dead certificate,
+                              // so an expired one was painted as merely expiring.
+                              (asset.sslCert.days_remaining ?? 99) <= 0
+                                ? 'text-down'
+                                : (asset.sslCert.days_remaining ?? 99) <= 14
+                                  ? 'text-warning'
                                   : 'text-up'
                             )}
                           >
                             <ShieldCheck className="size-4 shrink-0" />
                             {asset.sslCert.days_remaining != null
                               ? asset.sslCert.days_remaining <= 0
-                                ? t('asset.ssl_expired', '🔴 SSL Certifikát VYPRŠEL!')
+                                ? t('asset.ssl_expired', 'SSL certifikát vypršel!')
                                 : t(
                                     'asset.ssl_valid_expiry',
                                     { days: asset.sslCert.days_remaining },
-                                    `🟢 Platný (Vyprší za ${asset.sslCert.days_remaining} dní)`
+                                    `Platný (vyprší za ${asset.sslCert.days_remaining} dní)`
                                   )
-                              : t('asset.ssl_valid', '🟢 Platný SSL/TLS Certifikát')}
+                              : t('asset.ssl_valid', 'Platný SSL/TLS certifikát')}
                           </p>
-                          <div className="text-2xs text-muted-foreground font-mono space-y-0.5 pt-1 border-t border-border/40">
+                          <div className="text-2xs text-muted-foreground space-y-0.5 pt-1 border-t border-border/40">
                             {asset.sslCert.issuer && (
                               <p>
                                 {t('asset.ssl_issuer', 'Vydavatel:')} {asset.sslCert.issuer}
@@ -798,7 +925,7 @@ export function AssetDetailPage() {
                           <p className="text-xs font-medium text-muted-foreground">
                             {t('asset.ssl_unknown', 'Certifikát zatím nebyl načten')}
                           </p>
-                          <p className="text-2xs text-muted-foreground font-mono">
+                          <p className="text-2xs text-muted-foreground">
                             {t(
                               'asset.ssl_unknown_desc',
                               'Kontrola certifikátu proběhne při příštím HTTPS testu tohoto cíle.'
@@ -807,12 +934,12 @@ export function AssetDetailPage() {
                         </>
                       )}
                     </div>
-                    <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2">
+                    <div className="bg-inset space-y-2 rounded-lg border border-border p-4">
                       <p className="font-semibold text-sm">{t('asset.service_status', 'Stav Služby')}</p>
                       <p className={cn('text-xs font-medium', asset.status === 'down' ? 'text-down' : 'text-up')}>
                         {asset.status === 'down' ? t('common.offline', 'Offline') : t('infra.active_since', 'Aktivní')}
                       </p>
-                      <p className="text-2xs text-muted-foreground font-mono">
+                      <p className="text-2xs text-muted-foreground">
                         {t('common.protocol', 'Protokol')}: {asset.kind}
                       </p>
                     </div>
@@ -820,7 +947,7 @@ export function AssetDetailPage() {
                         Storage card carries a block per disk, so this would only
                         repeat a worse version of it. */}
                     {!Array.isArray(asset.rawDetails?.storage_disks) && (
-                      <div className="p-4 rounded-lg bg-secondary/40 border border-border space-y-2 md:col-span-2">
+                      <div className="bg-inset space-y-2 rounded-lg border border-border p-4 md:col-span-2">
                         <p className="font-semibold text-sm">
                           {t('asset.smart_status', 'SMART SSD Health & NVMe Opotřebení Disku')}
                         </p>
@@ -839,7 +966,7 @@ export function AssetDetailPage() {
                               >
                                 {raw ?? t('asset.smart_no_data', 'Nejsou dostupná data (agent SMART nehlásí).')}
                               </p>
-                              <p className="text-2xs text-muted-foreground font-mono">
+                              <p className="text-2xs text-muted-foreground">
                                 {missingTool
                                   ? t(
                                       'asset.smart_install_hint',
@@ -858,7 +985,7 @@ export function AssetDetailPage() {
                   </div>
                 );
               })()}
-          </Card>
+          </Panel>
         </TabsContent>
 
         <TabsContent value="events">
@@ -867,41 +994,33 @@ export function AssetDetailPage() {
                 outage, which nothing could answer until the delivery log. */}
             <NotificationLog monitorId={Number(asset.id)} />
             {serverInsights && serverInsights.timeline.length > 0 && (
-              <Card className="p-6 space-y-4">
-                <div className="flex items-center gap-3 border-b border-border pb-3">
-                  <Settings2 className="size-5 text-primary" />
-                  <div>
-                    <h3 className="font-bold text-base">{t('asset.system_timeline', 'Systémové události (30 dní)')}</h3>
-                    <p className="text-xs text-muted-foreground">
-                      {t(
-                        'asset.system_timeline_desc',
-                        'Změny stavu, vzdálené akce, SSL varování a překročené limity z monitor_events.'
-                      )}
-                    </p>
-                  </div>
-                </div>
-                <FilterableTimeline events={mapInsightsTimeline(serverInsights.timeline, t)} />
-              </Card>
+              <Panel
+                icon={Settings2}
+                title={t('asset.system_timeline', 'Systémové události (30 dní)')}
+                hint={t(
+                  'asset.system_timeline_desc',
+                  'Změny stavu, vzdálené akce, SSL varování a překročené limity z monitor_events.'
+                )}
+              >
+                <CollapsedTimeline filters events={systemEvents} />
+              </Panel>
             )}
 
-            <Card className="p-6 space-y-4">
-              <div className="flex items-center gap-3 border-b border-border pb-3">
-                <Clock className="size-5 text-primary" />
-                <div>
-                  <h3 className="font-bold text-base">
-                    {t(
-                      'asset.events_history',
-                      { name: asset.name },
-                      `Historie událostí & Protokol měření (${asset.name})`
-                    )}
-                  </h3>
-                  <p className="text-xs text-muted-foreground">
-                    {t('asset.events_history_desc', 'Záznamy kontrol, detekovaných služeb a změny stavu v čase.')}
-                  </p>
-                </div>
-              </div>
-              <FilterableTimeline events={events} />
-            </Card>
+            {/* The check log lives in one place (W2-6, PAGES-B request): the
+                fleet's "Protokol kontrol" narrowed to this device. The rows still
+                load here - they count the tab's badge and date the Hero's state. */}
+            <Panel padding="sm" bodyClassName="flex flex-wrap items-center justify-between gap-3">
+              <span className="flex items-center gap-3 text-sm font-semibold">
+                <IconTile icon={Clock} />
+                {t('incidents.check_log', 'Protokol kontrol')}
+              </span>
+              <Link
+                to={`/incidents/checks?monitor=${asset.id}`}
+                className="text-link focus-visible:ring-ring rounded text-xs font-semibold hover:underline focus-visible:ring-2 focus-visible:outline-none"
+              >
+                {t('asset.check_log_open', 'Otevřít protokol kontrol →')}
+              </Link>
+            </Panel>
           </div>
         </TabsContent>
       </Tabs>
@@ -909,71 +1028,32 @@ export function AssetDetailPage() {
   );
 }
 
-function Hero({ asset }: { asset: AssetDetail }) {
+/** The header's desktop actions: remote actions, the way to set them up, and the edit form. */
+function HeroActions({ asset }: { asset: AssetDetail }) {
   const { t } = useLanguage();
   const { isAdmin } = useSession();
-  const upperKind = (asset.kind || '').toUpperCase();
-  const Icon =
-    upperKind === 'ROUTER' || asset.id === 5
-      ? RouterIcon
-      : upperKind === 'MINECRAFT' || asset.id === 4
-        ? Gamepad2
-        : upperKind === 'VOICE' || upperKind === 'TEAMSPEAK' || asset.id === 3
-          ? Mic
-          : upperKind === 'DISCORD' || asset.id === 2
-            ? MessageSquare
-            : upperKind === 'HTTPS' || upperKind === 'HTTP' || upperKind === 'WEB'
-              ? Globe
-              : Server;
-
-  const statusText: Record<MonitorStatus, string> = {
-    up: t('common.online', 'Online'),
-    down: t('common.offline', 'Offline'),
-    warning: t('common.warning', 'Varování'),
-    paused: t('common.paused', 'Pozastaveno'),
-    maintenance: t('common.maintenance', 'Údržba'),
-    unknown: t('status.unknown', 'Neznámý'),
-  };
 
   return (
-    <div className="flex flex-wrap items-start justify-between gap-4">
-      <div className="flex items-center gap-3">
-        <span className="bg-muted grid size-11 shrink-0 place-items-center rounded-xl">
-          <Icon className="size-5" />
-        </span>
-        <div className="leading-tight">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-semibold tracking-tight">{asset.name}</h1>
-            <Badge variant={statusVariant[asset.status]} dot pulse={asset.status === 'up'}>
-              {statusText[asset.status]}
-            </Badge>
-          </div>
-          <p className="text-muted-foreground mt-0.5 text-sm">{asset.subtitle}</p>
-        </div>
-      </div>
-
-      <div className="flex items-center gap-2">
+    <>
+      <div className="hidden items-center gap-2 md:flex">
         {!asset.archived && asset.remoteActionsEnabled && asset.allowedActions.length > 0 && (
           <ActionsMenu asset={asset} />
         )}
         {/* Remote Actions are switched on in the monitor's settings. Without this
             the detail simply had no Actions button and gave no hint why. */}
-        {!asset.archived &&
-          isAdmin &&
-          (upperKind === 'ROUTER' || upperKind === 'OPENWRT') &&
-          !asset.remoteActionsEnabled && (
-            <Button variant="outline" size="sm" asChild>
-              <a
-                href={`/app/infrastructure?edit=${asset.id}&tab=advanced`}
-                title={t(
-                  'asset.ra_setup_title',
-                  'Vzdálené akce jsou pro tento router vypnuté. Zapnete je v nastavení monitoru, záložka Rozšíření & Agent.'
-                )}
-              >
-                <Settings2 className="size-4" /> {t('asset.ra_setup', 'Nastavit vzdálené akce')}
-              </a>
-            </Button>
-          )}
+        {!asset.archived && isAdmin && isRouterKind(asset.kind) && !asset.remoteActionsEnabled && (
+          <Button variant="outline" size="sm" asChild>
+            <a
+              href={`/app/infrastructure?edit=${asset.id}&tab=advanced`}
+              title={t(
+                'asset.ra_setup_title',
+                'Vzdálené akce jsou pro tento router vypnuté. Zapnete je v nastavení monitoru, záložka Rozšíření & Agent.'
+              )}
+            >
+              <Settings2 className="size-4" /> {t('asset.ra_setup', 'Nastavit vzdálené akce')}
+            </a>
+          </Button>
+        )}
         {!asset.archived && (
           <Button
             variant="outline"
@@ -987,6 +1067,70 @@ function Hero({ asset }: { asset: AssetDetail }) {
           </Button>
         )}
       </div>
+    </>
+  );
+}
+
+/** The page's actions below `md`: one "⋯" menu instead of three buttons. */
+function PhoneActions({
+  asset,
+  maintenanceActive,
+  onChanged,
+}: {
+  asset: AssetDetail;
+  maintenanceActive: boolean;
+  onChanged: () => void;
+}) {
+  const { t } = useLanguage();
+  const { isAdmin } = useSession();
+  const remote = useRemoteActions(asset);
+  const maintenance = useMaintenanceToggle({ monitorId: Number(asset.id), active: maintenanceActive, onChanged });
+  if (asset.archived) return null;
+
+  const items: OverflowMenuItem[] = [];
+  if (asset.remoteActionsEnabled) {
+    for (const action of asset.allowedActions) {
+      items.push({
+        label: remote.labels[action] ?? action,
+        icon: Settings2,
+        disabled: remote.busy,
+        onSelect: () => void remote.trigger(action),
+      });
+    }
+  } else if (isAdmin && isRouterKind(asset.kind)) {
+    items.push({
+      label: t('asset.ra_setup', 'Nastavit vzdálené akce'),
+      icon: Settings2,
+      onSelect: () => {
+        window.location.href = `/app/infrastructure?edit=${asset.id}&tab=advanced`;
+      },
+    });
+  }
+  if (maintenance.allowed) {
+    items.push({
+      label: maintenance.label,
+      icon: Wrench,
+      disabled: maintenance.busy,
+      onSelect: () => void maintenance.toggle(),
+    });
+  }
+  items.push({
+    label: t('asset.edit_monitor', 'Upravit monitor'),
+    icon: Pencil,
+    onSelect: () => {
+      window.location.href = `/app/infrastructure?edit=${asset.id}`;
+    },
+  });
+
+  const message = remote.result ?? (maintenance.error ? { ok: false, text: maintenance.error } : null);
+  return (
+    <div className="flex flex-col items-end gap-1 md:hidden">
+      <OverflowMenu label={t('asset.actions_menu', 'Akce zařízení')} items={items} />
+      {message && (
+        <p role="status" className={cn('max-w-64 text-right text-2xs', message.ok ? 'text-up' : 'text-down')}>
+          {message.text}
+        </p>
+      )}
     </div>
   );
 }
@@ -1011,372 +1155,575 @@ function RangePicker({ value, onChange }: { value: TimeRange; onChange: (range: 
 
 const TIME_RANGES = ['24h', '7d', '30d'] as const;
 
+/**
+ * The findings the asset page lists (C-12). Not the status one - the hero and
+ * the summary sentence already say it - and not a router's recommendations,
+ * which have their own card with the mute right under the summary.
+ */
+const DEVICE_FINDINGS: readonly FindingSource[] = ['certificate', 'check', 'metric', 'agent', 'insight', 'router'];
+const ROUTER_FINDINGS: readonly FindingSource[] = ['certificate', 'check', 'metric', 'agent', 'insight'];
+
 function OverviewTab({
   asset,
   range,
   events,
   serverInsights,
+  insightsFailed = false,
   statusChangeHint,
   recommendations,
+  onOpenTab,
 }: {
   asset: AssetDetail;
   range: TimeRange;
   events: TimelineEvent[];
   serverInsights: ServerInsights | null;
+  /** monitor_insights failed: the summary says so instead of disappearing. */
+  insightsFailed?: boolean;
   /** The router's full recommendation card; null for everything that is not a router. */
   recommendations?: React.ReactNode;
   /** What happened at the last status change and why; undefined = unknown yet. */
   statusChangeHint?: string;
+  /** Switches the page to another tab, optionally to a section of it. */
+  onOpenTab: (tab: string, anchor?: string) => void;
 }) {
-  const { t } = useLanguage();
-  // One chart fetch for the whole tab: the same data feeds the big charts below
-  // and the KPI-tile sparklines above (mockup: value + delta + trend).
+  const { t, lang } = useLanguage();
+  // One chart fetch for the whole tab: the same data feeds the panels, the
+  // charts below and the KPI-tile sparklines above (value + delta + trend).
   const charts = useAssetCharts(asset.id, range);
+  const router = isRouterKind(asset.kind);
+  const d = asset.rawDetails;
 
   const healthWithTrends = React.useMemo<HealthMetric[]>(() => {
     return asset.health.map((m) => {
       // Its own metric only (W1-B5) - never the first chart of the same colour.
       const s = seriesForTile(m.key, charts.data);
       if (!s) return m;
-      // Nulls kept on purpose - an unmeasured point is a gap in the trace.
-      const values = s.points.map((p) => p.v);
-      const delta = computeSeriesDelta(s);
-      const goodDir = goodDirectionFor(s.tone);
+      // Nulls kept on purpose - an unmeasured point is a gap in the trace, and
+      // the trace spans the chart's window, so silence at its end shows.
+      const delta = trendDelta({
+        metricKey: s.key,
+        unit: s.unit,
+        current: s.points.map((p) => p.v),
+        previous: s.previousAvg,
+      });
+      const chartWindow = charts.data?.find((c) => c.series.includes(s))?.window;
       return {
         ...m,
-        series: values.length >= 2 ? values : undefined,
-        delta: delta ? { ...delta, good: goodDir ? delta.direction === goodDir : null } : undefined,
+        series: s.points.length >= 2 ? { points: s.points, unit: s.unit, window: chartWindow } : undefined,
+        delta: delta ?? undefined,
       };
     });
   }, [asset.health, charts.data]);
 
+  // The chart plan, shared out: CPU, RAM and temperature into "Výkon", the
+  // line's traffic into "WAN" (a router), the response time into the latency
+  // panel, and the rest of the featured cards into the grid below. Each chart
+  // is drawn once (clutter-03).
+  const plan = React.useMemo(() => overviewPlan(charts.data, asset.kind, t), [charts.data, asset.kind, t]);
+  const chartEvents = React.useMemo(() => eventMarkers(events), [events]);
+  const decorate = React.useCallback(
+    (chart: ChartData) =>
+      withBands(
+        chartEvents.length > 0 ? { ...chart, events: [...(chart.events ?? []), ...chartEvents] } : chart,
+        asset.thresholds,
+        t
+      ),
+    [chartEvents, asset.thresholds, t]
+  );
+  const perf = plan ? pickPerformance(plan.cards).map(decorate) : [];
+  const wanChart = router && plan ? (plan.cards.find((c) => c.id === 'net-combined' || c.id === 'net') ?? null) : null;
+  const latencyChart = plan?.cards.find((c) => c.id === 'response_time') ?? null;
+  const shown = new Set([...perf.map((c) => c.id), wanChart?.id, latencyChart?.id]);
+  const restCards = plan ? plan.cards.filter((c) => !shown.has(c.id)) : [];
+  const metricHref = (id: string) => `/infrastructure/${asset.id}/metric/${asset.id}/${id}`;
+  const hasLatency = asset.typeProfile.latency || latencyChart != null;
+
+  const perfPanel = perf.length > 0 && <PerformancePanel charts={perf} metricHref={metricHref} className="h-full" />;
+  const latencyPanel = hasLatency && (
+    <LatencyPanel
+      chart={latencyChart ? decorate(latencyChart) : null}
+      current={asset.responseMs}
+      limitMs={asset.latencyLimitMs}
+      router={router}
+      metricHref={metricHref}
+      className="h-full"
+    />
+  );
+  // The line's facts or its traffic: a router whose agent reports either gets the panel.
+  const wanPanel = router && (hasWanData(d) || wanChart != null) && (
+    <WanPanel d={d} chart={wanChart ? decorate(wanChart) : null} metricHref={metricHref} className="h-full" />
+  );
+  const wifiPanel = router && <WifiSummaryPanel d={d} onOpen={() => onOpenTab('network', NET_ANCHORS.wifi)} />;
+  const clientsPanel = router && <ClientsPanel d={d} />;
+  // Decided here, not by the panel rendering null: an element that renders
+  // nothing still takes its half of a row in pair().
+  const storagePanel = Array.isArray(d.storage_disks) && d.storage_disks.length > 0 && (
+    <StorageSummaryPanel d={d} onOpen={() => onOpenTab('services')} className="h-full" />
+  );
+  const availability = <AvailabilityWindows monitorId={asset.id} />;
+  // A type without CPU/RAM readings (a website, a game server) pairs its
+  // latency with the availability instead of leaving it a full-width row.
+  const latencyWithAvailability = !perfPanel && latencyPanel;
+  const hasProcesses = asset.typeProfile.processes !== 'none';
+
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-12">
+    <div className="grid grid-cols-1 gap-6 *:min-w-0 xl:grid-cols-12">
       <div className="grid gap-3 xl:col-span-12 [grid-template-columns:repeat(auto-fit,minmax(150px,1fr))]">
-        {serverInsights?.healthScore && <HealthScoreTile score={serverInsights.healthScore.score} />}
         {healthWithTrends.map((metric) => (
-          <HealthCard key={metric.key} metric={metric} />
+          <StatBlock
+            key={metric.key}
+            variant="card"
+            size="sm"
+            label={metric.label}
+            value={metric.value}
+            hint={metric.hint}
+            tone={metric.breach ?? null}
+            delta={metric.delta}
+            sparkline={
+              metric.series && metric.tone
+                ? {
+                    points: metric.series.points,
+                    tone: metric.tone,
+                    unit: metric.series.unit,
+                    window: metric.series.window,
+                  }
+                : undefined
+            }
+          />
         ))}
       </div>
 
-      {/*
-        Density: this card took half a screen for two sentences.
-        The "Live measurement state from the database" subtitle conveyed nothing -
-        that the data is live shows in the numbers - and the spacing was built
-        for content that is only here occasionally.
-      */}
-      {/* self-start: grid items stretch to the row, so two sentences were pulled
-          to the height of the parameter list next to them - 200 px of card for
-          40 px of text. The row still grows with whichever card is taller. */}
-      <Card className="self-start xl:col-span-8">
-        <CardHeader className="pb-2">
-          <CardTitle>{t('asset.summary_title', 'Executive Summary')}</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-2.5">
-          {/* The server summary (bk_build_executive_summary) knows about health
-              score, threshold breaches, and insights - the client-built
-              asset.summary is only a generic template sentence, kept as a
-              fallback until the endpoint responds. Not muted: this is the
-              main content of the card, not a caption under it. */}
-          <p className="text-sm leading-relaxed">{serverInsights?.summary || asset.summary}</p>
+      {/* Left: the state and what to do about it, stacked. Side by side with
+          the information list, a two-sentence summary left a 300 px hole under
+          itself (clutter-17). */}
+      <div className="flex min-w-0 flex-col gap-6 xl:col-span-8">
+        <Panel
+          title={t('asset.summary_title', 'Souhrn stavu')}
+          icon={ClipboardList}
+          bodyClassName="flex flex-col gap-3"
+        >
+          {/* One status sentence from the server (C-11) - the client's
+              template sentence ("Monitor X běží na cíli Y...") said nothing
+              and is gone. Not muted: it is what the card is for. */}
+          {serverInsights ? (
+            <p className="text-sm leading-relaxed">{serverInsights.statusSentence ?? serverInsights.summary}</p>
+          ) : insightsFailed ? (
+            <ErrorState size="inline" message={t('asset.summary_failed', 'Souhrn stavu se nepodařilo načíst.')} />
+          ) : (
+            <LoadingState size="inline" label={t('asset.summary_loading', 'Načítám souhrn stavu…')} />
+          )}
 
           {serverInsights && serverInsights.tips.length > 0 && (
-            <div className="flex flex-col gap-1.5">
-              {serverInsights.tips.map((tip, i) => (
-                <div
-                  key={`${tip.severity}-${i}`}
-                  className={cn(
-                    'flex items-start gap-2 rounded-md border px-2.5 py-1.5 text-xs',
-                    tip.severity === 'critical'
-                      ? 'border-down/30 bg-down/10 text-down'
-                      : 'border-warning/30 bg-warning/10 text-warning'
-                  )}
-                >
-                  <span className="font-bold shrink-0">{tip.severity === 'critical' ? '⛔' : '⚠️'}</span>
-                  <span>{tip.text}</span>
-                </div>
+            <ul className="flex flex-col gap-1.5">
+              {serverInsights.tips.map((tip, i) => {
+                const critical = tip.severity === 'critical';
+                const Icon = critical ? OctagonAlert : TriangleAlert;
+                return (
+                  <li key={`${tip.severity}-${i}`} className="flex items-start gap-2 text-xs leading-relaxed">
+                    <Icon
+                      role="img"
+                      aria-label={
+                        critical ? t('rec.severity_critical', 'Kritické') : t('rec.severity_warning', 'Varování')
+                      }
+                      className={cn('mt-0.5 size-3.5 shrink-0', critical ? 'text-down' : 'text-warning')}
+                    />
+                    <span>{tip.text}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {asset.summaryChips.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {asset.summaryChips.map((chip) => (
+                <Badge key={chip.label} variant={chip.variant} dot>
+                  {chip.label}
+                </Badge>
               ))}
             </div>
           )}
 
-          {serverInsights && serverInsights.insights.length > 0 && (
-            <ul className="flex flex-col gap-1 text-xs text-muted-foreground border-t border-border pt-2.5">
-              {serverInsights.insights.map((ins, i) => (
-                <li key={i} className="flex items-start gap-2">
-                  <span className="shrink-0">💡</span>
-                  <span>{ins.text}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="flex flex-wrap gap-2">
-            {asset.summaryChips.map((chip) => (
-              <Badge key={chip.label} variant={chip.variant} dot>
-                {chip.label}
-              </Badge>
-            ))}
+          {/* The device's findings, once (C-12): trends, anomalies,
+              certificates and limits from the one feed. */}
+          <div className="border-border border-t pt-1">
+            <FindingsList
+              density="device"
+              monitorId={Number(asset.id)}
+              sources={router ? ROUTER_FINDINGS : DEVICE_FINDINGS}
+            />
           </div>
-        </CardContent>
-      </Card>
+        </Panel>
 
-      <Card className="xl:col-span-4">
-        <CardHeader>
-          <CardTitle>{t('asset.params_title', 'Parametry monitoru / serveru')}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="flex flex-col gap-2.5 text-sm">
-            {asset.info.map((rawRow) => {
-              const row =
-                rawRow.label === t('common.last_change', 'Poslední změna stavu') && statusChangeHint
-                  ? { ...rawRow, hint: statusChangeHint }
-                  : rawRow;
-              return (
-                <div key={row.label} className="flex items-baseline justify-between gap-3">
-                  <dt className="text-muted-foreground text-xs">{row.label}</dt>
-                  <dd className="min-w-0 text-right font-medium">
-                    {/* Wrapping, not truncating: a date cut in half ("12. 8. 2026 0:…")
-                        is worse than a value on two lines, and `truncate` hid the end
-                        of every long row here - kernel, model, board. */}
-                    <span className="block [overflow-wrap:anywhere]" title={row.hint ?? undefined}>
-                      {row.value}
-                    </span>
-                    {/* Without this the row only said WHEN the status changed. What
-                      changed and why had to be dug out of the timeline below. */}
-                    {row.hint && <span className="text-muted-foreground block text-2xs font-normal">{row.hint}</span>}
-                  </dd>
-                </div>
-              );
-            })}
-          </dl>
-        </CardContent>
-      </Card>
+        {/* Right under the summary: it is the to-do list the summary only hints at. */}
+        {recommendations}
+      </div>
 
-      {/* Right under the summary: it is the to-do list the summary only hints at. */}
-      {recommendations && <div className="xl:col-span-12">{recommendations}</div>}
+      {/* Identity only (clutter-03): what the device IS and when it last spoke. */}
+      <Panel title={t('asset.info_title', 'Informace')} icon={Info} className="self-start xl:col-span-4">
+        <KeyValueList
+          rows={asset.info.map((row) => ({
+            id: row.label,
+            label: row.label,
+            value: row.value,
+            mono: !row.prose,
+            // What changed and why, under the time it changed - it used to be
+            // dug out of the timeline below.
+            hint:
+              row.label === t('common.last_change', 'Poslední změna stavu') && statusChangeHint
+                ? statusChangeHint
+                : row.hint,
+          }))}
+        />
+      </Panel>
+
+      {latencyWithAvailability
+        ? pair(latencyPanel, availability, 'xl:col-span-5', 'xl:col-span-7', true)
+        : pair(perfPanel, latencyPanel, 'xl:col-span-7', 'xl:col-span-5')}
+      {pair(
+        wanPanel,
+        (wifiPanel || clientsPanel) && (
+          <div className="flex min-w-0 flex-col gap-6">
+            {wifiPanel}
+            {clientsPanel}
+          </div>
+        ),
+        'xl:col-span-7',
+        'xl:col-span-5'
+      )}
+
+      {/* The wiring of the household itself. Only the OpenWrt agent reports a
+          switch, so nothing else gets a card that could only say "no data". */}
+      {d.agent_type === 'openwrt' && (
+        <div className="xl:col-span-12">
+          <RouterPortPanel
+            details={d}
+            reportedAt={asset.lastCheck ? Math.floor(Date.parse(asset.lastCheck) / 1000) || null : null}
+          />
+        </div>
+      )}
 
       {/* How good this monitor has actually been - the server has computed it
           in one request all along and only the public page ever asked. */}
-      <div className="xl:col-span-12">
-        <AvailabilityWindows monitorId={asset.id} />
-      </div>
+      {latencyWithAvailability
+        ? storagePanel && <div className="min-w-0 xl:col-span-12">{storagePanel}</div>
+        : pair(storagePanel, availability, 'xl:col-span-5', 'xl:col-span-7', true)}
 
-      <div className="xl:col-span-12">
-        <PerformanceCharts
-          data={charts.data}
-          error={charts.error}
-          loading={charts.loading}
-          onRetry={charts.reload}
-          range={range}
-          events={events}
-          monitorId={asset.id}
-          thresholds={asset.thresholds}
-          hasTimeSeries={asset.typeProfile.timeSeries}
-        />
-      </div>
+      {/* Only when it has something to say: an empty cell in the grid is a
+          double gap on the page. */}
+      {(charts.error ||
+        charts.loading ||
+        !plan ||
+        restCards.length > 0 ||
+        plan.flat.length > 0 ||
+        plan.others.length > 0) && (
+        <div className="xl:col-span-12">
+          <PerformanceCharts
+            plan={plan}
+            cards={restCards.map(decorate)}
+            error={charts.error}
+            loading={charts.loading}
+            onRetry={charts.reload}
+            range={range}
+            monitorId={asset.id}
+            hasTimeSeries={asset.typeProfile.timeSeries}
+          />
+        </div>
+      )}
 
-      <Card className="xl:col-span-5">
-        <CardHeader>
-          <CardTitle>{t('asset.last_measurements', 'Posledních 5 měření')}</CardTitle>
-          <CardDescription>
-            {t('asset.last_measurements_desc', 'Čerstvé kontroly včetně odezvy a místa měření.')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-1.5">
-          {events.length === 0 ? (
-            <p className="text-muted-foreground py-4 text-center text-sm">
-              {t('asset.no_measurements', 'Zatím neproběhla žádná kontrola.')}
-            </p>
-          ) : (
-            events.slice(0, 5).map((e) => (
-              <div key={e.id} className="flex items-center gap-2.5 rounded-md border border-border px-3 py-2">
+      <Panel
+        title={t('asset.last_measurements', 'Posledních 5 měření')}
+        hint={t('asset.last_measurements_desc', 'Čerstvé kontroly včetně odezvy a místa měření.')}
+        icon={Clock}
+        className="xl:col-span-5"
+        padding="sm"
+      >
+        {events.length === 0 ? (
+          <p className="text-muted-foreground py-4 text-center text-sm">
+            {t('asset.no_measurements', 'Zatím neproběhla žádná kontrola.')}
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-1.5">
+            {events.slice(0, 5).map((e) => (
+              <li key={e.id} className="bg-inset flex items-center gap-2.5 rounded-lg border border-border px-3 py-2">
                 <StatusDot variant={e.severity === 'info' ? 'paused' : e.severity} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-medium">{e.title}</p>
                   <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-2xs">
-                    <span className="font-mono">{e.at}</span>
+                    <span className="figure">{e.at}</span>
                     {/* The vantage point may be unrecorded - then nothing is printed. */}
                     {e.location && <span className="truncate">· {e.location}</span>}
                   </div>
                 </div>
-                <span className="shrink-0 font-mono text-xs font-semibold">
+                <span className="figure shrink-0 text-xs font-semibold">
                   {e.responseMs == null ? '—' : formatMs(e.responseMs)}
                 </span>
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
 
       {/* A type that never has a process ranking gets no card. One that has it
           somewhere else (a service watched by its server's agent) gets the
           pointer instead of "no agent is connected" - the agent IS connected,
           just one level up. */}
-      {asset.typeProfile.processes !== 'none' && (
-        <Card className="xl:col-span-3">
-          <CardHeader>
-            <CardTitle>{t('asset.tab_processes', 'Nejvytíženější procesy')}</CardTitle>
-          </CardHeader>
-          <CardContent className="px-0">
-            {asset.processes.length > 0 && (
-              <p className="text-2xs text-muted-foreground px-5 pb-2">
-                {t(
-                  'asset.processes_top_hint',
-                  'Agent hlásí 5 nejnáročnějších procesů podle CPU a 5 podle RAM z posledního reportu — není to kompletní výpis všeho, co na stroji běží.'
-                )}
+      {hasProcesses && (
+        <Panel
+          title={t('asset.tab_processes', 'Nejvytíženější procesy')}
+          icon={Cpu}
+          className="xl:col-span-3"
+          padding="none"
+        >
+          {asset.processes.length > 0 && (
+            <p className="text-2xs text-muted-foreground px-5 pb-2">
+              {t(
+                'asset.processes_top_hint',
+                'Agent hlásí 5 nejnáročnějších procesů podle CPU a 5 podle RAM z posledního reportu — není to kompletní výpis všeho, co na stroji běží.'
+              )}
+            </p>
+          )}
+          {asset.processes.length === 0 ? (
+            <div className="text-xs text-muted-foreground px-5 pt-2 pb-6 text-center">
+              <p>
+                {asset.typeProfile.processes === 'parent'
+                  ? t('asset.processes_on_parent', 'Procesy sbírá agent na serveru, pod kterým tato služba běží.')
+                  : asset.cpanelStats
+                    ? t(
+                        'asset.no_agent_cpanel_hint',
+                        'Bez VPS agenta - podrobnosti o zdrojích cPanelu jsou na záložce Procesy.'
+                      )
+                    : t('asset.no_agent_processes', 'Zatím není připojen agent pro výpis procesů.')}
               </p>
-            )}
-            {asset.processes.length === 0 ? (
-              <div className="text-xs text-muted-foreground px-5 py-6 text-center">
-                <p>
-                  {asset.typeProfile.processes === 'parent'
-                    ? t('asset.processes_on_parent', 'Procesy sbírá agent na serveru, pod kterým tato služba běží.')
-                    : asset.cpanelStats
-                      ? t(
-                          'asset.no_agent_cpanel_hint',
-                          'Bez VPS agenta - podrobnosti o zdrojích cPanelu jsou na záložce Procesy.'
-                        )
-                      : t('asset.no_agent_processes', 'Zatím není připojen agent pro výpis procesů.')}
-                </p>
-                {asset.typeProfile.processes === 'parent' && asset.parent && (
-                  <Link
-                    to={`/infrastructure/${asset.parent.id}`}
-                    className="text-primary mt-1.5 inline-block font-medium hover:underline"
-                  >
-                    {t('asset.processes_open_parent', { name: asset.parent.name }, `Otevřít ${asset.parent.name}`)}
-                  </Link>
-                )}
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="pl-5">{t('asset.process', 'Proces')}</TableHead>
-                    <TableHead className="text-right">CPU</TableHead>
-                    <TableHead className="pr-5 text-right">RAM</TableHead>
+              {asset.typeProfile.processes === 'parent' && asset.parent && (
+                <Link
+                  to={`/infrastructure/${asset.parent.id}`}
+                  className="text-link mt-1.5 inline-block font-medium hover:underline"
+                >
+                  {t('asset.processes_open_parent', { name: asset.parent.name }, `Otevřít ${asset.parent.name}`)}
+                </Link>
+              )}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="pl-5">{t('asset.process', 'Proces')}</TableHead>
+                  <TableHead className="text-right">CPU</TableHead>
+                  <TableHead className="pr-5 text-right">RAM</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {asset.processes.map((proc) => (
+                  <TableRow key={proc.name}>
+                    <TableCell className="pl-5 font-mono text-xs">{proc.name}</TableCell>
+                    <TableCell className="font-mono tabular-nums text-right">
+                      {proc.cpu != null ? formatPercent(proc.cpu, 1, lang) : '—'}
+                    </TableCell>
+                    <TableCell className="font-mono tabular-nums pr-5 text-right">
+                      {proc.memory != null ? `${proc.memory} MB` : '—'}
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {asset.processes.map((proc) => (
-                    <TableRow key={proc.name}>
-                      <TableCell className="pl-5 font-mono text-xs">{proc.name}</TableCell>
-                      <TableCell className="tabular-nums text-right">
-                        {proc.cpu != null ? formatPercent(proc.cpu, 1) : '—'}
-                      </TableCell>
-                      <TableCell className="tabular-nums pr-5 text-right">
-                        {proc.memory != null ? `${proc.memory} MB` : '—'}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </Panel>
       )}
 
-      <Card className="xl:col-span-4">
-        <CardHeader>
-          <CardTitle>{t('asset.detected_services', 'Detekované Služby / Porty')}</CardTitle>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-1 px-2">
-          {/* Besides the linked monitors we also show what the agent really reports:
-              listening ports and discovered (not-yet-monitored) services -
-              this data used to sit unused in the report. */}
-          {asset.related.length === 0 &&
-            (() => {
-              const ports: number[] = Array.isArray(asset.rawDetails?.ports) ? asset.rawDetails.ports : [];
-              const found: any[] = Array.isArray(asset.rawDetails?.discovered_services)
-                ? asset.rawDetails.discovered_services
-                : [];
-              if (ports.length === 0 && found.length === 0) {
-                return (
-                  <p className="text-xs text-muted-foreground px-3 py-6 text-center">
-                    {t('asset.no_related_services', 'Žádné navázané podslužby.')}
-                  </p>
-                );
-              }
+      <Panel
+        title={t('asset.detected_services', 'Detekované Služby / Porty')}
+        icon={Plug}
+        // The processes card's third of the row goes to it when the type has none.
+        className={hasProcesses ? 'xl:col-span-4' : 'xl:col-span-7'}
+        padding="sm"
+      >
+        {/* Besides the linked monitors we also show what the agent really reports:
+            listening ports and discovered (not-yet-monitored) services -
+            this data used to sit unused in the report. */}
+        {asset.related.length === 0 &&
+          (() => {
+            const ports: number[] = Array.isArray(d?.ports) ? d.ports : [];
+            const found: any[] = Array.isArray(d?.discovered_services) ? d.discovered_services : [];
+            if (ports.length === 0 && found.length === 0) {
               return (
-                <div className="space-y-3 px-3 py-2">
-                  {found.length > 0 && (
-                    <div className="space-y-1.5">
-                      <p className="text-2xs font-semibold text-muted-foreground uppercase tracking-wide">
-                        {t('asset.agent_found_services', 'Agent objevil běžící služby')}
-                      </p>
-                      {found.map((s, i) => (
-                        <div
-                          key={i}
-                          className="border-border/40 flex items-center justify-between gap-2 border-b py-1.5 text-xs last:border-0"
-                        >
-                          <span className="font-medium truncate">
-                            {s.name}
-                            {s.port ? <span className="text-muted-foreground font-mono">:{s.port}</span> : null}
-                          </span>
-                          <span className="text-muted-foreground font-mono shrink-0">
-                            {s.confidence != null ? `${s.confidence} %` : ''}
-                          </span>
-                        </div>
-                      ))}
-                      <p className="text-3xs text-muted-foreground">
-                        {t('asset.agent_found_hint', 'Sledovat je můžete jedním kliknutím v přehledu Infrastruktura.')}
-                      </p>
-                    </div>
-                  )}
-                  {ports.length > 0 && (
-                    <div className="space-y-1.5">
-                      <p className="text-2xs font-semibold text-muted-foreground uppercase tracking-wide">
-                        {t('asset.listening_ports', 'Naslouchající porty')}
-                      </p>
-                      <div className="flex flex-wrap gap-1.5">
-                        {ports.map((p) => (
-                          <span key={p} className="rounded-md bg-secondary px-2 py-0.5 font-mono text-2xs">
-                            {p}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <p className="text-xs text-muted-foreground px-3 py-6 text-center">
+                  {t('asset.no_related_services', 'Žádné navázané podslužby.')}
+                </p>
               );
-            })()}
-          {asset.related.length > 0 &&
-            asset.related.map((service) => {
-              const relatedStatusLabel: Record<MonitorStatus, string> = {
-                up: t('common.online', 'Online'),
-                down: t('common.offline', 'Offline'),
-                warning: t('common.warning', 'Varování'),
-                paused: t('common.paused', 'Pozastaveno'),
-                maintenance: t('common.maintenance', 'Údržba'),
-                unknown: t('status.unknown', 'Neznámý'),
-              };
-              return (
-                <div
-                  key={service.name}
-                  className="hover:bg-muted/40 border-border/40 flex items-center gap-3 border-b px-3 py-2 transition-colors last:border-0"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{service.name}</p>
-                    <p className="text-muted-foreground truncate text-xs">
-                      {service.kind} · {service.detail}
+            }
+            return (
+              <div className="space-y-3 px-1 py-1">
+                {found.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="micro-label">{t('asset.agent_found_services', 'Agent objevil běžící služby')}</p>
+                    {found.map((s, i) => (
+                      <div
+                        key={i}
+                        className="border-border/60 flex items-center justify-between gap-2 border-b py-1.5 text-xs last:border-0"
+                      >
+                        <span className="font-medium truncate">
+                          {s.name}
+                          {s.port ? <span className="text-muted-foreground font-mono">:{s.port}</span> : null}
+                        </span>
+                        <span className="text-muted-foreground figure shrink-0">
+                          {s.confidence != null ? `${s.confidence} %` : ''}
+                        </span>
+                      </div>
+                    ))}
+                    <p className="text-3xs text-muted-foreground">
+                      {t('asset.agent_found_hint', 'Sledovat je můžete jedním kliknutím v přehledu Infrastruktura.')}
                     </p>
                   </div>
-                  <Badge variant={statusVariant[service.status]} dot>
-                    {relatedStatusLabel[service.status]}
-                  </Badge>
+                )}
+                {ports.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="micro-label">{t('asset.listening_ports', 'Naslouchající porty')}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {ports.map((p) => (
+                        <span
+                          key={p}
+                          className="bg-inset rounded-md border border-border px-2 py-0.5 font-mono text-2xs"
+                        >
+                          {p}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        {asset.related.length > 0 && (
+          <ul className="flex flex-col gap-1.5">
+            {asset.related.map((service) => (
+              <li
+                key={service.name}
+                className="bg-inset flex items-center gap-3 rounded-lg border border-border px-3 py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{service.name}</p>
+                  <p className="text-muted-foreground truncate text-xs">
+                    {service.kind} · {service.detail}
+                  </p>
                 </div>
-              );
-            })}
-        </CardContent>
-      </Card>
+                <Pill tone={PILL_TONE[statusMeta(service.statusKey).variant]} dot size="sm">
+                  {statusLabel(service.statusKey, t)}
+                </Pill>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
     </div>
   );
 }
 
-/** Does the monitor carry network telemetry worth a Network tab? */
+const PILL_TONE: Record<ReturnType<typeof statusMeta>['variant'], PillTone> = {
+  up: 'up',
+  warning: 'warning',
+  down: 'down',
+  info: 'info',
+  paused: 'paused',
+  neutral: 'neutral',
+};
+
+/**
+ * Two panels side by side on a wide screen, each full width when the other
+ * is missing - a lone half-width card left a hole beside it. `stretch` lets
+ * both keep their own height (items-start) instead of the taller one's.
+ */
+function pair(a: React.ReactNode, b: React.ReactNode, aSpan: string, bSpan: string, stretch = false): React.ReactNode {
+  const has = (n: React.ReactNode) => n !== false && n !== null && n !== undefined;
+  if (!has(a) && !has(b)) return null;
+  if (!has(a)) return <div className="min-w-0 xl:col-span-12">{b}</div>;
+  if (!has(b)) return <div className="min-w-0 xl:col-span-12">{a}</div>;
+  return (
+    <>
+      <div className={cn('min-w-0', aSpan, stretch && 'self-start')}>{a}</div>
+      <div className={cn('min-w-0', bSpan, stretch && 'self-start')}>{b}</div>
+    </>
+  );
+}
+
+/** A router reports its line: protocol, state, echo, speed or uptime. */
+function hasWanData(d: Record<string, any>): boolean {
+  return d.wan_proto != null || d.wan_up != null || d.wan_internet != null || d.wan_link_mbit != null;
+}
+
+/**
+ * The overview's chart plan (charts-08): at most six featured cards by type,
+ * a flat one as one line, the rest by subsystem - with the WAN and LTE
+ * traffic stacked into one chart where the backup carried anything. null
+ * while the charts load, fail or come back empty.
+ */
+function overviewPlan(
+  rawData: ChartData[] | null,
+  kind: string,
+  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
+) {
+  if (!rawData || rawData.length === 0 || !rawData.some((c) => c.series.some((s) => s.points.length > 0))) return null;
+  // Both links on one chart, stacked. "Did the backup carry the traffic while
+  // the primary was down?" needed two cards and a mental overlay; stacked, the
+  // height is the total and each band is one link's share.
+  const wan = rawData.find((c) => c.id === 'net');
+  const lte = rawData.find((c) => c.id === 'net_lte');
+  const combined: ChartData | null =
+    wan && lte && lte.series[0]?.points.some((p) => p.v != null && p.v > 0)
+      ? {
+          id: 'net-combined',
+          title: t('asset.traffic_combined', 'Provoz po linkách (WAN + LTE)'),
+          window: wan.window,
+          yMax: null,
+          yMin: 0,
+          stacked: true,
+          series: [
+            { ...wan.series[0], label: t('net.link_primary', 'Primární (WAN)') },
+            { ...lte.series[0], label: t('net.link_backup', 'Záloha (LTE)') },
+          ],
+        }
+      : null;
+  return planOverview(rawData, kind, combined);
+}
+
+/**
+ * Monitor events as vertical markers in the charts - an outage or restart is
+ * visible right where the metric jumped. MySQL datetimes are parsed via the
+ * 'T' variant (Safari cannot handle a bare 'YYYY-MM-DD HH:MM').
+ */
+function eventMarkers(events: TimelineEvent[]): { t: number; label: string; severity: 'alert' | 'info' }[] {
+  return events
+    .map((e) => {
+      const ms = Date.parse(String(e.at).replace(' ', 'T'));
+      return Number.isNaN(ms)
+        ? null
+        : {
+            t: ms,
+            label: e.title,
+            // The severity the event list already carries, so an outage
+            // marker stands out from a routine note.
+            severity: e.severity === 'down' || e.severity === 'warning' ? ('alert' as const) : ('info' as const),
+          };
+    })
+    .filter((e): e is { t: number; label: string; severity: 'alert' | 'info' } => e != null);
+}
+
 /** The router has its own cards and its own recommendations. */
 function isRouterKind(kind: string | null | undefined): boolean {
   const upper = (kind || '').toUpperCase();
   return upper === 'ROUTER' || upper === 'OPENWRT';
+}
+
+/** A machine with an agent or a hosting account: its services tab is about storage. */
+function isServerKind(kind: string | null | undefined): boolean {
+  const upper = (kind || '').toUpperCase();
+  return upper === 'VPS' || upper === 'CPANEL';
+}
+
+/** A count on a tab, quieter than its name; nothing at zero. */
+function TabCount({ n }: { n: number }) {
+  if (n <= 0) return null;
+  return <span className="text-muted-foreground ml-1.5 text-2xs font-mono tabular-nums">{n}</span>;
 }
 
 function hasNetworkData(d: Record<string, any>): boolean {
@@ -1428,14 +1775,17 @@ function Row({
 }) {
   const missing = value == null || value === '';
   if (missing && !dash) return null;
-  const shown = <span className="text-right font-mono font-medium">{missing ? '—' : value}</span>;
+  const shown = (
+    // Mono with tabular digits, like every figure in the app (apps/site DESIGN.md).
+    <span className="figure text-right">{missing ? '—' : value}</span>
+  );
   return (
-    <div className="border-border/40 flex items-center justify-between gap-3 border-b py-1.5 text-xs last:border-0">
+    <div className="border-border flex items-center justify-between gap-3 border-b py-2 text-xs last:border-0">
       <span className="text-muted-foreground">{label}</span>
       {to ? (
         <Link
           to={to}
-          className="hover:text-primary focus-visible:ring-ring rounded transition-colors focus-visible:ring-2 focus-visible:outline-none"
+          className="hover:text-link focus-visible:ring-ring rounded transition-colors focus-visible:ring-2 focus-visible:outline-none"
           title={label}
         >
           {shown}
@@ -1447,13 +1797,47 @@ function Row({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+/** The Network tab's section anchors, so a link or a later summary can jump to one. */
+const NET_ANCHORS = { wan: 'net-wan', lte: 'net-lte', wifi: 'net-wifi', speed: 'net-speed' } as const;
+
+/**
+ * A titled block of the Network tab, a kit Panel (a labelled region). `id`
+ * makes it a jump target (W2-3): focusable without joining the tab order,
+ * and clear of the sticky tab bar.
+ */
+function Section({
+  title,
+  icon,
+  id,
+  children,
+}: {
+  title: string;
+  icon?: LucideIcon;
+  id?: string;
+  children: React.ReactNode;
+}) {
   return (
-    <Card className="p-4">
-      <h4 className="font-bold text-sm mb-2">{title}</h4>
+    <Panel
+      id={id}
+      tabIndex={id ? -1 : undefined}
+      title={title}
+      icon={icon}
+      padding="sm"
+      className="scroll-mt-20 outline-none"
+    >
       {children}
-    </Card>
+    </Panel>
   );
+}
+
+/** The modem's SIM state in words; a state this build does not know is printed as sent. */
+function simStateText(state: string, t: ReturnType<typeof useLanguage>['t']): string {
+  if (state === 'ready') return t('rsvc.sim_ready', 'připravená');
+  if (state === 'no_sim') return t('rsvc.lte_reason_no_sim', 'SIM karta nenalezena');
+  if (state === 'pin_required') return t('rsvc.lte_reason_pin', 'SIM čeká na PIN');
+  if (state === 'puk_required') return t('rsvc.lte_reason_puk', 'SIM zablokovaná (PUK)');
+  if (state === 'invalid') return t('rsvc.lte_reason_invalid', 'SIM odmítnuta sítí');
+  return state;
 }
 
 /** Bytes the way the reader would say them. */
@@ -1490,17 +1874,17 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
     };
   }, [monitorId]);
 
-  const title = `🔀 ${t('net.link_traffic_title', 'Provoz podle linky')}`;
+  const title = t('net.link_traffic_title', 'Provoz podle linky');
   if (data === undefined) {
     return (
-      <Section title={title}>
+      <Section icon={Split} title={title}>
         <LoadingState label={t('net.link_loading', 'Načítám…')} size="inline" />
       </Section>
     );
   }
   if (data === null) {
     return (
-      <Section title={title}>
+      <Section icon={Split} title={title}>
         <p className="text-xs text-muted-foreground">
           {t('net.link_failed', 'Provoz podle linky se nepodařilo načíst.')}
         </p>
@@ -1513,19 +1897,15 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
     { key: '7d', label: t('net.link_7d', '7 dní') },
     { key: '30d', label: t('net.link_30d', '30 dní') },
   ];
-  const cell = (side: LinkTrafficResponse['primary'], key: 'today' | '7d' | '30d') => {
-    if (!side) return '—';
-    const w = side[key];
-    if (!w) return t('net.link_no_data', 'zatím bez dat');
-    return `↓${formatBytesShort(w.rx_bytes) ?? '—'} ↑${formatBytesShort(w.tx_bytes) ?? '—'}`;
+  // Both directions of one link over the period; null = that side is not
+  // known or has no rows yet - named with a dash, never drawn as zero.
+  const total = (side: LinkTrafficResponse['primary'], key: 'today' | '7d' | '30d') => {
+    const w = side?.[key];
+    // Both directions or no total: one missing side would pass for "nothing that way".
+    if (!w || typeof w.rx_bytes !== 'number' || typeof w.tx_bytes !== 'number') return null;
+    return w.rx_bytes + w.tx_bytes;
   };
-  const fmtDuration = (s: number) => {
-    if (s < 60) return `${s} s`;
-    const d = Math.floor(s / 86400);
-    const h = Math.floor((s % 86400) / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    return d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}min` : `${m} min`;
-  };
+  const fmtDuration = (secs: number) => formatDuration(secs, lang);
   const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
   const fmtTs = (ts: number | null, fallback: string) =>
     ts == null ? fallback : new Date(ts * 1000).toLocaleString(locale, { dateStyle: 'short', timeStyle: 'short' });
@@ -1533,29 +1913,35 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
 
   return (
     <Section title={title}>
-      {/* Rows are separated the same way every other table on this page is -
-          three columns of a grid need the border on each cell, so it is applied
-          per cell rather than to a row element that does not exist here. */}
-      <div className="grid grid-cols-[auto_1fr_1fr] gap-x-3 text-xs">
-        <span className="border-border border-b pb-1" />
-        <span className="border-border border-b pb-1 font-medium">
-          {t('net.link_primary', 'Primární (WAN)')}
-          {data.primary ? <span className="text-muted-foreground font-mono"> · {data.primary.iface}</span> : null}
-        </span>
-        <span className="border-border border-b pb-1 font-medium">
-          {t('net.link_backup', 'Záloha (LTE)')}
-          {data.backup ? <span className="text-muted-foreground font-mono"> · {data.backup.iface}</span> : null}
-        </span>
-        {windows.map((w, i) => {
-          const line = i === windows.length - 1 ? 'py-1.5' : 'border-border/40 border-b py-1.5';
-          return (
-            <React.Fragment key={w.key}>
-              <span className={`text-muted-foreground ${line}`}>{w.label}</span>
-              <span className={`font-mono ${line}`}>{cell(data.primary, w.key)}</span>
-              <span className={`font-mono ${line}`}>{cell(data.backup, w.key)}</span>
-            </React.Fragment>
-          );
-        })}
+      {/* One WAN-vs-LTE bar per period (W2-3): which line carried the bytes is
+          a share of one whole, which three rows of "↓12 GB ↑1 GB" per side
+          made the reader work out. The interfaces are named once, in the legend. */}
+      <div className="space-y-2.5">
+        {windows.map((w) => (
+          <div key={w.key} className="space-y-1">
+            <p className="text-muted-foreground text-2xs">{w.label}</p>
+            <RatioBar
+              label={`${title} · ${w.label}`}
+              format={(v) => formatBytesShort(v) ?? '—'}
+              parts={[
+                {
+                  key: 'primary',
+                  label: data.primary
+                    ? `${t('net.link_primary', 'Primární (WAN)')} ${data.primary.iface}`
+                    : t('net.link_primary', 'Primární (WAN)'),
+                  value: total(data.primary, w.key),
+                },
+                {
+                  key: 'backup',
+                  label: data.backup
+                    ? `${t('net.link_backup', 'Záloha (LTE)')} ${data.backup.iface}`
+                    : t('net.link_backup', 'Záloha (LTE)'),
+                  value: total(data.backup, w.key),
+                },
+              ]}
+            />
+          </div>
+        ))}
       </div>
       {!data.primary && (
         <p className="text-xs text-muted-foreground mt-2">
@@ -1585,7 +1971,7 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
             .slice(-5)
             .reverse()
             .map((p, i) => (
-              <div key={i} className="font-mono flex justify-between gap-2">
+              <div key={i} className="flex justify-between gap-2 font-mono tabular-nums">
                 <span>
                   {fmtTs(p.from, t('net.link_since_before', 'před začátkem okna'))} →{' '}
                   {fmtTs(p.to, t('net.link_still', 'dosud'))}
@@ -1602,27 +1988,23 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
 function NetworkTab({
   d,
   monitorId,
-  reportedAt,
   recommendations,
-  wanBottleneck,
-  speedtest,
+  router,
 }: {
   d: Record<string, any>;
   /** This page's monitor: both the page to come back to and the owner of the metric. */
   monitorId: number;
-  /** When the server received the report (epoch seconds); the port panel judges staleness by it. */
-  reportedAt: number | null;
   /** The compact recommendations of one area, placed next to the card they are about (routers only). */
   recommendations?: (area: 'wifi' | 'wan') => React.ReactNode;
-  /** The WAN verdict card; it explains the speed tests below it, so it comes first. */
-  wanBottleneck?: React.ReactNode;
-  /** The router's speed tests belong with its network, not with its services. */
-  speedtest?: React.ReactNode;
+  /** A router: it gets the line speed card, fed by one bottleneck request. */
+  router?: boolean;
 }) {
   // Rows whose number is also a stored metric: measured every minute, kept for
   // months, and until now readable only as its latest value.
   const history = (key: string) => `/infrastructure/${monitorId}/metric/${monitorId}/${key}`;
   const { t } = useLanguage();
+  // One request for the line speed verdict, made only for a router.
+  const bottleneck = useWanBottleneck(router ? monitorId : null);
 
   // "x minutes ago" labels need the clock, which is impure by definition.
   // It is read once on mount into state - within a single render all the
@@ -1658,6 +2040,13 @@ function NetworkTab({
   const lteOverall = lteVerdict(d.lte_rsrp, d.lte_rsrq, d.lte_sinr);
   const logSpan = logWindow(d.log_window_secs);
   const wg: any[] = Array.isArray(d.wireguard_peers) ? d.wireguard_peers : [];
+  const mwan3: any[] = Array.isArray(d.mwan3_policies) ? d.mwan3_policies : [];
+  const hasLte = d.lte_up != null || d.lte_rsrp != null || d.lte_rssi != null;
+  const hasVpn =
+    wg.length > 0 ||
+    d.tailscale_up != null ||
+    (d.zerotier_networks != null && d.zerotier_networks > 0) ||
+    (d.openvpn_tunnels != null && d.openvpn_tunnels > 0);
   const ifaces: any[] = Array.isArray(d.interfaces) ? d.interfaces : [];
   const restarts =
     d.service_restarts && typeof d.service_restarts === 'object'
@@ -1671,30 +2060,33 @@ function NetworkTab({
 
   return (
     <div className="space-y-4">
-      {/* Wi-Fi first and full width: with the radio profile, the client lines
-          and five readings per radio it no longer fits a grid cell. Its
-          recommendations sit at its top, so the finding and the numbers it
-          came from are on one screen. */}
+      {/* Wi-Fi full width: with the radio profile, the client lines and five
+          readings per radio it does not fit a grid cell. Its recommendations
+          sit at its top, so the finding and the numbers it came from are on
+          one screen. */}
       {wifi.length > 0 && (
-        <Card className="space-y-3 p-4">
-          <h4 className="text-sm font-bold">
-            📶 Wi-Fi ({d.wifi_clients_count ?? wifi.reduce((s, r) => s + (Number(r.clients) || 0), 0)}{' '}
-            {t('net.clients', 'klientů')})
-          </h4>
+        <Panel
+          id={NET_ANCHORS.wifi}
+          tabIndex={-1}
+          icon={Wifi}
+          title={`Wi-Fi (${d.wifi_clients_count ?? wifi.reduce((s, r) => s + (Number(r.clients) || 0), 0)} ${t('net.clients', 'klientů')})`}
+          className="scroll-mt-20 outline-none"
+          bodyClassName="space-y-3"
+        >
           {recommendations?.('wifi')}
           <WifiRadioList radios={wifi} history={history} />
-        </Card>
+        </Panel>
       )}
       {recommendations?.('wan')}
-      {wanBottleneck}
-      {speedtest}
-      {/* The wiring of the household itself. Only the OpenWrt agent reports a
-          switch, so nothing else gets a card that could only say "no data". */}
-      {d.agent_type === 'openwrt' && <RouterPortPanel details={d} reportedAt={reportedAt} />}
+      {router && <WanBottleneckCard monitorId={monitorId} source={bottleneck} id={NET_ANCHORS.speed} />}
+      {/* The port front panel moved to the overview (NetPulse device page): the
+          wiring is part of what the device IS, not a network detail. */}
 
-      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-3">
+      {/* items-start: a short card keeps its height instead of stretching to
+          the tallest one in its row (W2-3). */}
+      <div className="grid items-start gap-4 lg:grid-cols-2 xl:grid-cols-3">
         {(d.wan_proto != null || d.wan_up != null || d.wan_internet != null) && (
-          <Section title={`🌐 ${t('net.wan_title', 'WAN připojení')}`}>
+          <Section id={NET_ANCHORS.wan} icon={Globe} title={t('net.wan_title', 'WAN připojení')}>
             <Row
               label={t('common.status', 'Stav')}
               value={
@@ -1717,12 +2109,59 @@ function NetworkTab({
                 them, which read as a perfectly stable line (G24). */}
             <Row label={t('net.reconnects', 'Reconnecty (od startu)')} value={d.wan_reconnect_count} dash />
             <Row label={t('net.last_reconnect', 'Poslední reconnect')} value={fmtAgo(d.wan_last_reconnect)} />
+            {/* The echo bound to the WAN device - what tells "up" from "up and on the internet". */}
+            <Row
+              label={t('net.wan_internet', 'Ping ven přes WAN')}
+              value={
+                d.wan_internet == null
+                  ? null
+                  : d.wan_internet
+                    ? t('net.wan_internet_ok', 'odpovídá')
+                    : t('net.wan_internet_fail', 'neodpovídá')
+              }
+            />
+            {/* The negotiated port speed - a gigabit port dropped to 100 Mbit shows here. */}
+            <Row
+              label={t('net.port_speed', 'Rychlost portu')}
+              value={d.wan_link_mbit != null ? `${d.wan_link_mbit} Mbit/s` : null}
+            />
+            <Row
+              label={t('rsvc.wan_latency', 'Odezva k bráně')}
+              value={d.wan_latency_ms != null ? `${d.wan_latency_ms} ms` : null}
+            />
             {d.mwan3_active_gw != null && <Row label="mwan3" value={String(d.mwan3_active_gw)} />}
+            {mwan3.length > 0 && (
+              <Row
+                label={t('rsvc.mwan3', 'Multi-WAN (mwan3)')}
+                value={mwan3
+                  .filter((p: any) => p?.interface)
+                  .map((p: any) => `${p.interface}: ${p.status ?? '—'}`)
+                  .join(' · ')}
+              />
+            )}
+            {/* The shaper sits on the WAN, so its rows do too (W2-3 split "SQM & LTE"). */}
+            {d.sqm_enabled != null && (
+              <Row
+                label="SQM"
+                value={
+                  d.sqm_enabled
+                    ? `${t('common.online', 'Online')}${d.sqm_download_kbps ? ` · ↓${Math.round(d.sqm_download_kbps / 1000)} Mbit/s` : ''}${d.sqm_upload_kbps ? ` ↑${Math.round(d.sqm_upload_kbps / 1000)} Mbit/s` : ''}`
+                    : t('net.sqm_off', 'Vypnuto')
+                }
+              />
+            )}
+            <Row label={t('net.sqm_dropped', 'SQM zahozeno')} value={d.sqm_dropped} />
+            <Row label="SQM ECN" value={d.sqm_ecn != null ? (d.sqm_ecn ? 'ECN' : 'noECN') : null} />
+            {d.sqm_enabled === false && (
+              <p className="text-muted-foreground pt-1 text-2xs leading-relaxed">
+                {t('rsvc.sqm_off_hint', 'Bez SQM se při plném vytížení linky zhoršuje odezva (bufferbloat).')}
+              </p>
+            )}
           </Section>
         )}
 
         {(d.lan_subnet != null || d.dhcp_leases_count != null) && (
-          <Section title={`🏠 ${t('net.lan_title', 'LAN & DHCP')}`}>
+          <Section icon={House} title={t('net.lan_title', 'LAN & DHCP')}>
             <Row label={t('net.subnet', 'Subnet')} value={d.lan_subnet} />
             <Row
               label={t('net.dhcp_leases', 'Aktivní DHCP lease')}
@@ -1742,7 +2181,7 @@ function NetworkTab({
             gone the section has to survive an unknown engine - and a resolver
             that answers nothing is exactly when it must be on the page. */}
         {(d.dns_engine != null || d.dns_resolver_ok != null || d.dns_queries != null || d.dns_latency_ms != null) && (
-          <Section title="🧭 DNS">
+          <Section icon={Compass} title="DNS">
             <Row label={t('net.dns_engine', 'Resolver')} value={d.dns_engine} dash />
             {'dns_resolver_ok' in d && (
               <Row label={t('net.dns_resolver', 'DNS resolver')} value={dnsResolverText(d, t)} dash />
@@ -1761,8 +2200,19 @@ function NetworkTab({
           </Section>
         )}
 
-        {(d.fw_accepted != null || d.conntrack_pct != null) && (
-          <Section title={`🛡 ${t('net.fw_title', 'Firewall & Conntrack')}`}>
+        {(d.fw_accepted != null || d.conntrack_pct != null || d.firewall_enabled != null) && (
+          <Section icon={Shield} title={t('net.fw_title', 'Firewall & Conntrack')}>
+            {/* Whether the firewall runs at all - the old service tile said it, the counters below only imply it. */}
+            <Row
+              label={t('common.status', 'Stav')}
+              value={
+                d.firewall_enabled == null
+                  ? null
+                  : d.firewall_enabled
+                    ? t('rsvc.active', 'Aktivní')
+                    : t('rsvc.inactive', 'Vypnutý')
+              }
+            />
             <Row label={t('net.fw_accepted', 'Přijato paketů')} value={d.fw_accepted} to={history('fw_accepted')} />
             <Row label={t('net.fw_dropped', 'Zahozeno')} value={d.fw_dropped} to={history('fw_dropped')} />
             <Row label={t('net.fw_rejected', 'Odmítnuto')} value={d.fw_rejected} to={history('fw_rejected')} />
@@ -1777,8 +2227,13 @@ function NetworkTab({
           </Section>
         )}
 
-        {wg.length > 0 && (
-          <Section title={`🔒 WireGuard (${wg.length})`}>
+        {/* Every tunnel in one card (W2-3): WireGuard used to have its own,
+            Tailscale and ZeroTier sat under "SQM & LTE", OpenVPN under "Systém". */}
+        {hasVpn && (
+          <Section icon={Lock} title={t('net.vpn_title', 'VPN')}>
+            {wg.length > 0 && (
+              <p className="text-muted-foreground pt-0.5 text-2xs font-semibold">WireGuard ({wg.length})</p>
+            )}
             {wg.map((p, i) => (
               <div key={i} className="py-1.5 border-b border-border/40 last:border-0 text-xs">
                 <div className="flex items-center justify-between gap-2">
@@ -1797,11 +2252,27 @@ function NetworkTab({
                 )}
               </div>
             ))}
+            <Row
+              label="Tailscale"
+              value={
+                d.tailscale_up != null
+                  ? `${d.tailscale_up ? t('common.online', 'Online') : t('common.offline', 'Offline')}${d.tailscale_peers != null ? ` · ${d.tailscale_peers} peerů` : ''}`
+                  : null
+              }
+            />
+            <Row
+              label="ZeroTier"
+              value={d.zerotier_networks != null && d.zerotier_networks > 0 ? `${d.zerotier_networks}× síť` : null}
+            />
+            <Row
+              label="OpenVPN"
+              value={d.openvpn_tunnels != null && d.openvpn_tunnels > 0 ? `${d.openvpn_tunnels}× tunel` : null}
+            />
           </Section>
         )}
 
         {ifaces.length > 0 && (
-          <Section title={`🔌 ${t('net.ifaces_title', 'Rozhraní')} (${ifaces.length})`}>
+          <Section icon={Plug} title={`${t('net.ifaces_title', 'Rozhraní')} (${ifaces.length})`}>
             {ifaces.map((it, i) => (
               <div
                 key={i}
@@ -1832,20 +2303,8 @@ function NetworkTab({
           the only reader, and never drawn. */}
         <InterfaceTrafficDaily monitorId={monitorId} />
 
-        {(d.sqm_enabled != null || d.lte_rsrp != null || d.lte_up != null) && (
-          <Section title={`⚙️ ${t('net.link_title', 'SQM & LTE')}`}>
-            {d.sqm_enabled != null && (
-              <Row
-                label="SQM"
-                value={
-                  d.sqm_enabled
-                    ? `${t('common.online', 'Online')}${d.sqm_download_kbps ? ` · ↓${Math.round(d.sqm_download_kbps / 1000)} Mb/s` : ''}${d.sqm_upload_kbps ? ` ↑${Math.round(d.sqm_upload_kbps / 1000)} Mb/s` : ''}`
-                    : t('net.sqm_off', 'Vypnuto')
-                }
-              />
-            )}
-            <Row label={t('net.sqm_dropped', 'SQM zahozeno')} value={d.sqm_dropped} />
-            <Row label="SQM ECN" value={d.sqm_ecn != null ? (d.sqm_ecn ? 'ECN' : 'noECN') : null} />
+        {hasLte && (
+          <Section id={NET_ANCHORS.lte} icon={RadioTower} title={t('net.lte_backup', 'LTE záloha')}>
             {/* The connection is detectable even without ModemManager (ubus
               the signal does not - hence reported separately, and missing metrics
               stay empty instead of an excuse. */}
@@ -1864,7 +2323,7 @@ function NetworkTab({
               }
             />
             <Row
-              label={t('net.lte_backup', 'LTE záloha')}
+              label={t('net.lte_backup_state', 'Stav zálohy')}
               value={(() => {
                 const b = lteBackupState(d);
                 if (b.ok === true) return t('net.lte_backup_ok', 'Funkční - modem přihlášen, SIM připravená');
@@ -1928,34 +2387,69 @@ function NetworkTab({
               label={t('net.lte_band', 'Pásmo / operátor')}
               value={[d.lte_band, d.lte_carrier].filter(Boolean).join(' · ') || null}
             />
-            {d.lte_up === true && d.lte_rsrp == null && (
-              <p className="text-muted-foreground col-span-full text-2xs leading-relaxed">
+            {/* Only when the modem said nothing about the signal at all: RSSI
+                without RSRP is a modem that answers, not a missing package. */}
+            {d.lte_up === true &&
+              d.lte_rsrp == null &&
+              d.lte_rssi == null &&
+              d.lte_rsrq == null &&
+              d.lte_sinr == null && (
+                <p className="text-muted-foreground col-span-full text-2xs leading-relaxed">
+                  {t(
+                    'net.lte_no_signal_data',
+                    'Spojení běží, ale sílu signálu router nehlásí — modem není dostupný přes ModemManager. Doinstalováním balíčku umodem-manager (nebo uqmi) začne agent hlásit i RSRP, RSRQ a pásmo.'
+                  )}
+                </p>
+              )}
+            {/* What the modem says about the SIM and the network - the service
+                tile of the old "Služby" tab carried these (W2-3). */}
+            <Row
+              label="SIM"
+              value={
+                typeof d.lte_sim_state === 'string'
+                  ? `${simStateText(d.lte_sim_state, t)}${
+                      d.lte_sim_state === 'pin_required' && d.lte_sim_pin_left != null
+                        ? ` (${t('rsvc.pin_attempts', { count: d.lte_sim_pin_left }, `zbývá pokusů: ${d.lte_sim_pin_left}`)})`
+                        : ''
+                    }`
+                  : null
+              }
+            />
+            <Row
+              label={t('rsvc.registration', 'Registrace v síti')}
+              value={
+                d.lte_connected == null
+                  ? null
+                  : `${d.lte_connected ? t('rsvc.registered', 'přihlášen') : t('rsvc.not_registered', 'nepřihlášen')}${
+                      d.lte_conn_code != null ? ` (${d.lte_conn_code})` : ''
+                    }`
+              }
+            />
+            <Row label="RSSI" value={d.lte_rssi != null ? `${d.lte_rssi} dBm` : null} />
+            <Row label={t('rsvc.bandwidth', 'Šířka pásma')} value={d.lte_bandwidth || null} />
+            <Row
+              label={t('rsvc.cell', 'Buňka')}
+              value={d.lte_cell_id != null ? `${d.lte_cell_id}${d.lte_pci != null ? ` · PCI ${d.lte_pci}` : ''}` : null}
+            />
+            <Row label="PLMN" value={d.lte_plmn ?? null} />
+            {/* Up while the modem says nothing about the SIM is the exact shape of
+                the HiLink bug: unverified, never OK. RSSI without RSRP is a modem
+                that fills one tag and not the other - not a missing package. */}
+            {lteBackupState(d).ok === null && d.lte_up === true ? (
+              <p className="text-muted-foreground pt-1 text-2xs leading-relaxed">
                 {t(
-                  'net.lte_no_signal_data',
-                  'Spojení běží, ale sílu signálu router nehlásí — modem není dostupný přes ModemManager. Doinstalováním balíčku umodem-manager (nebo uqmi) začne agent hlásit i RSRP, RSRQ a pásmo.'
+                  'rsvc.lte_unverified_note',
+                  'Rozhraní k modemu běží, ale modem nehlásí stav SIM ani registraci - zálohu nelze potvrdit. Bez SIM nebo se špatným PINem vypadá rozhraní úplně stejně.'
                 )}
               </p>
-            )}
-            <Row
-              label="Tailscale"
-              value={
-                d.tailscale_up != null
-                  ? `${d.tailscale_up ? t('common.online', 'Online') : t('common.offline', 'Offline')}${d.tailscale_peers != null ? ` · ${d.tailscale_peers} peerů` : ''}`
-                  : null
-              }
-            />
-            <Row
-              label="ZeroTier"
-              value={d.zerotier_networks != null && d.zerotier_networks > 0 ? `${d.zerotier_networks}× síť` : null}
-            />
-            <Row
-              label="UPS"
-              value={
-                d.ups_status != null
-                  ? `${d.ups_status}${d.ups_battery_pct != null ? ` · baterie ${d.ups_battery_pct} %` : ''}`
-                  : null
-              }
-            />
+            ) : d.lte_up === true && d.lte_rsrp == null && d.lte_rssi != null ? (
+              <p className="text-muted-foreground pt-1 text-2xs leading-relaxed">
+                {t(
+                  'rsvc.lte_rssi_only',
+                  'Modem hlásí RSSI, ale ne RSRP — tuhle hodnotu prostě nevyplňuje. Pro sílu signálu se řiďte RSSI.'
+                )}
+              </p>
+            ) : null}
           </Section>
         )}
 
@@ -1964,7 +2458,7 @@ function NetworkTab({
           restarts.length > 0 ||
           d.entropy != null ||
           d.agent_run_ms != null) && (
-          <Section title={`🧰 ${t('net.sys_title', 'Systém & Služby')}`}>
+          <Section icon={Server} title={t('net.sys_title', 'Systém & Služby')}>
             <Row
               label={t('net.packages', 'Balíčky (instalované / aktualizace)')}
               value={
@@ -2025,8 +2519,12 @@ function NetworkTab({
               }
             />
             <Row
-              label="OpenVPN"
-              value={d.openvpn_tunnels != null && d.openvpn_tunnels > 0 ? `${d.openvpn_tunnels}× tunel` : null}
+              label="UPS"
+              value={
+                d.ups_status != null
+                  ? `${d.ups_status}${d.ups_battery_pct != null ? ` · baterie ${d.ups_battery_pct} %` : ''}`
+                  : null
+              }
             />
             <Row
               label={t('net.usb_devices', 'USB zařízení')}
@@ -2058,20 +2556,15 @@ function NetworkTab({
  * next report (within ~1 min); the result then appears in the system timeline.
  * restart_service asks for the service name (suggested from the monitor's watched processes).
  */
-function ActionsMenu({ asset }: { asset: AssetDetail }) {
+/**
+ * Remote actions as labels and one trigger, shared by the desktop "Akce" menu
+ * and the phone's overflow menu (W2-2): the prompt, the confirmation for a
+ * reboot and the queued/failed message are the same wherever it is clicked.
+ */
+function useRemoteActions(asset: AssetDetail) {
   const { t } = useLanguage();
-  const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const [result, setResult] = React.useState<{ ok: boolean; text: string } | null>(null);
-  const wrapRef = React.useRef<HTMLDivElement>(null);
-
-  React.useEffect(() => {
-    const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, []);
 
   const labels: Record<string, string> = {
     restart_wan: t('asset.ra_restart_wan', 'Restart WAN'),
@@ -2083,7 +2576,6 @@ function ActionsMenu({ asset }: { asset: AssetDetail }) {
   };
 
   const trigger = async (action: string) => {
-    setOpen(false);
     let serviceName: string | undefined;
     if (action === 'restart_service') {
       const suggestion = (asset.monitoredProcesses ?? '').split(',')[0]?.trim() || '';
@@ -2135,6 +2627,27 @@ function ActionsMenu({ asset }: { asset: AssetDetail }) {
     }
   };
 
+  return { labels, trigger, busy, result };
+}
+
+function ActionsMenu({ asset }: { asset: AssetDetail }) {
+  const { t } = useLanguage();
+  const [open, setOpen] = React.useState(false);
+  const { labels, trigger: run, busy, result } = useRemoteActions(asset);
+  const wrapRef = React.useRef<HTMLDivElement>(null);
+  const trigger = (action: string) => {
+    setOpen(false);
+    void run(action);
+  };
+
+  React.useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, []);
+
   return (
     <div className="relative" ref={wrapRef}>
       <Button variant="outline" size="sm" disabled={busy} onClick={() => setOpen((o) => !o)}>
@@ -2165,74 +2678,6 @@ function ActionsMenu({ asset }: { asset: AssetDetail }) {
         </p>
       )}
     </div>
-  );
-}
-
-function HealthScoreTile({ score }: { score: number }) {
-  const { t } = useLanguage();
-  const label =
-    score >= 90
-      ? t('asset.score_excellent', 'Výborné')
-      : score >= 70
-        ? t('asset.score_good', 'Dobré')
-        : t('asset.score_poor', 'Vyžaduje pozornost');
-  const toneCls = score >= 90 ? 'text-up' : score >= 70 ? 'text-warning' : 'text-down';
-  return (
-    <Card className="p-3.5 flex flex-col gap-1">
-      <p className="text-xs text-muted-foreground font-medium flex items-center gap-1.5">
-        <ShieldCheck className={cn('size-3.5', toneCls)} /> {t('asset.health_score_label', 'Health Score')}
-      </p>
-      <div className="flex items-baseline gap-1">
-        <span className={cn('tabular-nums text-xl font-bold tracking-tight', toneCls)}>{score}</span>
-        <span className="text-muted-foreground text-xs font-medium">/ 100</span>
-      </div>
-      <p className={cn('text-2xs font-semibold', toneCls)}>{label}</p>
-    </Card>
-  );
-}
-
-/** The same tokens the sparkline strokes with, so a tile reads as one thing. */
-const TONE_TEXT: Record<NonNullable<HealthMetric['tone']>, string> = {
-  latency: 'text-chart-latency',
-  cpu: 'text-chart-cpu',
-  memory: 'text-chart-memory',
-  disk: 'text-chart-disk',
-  temperature: 'text-chart-temperature',
-};
-
-function HealthCard({ metric }: { metric: HealthMetric }) {
-  return (
-    <Card className="p-3.5 flex flex-col gap-1">
-      <p className="text-xs text-muted-foreground font-medium">{metric.label}</p>
-      <div className="flex items-baseline gap-1.5">
-        {/* One metric, one colour. The number used to be picked from a
-            hand-written hue ladder (CPU amber) while the trace right below it
-            used the chart token (CPU green), so the tile contradicted itself. */}
-        <p
-          className={cn('text-base font-bold', metric.tone ? `${TONE_TEXT[metric.tone]} font-mono` : 'text-foreground')}
-        >
-          {metric.value}
-        </p>
-        {metric.delta && (
-          <span
-            className={cn(
-              'tabular-nums text-2xs font-semibold',
-              metric.delta.good === null ? 'text-muted-foreground' : metric.delta.good ? 'text-up' : 'text-down'
-            )}
-          >
-            {metric.delta.direction === 'up' ? '↑' : '↓'} {metric.delta.pct} %
-          </span>
-        )}
-      </div>
-      {/* An average that hides one saturated core is the most misread number
-          on a router page - the line says so right under it. */}
-      {metric.hint && <p className="text-muted-foreground text-2xs">{metric.hint}</p>}
-      {metric.series && metric.tone && (
-        <div className="mt-auto pt-0.5">
-          <Sparkline data={metric.series} tone={metric.tone} className="h-7 w-full" />
-        </div>
-      )}
-    </Card>
   );
 }
 
@@ -2270,58 +2715,30 @@ function withBands(
 }
 
 function PerformanceCharts({
-  data: rawData,
+  plan,
+  cards,
   error,
   loading,
   range,
-  events = [],
   monitorId,
-  thresholds,
   hasTimeSeries = true,
   onRetry,
 }: {
-  data: ChartData[] | null;
+  /** The page's chart plan; null = nothing measured (or still loading, or failed). */
+  plan: ReturnType<typeof overviewPlan>;
+  /** The featured cards the panels above did not take, decorated with bands and events. */
+  cards: ChartData[];
   error: Error | null;
   loading: boolean;
   /** Refetches after a failure; the error state offers it as "try again". */
   onRetry?: () => void;
   range: TimeRange;
-  events?: TimelineEvent[];
   /** This page's monitor; the metric detail (Level 3) links back to it. */
   monitorId: number;
-  /** The monitor's effective limits, so the charts show the same line the alerts use. */
-  thresholds?: { cpu: number | null; ram: number | null; hdd: number | null };
   /** False = this monitor TYPE stores no metric history, so "no data" is not news. */
   hasTimeSeries?: boolean;
 }) {
-  const { t } = useLanguage();
-
-  // Monitor events as vertical markers in ALL charts - an outage or restart is
-  // visible right where the metric jumped. MySQL datetimes are parsed via the
-  // 'T' variant (Safari cannot handle a bare 'YYYY-MM-DD HH:MM').
-  const chartEvents = React.useMemo(() => {
-    return events
-      .map((e) => {
-        const ms = Date.parse(String(e.at).replace(' ', 'T'));
-        return Number.isNaN(ms)
-          ? null
-          : {
-              t: ms,
-              label: e.title,
-              // The severity the event list already carries, so an outage
-              // marker stands out from a routine note.
-              severity: e.severity === 'down' || e.severity === 'warning' ? ('alert' as const) : ('info' as const),
-            };
-      })
-      .filter((e): e is { t: number; label: string; severity: 'alert' | 'info' } => e != null);
-  }, [events]);
-
-  const data = React.useMemo(() => {
-    if (rawData && rawData.length > 0 && rawData.some((c) => c.series.some((s) => s.points.length > 0))) {
-      return rawData;
-    }
-    return null;
-  }, [rawData]);
+  const { t, lang } = useLanguage();
 
   // A failed request is never "no data": the empty copy below is reserved for
   // a server that answered and had nothing measured.
@@ -2341,15 +2758,16 @@ function PerformanceCharts({
 
   if (loading) {
     return (
-      <div className="grid gap-4 lg:grid-cols-2">
-        {['cpu', 'ram', 'hdd', 'latency'].map((key) => (
-          <div key={key} className="p-6 rounded-xl bg-card border border-border h-48 animate-pulse" />
+      <div aria-busy="true" className="grid gap-4 lg:grid-cols-2">
+        {['cpu', 'ram'].map((key) => (
+          <Skeleton key={key} className="h-48 w-full rounded-xl" />
         ))}
+        <span className="sr-only">{t('metric.loading', 'Načítám měření…')}</span>
       </div>
     );
   }
 
-  if (!data || data.length === 0) {
+  if (!plan) {
     // A type that never stores a time series (an agent-side service check, a
     // heartbeat) used to get a full-width box announcing an empty database.
     // Nothing is missing there, so one line says it and the page moves on.
@@ -2361,92 +2779,117 @@ function PerformanceCharts({
       );
     }
     return (
-      <div className="p-8 rounded-lg bg-secondary/30 border border-border text-center text-xs text-muted-foreground space-y-1">
-        <p className="font-semibold text-foreground text-sm">
-          {t('asset.no_chart_data', 'Data pro tento monitor nejsou v databázi k dispozici')}
-        </p>
-        <p>
-          {t(
-            'asset.no_chart_data_desc',
-            { range },
-            `Nebyla nalezena žádná naměřená historie časových řad pro zadaný rozsah ${range}.`
-          )}
-        </p>
-      </div>
+      <EmptyState
+        boxed
+        title={
+          <span className="text-foreground">
+            {t('asset.no_chart_data', 'Data pro tento monitor nejsou v databázi k dispozici')}
+          </span>
+        }
+        hint={t(
+          'asset.no_chart_data_desc',
+          { range },
+          `Nebyla nalezena žádná naměřená historie časových řad pro zadaný rozsah ${range}.`
+        )}
+      />
     );
   }
 
-  // Cards for the curated set, a compact list for everything else the device
-  // reports. `featured` undefined means an older source that only ever
-  // returned the curated set - it keeps its cards.
-  const featured = data.filter((c) => c.featured !== false);
-  const others = data.filter((c) => c.featured === false);
-
-  // Both links on one chart, stacked. "Did the backup carry the traffic while
-  // the primary was down?" needed two cards and a mental overlay; stacked, the
-  // height is the total and each band is one link's share.
-  const wan = featured.find((c) => c.id === 'net');
-  const lte = featured.find((c) => c.id === 'net_lte');
-  const combined: ChartData | null =
-    wan && lte && lte.series[0]?.points.some((p) => p.v != null && p.v > 0)
-      ? {
-          id: 'net-combined',
-          title: t('asset.traffic_combined', 'Provoz po linkách (WAN + LTE)'),
-          yMax: null,
-          yMin: 0,
-          stacked: true,
-          series: [
-            { ...wan.series[0], label: t('net.link_primary', 'Primární (WAN)') },
-            { ...lte.series[0], label: t('net.link_backup', 'Záloha (LTE)') },
-          ],
-        }
-      : null;
+  const { flat, others } = plan;
+  const metricHref = (id: string) => `/infrastructure/${monitorId}/metric/${monitorId}/${id}`;
 
   return (
     <div className="flex flex-col gap-4">
-      {combined && <ChartCard data={combined} group="asset-performance" />}
+      {cards.length > 0 && (
+        <div className="grid gap-4 lg:grid-cols-2">
+          {cards.map((chart) => (
+            // Link through to Level 3; the combined chart has no single metric behind it.
+            <ChartCard
+              key={chart.id}
+              data={chart}
+              group="asset-performance"
+              to={chart.id === 'net-combined' ? undefined : metricHref(chart.id)}
+            />
+          ))}
+        </div>
+      )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {featured.map((chart) => (
-          // Link through to Level 3. The legacy page had a metric detail too, but
-          // there was no way to reach it from here - and what cannot be reached
-          // does not exist.
-          <ChartCard
-            key={chart.id}
-            data={withBands(
-              chartEvents.length > 0 ? { ...chart, events: [...(chart.events ?? []), ...chartEvents] } : chart,
-              thresholds,
-              t
-            )}
-            group="asset-performance"
-            to={`/infrastructure/${monitorId}/metric/${monitorId}/${chart.id}`}
-          />
-        ))}
-      </div>
+      {flat.length > 0 && (
+        <Panel padding="sm">
+          <ul
+            className="divide-border divide-y text-xs"
+            aria-label={t('asset.flat_title', 'Beze změny v tomto období')}
+          >
+            {flat.map((chart) => {
+              const r = valueRange(chart);
+              const unit = chart.series[0]?.unit ?? '';
+              const shownValue =
+                r == null
+                  ? '—'
+                  : r.min === r.max
+                    ? formatMetricValue(r.min, unit, lang)
+                    : `${formatMetricValue(r.min, unit, lang)} – ${formatMetricValue(r.max, unit, lang)}`;
+              return (
+                <li key={chart.id}>
+                  <Link
+                    to={chart.id === 'net-combined' ? metricHref('net') : metricHref(chart.id)}
+                    className="hover:bg-raised focus-visible:ring-ring -mx-2 flex items-baseline justify-between gap-3 rounded-md px-2 py-1.5 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                  >
+                    <span className="font-medium">{chart.title}</span>
+                    <span className="text-muted-foreground figure">
+                      {t('asset.flat_value', { value: shownValue }, `${shownValue}, beze změny`)}
+                    </span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </Panel>
+      )}
 
       {others.length > 0 && (
-        <Card className="space-y-3 p-5">
-          <div>
-            <h3 className="text-sm font-semibold">
-              {t('asset.more_metrics', { count: others.length }, `Další měřené metriky (${others.length})`)}
-            </h3>
-            <p className="text-muted-foreground text-2xs leading-relaxed">
-              {t(
-                'asset.more_metrics_hint',
-                'Tohle zařízení je hlásí každou minutu a historie se ukládá. Klikněte na kteroukoli pro graf, rozložení hodnot a souvislosti.'
-              )}
-            </p>
+        <Panel
+          title={t('asset.more_metrics', { count: others.length }, `Další měřené metriky (${others.length})`)}
+          hint={t(
+            'asset.more_metrics_hint',
+            'Tohle zařízení je hlásí každou minutu a historie se ukládá. Klikněte na kteroukoli pro graf, rozložení hodnot a souvislosti.'
+          )}
+          icon={Activity}
+        >
+          {/* By subsystem (C-13): a closed group still names its count and the
+              metric that moved most, and the flat ones fold into one line. */}
+          <div className="space-y-2">
+            {groupMetrics(others).map((group) => {
+              // grid-cols-1 (minmax(0, 1fr)) on a phone: the implicit column
+              // grew to the longest metric name and pushed the rows past the
+              // card (V-12); truncation needs a column that may shrink.
+              const rows = (list: ChartData[]) => (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {list.map((chart) => (
+                    <MetricRow key={chart.id} chart={chart} to={metricHref(chart.id)} />
+                  ))}
+                </div>
+              );
+              const notable = group.notable;
+              return (
+                <MetricGroup
+                  key={group.subsystem}
+                  title={subsystemTitle(group.subsystem, t)}
+                  count={group.changed.length + group.unchanged.length}
+                  notable={
+                    notable
+                      ? `${notable.title}: ${formatMetricValue(latestValue(notable), notable.series[0]?.unit ?? '', lang)}`
+                      : undefined
+                  }
+                  unchangedCount={group.unchanged.length}
+                  unchanged={rows(group.unchanged)}
+                >
+                  {group.changed.length > 0 && rows(group.changed)}
+                </MetricGroup>
+              );
+            })}
           </div>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {others.map((chart) => (
-              <MetricRow
-                key={chart.id}
-                chart={chart}
-                to={`/infrastructure/${monitorId}/metric/${monitorId}/${chart.id}`}
-              />
-            ))}
-          </div>
-        </Card>
+        </Panel>
       )}
     </div>
   );
@@ -2458,10 +2901,10 @@ function PerformanceCharts({
  * NON-NULL sample - a gap marker must not read as the current reading.
  */
 function MetricRow({ chart, to }: { chart: ChartData; to: string }) {
+  const { lang } = useLanguage();
   const series = chart.series[0];
   const points = series?.points ?? [];
-  const latest = [...points].reverse().find((p) => p.v != null);
-  const values = points.map((p) => p.v);
+  const latest = latestValue(chart);
 
   return (
     <Link
@@ -2470,11 +2913,19 @@ function MetricRow({ chart, to }: { chart: ChartData; to: string }) {
     >
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs font-medium">{chart.title}</span>
-        <span className="text-muted-foreground tabular-nums block text-2xs">
-          {latest?.v == null ? '—' : `${latest.v} ${series?.unit ?? ''}`.trim()}
+        <span className="text-muted-foreground font-mono tabular-nums block text-2xs">
+          {formatMetricValue(latest, series?.unit ?? '', lang)}
         </span>
       </span>
-      {values.length >= 2 && <Sparkline data={values} tone="latency" className="h-6 w-16 shrink-0" />}
+      {points.length >= 2 && (
+        <Sparkline
+          points={points}
+          window={chart.window}
+          tone={series?.tone ?? 'latency'}
+          unit={series?.unit}
+          className="h-6 w-16 shrink-0"
+        />
+      )}
     </Link>
   );
 }
@@ -2486,132 +2937,6 @@ function MetricRow({ chart, to }: { chart: ChartData; to: string }) {
  * server-computed relative label instead of being re-parsed client-side
  * (Safari can't reliably parse that format via new Date()).
  */
-/**
- * Timeline with a severity filter and pagination - 60 events in one endless
- * column were unreadable (reported by the user: recovery and service
- * discovered mixed together).
- */
-function FilterableTimeline({ events }: { events: TimelineEvent[] }) {
-  const { t } = useLanguage();
-  const [severity, setSeverity] = React.useState<'all' | 'down' | 'warning' | 'up' | 'info'>('all');
-  const [page, setPage] = React.useState(0);
-  const [pageSize, setPageSize] = React.useState(10);
-  const [newestFirst, setNewestFirst] = React.useState(true);
-
-  const counts = {
-    all: events.length,
-    down: events.filter((e) => e.severity === 'down').length,
-    warning: events.filter((e) => e.severity === 'warning').length,
-    up: events.filter((e) => e.severity === 'up').length,
-    info: events.filter((e) => e.severity === 'info').length,
-  };
-  const bySeverity = severity === 'all' ? events : events.filter((e) => e.severity === severity);
-  // Sorted by time; an unparsable date keeps its original position (the
-  // server sends newest first) instead of sinking to the bottom.
-  const filtered = React.useMemo(() => {
-    const withTime = bySeverity.map((e, i) => ({ e, i, ts: Date.parse(String(e.at).replace(' ', 'T')) }));
-    withTime.sort((a, b) => {
-      if (Number.isNaN(a.ts) || Number.isNaN(b.ts)) return a.i - b.i;
-      return newestFirst ? b.ts - a.ts : a.ts - b.ts;
-    });
-    return withTime.map((x) => x.e);
-  }, [bySeverity, newestFirst]);
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const current = Math.min(page, pageCount - 1);
-  const visible = filtered.slice(current * pageSize, current * pageSize + pageSize);
-
-  const labels: Record<typeof severity, string> = {
-    all: t('common.all', 'Vše'),
-    down: t('timeline.sev_down', 'Výpadky'),
-    warning: t('timeline.sev_warning', 'Varování'),
-    up: t('timeline.sev_up', 'Obnovení'),
-    info: t('timeline.sev_info', 'Informace'),
-  };
-
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-1.5">
-        {(['all', 'down', 'warning', 'up', 'info'] as const).map((s) =>
-          counts[s] === 0 && s !== 'all' ? null : (
-            <button
-              key={s}
-              type="button"
-              onClick={() => {
-                setSeverity(s);
-                setPage(0);
-              }}
-              className={`rounded-md px-2.5 py-1 text-2xs font-semibold transition-colors ${
-                severity === s
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-secondary text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {labels[s]} <span className="opacity-70">({counts[s]})</span>
-            </button>
-          )
-        )}
-
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => {
-              setNewestFirst((v) => !v);
-              setPage(0);
-            }}
-            className="bg-secondary text-muted-foreground hover:text-foreground rounded-md px-2.5 py-1 text-2xs font-semibold transition-colors"
-          >
-            {newestFirst
-              ? t('timeline.newest_first', 'Nejnovější první')
-              : t('timeline.oldest_first', 'Nejstarší první')}
-          </button>
-          <select
-            value={pageSize}
-            onChange={(e) => {
-              setPageSize(Number(e.target.value));
-              setPage(0);
-            }}
-            aria-label={t('timeline.page_size', 'Počet na stránku')}
-            className="border-border bg-background rounded-md border px-1.5 py-1 text-2xs"
-          >
-            {[10, 25, 50, 100].map((n) => (
-              <option key={n} value={n}>
-                {n} / {t('timeline.page_unit', 'stránku')}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
-
-      <Timeline events={visible} />
-
-      {pageCount > 1 && (
-        <div className="flex items-center justify-between gap-2 pt-1">
-          <span className="text-2xs text-muted-foreground">
-            {t(
-              'timeline.page_info',
-              { from: current * pageSize + 1, to: current * pageSize + visible.length, total: filtered.length },
-              `${current * pageSize + 1}–${current * pageSize + visible.length} z ${filtered.length}`
-            )}
-          </span>
-          <div className="flex items-center gap-1.5">
-            <Button variant="outline" size="sm" disabled={current === 0} onClick={() => setPage(current - 1)}>
-              ← {t('common.previous', 'Předchozí')}
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={current >= pageCount - 1}
-              onClick={() => setPage(current + 1)}
-            >
-              {t('common.next', 'Další')} →
-            </Button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function mapInsightsTimeline(
   timeline: ServerInsights['timeline'],
   t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
@@ -2623,6 +2948,10 @@ function mapInsightsTimeline(
     title: timelineTitle(e.type, t),
     detail: e.description ?? '',
     at: e.relative ? `${e.relative} · ${e.at}` : e.at,
+    // The machine-readable moment, so a collapsed run spans real times
+    // ("21. 9. 10:00–12:40") instead of repeating the relative label at
+    // both ends (V-15). timeOf() reads it with 'T' in place of the space.
+    atIso: e.at,
     severity: timelineSeverity(e.type),
   }));
 }
@@ -2659,8 +2988,10 @@ function timeAgo(
 function buildDynamicAsset(
   m: ApiMonitor,
   t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string,
-  siblings: ApiMonitor[] = []
+  siblings: ApiMonitor[] = [],
+  lang: string = 'cs'
 ): AssetDetail {
+  const numLang = lang === 'en' ? 'en' : 'cs';
   // Every status the API can report. 'maintenance' and 'unknown' used to be
   // folded into 'paused', so a silent agent read as "Paused" in the header.
   const status: MonitorStatus =
@@ -2736,6 +3067,15 @@ function buildDynamicAsset(
     }
   }
 
+  const stateLabel = statusLabel(monitorStatusKey(m), t);
+  const inStateSecs = m.sinceStatusChangeSeconds ?? m.uptimeSeconds ?? null;
+  // Seconds since boot; the agents send it as `uptime`. Only a positive count
+  // is a reading - a missing /proc/uptime arrives as null, never as 0 s.
+  const deviceUptime =
+    [m.details?.uptime, m.details?.uptime_sec].find(
+      (v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0
+    ) ?? null;
+
   const isTS3 = isTeamSpeakMonitor(m);
   const ts3Servers = Array.isArray(m.details?.teamspeak_servers) ? m.details.teamspeak_servers[0] : null;
   const ts3Clients: number | null = m.details?.ts3_clients ?? ts3Servers?.clients_online ?? null;
@@ -2769,29 +3109,45 @@ function buildDynamicAsset(
     // system name (G24): trimmed away, or the subtitle started with " · ".
     subtitle: [osLabel, m.target, m.category ?? 'Monitory'].filter(Boolean).join(' · '),
     status,
+    statusKey: monitorStatusKey(m),
     breadcrumb: [m.category ?? 'Monitory'],
-    // The KPI row per the mockup: uptime, latency, CPU, RAM, disk, temperature.
-    // No status here - the hero badge already shows it; the Health Score tile
-    // is added by OverviewTab from server insights.
+    // The KPI row per the mockup: time in state, device uptime, latency, CPU,
+    // RAM, disk, temperature. No status here - the hero badge already shows
+    // it; the Health Score tile is added by OverviewTab from server insights.
     health: [
-      // Down has no uptime - it has an outage duration (the tile used to vanish).
-      ...(m.status === 'down' && m.sinceStatusChangeSeconds != null
+      // Time since the last status change, named for what it is (honest-21):
+      // the tile said "Uptime 40 d" for a router that had rebooted twice in
+      // that time - it had only stayed "online" to the checks.
+      ...(inStateSecs != null
         ? [
             {
               key: 'uptime',
-              label: t('asset.down_for', 'Výpadek trvá'),
-              value: formatUptime(m.sinceStatusChangeSeconds),
+              label:
+                status === 'up'
+                  ? t('asset.online_for', 'Online nepřetržitě')
+                  : status === 'down'
+                    ? t('asset.down_for', 'Výpadek trvá')
+                    : t('asset.state_lasts', { state: stateLabel }, `${stateLabel} trvá`),
+              value: formatDuration(inStateSecs, lang),
             },
           ]
-        : m.uptimeSeconds != null
-          ? [{ key: 'uptime', label: 'Uptime', value: formatUptime(m.uptimeSeconds) }]
-          : []),
+        : []),
+      // The machine's own uptime from the agent (/proc/uptime): how long since it booted.
+      ...(deviceUptime != null
+        ? [
+            {
+              key: 'device_uptime',
+              label: t('asset.device_uptime', 'Uptime zařízení'),
+              value: formatDuration(deviceUptime, lang),
+            },
+          ]
+        : []),
       ...(profile.latency || m.responseMs != null
         ? [
             {
               key: 'latency',
               label: t('common.response', 'Odezva'),
-              value: m.responseMs != null ? `${m.responseMs} ms` : '—',
+              value: m.responseMs != null ? `${formatNumber(m.responseMs, numLang, 0)} ms` : '—',
               tone: 'latency' as const,
             },
           ]
@@ -2815,7 +3171,8 @@ function buildDynamicAsset(
             {
               key: 'cpu',
               label: t('common.cpu', 'Využití CPU'),
-              value: usage.cpu != null ? `${usage.cpu.toFixed(1)} %` : '—',
+              value: usage.cpu != null ? `${formatNumber(usage.cpu, numLang, 1)} %` : '—',
+              breach: breachTone(metricSeverity(usage.cpu, thresholdFor(m, 'cpu'))),
               tone: 'cpu' as const,
               ...(coreHint ? { hint: coreHint } : {}),
             },
@@ -2828,7 +3185,14 @@ function buildDynamicAsset(
               label: t('common.ram', 'Využití RAM'),
               // A watched process reports resident megabytes, a machine a share
               // of its memory - the unit follows the type, not the number.
-              value: usage.ram == null ? '—' : profile.ram === 'mb' ? `${usage.ram} MB` : `${usage.ram.toFixed(1)} %`,
+              value:
+                usage.ram == null
+                  ? '—'
+                  : profile.ram === 'mb'
+                    ? `${formatNumber(usage.ram, numLang, 0)} MB`
+                    : `${formatNumber(usage.ram, numLang, 1)} %`,
+              // Megabytes of one process have no limit to cross.
+              breach: profile.ram === 'mb' ? null : breachTone(metricSeverity(usage.ram, thresholdFor(m, 'ram'))),
               tone: 'memory' as const,
             },
           ]
@@ -2838,7 +3202,8 @@ function buildDynamicAsset(
             {
               key: 'hdd',
               label: t('common.hdd', 'Využití disku'),
-              value: m.hdd != null ? `${m.hdd.toFixed(1)} %` : '—',
+              value: m.hdd != null ? `${formatNumber(m.hdd, numLang, 1)} %` : '—',
+              breach: breachTone(metricSeverity(m.hdd, thresholdFor(m, 'hdd'))),
               tone: 'disk' as const,
             },
           ]
@@ -2848,33 +3213,21 @@ function buildDynamicAsset(
             {
               key: 'temp',
               label: t('asset.temperature', 'Teplota'),
-              value: `${socTemp.toFixed(0)} °C`,
+              value: `${formatNumber(socTemp, numLang, 0)} °C`,
               tone: 'temperature' as const,
             },
           ]
         : []),
     ],
-    summary: t(
-      'asset.summary_text',
-      { name: m.name, type: m.type, target: m.target },
-      `Monitor ${m.name} (${m.type}) běží na cíli ${m.target}. Metriky se pravidelně ukládají a vyhodnocují v databázi.`
-    ),
+    // Only what is said nowhere else on the page (clutter-17): "Všechny testy
+    // OK" repeated the status badge and "Typ" the parameter list.
     summaryChips: [
-      {
-        label:
-          status === 'up'
-            ? t('asset.all_tests_ok', 'Všechny testy OK')
-            : t('asset.outage_detected', 'Detekován výpadek'),
-        variant: status === 'up' ? 'up' : 'warning',
-      },
-      // The badge printed the stored enum ("Typ: AGENT_SERVICE"); it says a word now.
-      { label: `${t('common.type', 'Typ')}: ${typeLabel}`, variant: 'info' },
       // Stored for years, never displayed: a server awaiting restart and watched
       // processes that are not running - both belong at first sight.
       ...(m.details?.reboot_required
         ? [
             {
-              label: t('asset.reboot_required', '⚠ Server čeká na restart (aktualizace jádra)'),
+              label: t('asset.reboot_required', 'Server čeká na restart (aktualizace jádra)'),
               variant: 'warning' as const,
             },
           ]
@@ -2888,82 +3241,32 @@ function buildDynamicAsset(
           ]
         : []),
     ],
+    // Identity only (clutter-03): what the device IS and when it last spoke.
+    // Response time, throughput, disk I/O, inodes, swap, retransmissions and
+    // conntrack were rows here as well as tiles or charts - each fact is on
+    // the page once now, in the place that can show how it moves.
     info: [
       { label: t('common.last_check', 'Poslední kontrola'), value: lastCheckDisplay },
       { label: t('common.last_change', 'Poslední změna stavu'), value: lastChangeDisplay },
-      ...(profile.latency || m.responseMs != null
-        ? [{ label: t('common.response', 'Odezva'), value: m.responseMs != null ? `${m.responseMs} ms` : '—' }]
-        : []),
       // `os` echoes the type for monitors that report no system name - the row
       // then said "Operační systém: agent_service" next to "Typ protokolu".
-      ...(osLabel ? [{ label: t('infra.os', 'Operační systém'), value: osLabel }] : []),
+      ...(osLabel ? [{ label: t('infra.os', 'Operační systém'), value: osLabel, prose: true }] : []),
       ...(m.details?.model ? [{ label: t('asset.model', 'Model'), value: String(m.details.model) }] : []),
       ...(m.details?.board_name ? [{ label: t('asset.board', 'Board'), value: String(m.details.board_name) }] : []),
       ...(m.details?.kernel ? [{ label: t('asset.kernel', 'Kernel'), value: String(m.details.kernel) }] : []),
       ...(m.details?.virtualization
-        ? [{ label: t('asset.virtualization', 'Virtualizace'), value: String(m.details.virtualization) }]
+        ? [{ label: t('asset.virtualization', 'Virtualizace'), value: String(m.details.virtualization), prose: true }]
         : []),
       ...(m.details?.cloud_provider
-        ? [{ label: t('asset.cloud_provider', 'Cloud'), value: String(m.details.cloud_provider) }]
+        ? [{ label: t('asset.cloud_provider', 'Cloud'), value: String(m.details.cloud_provider), prose: true }]
         : []),
       ...(m.details?.timezone
         ? [{ label: t('asset.timezone', 'Časová zóna'), value: String(m.details.timezone) }]
         : []),
-      { label: t('asset.protocol_type', 'Typ protokolu'), value: typeLabel },
-      ...(isTS3 && hasTs3Counts
-        ? [
-            {
-              label: t('asset.ts3_serverquery', 'TeamSpeak 3 ServerQuery'),
-              value: t(
-                'asset.ts3_serverquery_value',
-                { online: ts3Clients, max: ts3Max },
-                `${ts3Clients} / ${ts3Max} uživatelů online`
-              ),
-            },
-          ]
-        : []),
-      ...(m.details?.net != null
-        ? [
-            {
-              label: t('asset.net_throughput', 'Síťový průtok (Rx/Tx)'),
-              value: `${Number(m.details.net).toFixed(1)} KB/s`,
-            },
-          ]
-        : []),
-      ...(m.details?.disk_read_kb != null
-        ? [{ label: t('asset.disk_read', 'Čtení z disku'), value: `${Number(m.details.disk_read_kb).toFixed(1)} KB/s` }]
-        : []),
-      ...(m.details?.disk_write_kb != null
-        ? [
-            {
-              label: t('asset.disk_write', 'Zápis na disk'),
-              value: `${Number(m.details.disk_write_kb).toFixed(1)} KB/s`,
-            },
-          ]
-        : []),
-      ...(m.details?.inode_usage != null
-        ? [
-            {
-              label: t('asset.inode_usage', 'Využití Inodů (fs)'),
-              value: `${Number(m.details.inode_usage).toFixed(1)} %`,
-            },
-          ]
-        : []),
-      ...((m.details?.swap ?? m.details?.swap_pct) != null
-        ? [
-            {
-              label: t('asset.swap_usage', 'Využití Swapu'),
-              value: `${Number(m.details?.swap ?? m.details?.swap_pct).toFixed(1)} %`,
-            },
-          ]
-        : []),
-      ...(m.details?.tcp_retrans != null
-        ? [{ label: t('asset.tcp_retrans', 'TCP Retransmissions (/proc/net/snmp)'), value: `${m.details.tcp_retrans}` }]
-        : []),
-      ...(m.details?.conntrack_count != null
-        ? [{ label: t('asset.conntrack', 'Conntrack Spojení (Sockets)'), value: `${m.details.conntrack_count}` }]
-        : []),
+      { label: t('asset.protocol_type', 'Typ protokolu'), value: typeLabel, prose: true },
     ],
+    responseMs: typeof m.responseMs === 'number' && Number.isFinite(m.responseMs) ? m.responseMs : null,
+    latencyLimitMs: typeof m.latencyThresholdMs === 'number' && m.latencyThresholdMs > 0 ? m.latencyThresholdMs : null,
     smartStatus: m.details?.smart ?? null,
     cpanelStats: m.details?.cpanel_stats ?? null,
     cpanelStatsError: m.details?.cpanel_stats_error ?? null,
@@ -2998,18 +3301,7 @@ function buildDynamicAsset(
       name: s.name,
       // The card next to it used to read "AGENT_SERVICE · nginx:443".
       kind: monitorTypeLabel(s.type, t),
-      status:
-        s.status === 'up'
-          ? 'up'
-          : s.status === 'down'
-            ? 'down'
-            : s.status === 'warning'
-              ? 'warning'
-              : s.status === 'maintenance'
-                ? 'maintenance'
-                : s.status === 'unknown'
-                  ? 'unknown'
-                  : 'paused',
+      statusKey: monitorStatusKey(s),
       detail: [s.target, s.port ? `:${s.port}` : null].filter(Boolean).join('') || (s.hostname ?? ''),
     })),
   };
@@ -3050,7 +3342,7 @@ function ArchivedNotice({
   return (
     <div
       role="status"
-      className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-secondary/40 p-3 text-xs"
+      className="bg-inset flex flex-wrap items-center gap-3 rounded-lg border border-border p-3 text-xs"
     >
       <Archive className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <p className="min-w-0 flex-1">

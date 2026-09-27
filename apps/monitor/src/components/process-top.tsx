@@ -1,5 +1,7 @@
 import * as React from 'react';
-import { Card } from '@/components/ui/card';
+import { Gauge } from 'lucide-react';
+import { Panel } from '@/components/ui/panel';
+import { cn } from '@/lib/utils';
 import { useLanguage } from '@/context/language-context';
 import { useSession } from '@/api/use-session';
 
@@ -65,14 +67,14 @@ export function ProcessTop({ monitorId }: { monitorId: number }) {
 
   if (!state.enabled) {
     return (
-      <Card className="p-5">
+      <Panel padding="sm">
         <p className="text-muted-foreground text-xs leading-relaxed">
           {t(
             'proctop.disabled',
             'Historie procesů je vypnutá (Nastavení → Obecné → Historie procesů), takže tuhle otázku zatím zodpovědět nejde.'
           )}
         </p>
-      </Card>
+      </Panel>
     );
   }
 
@@ -81,36 +83,40 @@ export function ProcessTop({ monitorId }: { monitorId: number }) {
   const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
 
   return (
-    <Card className="space-y-3 p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h3 className="text-sm font-semibold">{t('proctop.title', 'Kdo bral výkon za posledních 24 hodin')}</h3>
-          <p className="text-muted-foreground text-2xs leading-relaxed">
-            {t(
-              'proctop.hint',
-              'Průměr a špička za období, ne jen poslední hlášení. Proces, který si skočí každých deset minut, se ve snímku nikdy neukáže.'
-            )}
-          </p>
-        </div>
-        <div className="flex gap-1" role="group">
+    <Panel
+      icon={Gauge}
+      title={t('proctop.title', 'Kdo bral výkon za posledních 24 hodin')}
+      hint={t(
+        'proctop.hint',
+        'Průměr a špička za období, ne jen poslední hlášení. Proces, který si skočí každých deset minut, se ve snímku nikdy neukáže.'
+      )}
+
+      // Drawn like the range pills (one segmented control look), with words.
+      action={
+        <div
+          role="group"
+          className="bg-secondary/60 inline-flex items-center gap-0.5 rounded-lg border border-border p-0.5"
+        >
           {(['cpu', 'ram'] as const).map((k) => (
             <button
               key={k}
               type="button"
               aria-pressed={kind === k}
               onClick={() => setKind(k)}
-              className={
+              className={cn(
+                'focus-visible:ring-ring rounded-md px-2.5 py-1 text-xs transition-colors focus-visible:ring-2 focus-visible:outline-none',
                 kind === k
-                  ? 'border-primary bg-primary/10 text-primary rounded-md border px-2.5 py-1 text-xs font-medium'
-                  : 'text-muted-foreground hover:text-foreground border-border rounded-md border px-2.5 py-1 text-xs font-medium'
-              }
+                  ? 'bg-card text-foreground font-semibold shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
             >
               {k === 'cpu' ? t('proctop.cpu', 'Procesor') : t('proctop.ram', 'Paměť')}
             </button>
           ))}
         </div>
-      </div>
-
+      }
+      bodyClassName="space-y-3"
+    >
       {state.processes.length === 0 ? (
         <p className="text-muted-foreground text-xs">
           {t('proctop.empty', 'Za posledních 24 hodin nejsou uložené žádné vzorky procesů.')}
@@ -122,9 +128,9 @@ export function ProcessTop({ monitorId }: { monitorId: number }) {
               <span className="min-w-0 flex-1 truncate font-mono">{p.name}</span>
               {/* The bar is relative to the worst offender in this window, so
                   the ranking is readable without reading every number. */}
-              <span className="bg-secondary hidden h-1.5 w-24 shrink-0 overflow-hidden rounded-full sm:block">
+              <span className="bg-inset hidden h-1.5 w-24 shrink-0 overflow-hidden rounded-full sm:block">
                 <span
-                  className="bg-primary block h-full rounded-full"
+                  className="bg-chart-cpu block h-full rounded-full"
                   style={{ width: `${worst > 0 ? Math.max(2, Math.round((p.avg / worst) * 100)) : 0}%` }}
                 />
               </span>
@@ -141,6 +147,6 @@ export function ProcessTop({ monitorId }: { monitorId: number }) {
           ))}
         </ul>
       )}
-    </Card>
+    </Panel>
   );
 }

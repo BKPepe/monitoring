@@ -60,8 +60,15 @@ const jsonResponse = (body: unknown) =>
     text: () => Promise.resolve(JSON.stringify(body)),
   }) as Response;
 
-/** Eight points so the tile delta (quarter averages) has something to compare. */
-const eight = (values: number[]) => values.map((v, i) => [1_758_000_000 + i * 300, v]);
+/**
+ * Eight five-minute points ending now: the tile sparkline spans the chart's
+ * window (the last 24 h up to the fetch), so samples from another day would
+ * rightly fall outside it and draw nothing.
+ */
+const eight = (values: number[]) => {
+  const end = Math.floor(Date.now() / 1000);
+  return values.map((v, i) => [end - (values.length - i) * 300, v]);
+};
 
 let details: Record<string, unknown> = baseDetails;
 let batch: Record<string, unknown> = { series: [] };
@@ -95,11 +102,11 @@ async function openTab(name: string) {
   fireEvent.mouseDown(await screen.findByRole('tab', { name: new RegExp(name) }));
 }
 
-/** The KPI tile (Card) whose label is exactly `label`. */
+/** The KPI tile (StatBlock) whose label is exactly `label`. */
 function tile(label: string): HTMLElement {
-  const el = screen.getAllByText(label).find((n) => n.tagName === 'P' && n.closest('[class*="flex-col"]'));
+  const el = screen.getAllByText(label).find((n) => n.closest('[data-slot="stat-block"]'));
   if (!el) throw new Error(`dlaždice ${label} nenalezena`);
-  return el.parentElement as HTMLElement;
+  return el.closest('[data-slot="stat-block"]') as HTMLElement;
 }
 
 describe('Router: karty nahlášené vlastníkem', () => {
@@ -162,12 +169,13 @@ describe('Router: karty nahlášené vlastníkem', () => {
     expect(screen.queryByTestId('lte-advice')).toBeNull();
   });
 
-  it('LTE: RSRP -101 dBm čtou karty Služby i Síť stejným slovem (W1-C1)', async () => {
+  it('LTE: RSRP -101 dBm čte řádek Síť slovem „špatný“ a úložiště ho nevypisuje (W1-C1, W2-3)', async () => {
     details = { ...baseDetails, lte_rsrp: -101, lte_rsrq: -9, lte_sinr: 15 };
     renderDetail();
-    await openTab('Služby');
-    expect(await screen.findByText('RSRP: -101 dBm (špatný)')).toBeTruthy();
-    expect(screen.queryByText(/RSRP: -101 dBm \(slabý\)/)).toBeNull();
+    // The service chips of the old third tab are rows of the Network tab's
+    // sections now (W2-3); the storage tab keeps only the disks.
+    await openTab('Úložiště');
+    expect(screen.queryByText(/RSRP: -101 dBm/)).toBeNull();
 
     await openTab('Síť');
     const row = (await screen.findByText('LTE RSRP')).closest('div.border-b') as HTMLElement;
@@ -232,9 +240,16 @@ describe('Router: karty nahlášené vlastníkem', () => {
   it('Dlaždice: teplota kreslí svou řadu, ne provoz na LTE ve stejném odstínu (W1-B5)', async () => {
     batch = {
       series: {
-        // Same "temperature" tone and listed first: the tile used to take it.
-        net_lte: { points: eight([10, 10, 20, 40, 60, 80, 100, 100]), unit: 'KB/s', label: 'LTE' },
-        temperature_c: { points: eight([60, 60, 60, 60, 60, 60, 66, 66]), unit: '°C', label: 'Teplota' },
+        // Listed first and once shared the tile's tone: the tile used to take it.
+        // The trend compares with the previous window's mean (C-3), so each
+        // series carries its own and only the temperature one gives +10 %.
+        net_lte: { points: eight([10, 10, 20, 40, 60, 80, 100, 100]), unit: 'KB/s', label: 'LTE', previousAvg: 10 },
+        temperature_c: {
+          points: eight([66, 66, 66, 66, 66, 66, 66, 66]),
+          unit: '°C',
+          label: 'Teplota',
+          previousAvg: 60,
+        },
       },
     };
     renderDetail();
@@ -247,15 +262,16 @@ describe('Router: karty nahlášené vlastníkem', () => {
   it('Dlaždice: odezva bez vlastní řady nemá šipku ani křivku, i když I/O čekání roste (W1-B5)', async () => {
     batch = {
       series: {
-        // iowait shares the "latency" tone; it is not the response time.
-        iowait: { points: eight([1, 1, 2, 3, 5, 8, 9, 9]), unit: '%', label: 'I/O' },
-        cpu: { points: eight([40, 40, 40, 40, 40, 40, 44, 44]), unit: '%', label: 'CPU' },
+        // iowait once shared the "latency" tone; it is not the response time.
+        iowait: { points: eight([1, 1, 2, 3, 5, 8, 9, 9]), unit: '%', label: 'I/O', previousAvg: 1 },
+        cpu: { points: eight([44, 44, 44, 44, 44, 44, 44, 44]), unit: '%', label: 'CPU', previousAvg: 40 },
       },
     };
     renderDetail();
     await screen.findByText('Teplota');
     const cpu = tile('Využití CPU');
-    expect(await within(cpu).findByText('↑ 10 %')).toBeTruthy();
+    // A percentage moves in percentage points against the previous window.
+    expect(await within(cpu).findByText('↑ 4 p. b.')).toBeTruthy();
     const latency = tile('Odezva');
     expect(latency.textContent).not.toMatch(/[↑↓]/);
     expect(latency.querySelector('svg')).toBeNull();

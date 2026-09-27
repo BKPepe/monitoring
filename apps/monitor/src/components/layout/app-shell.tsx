@@ -4,24 +4,55 @@ import { Sidebar } from './sidebar';
 import { Header } from './header';
 import { Footer } from './footer';
 import { UserMenu } from './user-menu';
-import { cn } from '@/lib/utils';
+import { TabBar } from './tab-bar';
+import { ServerStatusCard } from './server-status-card';
+import { ShellProvider, useShellChrome } from './shell-context';
+import { useShellCounts } from './use-shell-counts';
 
 /**
- * App shell: sidebar + header + scrolling content + footer.
- *
- * On mobile the sidebar turns into an overlay panel - a permanently
- * occupied width would leave no room for data on a 390px display.
+ * App shell (NetPulse look): the collapsible sidebar, the header with the
+ * page title, refresh, the freshness pill and the bell, the scrolling page
+ * and its footer. Below lg the sidebar gives way to a bottom tab bar, whose
+ * "Více" opens the full navigation as a drawer - a permanently occupied
+ * width would leave no room for data on a 390 px display.
  */
 import { useSession } from '@/api/use-session';
+import { ApiError } from '@/api/app-api';
 import { useLanguage } from '@/context/language-context';
 import { useFocusTrap } from '@/lib/use-focus-trap';
 import { ErrorState, LoadingState } from '@/components/ui/states';
 import { NotFoundPage } from '@/pages/not-found';
 
 export function AppShell() {
+  return (
+    <ShellProvider>
+      <AppShellInner />
+    </ShellProvider>
+  );
+}
+
+const COLLAPSED_KEY = 'bk-sidebar-collapsed';
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function AppShellInner() {
   const { t } = useLanguage();
   const navigate = useNavigate();
-  const [collapsed, setCollapsed] = React.useState(false);
+  // The rail is a per-browser preference: remembered, and harmless to lose.
+  const [collapsed, setCollapsed] = React.useState(readCollapsed);
+  React.useEffect(() => {
+    try {
+      localStorage.setItem(COLLAPSED_KEY, collapsed ? '1' : '0');
+    } catch {
+      // Storage blocked: the rail simply opens expanded next time.
+    }
+  }, [collapsed]);
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
   const closeMobileNav = React.useCallback(() => setMobileNavOpen(false), []);
   const mobileNavRef = useFocusTrap<HTMLDivElement>(mobileNavOpen, closeMobileNav);
@@ -71,12 +102,6 @@ export function AppShell() {
         label: t('nav.websites', 'Weby'),
         group: t('search.group_pages', 'Stránky'),
         hint: '/websites',
-      },
-      {
-        id: 'p-/services',
-        label: t('nav.services', 'Služby'),
-        group: t('search.group_pages', 'Stránky'),
-        hint: '/services',
       },
       {
         id: 'p-/incidents',
@@ -129,39 +154,26 @@ export function AppShell() {
     session?.authenticated && session.user ? session.user.username : t('user_menu.logged_out', 'Nepřihlášen');
   const userRole =
     session?.authenticated && session.user ? session.user.role : t('user_menu.please_login', 'Přihlaste se');
-  // The Incidents badge must count THE SAME thing the incidents page shows -
-  // it used to take downMonitors from public_status and show "2" while the
-  // page (open DB incidents + troubled monitors) had none.
-  // A single source: the incidents endpoint already includes freshly fallen
-  // monitors, so nothing is summed (an outage would be counted twice otherwise).
-  const [realAlertCount, setRealAlertCount] = React.useState(0);
-  // The badges keep the last known count through a failed refresh, but the
-  // bell may only call it "all OK" after a fresh successful answer (W1-A).
-  const [alertCountKnown, setAlertCountKnown] = React.useState(false);
-  React.useEffect(() => {
-    let active = true;
-    const load = () =>
-      fetch('/status/api.php?action=incidents', { credentials: 'include' })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (!active) return;
-          if (Array.isArray(data?.incidents)) {
-            setRealAlertCount(data.incidents.filter((i: any) => (i.status ?? 'investigating') !== 'resolved').length);
-            setAlertCountKnown(true);
-          } else {
-            setAlertCountKnown(false);
-          }
-        })
-        .catch(() => {
-          if (active) setAlertCountKnown(false);
-        });
-    load();
-    const timer = setInterval(load, 60000);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, []);
+  const counts = useShellCounts();
+  const chrome = useShellChrome();
+
+  // Refresh: the page's own refetch when it registered one (usePageChrome),
+  // otherwise the page is mounted anew, which refetches everything it shows.
+  // The counts in the sidebar and the bell refresh with it either way.
+  const [pageKey, setPageKey] = React.useState(0);
+  const onRefresh = React.useCallback(async () => {
+    const page = chrome.onRefresh ? Promise.resolve(chrome.onRefresh()) : Promise.resolve(setPageKey((k) => k + 1));
+    await Promise.allSettled([page, counts.refresh()]);
+  }, [chrome, counts]);
+
+  // A new page closes the drawer: "Více" is a way somewhere, not a place.
+  // Compared during render (React's pattern for state that follows a prop),
+  // so the drawer never paints one frame over the new page.
+  const [drawerPath, setDrawerPath] = React.useState(location.pathname);
+  if (drawerPath !== location.pathname) {
+    setDrawerPath(location.pathname);
+    setMobileNavOpen(false);
+  }
 
   // Escape closes the mobile nav - otherwise there's no way out of it
   // on a touch device with a keyboard.
@@ -185,6 +197,13 @@ export function AppShell() {
   // that failed (network, a 5xx while the database restarts) used to count as
   // a logout, so an outage of the API looked like an expired session (W1-A7).
   if (!session) {
+    // A fresh upload answers every call with 503 needs_setup until the
+    // installer ran (site W1-5). That is not an outage: the installer is the
+    // page. database_unavailable (a real config whose database is down)
+    // stays the error below - it must never open the installer.
+    if (sessionError instanceof ApiError && sessionError.status === 503 && sessionError.message === 'needs_setup') {
+      return <Navigate to="/setup" replace />;
+    }
     if (sessionError) {
       return (
         <div className="mx-auto max-w-lg px-4 py-16">
@@ -213,22 +232,27 @@ export function AppShell() {
     return <Navigate to={`/setup${next && next !== '/' ? `?next=${encodeURIComponent(next)}` : ''}`} replace />;
   }
 
+  const userMenu = (collapsedRail: boolean) => (
+    <UserMenu name={userName} role={userRole} collapsed={collapsedRail} isLoggedOut={isLoggedOut} />
+  );
+
   return (
-    <div className="flex h-dvh overflow-hidden print:h-auto print:overflow-visible print:block">
+    <div className="flex h-dvh overflow-hidden print:block print:h-auto print:overflow-visible">
       {/* Desktop sidebar */}
       <div className="hidden lg:flex print:hidden">
-        <div className="flex h-full flex-col">
-          <Sidebar collapsed={collapsed} incidentCount={realAlertCount} onToggle={() => setCollapsed((v) => !v)} />
-          <div className={cn('bg-sidebar', collapsed ? 'w-16' : 'w-60')}>
-            <UserMenu name={userName} role={userRole} collapsed={collapsed} isLoggedOut={isLoggedOut} />
-          </div>
-        </div>
+        <Sidebar
+          collapsed={collapsed}
+          onToggle={() => setCollapsed((v) => !v)}
+          incidentCount={counts.openIncidents}
+          findings={counts.findings}
+          statusCard={<ServerStatusCard version={__APP_VERSION__} collapsed={collapsed} />}
+          userMenu={userMenu(collapsed)}
+        />
       </div>
 
-      {/* Mobile overlay. A dialog, not a decorated div: it takes the keyboard
-          when it opens, keeps it inside while it is open, closes on Escape and
-          hands focus back to the button that opened it. Without that a
-          keyboard user could open the drawer and never reach it. */}
+      {/* The "Více" drawer. A dialog, not a decorated div: it takes the
+          keyboard when it opens, keeps it inside while it is open, closes on
+          Escape and hands focus back to the tab that opened it. */}
       {mobileNavOpen && (
         <div
           ref={mobileNavRef}
@@ -243,11 +267,16 @@ export function AppShell() {
             onClick={() => setMobileNavOpen(false)}
             aria-label={t('app_shell.close_nav', 'Zavřít navigaci')}
           />
-          <div className="relative flex h-full w-60 flex-col">
-            <Sidebar collapsed={false} incidentCount={realAlertCount} onToggle={() => setMobileNavOpen(false)} />
-            <div className="bg-sidebar">
-              <UserMenu name={userName} role={userRole} collapsed={false} isLoggedOut={isLoggedOut} />
-            </div>
+          <div className="relative flex h-full w-72 max-w-[85vw] flex-col">
+            <Sidebar
+              collapsed={false}
+              onToggle={() => setMobileNavOpen(false)}
+              showCollapse={false}
+              incidentCount={counts.openIncidents}
+              findings={counts.findings}
+              statusCard={<ServerStatusCard version={__APP_VERSION__} />}
+              userMenu={userMenu(false)}
+            />
           </div>
         </div>
       )}
@@ -266,25 +295,34 @@ export function AppShell() {
         <Header
           searchResults={searchIndex}
           onSearchSelect={onSearchSelect}
-          alertCount={realAlertCount}
-          alertCountKnown={alertCountKnown}
-          onOpenMobileNav={() => setMobileNavOpen(true)}
+          findings={counts.findings}
+          findingsState={counts.findingsState}
+          openIncidents={counts.openIncidents}
+          incidentsState={counts.incidentsState}
+          onRefresh={onRefresh}
         />
 
-        <main id="main" tabIndex={-1} className="flex-1 overflow-y-auto print:overflow-visible print:h-auto">
+        <main
+          id="main"
+          tabIndex={-1}
+          className="pb-tabbar flex-1 overflow-y-auto lg:pb-0 print:h-auto print:overflow-visible print:pb-0"
+        >
           {/* The 12-column grid is available to pages inside; the shell just
               holds the max width and padding. */}
-          <div className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 print:px-0 print:py-0 print:max-w-none">
+          <div className="mx-auto w-full max-w-[1600px] px-4 py-6 sm:px-6 print:max-w-none print:px-0 print:py-0">
             {/* Pages load on visit (React.lazy in routes.tsx), so between the
-                click and the render there is a short pause for downloading
-                jejich kódu. Bez tohohle boundary by React vyhodil chybu. */}
+                click and the render there is a short pause while their code
+                downloads. Without this boundary React would throw. */}
             <React.Suspense fallback={<LoadingState size="page" label={t('shell.loading_page', 'Načítám stránku…')} />}>
-              <Outlet />
+              <React.Fragment key={pageKey}>
+                <Outlet />
+              </React.Fragment>
             </React.Suspense>
           </div>
+          <Footer version={__APP_VERSION__} />
         </main>
 
-        <Footer version={__APP_VERSION__} />
+        <TabBar findings={counts.findings} onMore={() => setMobileNavOpen(true)} moreOpen={mobileNavOpen} />
       </div>
     </div>
   );

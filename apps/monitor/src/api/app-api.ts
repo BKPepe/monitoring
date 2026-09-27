@@ -2,6 +2,7 @@ import { STATUS_API } from './http-source';
 import { requestSessionRecheck } from './session-recheck';
 import type {
   DashboardInsightsResponse,
+  FindingsResponse,
   OutgoingMessagePage,
   RouterRecommendationMuteResponse,
   RouterRecommendationsResponse,
@@ -35,6 +36,12 @@ export interface ApiMonitor {
   port?: number | null;
   /** 'unknown' = an agent-side check whose agent stopped reporting (cron writes it). */
   status: 'up' | 'down' | 'warning' | 'maintenance' | 'paused' | 'unknown';
+  /**
+   * The shared status vocabulary (C-11, lib/status.ts): 'unknown' split into
+   * 'unknown_new' (never reported) and 'unknown_stale' (an agent gone quiet).
+   * Absent on an older server - monitorStatusKey() derives it then.
+   */
+  statusKey?: string;
   category: string | null;
   assetId: number | null;
   assetName: string | null;
@@ -327,14 +334,26 @@ export const appApi = {
     ),
 
   /**
-   * The server's findings across every monitor this viewer sees, one page at
-   * a time and in the viewer's language (W1-B6). A failed request rejects:
-   * the Insights page must say "could not load", never "nothing found".
+   * The old insights list (W1-B6), read by the Insights page until it moves
+   * to the findings feed in the pages commit.
    */
   getDashboardInsights: (lang: string, limit: number, offset = 0) =>
     request<DashboardInsightsResponse>(
       'dashboard_insights' + `&limit=${limit}&offset=${offset}&lang=${encodeURIComponent(lang)}`
     ),
+
+  /**
+   * The one findings feed (C-12), worst first, in the viewer's language.
+   * A failed request rejects - "could not load" must never read as
+   * "nothing found"; a failed source inside a 200 is in `sourceErrors`.
+   */
+  getFindings: (lang: string, opts: { monitorId?: number; limit?: number } = {}) => {
+    const query =
+      `&limit=${opts.limit ?? 50}&lang=${encodeURIComponent(lang)}` +
+      (opts.monitorId ? `&monitor_id=${opts.monitorId}` : '');
+    // The action on the request line, so run_api_action_lint sees who calls it.
+    return request<FindingsResponse>('findings' + query);
+  },
 
   /** The websites' SLA map and the server's certificate alert limit (`sslAlertDays`). */
   getWebsitesOverview: () => request<WebsitesOverviewResponse>('websites_overview'),
