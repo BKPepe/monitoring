@@ -73,7 +73,11 @@ ErrorDocument 503 /status/error.php?code=503
 # flags); the server reads it from disk, and nobody needs to learn from it how
 # PHP is set up here. installer.php only defines functions for api.php and
 # answers 404 on its own; this is the layer that does not depend on PHP.
-<FilesMatch "^(schema\.sql|README\.md|package\.json|\.ftp-deploy-sync-state\.json|\.user\.ini|installer\.php)$">
+# error_log is where a cPanel host's PHP writes its errors, next to the script
+# that raised them: database messages, and the masked start of anything
+# config.php prints. Nobody needs it over HTTP: an administrator reads it in
+# the hosting panel or over FTP.
+<FilesMatch "^(schema\.sql|README\.md|package\.json|\.ftp-deploy-sync-state\.json|\.user\.ini|installer\.php|error_log)$">
     <IfModule mod_authz_core.c>
         Require all denied
     </IfModule>
