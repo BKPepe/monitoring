@@ -3839,6 +3839,48 @@ check('prstenec: minuta beze změny času agent přijme', $omnia_counters(array_
 ])), 200);
 check('prstenec: minuta beze změny času nemá krok', $omnia_metrics('wan_ring_drops'), ['wan_ring_drops' => null]);
 
+// --- The WAN port's own counters and the speed-test flag (schema r022) --------
+//
+// Agent 0.1.13 splits what wan_errors and the ring lump together. The six
+// counters ride the ring's hourly gate; the SFP facts stay in last_details.
+// speedtest_active is stored per minute: 1 / 0, and NULL when not reported.
+$pc_cols = 'wan_rx_overrun, wan_rx_discard, wan_crc_errors, wan_mac_rx_errors, wan_refill_errors, wan_oversize, wan_ring_drops';
+$pc_path = function (int $checked_at, array $counters) use ($omnia_pl): array {
+    $path = $omnia_pl['wan_path'];
+    $path['checked_at'] = $checked_at;
+    return array_merge($path, $counters);
+};
+$pc_sfp = ['sfp_temp_mc' => 49000, 'sfp_temp_max_mc' => 70000, 'sfp_temp_crit_mc' => 75000, 'sfp_rx_power_uw' => null,
+    'sfp_rx_power_min_uw' => null, 'sfp_rx_power_lcrit_uw' => null, 'sfp_phy_hwmon' => true];
+$pc_first = ['wan_rx_ring_drops' => 7, 'rx_overrun' => 2, 'rx_discard' => 5, 'bad_crc_event' => 3, 'mac_receive_error' => 1,
+    'refill_errors' => 4, 'oversize_received' => 0] + $pc_sfp;
+$pc_base = array_merge($wan_base, ['uptime' => 250000, 'wan_link_dev' => 'eth2']);
+check('čítače portu: první hodinové čtení agent přijme', $omnia_counters(array_merge($pc_base, [
+    'speedtest_active' => true, 'wan_path' => $pc_path(1789700000, $pc_first)])), 200);
+check('čítače portu: první čtení nemá krok ani v jednom sloupci', array_values(array_unique(array_values($omnia_metrics($pc_cols)), SORT_REGULAR)), [null]);
+check('test rychlosti: příznak true se uloží jako 1', $omnia_num($omnia_metrics('speedtest_active')['speedtest_active']), 1.0);
+check('čítače portu: další hodinové čtení agent přijme', $omnia_counters(array_merge($pc_base, [
+    'uptime' => 250060, 'speedtest_active' => false,
+    'wan_path' => $pc_path(1789703600, ['wan_rx_ring_drops' => 17, 'rx_overrun' => 12, 'rx_discard' => 5, 'bad_crc_event' => 3,
+        'mac_receive_error' => 1, 'refill_errors' => 9, 'oversize_received' => 0] + $pc_sfp)])), 200);
+check('čítače portu: kroky jsou přírůstky, změřená nula zůstane nulou',
+    array_map($omnia_num, $omnia_metrics($pc_cols)),
+    ['wan_rx_overrun' => 10.0, 'wan_rx_discard' => 0.0, 'wan_crc_errors' => 0.0, 'wan_mac_rx_errors' => 0.0,
+        'wan_refill_errors' => 5.0, 'wan_oversize' => 0.0, 'wan_ring_drops' => 10.0]);
+check('test rychlosti: příznak false se uloží jako 0, ne NULL', $omnia_num($omnia_metrics('speedtest_active')['speedtest_active']), 0.0);
+$pc_d = $omnia_details()['wan_path'] ?? [];
+check('modul SFP: údaje zůstanou v last_details i s neznámým výkonem',
+    [$pc_d['sfp_temp_mc'] ?? 'chybí', $pc_d['sfp_temp_max_mc'] ?? 'chybí', $pc_d['sfp_phy_hwmon'] ?? 'chybí',
+        $omnia_at($pc_d, 'sfp_rx_power_uw'), $pc_d['bad_crc_event'] ?? 'chybí'],
+    [49000, 70000, true, null, 3]);
+$pc_no_flag = $omnia_pl;
+unset($pc_no_flag['speedtest_active']);
+check('čítače portu: minuta beze změny času agent přijme', $post_agent(array_merge($pc_no_flag, $pc_base, [
+    'agent_time' => time(), 'uptime' => 250120,
+    'wan_path' => $pc_path(1789703600, ['wan_rx_ring_drops' => 17, 'rx_overrun' => 12] + $pc_first)])), 200);
+check('čítače portu: minuta beze změny času nemá krok', array_values(array_unique(array_values($omnia_metrics($pc_cols)), SORT_REGULAR)), [null]);
+check('test rychlosti: agent, který příznak neposlal, má NULL, ne 0', $omnia_metrics('speedtest_active')['speedtest_active'], null);
+
 // --- Nothing is dropped silently (details_dropped, ingest_issues) -------------
 //
 // last_details is one 64 KB column. A report that does not fit used to shed its

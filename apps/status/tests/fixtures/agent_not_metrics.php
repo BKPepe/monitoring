@@ -77,9 +77,21 @@ return [
     'conntrack_insert_failed', 'conntrack_drop', 'conntrack_early_drop',
     'wan_carrier_down_count',
     // wan_link_dev: name of the physical WAN port, a label. wan_path: hourly
-    // path state (object, last_details). speedtest_active / reduced: flags of
-    // THIS report that gate the alerts, not a series.
-    'wan_link_dev', 'wan_path', 'speedtest_active', 'reduced',
+    // path state (object, last_details). reduced: a flag of THIS report that
+    // gates the alerts, not a series. speedtest_active is NOT here any more:
+    // since schema 20260927r022 it is stored per minute (vps_metrics), so the
+    // WAN port finding can say how many errors fell into speed-test minutes.
+    'wan_link_dev', 'wan_path', 'reduced',
+    // Nested in `wan_path` (agent 0.1.13). The six port counters are hourly
+    // cumulative MIB values: the stored series is the server's STEP of each
+    // (wan_rx_overrun, wan_rx_discard, wan_crc_errors, wan_mac_rx_errors,
+    // wan_refill_errors, wan_oversize), like wan_rx_ring_drops below.
+    'rx_overrun', 'rx_discard', 'bad_crc_event', 'mac_receive_error', 'refill_errors', 'oversize_received',
+    // The SFP module's current reading and its own constant limits, plus
+    // whether a PHY inside it has a hwmon: last_details only, read by the WAN
+    // port finding. A temperature series is deferred, not forgotten.
+    'sfp_temp_mc', 'sfp_temp_max_mc', 'sfp_temp_crit_mc', 'sfp_rx_power_uw', 'sfp_rx_power_min_uw',
+    'sfp_rx_power_lcrit_uw', 'sfp_phy_hwmon',
     // agent_time: the router's clock; the stored metric is clock_skew_s, the
     // distance from the server's clock. cpu_cores: a hardware constant.
     // cpu_core_max_index: WHICH core was busiest - a label, averaging it means nothing.

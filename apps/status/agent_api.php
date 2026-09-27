@@ -599,6 +599,13 @@ try {
             'conntrack_drop' => bk_ranged_int($data['conntrack_drop'] ?? null, 0, 2 ** 53),
             'wan_carrier_down_count' => bk_ranged_int($data['wan_carrier_down_count'] ?? null, 0, 2 ** 53),
             'wan_rx_ring_drops' => $ow_wan_path['wan_rx_ring_drops'] ?? null,
+            // Agent 0.1.13, the same hourly `ethtool -S` read.
+            'rx_overrun' => $ow_wan_path['rx_overrun'] ?? null,
+            'rx_discard' => $ow_wan_path['rx_discard'] ?? null,
+            'bad_crc_event' => $ow_wan_path['bad_crc_event'] ?? null,
+            'mac_receive_error' => $ow_wan_path['mac_receive_error'] ?? null,
+            'refill_errors' => $ow_wan_path['refill_errors'] ?? null,
+            'oversize_received' => $ow_wan_path['oversize_received'] ?? null,
         ],
         $ow_wan_link_dev,
         bk_agent_int($data, 'uptime'),
@@ -1221,6 +1228,20 @@ try {
             'wan_ring_drops' => $ow_wan_steps['steps']['wan_ring_drops'],
             'wan_link_flaps' => $ow_wan_steps['steps']['wan_link_flaps'],
             'conntrack_drops' => $ow_wan_steps['steps']['conntrack_drops'],
+            // Agent 0.1.13: the WAN port's own counters, hourly steps like
+            // wan_ring_drops (null on every minute without a new reading).
+            'wan_rx_overrun' => $ow_wan_steps['steps']['wan_rx_overrun'],
+            'wan_rx_discard' => $ow_wan_steps['steps']['wan_rx_discard'],
+            'wan_crc_errors' => $ow_wan_steps['steps']['wan_crc_errors'],
+            'wan_mac_rx_errors' => $ow_wan_steps['steps']['wan_mac_rx_errors'],
+            'wan_refill_errors' => $ow_wan_steps['steps']['wan_refill_errors'],
+            'wan_oversize' => $ow_wan_steps['steps']['wan_oversize'],
+            // Was a speed test running or just finished in this minute: the
+            // agent's flag, a result travelling in this report, or a light run
+            // that stepped aside for the test. NULL = the agent did not say, so
+            // an error in that minute is "not recorded", never "outside a test".
+            // One line on purpose: the metric lint traces the variables of it.
+            'speedtest_active' => ($bk_speedtest_flagged || $ow_report_reduced) ? 1 : ($ow_speedtest_active === false ? 0 : null),
             'agent_run_ms' => $ow_agent_run_ms,
             'clock_skew_s' => $ow_clock_skew_s,
             // Agent 0.1.9: what the previous run cost in CPU. Grouped by

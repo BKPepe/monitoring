@@ -528,7 +528,7 @@ answers 409.
 
 | Endpoint | Access | Description |
 |---|---|---|
-| `action=metric_series&monitor_id=&metric=&period=&lang=` | assigned monitor | One metric over time. A metric flagged `step` (`wan_errors`, `wan_drops`, `wan_ring_drops`, `wan_link_flaps`, `conntrack_drops`) already holds the increment between two reports: a raw point is that minute's step and the 90-day view is the day's TOTAL (`avg_val * samples`), never the average of it. A cumulative `counter` series is drawn as increments: a reset (reboot) and an increment across a gap longer than 2.5 reporting intervals leave no point - a break, never a spike. `distinctValues` counts the series' different values, so a page can tell a constant metric from a curve. `lang=en` gives the English metric name in `label` (default Czech); a counter's label ends in `(increase)` / `(přírůstek)` |
+| `action=metric_series&monitor_id=&metric=&period=&lang=` | assigned monitor | One metric over time. A metric flagged `step` (`wan_errors`, `wan_drops`, `wan_ring_drops`, `wan_link_flaps`, `conntrack_drops`, and the hourly WAN port counters `wan_rx_overrun`, `wan_rx_discard`, `wan_crc_errors`, `wan_mac_rx_errors`, `wan_refill_errors`, `wan_oversize`) already holds the increment between two reports: a raw point is that minute's step and the 90-day view is the day's TOTAL (`avg_val * samples`), never the average of it. A cumulative `counter` series is drawn as increments: a reset (reboot) and an increment across a gap longer than 2.5 reporting intervals leave no point - a break, never a spike. `distinctValues` counts the series' different values, so a page can tell a constant metric from a curve. `lang=en` gives the English metric name in `label` (default Czech); a counter's label ends in `(increase)` / `(přírůstek)` |
 | `action=metric_series_batch&monitor_id=&period=&lang=` | assigned monitor | Every chart of a device in one call. The `hdd` and `ram` series additionally carry `daysToFull` (days until full) wherever growth is actually measured - a missing key means no forecast, never a zero. Periods up to `30d` only: `90d`, `180d` and `1y` answer `400 {"error": "period_unsupported"}` - they used to return the last 24 hours under the long label. Counters (`fw_*`, `dns_*`, `tcp_retrans`, ...) come as increments like in `metric_series`, with `(přírůstek)` in the label and `counter: true` - they used to be lifetime totals. Every series carries `previousAvg`: the mean over the same-length window one period earlier (the window `metric_series&previous=1` draws; for a counter, the mean of its increments), so a tile can show its trend without a second request. `null` with fewer than 3 samples there - never a trend built on one or two readings; `30d` usually has none, because raw samples are pruned after 30 days. Labels follow `lang` like in `metric_series` |
 | `action=metric_detail&monitor_id=&metric=&lang=` | assigned monitor | Context for the metric detail page; `metric.label` and the `related` labels follow `lang` like in `metric_series` |
 | `action=metric_correlations&monitor_id=&metric=&period=&lang=` (optionally `&all=1` for every compared metric, not just the strongest 8) | assigned monitor | How the device's other metrics moved together with this one (Pearson). Only metrics stored in `vps_metrics` take part: they share one measurement row, so samples pair exactly instead of being averaged into common buckets, which would smooth both series and inflate the coefficient. `r` is `null`, never `0`, when undefined - a series that never changed (`reason: constant`) or too few overlapping pairs (`few_samples`). Every row carries its `family` (load 1/5/15, the RAM columns, ...; the answer carries the subject's): the subject's own family is never compared, and without `all=1` each other family lists only its strongest member. `total` counts every comparison. The subject's `label` and every row's follow `lang` like in `metric_series` |
@@ -995,9 +995,15 @@ server applies to all of them:
 - **An absent `storage_disks` keeps the last list.** Agent 0.1.6 does not send
   the key and a 0.1.7 report that had to shrink may drop it; reading that as
   "no disks" would erase a working disk list. A key that IS sent replaces it.
-- Five WAN counters are stored as the **step** between two reports, and the step
-  is `null` across a reboot or a change of WAN device - never the value since
-  boot.
+- The WAN counters are stored as the **step** between two readings (every
+  report; once an hour for the ring and the six port counters of agent 0.1.13),
+  and the step is `null` across a reboot or a change of WAN device - never the
+  value since boot.
+- The report's `speedtest_active` flag is stored per minute
+  (`vps_metrics.speedtest_active`, schema 20260927r022): `1` when the flag was
+  set, a speed-test result travelled in the report or the run stepped aside for
+  the test, `0` when the agent said no test ran, `null` when it did not say.
+  Rows from before that schema stay `null` and are never backfilled.
 - **Privacy:** no MAC address, BSSID, neighbour SSID, disk serial or WWN leaves
   the router; disk identity is a server-side hash of transport, port, model and
   size.
@@ -1069,6 +1075,22 @@ collecting from its next run.
   0.1.8, never 0.
 
 Out of range, negative, fractional or not a number is `null`, never a bound.
+
+**Agent 0.1.13 (OpenWrt) adds** to the hourly `wan_path` object:
+
+- the WAN port's own counters from the same `ethtool -S` read, cumulative:
+  `rx_overrun`, `rx_discard`, `bad_crc_event`, `mac_receive_error`,
+  `refill_errors`, `oversize_received`. `null` = the driver does not print that
+  name; `0` is a measurement. The server stores each as an hourly **step**
+  (`wan_rx_overrun`, `wan_rx_discard`, `wan_crc_errors`, `wan_mac_rx_errors`,
+  `wan_refill_errors`, `wan_oversize`), gated like `wan_ring_drops`.
+- the SFP module's readings in kernel units, only when exactly one module hwmon
+  exists: `sfp_temp_mc`, `sfp_temp_max_mc`, `sfp_temp_crit_mc` (m°C, range
+  -60000 to 200000) and `sfp_rx_power_uw`, `sfp_rx_power_min_uw`,
+  `sfp_rx_power_lcrit_uw` (µW, 0-100000), plus `sfp_phy_hwmon` (strict bool:
+  `true` = a PHY inside the module has its own hwmon, i.e. a copper-class
+  module; `false` says nothing about fibre). `last_details` only, no series.
+  No serial number or EEPROM content is ever sent.
 
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 

@@ -32,7 +32,9 @@ if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 
             // Router release 20260920: one early, one late Wi-Fi column and the LAST column of the migration block.
             'wifi_busy_5g','wifi_6e_unserved','clock_skew_s',
             // Agent 0.1.9: without it every report's metrics INSERT fails (ingest_dropped).
-            'agent_prev_cpu_ms'];
+            'agent_prev_cpu_ms',
+            // 20260927r022: the first and the last column of that block, same reason.
+            'wan_rx_overrun','speedtest_active'];
         $stmt_cols = $pdo->query("DESCRIBE vps_metrics");
         $existing = array_column($stmt_cols->fetchAll(PDO::FETCH_ASSOC), 'Field');
         $missing = array_diff($required_cols, $existing);

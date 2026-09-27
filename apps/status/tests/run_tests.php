@@ -1070,7 +1070,9 @@ if (function_exists('bk_counter_step')) {
     check('první hlášení = žádný přírůstek', array_values(array_unique(array_values($first['steps']), SORT_REGULAR)), [null]);
     $second = bk_wan_counter_steps($first['state'], $cnt(9, 125, 4, 1), 'eth2', 5060, null);
     check('druhé hlášení: chyby, zahození, výpadky linky a odmítnutá spojení jsou přírůstky', $second['steps'],
-        ['wan_errors' => 2, 'wan_drops' => 5, 'wan_ring_drops' => null, 'wan_link_flaps' => 1, 'conntrack_drops' => 0]);
+        ['wan_errors' => 2, 'wan_drops' => 5, 'wan_ring_drops' => null, 'wan_link_flaps' => 1, 'conntrack_drops' => 0,
+            'wan_rx_overrun' => null, 'wan_rx_discard' => null, 'wan_crc_errors' => null, 'wan_mac_rx_errors' => null,
+            'wan_refill_errors' => null, 'wan_oversize' => null]);
     $rebooted = bk_wan_counter_steps($second['state'], $cnt(40, 300, 9, 5), 'eth2', 90, null);
     check('restart, po kterém čítač stihl přerůst starou hodnotu, se pozná podle uptime', array_values(array_unique(array_values($rebooted['steps']), SORT_REGULAR)), [null]);
     check('po restartu se počítá od nové hodnoty', bk_wan_counter_steps($rebooted['state'], $cnt(41, 300, 9, 5), 'eth2', 150, null)['steps']['wan_errors'], 1);
@@ -1100,6 +1102,48 @@ if (function_exists('bk_counter_step')) {
         [$r_boot['steps']['wan_ring_drops'], $ring($r_boot['state'], 900, 3660, 1789557300)['steps']['wan_ring_drops']], [null, 895]);
 }
 
+// --- The WAN port's own counters (agent 0.1.13): hourly steps like the ring ----
+// They come from the same `ethtool -S` read, so the same gate applies: a step
+// only on the report with a NEW wan_path.checked_at. A name the driver does not
+// print is null and stays null; a measured 0 is a step of 0.
+if (function_exists('bk_wan_counter_steps')) {
+    $pc_cnt = ['wan_rx_errors' => 0, 'wan_tx_errors' => 0, 'wan_rx_dropped' => 0, 'wan_tx_dropped' => 0,
+        'conntrack_drop' => 0, 'wan_carrier_down_count' => 0];
+    $pc_keys = ['wan_rx_overrun', 'wan_rx_discard', 'wan_crc_errors', 'wan_mac_rx_errors', 'wan_refill_errors', 'wan_oversize'];
+    $pc = fn ($prev, array $port, int $uptime, int $checked) => bk_wan_counter_steps($prev, $port + $pc_cnt, 'eth2', $uptime, $checked);
+    $pc_steps = fn (array $res): array => array_intersect_key($res['steps'], array_flip($pc_keys));
+    $pc_a = ['wan_rx_ring_drops' => 7, 'rx_overrun' => 2, 'rx_discard' => 5, 'bad_crc_event' => 3, 'mac_receive_error' => 1,
+        'refill_errors' => 4, 'oversize_received' => 0];
+    $pc1 = $pc(null, $pc_a, 1000, 1789550000);
+    $pc2 = $pc($pc1['state'], $pc_a, 1060, 1789550000);
+    $pc3 = $pc($pc2['state'], ['rx_overrun' => 12, 'rx_discard' => 5, 'bad_crc_event' => 3, 'mac_receive_error' => 1,
+        'refill_errors' => 9, 'oversize_received' => 0, 'wan_rx_ring_drops' => 17], 4600, 1789553600);
+    check('čítače portu: první čtení nemá přírůstek, minuta beze změny času také ne',
+        [array_unique(array_values($pc_steps($pc1)), SORT_REGULAR), array_unique(array_values($pc_steps($pc2)), SORT_REGULAR)], [[null], [null]]);
+    check('čítače portu: nové hodinové čtení dá přírůstek každého, změřená nula zůstane nulou',
+        $pc_steps($pc3), ['wan_rx_overrun' => 10, 'wan_rx_discard' => 0, 'wan_crc_errors' => 0, 'wan_mac_rx_errors' => 0,
+            'wan_refill_errors' => 5, 'wan_oversize' => 0]);
+    check('čítače portu: prstenec počítá dál stejně jako dřív', $pc3['steps']['wan_ring_drops'], 10);
+    // A driver that prints only the two ring counters: the other four are unknown.
+    $pc4 = $pc($pc3['state'], ['rx_overrun' => 13, 'rx_discard' => 6, 'wan_rx_ring_drops' => 19], 8200, 1789557200);
+    check('čítače portu: název, který ovladač nevypíše, je null, ne nula',
+        $pc_steps($pc4), ['wan_rx_overrun' => 1, 'wan_rx_discard' => 1, 'wan_crc_errors' => null, 'wan_mac_rx_errors' => null,
+            'wan_refill_errors' => null, 'wan_oversize' => null]);
+    check('čítače portu: po chybějícím čtení se řetěz obnoví až dalším čtením',
+        $pc_steps($pc($pc4['state'], $pc_a + ['bad_crc_event' => 3], 11800, 1789560800))['wan_crc_errors'], null);
+    check('čítače portu: pokles (restart ovladače) není přírůstek',
+        $pc_steps($pc($pc3['state'], ['refill_errors' => 2] + $pc_a, 8200, 1789557200))['wan_refill_errors'], null);
+    // A state saved by the server before this release knows only the ring: its
+    // first reading with the new counters starts them, it books no total.
+    $pc_old = $pc1['state'];
+    foreach (['rx_overrun', 'rx_discard', 'bad_crc_event', 'mac_receive_error', 'refill_errors', 'oversize_received'] as $pc_k) {
+        unset($pc_old[$pc_k]);
+    }
+    $pc5 = $pc($pc_old, ['wan_rx_ring_drops' => 9] + $pc_a, 4600, 1789553600);
+    check('čítače portu: stav z doby před nimi dá první přírůstek null, prstenec pokračuje',
+        [array_unique(array_values($pc_steps($pc5)), SORT_REGULAR), $pc5['steps']['wan_ring_drops']], [[null], 2]);
+}
+
 // --- bk_sanitize_wan_path ------------------------------------------------------
 if (function_exists('bk_sanitize_wan_path')) {
     $wp = bk_sanitize_wan_path(['checked_at' => 1789553100, 'flow_offloading' => true, 'flow_offloading_hw' => 'false', 'flowtable_active' => 1,
@@ -1115,6 +1159,22 @@ if (function_exists('bk_sanitize_wan_path')) {
     $wp_null = bk_sanitize_wan_path(['sqm' => null, 'lan_conduits' => 'x']);
     check('sqm null (nešlo ověřit) se nezmění na prázdný seznam (ověřeno, žádná fronta)', [$wp_null['sqm'], bk_sanitize_wan_path(['sqm' => []])['sqm'], $wp_null['lan_conduits']], [null, [], null]);
     check('starší agent cestu WAN neposílá', bk_sanitize_wan_path(null), null);
+
+    // Agent 0.1.13: the port's own counters and the SFP module's readings.
+    $wp13 = bk_sanitize_wan_path(['rx_overrun' => 2, 'rx_discard' => '5', 'bad_crc_event' => 0, 'mac_receive_error' => -1,
+        'refill_errors' => 4.5, 'oversize_received' => null, 'sfp_temp_mc' => 49000, 'sfp_temp_max_mc' => 70000,
+        'sfp_temp_crit_mc' => 200001, 'sfp_rx_power_uw' => 350, 'sfp_rx_power_min_uw' => 100001, 'sfp_rx_power_lcrit_uw' => 'x',
+        'sfp_phy_hwmon' => 'true', 'sfp_serial' => 'ABC123']);
+    check('čítače portu: celé číslo i jako text, záporné a desetinné null, změřená nula zůstane',
+        [$wp13['rx_overrun'], $wp13['rx_discard'], $wp13['bad_crc_event'], $wp13['mac_receive_error'], $wp13['refill_errors'], $wp13['oversize_received']],
+        [2, 5, 0, null, null, null]);
+    check('modul SFP: m°C a µW v rozsahu, mimo něj null; příznak PHY jen přísný bool; sériové číslo pryč',
+        [$wp13['sfp_temp_mc'], $wp13['sfp_temp_max_mc'], $wp13['sfp_temp_crit_mc'], $wp13['sfp_rx_power_uw'],
+            $wp13['sfp_rx_power_min_uw'], $wp13['sfp_rx_power_lcrit_uw'], $wp13['sfp_phy_hwmon'], array_key_exists('sfp_serial', $wp13)],
+        [49000, 70000, null, 350, null, null, null, false]);
+    check('modul SFP: záporná teplota je měření a false u PHY zůstane false',
+        [bk_sanitize_wan_path(['sfp_temp_mc' => -5000, 'sfp_phy_hwmon' => false])['sfp_temp_mc'], bk_sanitize_wan_path(['sfp_phy_hwmon' => false])['sfp_phy_hwmon']],
+        [-5000, false]);
 }
 
 // --- bk_sanitize_lan_ports -----------------------------------------------------
@@ -1194,8 +1254,10 @@ if (function_exists('bk_metric_column_map')) {
         'agent_run_ms', 'clock_skew_s',
         // Agent 0.1.9: the CPU time of the previous run.
         'agent_prev_cpu_ms',
+        // Agent 0.1.13: the WAN port's own counters, hourly steps.
+        'wan_rx_overrun', 'wan_rx_discard', 'wan_crc_errors', 'wan_mac_rx_errors', 'wan_refill_errors', 'wan_oversize',
     ];
-    check('registr metrik: všech 25 metrik routeru v něm je', [count($reg_new), array_values(array_diff($reg_new, array_keys($reg)))], [25, []]);
+    check('registr metrik: všech 31 metrik routeru v něm je', [count($reg_new), array_values(array_diff($reg_new, array_keys($reg)))], [31, []]);
     $reg_schema = (string)file_get_contents(__DIR__ . '/../schema.sql');
     preg_match('/CREATE TABLE IF NOT EXISTS `vps_metrics`\s*\((.*?)\n\)\s*ENGINE/s', $reg_schema, $reg_m);
     preg_match_all('/^\s*`(\w+)`\s/m', $reg_m[1] ?? '', $reg_cols);
@@ -1227,8 +1289,9 @@ if (function_exists('bk_metric_column_map')) {
             check_true("registr metrik: krokovou metriku {$reg_key} nikdo nečte jako čítač", ($reg_def['counter'] ?? false) === false);
         }
     }
-    check('registr metrik: krokových metrik je přesně pět', $reg_steps,
-        ['wan_errors', 'wan_drops', 'wan_ring_drops', 'wan_link_flaps', 'conntrack_drops']);
+    check('registr metrik: krokových metrik je přesně jedenáct', $reg_steps,
+        ['wan_errors', 'wan_drops', 'wan_ring_drops', 'wan_link_flaps', 'conntrack_drops',
+            'wan_rx_overrun', 'wan_rx_discard', 'wan_crc_errors', 'wan_mac_rx_errors', 'wan_refill_errors', 'wan_oversize']);
 }
 
 // --- Fixture: the user's Turris Omnia (tests/fixtures/omnia_router.php) -------
@@ -1346,7 +1409,9 @@ if (function_exists('bk_metric_column_map')) {
     // deliberate exemption of run_agent_metric_lint.php - otherwise the lint
     // turns red the day the agent really sends it.
     $nm_list = require __DIR__ . '/fixtures/agent_not_metrics.php';
-    $stored_by_contract = ['wifi_clients_count', 'wan_link_mbit', 'conntrack_count', 'conntrack_pct', 'cpu_core_max_pct', 'cpu_core_max_softirq_pct', 'wan_rx_mbps', 'wan_tx_mbps', 'agent_run_ms', 'agent_prev_cpu_ms'];
+    $stored_by_contract = ['wifi_clients_count', 'wan_link_mbit', 'conntrack_count', 'conntrack_pct', 'cpu_core_max_pct', 'cpu_core_max_softirq_pct', 'wan_rx_mbps', 'wan_tx_mbps', 'agent_run_ms', 'agent_prev_cpu_ms',
+        // Stored per minute since schema 20260927r022 (vps_metrics.speedtest_active).
+        'speedtest_active'];
     check('Omnia: každý klíč hlášení je ukládaná metrika, nebo vědomá výjimka lintu', array_values(array_diff(array_keys($omnia_p), $nm_list, $stored_by_contract)), []);
     check('Omnia: ukládané klíče mezi výjimkami lintu nejsou', array_values(array_intersect($stored_by_contract, $nm_list)), []);
 }

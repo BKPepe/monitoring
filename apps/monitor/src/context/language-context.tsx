@@ -2753,8 +2753,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: "The WAN port's rx_errors and tx_errors counters in /sys/class/net; the server stores the growth between two reports.",
   },
   'help.wan_errors_caveat': {
-    cs: 'Rostoucí počet ukazuje na kabel, modul SFP nebo port, ne na zahlcení.',
-    en: 'A growing count points at the cable, the SFP module or the port, not at congestion.',
+    cs: 'Na některých ovladačích (mvneta na Turris Omnii) se sem počítají i rámce, které router nestihl převzít, nejen poškozené rámce z linky. Většinu příčin rozliší řady chyb CRC, přetečení přijímací fronty FIFO, nedoplněných bufferů a příliš dlouhých rámců; některé příčiny vlastní počítadlo nemají.',
+    en: 'On some drivers (mvneta on the Turris Omnia) this also counts frames the router could not take in time, not only damaged frames from the line. The CRC error, receive FIFO overrun, failed buffer refill and oversize frame series show most of it; some causes have no counter of their own.',
   },
   'help.wan_drops_what': {
     cs: 'Nově zahozené pakety na portu WAN od předchozího hlášení (včetně neznámých protokolů).',
@@ -2765,12 +2765,12 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: "The WAN port's rx_dropped and tx_dropped counters in /sys/class/net; the server stores the growth between two reports.",
   },
   'help.wan_drops_caveat': {
-    cs: 'Většinou jde o neškodné rámce, které router nezpracovává (LLDP, cizí VLAN, PPPoE discovery), ne o přetížení. Žádné doporučení z této hodnoty nevychází.',
-    en: 'Mostly harmless frames the router does not handle (LLDP, foreign VLANs, PPPoE discovery), not overload. No recommendation is based on this value.',
+    cs: 'Většinou jde o neškodné rámce, které router nezpracovává (LLDP, cizí VLAN, PPPoE discovery), ne o přetížení. Se zapnutým packet steeringem se sem počítá i přeplněná fronta procesoru. Žádné doporučení z této hodnoty nevychází.',
+    en: 'Mostly harmless frames the router does not handle (LLDP, foreign VLANs, PPPoE discovery), not overload. With packet steering on, a full CPU backlog is counted here too. No recommendation is based on this value.',
   },
   'help.wan_ring_drops_what': {
-    cs: 'Pakety, které port WAN nestihl převzít z přijímací fronty (rx_discard + rx_overrun).',
-    en: 'Packets the WAN port could not take from its receive ring in time (rx_discard + rx_overrun).',
+    cs: 'Rámce, které port WAN zahodil: filtr adres nebo nedostatek místa (rx_discard) a plná přijímací fronta FIFO (rx_overrun).',
+    en: 'Frames the WAN port discarded: address filtering or lack of room (rx_discard) and a full receive FIFO (rx_overrun).',
   },
   'help.wan_ring_drops_how': {
     cs: 'ethtool -S <port WAN>, čte se jednou za hodinu; server ukládá přírůstek mezi dvěma čteními. Potřebuje balíček ethtool; bez něj zůstane prázdné.',
@@ -2795,6 +2795,54 @@ const translations: Record<string, { cs: string; en: string }> = {
   'help.wan_link_flaps_how': {
     cs: 'Počítadlo carrier_down_count portu WAN v /sys/class/net; server ukládá přírůstek mezi dvěma hlášeními.',
     en: "The WAN port's carrier_down_count counter in /sys/class/net; the server stores the growth between two reports.",
+  },
+  'help.wan_port_counter_how': {
+    cs: 'ethtool -S <port WAN>, čte se jednou za hodinu; server ukládá přírůstek mezi dvěma čteními. Starší agent ho neposílá; pak zůstane prázdné.',
+    en: 'ethtool -S <WAN port>, read once an hour; the server stores the growth between two readings. An older agent does not send it; the value then stays empty.',
+  },
+  'help.wan_line_counter_caveat': {
+    cs: 'Rostoucí počet ukazuje na linku: kabel nebo optiku, modul SFP nebo zařízení poskytovatele. S metalickým modulem SFP vidí port spoj s modulem a z kabelu jen to, co modul propustí.',
+    en: "A growing count points at the line: the cable or fibre, the SFP module or the provider's device. With a copper SFP module the port sees the link to the module and only what the module passes on from the cable.",
+  },
+  'help.wan_crc_errors_what': {
+    cs: 'Nové rámce s chybným kontrolním součtem (CRC), které port WAN přijal z linky (počítadlo bad_crc_event).',
+    en: 'New frames with a bad checksum (CRC) that the WAN port received from the line (the bad_crc_event counter).',
+  },
+  'help.wan_mac_rx_errors_what': {
+    cs: 'Nové chyby příjmu, které MAC portu WAN zaznamenala na lince (počítadlo mac_receive_error).',
+    en: "New receive errors the WAN port's MAC saw on the line (the mac_receive_error counter).",
+  },
+  'help.wan_rx_overrun_what': {
+    cs: 'Rámce, které port WAN ztratil, protože byla plná jeho přijímací fronta FIFO (počítadlo rx_overrun).',
+    en: 'Frames the WAN port lost because its receive FIFO was full (the rx_overrun counter).',
+  },
+  'help.wan_rx_overrun_caveat': {
+    cs: 'Router nestíhal příjem, například při testu rychlosti nebo velkém stahování. Nejde o závadu linky.',
+    en: 'The router could not keep up with reception, for example during a speed test or a large download. It is not a line fault.',
+  },
+  'help.wan_rx_discard_what': {
+    cs: 'Rámce, které port WAN zahodil kvůli filtru adres (rámce pro jiné zařízení) nebo kvůli nedostatku místa (počítadlo rx_discard).',
+    en: 'Frames the WAN port discarded, by its address filter (frames for another device) or for lack of room (the rx_discard counter).',
+  },
+  'help.wan_rx_discard_caveat': {
+    cs: 'Samo o sobě neodliší neškodný filtr od přetížení. Roste-li i na nečinné lince, jde o filtr.',
+    en: 'On its own it cannot tell harmless filtering from overload. If it also grows while the line is idle, it is filtering.',
+  },
+  'help.wan_refill_errors_what': {
+    cs: 'Kolikrát ovladač portu WAN nestihl doplnit přijímací buffer (počítadlo refill_errors).',
+    en: "How many times the WAN port's driver could not refill a receive buffer (the refill_errors counter).",
+  },
+  'help.wan_refill_errors_caveat': {
+    cs: 'Ukazuje na zátěž nebo paměť routeru, ne na linku. Na některých ovladačích (mvneta na Turris Omnii) se tyto události počítají i do chyb na portu WAN.',
+    en: "Points at the router's load or memory, not at the line. On some drivers (mvneta on the Turris Omnia) these events are also counted in the WAN port errors.",
+  },
+  'help.wan_oversize_what': {
+    cs: 'Rámce delší, než port WAN přijímá (počítadlo oversize_received).',
+    en: 'Frames longer than the WAN port accepts (the oversize_received counter).',
+  },
+  'help.wan_oversize_caveat': {
+    cs: 'Ukazuje na nesoulad MTU mezi portem a stranou poskytovatele, ne na závadu hardwaru.',
+    en: "Points at an MTU mismatch between the port and the provider's side, not at a hardware fault.",
   },
   'help.agent_run_ms_what': {
     cs: 'Jak dlouho agentovi na routeru trvalo jedno měření, od startu po sestavení hlášení.',

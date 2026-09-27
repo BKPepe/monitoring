@@ -519,7 +519,7 @@ kontroly nebo hlášení. Obojí se zapíše do auditu.
 
 | Endpoint | Přístup | Popis |
 |---|---|---|
-| `action=metric_series&monitor_id=&metric=&period=&lang=` | přiřazený monitor | Jedna metrika v čase. Metrika označená `step` (`wan_errors`, `wan_drops`, `wan_ring_drops`, `wan_link_flaps`, `conntrack_drops`) už nese přírůstek mezi dvěma hlášeními: syrový bod je krok té minuty a devadesátidenní pohled je SOUČET dne (`avg_val * samples`), nikdy jeho průměr. Kumulativní `counter` série se kreslí jako přírůstky: reset (restart) a přírůstek přes mezeru delší než 2,5 intervalu hlášení nezanechá bod - přerušení, nikdy špičku. `distinctValues` počítá různé hodnoty série, aby stránka poznala konstantní metriku od křivky. `lang=en` dá do `label` anglický název metriky (výchozí je čeština); popisek počítadla končí `(přírůstek)` / `(increase)` |
+| `action=metric_series&monitor_id=&metric=&period=&lang=` | přiřazený monitor | Jedna metrika v čase. Metrika označená `step` (`wan_errors`, `wan_drops`, `wan_ring_drops`, `wan_link_flaps`, `conntrack_drops` a hodinové čítače portu WAN `wan_rx_overrun`, `wan_rx_discard`, `wan_crc_errors`, `wan_mac_rx_errors`, `wan_refill_errors`, `wan_oversize`) už nese přírůstek mezi dvěma hlášeními: syrový bod je krok té minuty a devadesátidenní pohled je SOUČET dne (`avg_val * samples`), nikdy jeho průměr. Kumulativní `counter` série se kreslí jako přírůstky: reset (restart) a přírůstek přes mezeru delší než 2,5 intervalu hlášení nezanechá bod - přerušení, nikdy špičku. `distinctValues` počítá různé hodnoty série, aby stránka poznala konstantní metriku od křivky. `lang=en` dá do `label` anglický název metriky (výchozí je čeština); popisek počítadla končí `(přírůstek)` / `(increase)` |
 | `action=metric_series_batch&monitor_id=&period=&lang=` | přiřazený monitor | Všechny grafy zařízení v jednom volání. Série pro `hdd` a `ram` navíc nese `daysToFull` (počet dní do zaplnění), a to jen tam, kde je růst opravdu naměřený - chybějící klíč znamená bez predikce, nikdy nulu. Jen období do `30d`: `90d`, `180d` a `1y` odpoví `400 {"error": "period_unsupported"}` - dřív vracela posledních 24 hodin pod dlouhým popiskem. Počítadla (`fw_*`, `dns_*`, `tcp_retrans`, ...) chodí jako přírůstky stejně jako v `metric_series`, s `(přírůstek)` v popisku a `counter: true` - dřív to byly celoživotní součty. Každá série nese `previousAvg`: průměr stejně dlouhého okna o jednu periodu dřív (okno, které kreslí `metric_series&previous=1`; u počítadla průměr jeho přírůstků), takže dlaždice ukáže trend bez druhého dotazu. `null`, když tam jsou méně než 3 vzorky - trend z jednoho dvou čtení se nevymýšlí; `30d` ho většinou nemá, protože syrová měření se po 30 dnech mažou. Popisky se řídí `lang` jako u `metric_series` |
 | `action=metric_detail&monitor_id=&metric=&lang=` | přiřazený monitor | Kontext stránky detailu metriky; `metric.label` a popisky v `related` se řídí `lang` jako u `metric_series` |
 | `action=metric_correlations&monitor_id=&metric=&period=&lang=` (volitelně `&all=1` pro všechny porovnávané metriky, ne jen nejsilnějších 8) | přiřazený monitor | Jak se ostatní metriky zařízení hýbaly spolu s touto (Pearson). Počítá se jen z metrik ve `vps_metrics`: sdílejí jeden řádek měření, takže se vzorky párují přesně místo průměrování do společných oken, které by obě řady vyhladilo a koeficient nadhodnotilo. `r` je `null`, nikdy `0`, když je nedefinovaný - neměnná řada (`reason: constant`) nebo málo překryvů (`few_samples`). Každý řádek nese svou `family` (load 1/5/15, sloupce RAM, ...; odpověď nese rodinu předmětu): s vlastní rodinou se předmět nesrovnává nikdy a bez `all=1` má každá jiná rodina v seznamu jen nejsilnějšího člena. `total` počítá všechna srovnání. Popisek předmětu i každého řádku se řídí `lang` jako u `metric_series` |
@@ -976,8 +976,14 @@ server uplatňuje:
   neposílá a hlášení 0.1.7, které se muselo zmenšit, o něj může přijít; číst to
   jako „žádné disky" by smazalo funkční seznam. Klíč, který poslaný JE, seznam
   nahradí.
-- Pět čítačů WAN se ukládá jako **krok** mezi dvěma hlášeními a krok je `null`
+- Čítače WAN se ukládají jako **krok** mezi dvěma čteními (v každém hlášení; u
+  fronty a šesti čítačů portu z agenta 0.1.13 jednou za hodinu) a krok je `null`
   přes restart nebo při změně zařízení WAN – nikdy hodnota od startu.
+- Příznak hlášení `speedtest_active` se ukládá po minutách
+  (`vps_metrics.speedtest_active`, schéma 20260927r022): `1`, když byl příznak
+  nastavený, v hlášení cestoval výsledek testu rychlosti nebo běh kvůli testu
+  ustoupil, `0`, když agent řekl, že žádný test neběžel, `null`, když neřekl
+  nic. Řádky z doby před tímto schématem zůstanou `null` a nikdy se nedoplňují.
 - **Soukromí:** router neopustí žádná MAC adresa, BSSID, SSID sousedů, sériové
   číslo disku ani WWN; identita disku je serverový otisk z přenosu, portu,
   modelu a velikosti.
@@ -1049,6 +1055,22 @@ porovnává doslova a od dalšího běhu přestane sbírat.
   `reports_missing` třetí důvod. Od agentů do 0.1.8 `null`, nikdy 0.
 
 Hodnota mimo rozsah, záporná, desetinná nebo nečíselná je `null`, nikdy mez.
+
+**Agent 0.1.13 (OpenWrt) přidává** do hodinového objektu `wan_path`:
+
+- vlastní čítače portu WAN ze stejného čtení `ethtool -S`, kumulativní:
+  `rx_overrun`, `rx_discard`, `bad_crc_event`, `mac_receive_error`,
+  `refill_errors`, `oversize_received`. `null` = ovladač takový název nevypisuje;
+  `0` je měření. Server každý ukládá jako hodinový **krok** (`wan_rx_overrun`,
+  `wan_rx_discard`, `wan_crc_errors`, `wan_mac_rx_errors`, `wan_refill_errors`,
+  `wan_oversize`), hlídaný stejně jako `wan_ring_drops`.
+- údaje modulu SFP v jednotkách jádra, jen když existuje právě jeden hwmon
+  modulu: `sfp_temp_mc`, `sfp_temp_max_mc`, `sfp_temp_crit_mc` (m°C, rozsah
+  -60000 až 200000) a `sfp_rx_power_uw`, `sfp_rx_power_min_uw`,
+  `sfp_rx_power_lcrit_uw` (µW, 0-100000), k tomu `sfp_phy_hwmon` (přísný bool:
+  `true` = PHY uvnitř modulu má vlastní hwmon, tedy metalický modul; `false`
+  o optice nic neříká). Jen v `last_details`, žádná řada. Sériové číslo ani
+  obsah EEPROM se nikdy neposílá.
 
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 

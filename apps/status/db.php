@@ -515,7 +515,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260927r021');
+    define('BK_SCHEMA_VERSION', '20260927r022');
 
     $bk_current_schema = false;
     try {
@@ -1483,6 +1483,20 @@ try {
           FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
           INDEX (`monitor_id`, `metric_key`)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+        // The WAN port's own counters (agent 0.1.13), hourly STEPS from the
+        // same `ethtool -S` read as wan_ring_drops. They tell a damaged frame
+        // from the line from a frame the router could not take in. NULL = not
+        // measured: every older row stays NULL and is never backfilled.
+        "ALTER TABLE vps_metrics ADD COLUMN wan_rx_overrun INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wan_rx_discard INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wan_crc_errors INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wan_mac_rx_errors INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wan_refill_errors INT DEFAULT NULL",
+        "ALTER TABLE vps_metrics ADD COLUMN wan_oversize INT DEFAULT NULL",
+        // Was the router's own speed test running (or its result waiting) in
+        // that minute: 1 / 0, NULL = the agent did not say. The agent has
+        // sent the flag since 0.1.7; only last_details kept it until now.
+        "ALTER TABLE vps_metrics ADD COLUMN speedtest_active TINYINT DEFAULT NULL",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);

@@ -255,6 +255,15 @@ CREATE TABLE IF NOT EXISTS `vps_metrics` (
   `agent_run_ms` INT DEFAULT NULL, -- wall time of the previous agent run
   `clock_skew_s` INT DEFAULT NULL, -- abs(receive time - agent_time); absolute so that a weekly mean cannot cancel out
   `agent_prev_cpu_ms` INT DEFAULT NULL, -- CPU time (user+sys, children included) of the previous agent run; NULL = not measured (agent <= 0.1.8, first run, killed run)
+  -- The WAN port's own counters (agent 0.1.13): hourly STEPS of `ethtool -S`,
+  -- written only when the hourly path check ran, like wan_ring_drops.
+  `wan_rx_overrun` INT DEFAULT NULL, -- step of rx_overrun: frames lost because the receive FIFO was full
+  `wan_rx_discard` INT DEFAULT NULL, -- step of rx_discard: address filtering OR a resource error
+  `wan_crc_errors` INT DEFAULT NULL, -- step of bad_crc_event: damaged frames from the line or the module
+  `wan_mac_rx_errors` INT DEFAULT NULL, -- step of mac_receive_error: receive errors the MAC saw on the line
+  `wan_refill_errors` INT DEFAULT NULL, -- step of refill_errors: receive buffers the driver could not refill
+  `wan_oversize` INT DEFAULT NULL, -- step of oversize_received: frames longer than the port takes (MTU mismatch)
+  `speedtest_active` TINYINT DEFAULT NULL, -- 1 = a speed test ran or its result was waiting in that minute, 0 = none; NULL = not reported
   `checked_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   INDEX (`checked_at`),

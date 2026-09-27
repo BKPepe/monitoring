@@ -1123,6 +1123,17 @@ function bk_metric_column_map(): array {
     // Agent 0.1.9: CPU time of the PREVIOUS run (user + system, children
     // included), a level like agent_run_ms. / 60,000 = the share of one core.
     'agent_prev_cpu_ms' => ['col' => 'agent_prev_cpu_ms', 'unit' => 'ms', 'label' => 'CPU čas běhu agenta', 'only' => ['openwrt']],
+    // Agent 0.1.13: the WAN port's own counters, hourly STEPS of the same
+    // `ethtool -S` read as wan_ring_drops. They split what wan_errors and
+    // wan_ring_drops lump together: damaged frames from the line (CRC, MAC
+    // receive errors), frames longer than the port takes, and frames the
+    // router could not take in (FIFO overruns, failed buffer refills).
+    'wan_rx_overrun' => ['col' => 'wan_rx_overrun', 'unit' => '', 'label' => 'Přetečení přijímací fronty FIFO na portu WAN', 'only' => ['openwrt'], 'step' => true],
+    'wan_rx_discard' => ['col' => 'wan_rx_discard', 'unit' => '', 'label' => 'Rámce zahozené portem WAN (filtr adres nebo nedostatek místa)', 'only' => ['openwrt'], 'step' => true],
+    'wan_crc_errors' => ['col' => 'wan_crc_errors', 'unit' => '', 'label' => 'Chyby CRC na portu WAN', 'only' => ['openwrt'], 'step' => true],
+    'wan_mac_rx_errors' => ['col' => 'wan_mac_rx_errors', 'unit' => '', 'label' => 'Chyby příjmu MAC na portu WAN', 'only' => ['openwrt'], 'step' => true],
+    'wan_refill_errors' => ['col' => 'wan_refill_errors', 'unit' => '', 'label' => 'Nedoplněné přijímací buffery portu WAN', 'only' => ['openwrt'], 'step' => true],
+    'wan_oversize' => ['col' => 'wan_oversize', 'unit' => '', 'label' => 'Příliš dlouhé rámce na portu WAN', 'only' => ['openwrt'], 'step' => true],
 ];
 }
 
@@ -1193,6 +1204,11 @@ function bk_metric_labels_en(): array {
     'conntrack_drops' => 'Connections refused by conntrack',
     'agent_run_ms' => 'Agent run time', 'clock_skew_s' => 'Router clock offset',
     'agent_prev_cpu_ms' => 'Agent run CPU time',
+    'wan_rx_overrun' => 'Receive FIFO overruns on the WAN port',
+    'wan_rx_discard' => 'Frames discarded by the WAN port (address filter or no room)',
+    'wan_crc_errors' => 'CRC errors on the WAN port', 'wan_mac_rx_errors' => 'MAC receive errors on the WAN port',
+    'wan_refill_errors' => 'Receive buffers the WAN port could not refill',
+    'wan_oversize' => 'Oversize frames on the WAN port',
     ];
 }
 
@@ -1624,6 +1640,9 @@ function bk_counter_step(?int $prev, ?int $cur, bool $same_source): ?int {
  *
  * Ring drops come from `ethtool -S` once an hour: their step is written only
  * on the report that carries a NEW `wan_path.checked_at`, null on every other.
+ * The port's own counters of agent 0.1.13 (rx_overrun, rx_discard,
+ * bad_crc_event, mac_receive_error, refill_errors, oversize_received) come
+ * from the same read and follow the same gate.
  *
  * @param mixed $prev the stored state (anything but an array = first report)
  * @param array<string, ?int> $cur cumulative values of this report
@@ -1647,13 +1666,25 @@ function bk_wan_counter_steps($prev, array $cur, ?string $dev, ?int $uptime, ?in
     // A sum of two directions is known only when both are.
     $both = fn (?int $a, ?int $b): ?int => ($a === null || $b === null) ? null : $a + $b;
 
-    $ring = $cur['wan_rx_ring_drops'] ?? null;
-    $ring_step = null;
-    $state['wan_rx_ring_drops'] = $same ? $old('wan_rx_ring_drops') : null;
+    // The hourly `ethtool -S` counters, all gated on the same new reading. A
+    // state saved before a counter existed has no value for it, so its first
+    // step is null, never the total since boot.
+    $hourly = ['wan_rx_ring_drops' => 'wan_ring_drops', 'rx_overrun' => 'wan_rx_overrun',
+        'rx_discard' => 'wan_rx_discard', 'bad_crc_event' => 'wan_crc_errors',
+        'mac_receive_error' => 'wan_mac_rx_errors', 'refill_errors' => 'wan_refill_errors',
+        'oversize_received' => 'wan_oversize'];
     $state['ring_at'] = $same ? $old('ring_at') : null;
-    if ($path_checked_at !== null && $path_checked_at !== $state['ring_at']) {
-        $ring_step = bk_counter_step($state['wan_rx_ring_drops'], $ring, $same);
-        $state['wan_rx_ring_drops'] = $ring;
+    $new_reading = $path_checked_at !== null && $path_checked_at !== $state['ring_at'];
+    $hour_step = [];
+    foreach ($hourly as $key => $out_key) {
+        $hour_step[$out_key] = null;
+        $state[$key] = $same ? $old($key) : null;
+        if ($new_reading) {
+            $hour_step[$out_key] = bk_counter_step($state[$key], $cur[$key] ?? null, $same);
+            $state[$key] = $cur[$key] ?? null;
+        }
+    }
+    if ($new_reading) {
         $state['ring_at'] = $path_checked_at;
     }
 
@@ -1662,11 +1693,18 @@ function bk_wan_counter_steps($prev, array $cur, ?string $dev, ?int $uptime, ?in
         'steps' => [
             'wan_errors' => $both($step['wan_rx_errors'], $step['wan_tx_errors']),
             'wan_drops' => $both($step['wan_rx_dropped'], $step['wan_tx_dropped']),
-            'wan_ring_drops' => $ring_step,
+            'wan_ring_drops' => $hour_step['wan_ring_drops'],
             'wan_link_flaps' => $step['wan_carrier_down_count'],
             // `drop` only: insert_failed also grows on harmless races and
             // early_drop counts entries evicted to MAKE room - nothing refused.
             'conntrack_drops' => $step['conntrack_drop'],
+            // Agent 0.1.13: the port's own counters, hourly like the ring.
+            'wan_rx_overrun' => $hour_step['wan_rx_overrun'],
+            'wan_rx_discard' => $hour_step['wan_rx_discard'],
+            'wan_crc_errors' => $hour_step['wan_crc_errors'],
+            'wan_mac_rx_errors' => $hour_step['wan_mac_rx_errors'],
+            'wan_refill_errors' => $hour_step['wan_refill_errors'],
+            'wan_oversize' => $hour_step['wan_oversize'],
         ],
         // An agent that reads none of the counters (0.1.6, a VPS) keeps no state.
         'state' => $measured === [] ? null : $state,
@@ -11394,6 +11432,30 @@ function bk_sanitize_wan_path($raw): ?array {
     $mask = $raw['wan_rps_mask'] ?? null;
     $out['wan_rps_mask'] = (is_string($mask) && preg_match('/^[0-9a-fA-F,]{1,64}$/', $mask)) ? $mask : null;
     $out['wan_rx_ring_drops'] = bk_ranged_int($raw['wan_rx_ring_drops'] ?? null, 0, 2 ** 53);
+    // Agent 0.1.13: the port's own counters from the same `ethtool -S` read,
+    // cumulative since the driver loaded. null = the driver does not print
+    // that name (or no ethtool); 0 is a measurement. What each one means:
+    // rx_overrun = the receive FIFO was full (the router's load), rx_discard =
+    // address filtering OR a resource error (ambiguous on its own),
+    // bad_crc_event / mac_receive_error = damaged frames from the line or the
+    // module, refill_errors = a receive buffer could not be refilled (load),
+    // oversize_received = frames longer than the port takes (an MTU mismatch).
+    foreach (['rx_overrun', 'rx_discard', 'bad_crc_event', 'mac_receive_error', 'refill_errors', 'oversize_received'] as $key) {
+        $out[$key] = bk_ranged_int($raw[$key] ?? null, 0, 2 ** 53);
+    }
+    // The SFP module's own readings and limits (sfp hwmon, kernel units: m°C
+    // and µW), sent only when exactly one module hwmon exists. null = no
+    // module, no diagnostics, or the value is hidden (RX power of a module
+    // that needs external calibration). sfp_phy_hwmon: true = a PHY inside
+    // the module has its own hwmon, i.e. a copper-class module; false says
+    // nothing about fibre - many copper modules have no such hwmon.
+    foreach (['sfp_temp_mc', 'sfp_temp_max_mc', 'sfp_temp_crit_mc'] as $key) {
+        $out[$key] = bk_ranged_int($raw[$key] ?? null, -60000, 200000);
+    }
+    foreach (['sfp_rx_power_uw', 'sfp_rx_power_min_uw', 'sfp_rx_power_lcrit_uw'] as $key) {
+        $out[$key] = bk_ranged_int($raw[$key] ?? null, 0, 100000);
+    }
+    $out['sfp_phy_hwmon'] = is_bool($raw['sfp_phy_hwmon'] ?? null) ? $raw['sfp_phy_hwmon'] : null;
 
     $out['sqm'] = null;
     if (is_array($raw['sqm'] ?? null)) {

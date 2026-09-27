@@ -78,6 +78,16 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
     'help.wan_rate_caveat',
     'Minutový průměr, krátká špička se v něm rozpustí. Po startu routeru nebo změně rozhraní WAN zůstane prázdné.'
   );
+  // The WAN port's own counters (agent 0.1.13): one hourly `ethtool -S` read,
+  // and each counter points at a different cause, which the caveat names.
+  const wanPortCounterHow = t(
+    'help.wan_port_counter_how',
+    'ethtool -S <port WAN>, čte se jednou za hodinu; server ukládá přírůstek mezi dvěma čteními. Starší agent ho neposílá; pak zůstane prázdné.'
+  );
+  const wanLineCaveat = t(
+    'help.wan_line_counter_caveat',
+    'Rostoucí počet ukazuje na linku: kabel nebo optiku, modul SFP nebo zařízení poskytovatele. S metalickým modulem SFP vidí port spoj s modulem a z kabelu jen to, co modul propustí.'
+  );
 
   const catalogue: Record<string, MetricHelp> = {
     response_time: {
@@ -535,7 +545,9 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
         'Počítadla rx_errors a tx_errors portu WAN v /sys/class/net; server ukládá přírůstek mezi dvěma hlášeními.'
       ),
       source: agent,
-      caveat: `${t('help.wan_errors_caveat', 'Rostoucí počet ukazuje na kabel, modul SFP nebo port, ne na zahlcení.')} ${stepCaveat}`,
+      // mvneta counts overruns, resource errors and failed buffer refills in
+      // rx_errors too, so "not congestion" was wrong on the Turris Omnia.
+      caveat: `${t('help.wan_errors_caveat', 'Na některých ovladačích (mvneta na Turris Omnii) se sem počítají i rámce, které router nestihl převzít, nejen poškozené rámce z linky. Většinu příčin rozliší řady chyb CRC, přetečení přijímací fronty FIFO, nedoplněných bufferů a příliš dlouhých rámců; některé příčiny vlastní počítadlo nemají.')} ${stepCaveat}`,
     },
     // rx_dropped also counts frames nobody handles (LLDP, foreign VLAN tags),
     // so the explainer must not let it read as "the router is overloaded".
@@ -549,12 +561,14 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
         'Počítadla rx_dropped a tx_dropped portu WAN v /sys/class/net; server ukládá přírůstek mezi dvěma hlášeními.'
       ),
       source: agent,
-      caveat: `${t('help.wan_drops_caveat', 'Většinou jde o neškodné rámce, které router nezpracovává (LLDP, cizí VLAN, PPPoE discovery), ne o přetížení. Žádné doporučení z této hodnoty nevychází.')} ${stepCaveat}`,
+      caveat: `${t('help.wan_drops_caveat', 'Většinou jde o neškodné rámce, které router nezpracovává (LLDP, cizí VLAN, PPPoE discovery), ne o přetížení. Se zapnutým packet steeringem se sem počítá i přeplněná fronta procesoru. Žádné doporučení z této hodnoty nevychází.')} ${stepCaveat}`,
     },
     wan_ring_drops: {
+      // rx_discard also counts frames the address filter threw away, so the
+      // sum is not "could not keep up" as a whole.
       what: t(
         'help.wan_ring_drops_what',
-        'Pakety, které port WAN nestihl převzít z přijímací fronty (rx_discard + rx_overrun).'
+        'Rámce, které port WAN zahodil: filtr adres nebo nedostatek místa (rx_discard) a plná přijímací fronta FIFO (rx_overrun).'
       ),
       how: t(
         'help.wan_ring_drops_how',
@@ -582,6 +596,57 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
       ),
       source: agent,
       caveat: stepCaveat,
+    },
+    wan_crc_errors: {
+      what: t(
+        'help.wan_crc_errors_what',
+        'Nové rámce s chybným kontrolním součtem (CRC), které port WAN přijal z linky (počítadlo bad_crc_event).'
+      ),
+      how: wanPortCounterHow,
+      source: agent,
+      caveat: `${wanLineCaveat} ${stepCaveat}`,
+    },
+    wan_mac_rx_errors: {
+      what: t(
+        'help.wan_mac_rx_errors_what',
+        'Nové chyby příjmu, které MAC portu WAN zaznamenala na lince (počítadlo mac_receive_error).'
+      ),
+      how: wanPortCounterHow,
+      source: agent,
+      caveat: `${wanLineCaveat} ${stepCaveat}`,
+    },
+    wan_rx_overrun: {
+      what: t(
+        'help.wan_rx_overrun_what',
+        'Rámce, které port WAN ztratil, protože byla plná jeho přijímací fronta FIFO (počítadlo rx_overrun).'
+      ),
+      how: wanPortCounterHow,
+      source: agent,
+      caveat: `${t('help.wan_rx_overrun_caveat', 'Router nestíhal příjem, například při testu rychlosti nebo velkém stahování. Nejde o závadu linky.')} ${stepCaveat}`,
+    },
+    wan_rx_discard: {
+      what: t(
+        'help.wan_rx_discard_what',
+        'Rámce, které port WAN zahodil kvůli filtru adres (rámce pro jiné zařízení) nebo kvůli nedostatku místa (počítadlo rx_discard).'
+      ),
+      how: wanPortCounterHow,
+      source: agent,
+      caveat: `${t('help.wan_rx_discard_caveat', 'Samo o sobě neodliší neškodný filtr od přetížení. Roste-li i na nečinné lince, jde o filtr.')} ${stepCaveat}`,
+    },
+    wan_refill_errors: {
+      what: t(
+        'help.wan_refill_errors_what',
+        'Kolikrát ovladač portu WAN nestihl doplnit přijímací buffer (počítadlo refill_errors).'
+      ),
+      how: wanPortCounterHow,
+      source: agent,
+      caveat: `${t('help.wan_refill_errors_caveat', 'Ukazuje na zátěž nebo paměť routeru, ne na linku. Na některých ovladačích (mvneta na Turris Omnii) se tyto události počítají i do chyb na portu WAN.')} ${stepCaveat}`,
+    },
+    wan_oversize: {
+      what: t('help.wan_oversize_what', 'Rámce delší, než port WAN přijímá (počítadlo oversize_received).'),
+      how: wanPortCounterHow,
+      source: agent,
+      caveat: `${t('help.wan_oversize_caveat', 'Ukazuje na nesoulad MTU mezi portem a stranou poskytovatele, ne na závadu hardwaru.')} ${stepCaveat}`,
     },
     agent_run_ms: {
       what: t(

@@ -21,7 +21,20 @@ const WIFI_KEYS = [
   'wifi_5g_capable_24g',
 ];
 
-const STEP_KEYS = ['wan_errors', 'wan_drops', 'wan_ring_drops', 'conntrack_drops', 'wan_link_flaps'];
+const STEP_KEYS = [
+  'wan_errors',
+  'wan_drops',
+  'wan_ring_drops',
+  'conntrack_drops',
+  'wan_link_flaps',
+  // Agent 0.1.13: the WAN port's own counters, hourly steps.
+  'wan_rx_overrun',
+  'wan_rx_discard',
+  'wan_crc_errors',
+  'wan_mac_rx_errors',
+  'wan_refill_errors',
+  'wan_oversize',
+];
 
 const WAN_KEYS = [
   'cpu_core_max',
@@ -34,9 +47,9 @@ const WAN_KEYS = [
 ];
 
 describe('metricHelp', () => {
-  it('explains every metric of agent 0.1.7: what, how and from where', () => {
+  it('explains every router metric of agent 0.1.7 and 0.1.13: what, how and from where', () => {
     const keys = [...WIFI_KEYS, ...WAN_KEYS];
-    expect(keys).toHaveLength(24);
+    expect(keys).toHaveLength(30);
     for (const key of keys) {
       const help = metricHelp(key, t);
       expect(help, key).not.toBeNull();
@@ -84,6 +97,19 @@ describe('metricHelp', () => {
     expect(metricHelp('wan_drops', t)?.caveat).toContain('ne o přetížení');
     expect(metricHelp('conntrack_drops', t)?.what).not.toMatch(/odmítn/);
     expect(metricHelp('conntrack_drops', t)?.caveat).toContain('plná tabulka spojení');
+  });
+
+  // mvneta counts overruns and failed buffer refills as rx_errors, and
+  // rx_discard also counts address-filtered frames: neither sum may claim a
+  // single cause.
+  it('does not tie WAN errors or port discards to a single cause', () => {
+    expect(metricHelp('wan_errors', t)?.caveat).not.toContain('ne na zahlcení');
+    expect(metricHelp('wan_errors', t)?.caveat).toContain('nestihl převzít');
+    expect(metricHelp('wan_ring_drops', t)?.what).toContain('filtr adres');
+    expect(metricHelp('wan_ring_drops', t)?.what).not.toContain('nestihl');
+    expect(metricHelp('wan_crc_errors', t)?.caveat).toContain('linku');
+    expect(metricHelp('wan_rx_overrun', t)?.caveat).toContain('Nejde o závadu linky');
+    expect(metricHelp('wan_oversize', t)?.caveat).toContain('MTU');
   });
 
   it('tells download from upload', () => {

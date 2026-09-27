@@ -71,7 +71,14 @@ export type MetricKey =
   | 'agent_run_ms'
   | 'clock_skew_s'
   // Agent 0.1.9: the CPU time of the agent's previous run, in ms.
-  | 'agent_prev_cpu_ms';
+  | 'agent_prev_cpu_ms'
+  // Agent 0.1.13: the WAN port's own counters, hourly step metrics.
+  | 'wan_rx_overrun'
+  | 'wan_rx_discard'
+  | 'wan_crc_errors'
+  | 'wan_mac_rx_errors'
+  | 'wan_refill_errors'
+  | 'wan_oversize';
 
 /** Colour tone of a series. Must match the `--chart-*` tokens. */
 export type MetricTone = 'cpu' | 'memory' | 'network' | 'temperature' | 'disk' | 'latency';
@@ -244,9 +251,11 @@ export interface MetricDetail {
   };
   /**
    * `step` (X8): the stored value is already the increment since the previous
-   * report, so a bucket is SUMMED, never averaged - true for the five step
+   * report, so a bucket is SUMMED, never averaged - true for the step
    * metrics `wan_errors`, `wan_drops`, `wan_ring_drops`, `wan_link_flaps`,
-   * `conntrack_drops`. Absent on an older server.
+   * `conntrack_drops` and the six hourly WAN port counters (`wan_rx_overrun`,
+   * `wan_rx_discard`, `wan_crc_errors`, `wan_mac_rx_errors`,
+   * `wan_refill_errors`, `wan_oversize`). Absent on an older server.
    */
   metric: { key: string; label: string; unit: string; counter: boolean; step?: boolean };
   /** `null` = no threshold is set; no band is drawn in the chart. */

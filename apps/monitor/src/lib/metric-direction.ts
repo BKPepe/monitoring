@@ -72,6 +72,13 @@ const LOWER_IS_BETTER = new Set([
   'agent_prev_cpu_ms',
   // Stored as an absolute value, so zero is the good end whichever way the clock is off.
   'clock_skew_s',
+  // Agent 0.1.13: the WAN port's own error and drop counters.
+  'wan_rx_overrun',
+  'wan_rx_discard',
+  'wan_crc_errors',
+  'wan_mac_rx_errors',
+  'wan_refill_errors',
+  'wan_oversize',
 ]);
 
 /**
