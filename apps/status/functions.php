@@ -17823,7 +17823,8 @@ function bk_router_rec_inputs_batch(PDO $pdo, array $monitor_ids, string $end_da
     //    daily week already shows the peak they look for. A chunk of fifty
     //    quiet routers issues neither query; a router that never saturated a
     //    core cannot have ten such minutes, so the pre-filter cannot hide a
-    //    rule that would have fired.
+    //    rule that would have fired. A raw minute is keyed by `checked_at`;
+    //    vps_metrics has no `created_at`.
     $th = bk_router_rec_thresholds();
     $w_from = $window['days'][0] . ' 00:00:00';
     $w_to = end($window['days']) . ' 23:59:59';
@@ -17842,7 +17843,7 @@ function bk_router_rec_inputs_batch(PDO $pdo, array $monitor_ids, string $end_da
         if ($core_peak !== null && $core_peak >= $th['wan_forwarding_core_saturated']['core_pct']) {
             $stmt = $pdo->prepare(
                 "SELECT COUNT(*) FROM vps_metrics
-                  WHERE monitor_id = ? AND created_at BETWEEN ? AND ?
+                  WHERE monitor_id = ? AND checked_at BETWEEN ? AND ?
                     AND cpu_core_max >= ? AND cpu_core_max_softirq >= ?
                     AND (COALESCE(wan_rx_mbps, 0) + COALESCE(wan_tx_mbps, 0)) >= ?"
             );
@@ -17851,14 +17852,16 @@ function bk_router_rec_inputs_batch(PDO $pdo, array $monitor_ids, string $end_da
                 $th['wan_forwarding_core_saturated']['wan_mbps']]);
             $out[$id]['forwarding_minutes'] = (int)$stmt->fetchColumn();
         }
-        $ct_peak = $peak('conntrack_pct');
+        // metrics_daily keys the table fill as `conntrack` (the map key, not
+        // the column), so a peak read under the column name never existed.
+        $ct_peak = $peak('conntrack');
         if ($ct_peak !== null && $ct_peak >= $th['conntrack_drops']['full_pct']) {
             $stmt = $pdo->prepare(
-                "SELECT DATE(created_at) AS day, SUM(conntrack_drops) AS drops, MAX(conntrack_pct) AS pct
+                "SELECT DATE(checked_at) AS day, SUM(conntrack_drops) AS drops, MAX(conntrack_pct) AS pct
                    FROM vps_metrics
-                  WHERE monitor_id = ? AND created_at BETWEEN ? AND ?
+                  WHERE monitor_id = ? AND checked_at BETWEEN ? AND ?
                     AND conntrack_pct >= ? AND conntrack_drops > 0
-                  GROUP BY DATE(created_at)"
+                  GROUP BY DATE(checked_at)"
             );
             $stmt->execute([$id, $w_from, $w_to, $th['conntrack_drops']['full_pct']]);
             foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {

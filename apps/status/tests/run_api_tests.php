@@ -4749,6 +4749,42 @@ try {
 }
 
 
+// --- The raw-minute scans of X13 read vps_metrics.checked_at ------------------
+//
+// Both scans once filtered on `created_at`, a column vps_metrics does not
+// have: a router whose loaded month held a saturated core failed the whole
+// page (500) and the digest with it. The conntrack scan looked for its peak
+// under the column name, which metrics_daily never uses (`conntrack`), so it
+// never ran at all and its rule could not fire.
+if (function_exists('bk_router_rec_inputs_batch')) {
+    $x13_days = bk_router_rec_window(date('Y-m-d'))['days'];
+    $x13_day = $x13_days[3];
+    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('cpu_core_max', 'conntrack')")->execute();
+    $x13_daily = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, ?, ?, 1, 20, ?, 1440)");
+    $x13_daily->execute([$x13_day, 'cpu_core_max', 99]);
+    $x13_daily->execute([$x13_day, 'conntrack', 95]);
+    $x13_before = (int)$pdo->query("SELECT COALESCE(MAX(id), 0) FROM vps_metrics")->fetchColumn();
+    $x13_min = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_core_max, cpu_core_max_softirq, wan_rx_mbps, wan_tx_mbps, conntrack_pct, conntrack_drops, checked_at) VALUES (2, ?, ?, ?, ?, ?, ?, ?)");
+    foreach (['12:00:00', '12:01:00', '12:02:00'] as $x13_t) {
+        $x13_min->execute([99.0, 90.0, 400.0, 20.0, null, null, "{$x13_day} {$x13_t}"]);
+    }
+    // Under the bar (softirq 50 %): the same minute shape, not counted.
+    $x13_min->execute([99.0, 50.0, 400.0, 20.0, null, null, "{$x13_day} 12:03:00"]);
+    $x13_min->execute([null, null, null, null, 95.0, 4, "{$x13_day} 13:00:00"]);
+    $x13_min->execute([null, null, null, null, 96.0, 3, "{$x13_day} 13:01:00"]);
+    $x13_in = bk_router_rec_inputs_batch($pdo, [2], date('Y-m-d'))[2] ?? [];
+    check('X13: minuty se saturovaným jádrem se spočítají podle checked_at', $x13_in['forwarding_minutes'] ?? null, 3);
+    check('X13: den s plnou tabulkou spojení nese zahozená spojení i špičku',
+        $x13_in['conntrack_days'][$x13_day] ?? null, ['drops' => 7.0, 'pct' => 96.0]);
+    if ($logged_in) {
+        [$x13_code] = api_get_auth($base, 'action=router_recommendations&monitor_id=2', $cookie_jar);
+        check('X13: doporučení routeru se špičkou v měsíci odpoví 200, ne 500', $x13_code, 200);
+    }
+    $pdo->prepare("DELETE FROM vps_metrics WHERE monitor_id = 2 AND id > ?")->execute([$x13_before]);
+    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('cpu_core_max', 'conntrack')")->execute();
+}
+
+
 // --- The five router endpoints (CORE 3.9, WAN 3.6; CORE 6.3 tests 7-9) -------
 //
 // They are read-only except the mute, and the mute is the only place where a
