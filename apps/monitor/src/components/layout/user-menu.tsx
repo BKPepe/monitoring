@@ -33,7 +33,7 @@ export function UserMenu({
         collapsed && 'justify-center px-0'
       )}
     >
-      <span className="bg-primary/12 text-primary grid size-8 shrink-0 place-items-center rounded-full text-xs font-semibold">
+      <span className="bg-primary/12 text-link grid size-8 shrink-0 place-items-center rounded-full text-xs font-semibold">
         {isLoggedOut ? <LogIn className="size-4" /> : initials}
       </span>
 

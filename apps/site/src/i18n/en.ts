@@ -394,7 +394,7 @@ export const en = {
     },
     config: {
       title: 'Run the installer',
-      text: 'Open https://YOUR-DOMAIN/app/setup. It checks PHP, tests the database login, writes status/config.php (or shows the file to upload when PHP may not write there), creates the tables and then the first administrator. There is no default account or password, and the installer refuses to run again once an account exists. By hand instead: copy config.sample.php to config.php in status/ and fill in the connection:',
+      text: 'Open https://YOUR-DOMAIN/app/setup. It checks PHP, tests the database login, writes status/config.php (or shows the file to upload when PHP may not write there), creates the tables and then the first administrator. There is no default account or password, and the installer refuses to run again once an account exists. Until then it is open to anyone who finds the address, so create the database before the upload and run the installer right after it. By hand instead: copy config.sample.php to config.php in status/ and fill in the connection:',
       optional:
         'Optional keys go into the same file as constants, in capitals, or later into the app under Settings: CRON_KEY, AGENT_REGISTRATION_TOKEN and METRICS_TOKEN. The installer gives every new install its own CRON_KEY. On the manual path it stays empty until you set one, and while it is empty anyone who knows the address of cron.php can start a collection run.',
       keep: 'config.php holds the database password. It is not in the ZIP, and uploading a new release does not overwrite it.',

@@ -19,7 +19,7 @@ const badgeVariants = cva(
         info: 'border-info/30 bg-info/12 text-info',
         paused: 'border-paused/30 bg-paused/12 text-paused',
         neutral: 'border-border bg-muted text-muted-foreground',
-        primary: 'border-primary/30 bg-primary/12 text-primary',
+        primary: 'border-primary/30 bg-primary/12 text-link',
       },
     },
     defaultVariants: {

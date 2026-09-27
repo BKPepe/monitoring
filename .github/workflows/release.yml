@@ -22,13 +22,19 @@ on:
     tags:
       - 'v*'
 
+# Build and publish are two jobs. `npm ci` runs every dependency's install
+# scripts and the build runs third-party code; a step can read the job token
+# from the runner's memory, so the job doing that holds a read-only token. Only
+# the publish job, which runs no project code, may write (SEC-3).
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    name: Build the package and publish the release
+  build:
+    name: Build and check the package
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout Code
@@ -36,11 +42,7 @@ jobs:
         with:
           # The agents live in their own repository (submodule `agents`).
           submodules: true
-          # The job holds contents: write, and `npm ci` then runs every
-          # dependency's install scripts and the build runs third-party code.
-          # Left in .git/config, the token would let a compromised package push
-          # to main, which deploys to production. Only the publish step needs
-          # it, and it gets it through its own input.
+          # Not even the read-only token stays in .git/config for the build.
           persist-credentials: false
 
       - name: Setup Node.js
@@ -128,6 +130,30 @@ jobs:
             cp "agents/vps-agent/$f" "$OUT/$f"
           done
           (cd "$OUT" && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Hand the checked assets to the publish job
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish the GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # No checkout and no project code here: only the assets the build job
+      # checked, and the action that attaches them.
+      - name: Take the checked assets
+        uses: actions/download-artifact@v8
+        with:
+          name: release-assets
+          path: release-assets
 
       - name: Publish the GitHub release
         uses: softprops/action-gh-release@v3

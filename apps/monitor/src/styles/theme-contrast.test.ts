@@ -177,3 +177,31 @@ describe('text links', () => {
     });
   }
 });
+
+// V-01: grey micro-labels sit inside the kit's wells (KPI boxes, device-card
+// cells, the range pills, the CS/EN switch), and #6b7280 on the light #eef0f3
+// well was 4.23:1. Plain grounds only: tinted callouts are a separate case.
+describe('tlumený text', () => {
+  for (const theme of ['light', 'dark'] as const) {
+    it(`tlumený text je čitelný na každém podkladu (${theme})`, () => {
+      const grounds = [
+        'background',
+        'card',
+        'popover',
+        'secondary',
+        'muted',
+        'accent',
+        'inset',
+        'raised',
+        'sidebar',
+        'sidebar-accent',
+      ] as const;
+      for (const ground of grounds) {
+        expect(
+          contrast(token('muted-foreground', theme), token(ground, theme)),
+          `muted-foreground on --${ground}`
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    });
+  }
+});

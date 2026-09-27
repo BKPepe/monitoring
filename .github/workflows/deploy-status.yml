@@ -77,20 +77,41 @@ jobs:
             exit 1
           fi
           printf '%s' "$STATUS_CONFIG_PHP" > apps/status/config.php
-          # The DB_PASS value only, as the server decides it (bk_config_is_placeholder
-          # in db.php): the same words in a comment of the real config are fine.
-          if grep -Eq "^[[:space:]]*define\([\"']DB_PASS[\"'],[[:space:]]*[\"'](heslo_databaze|database_password)[\"']" apps/status/config.php; then
-            echo "::error::STATUS_CONFIG_PHP still holds the sample's placeholder password. Refusing to deploy."
-            exit 1
-          fi
           if ! php -l apps/status/config.php > /dev/null 2>&1; then
             echo "::error::STATUS_CONFIG_PHP is not valid PHP (php -l failed; output hidden, it may quote the file). Refusing to deploy."
             exit 1
           fi
-          if ! grep -q "DB_PASS" apps/status/config.php; then
-            echo "::error::STATUS_CONFIG_PHP defines no DB_PASS. Refusing to deploy."
-            exit 1
-          fi
+          # The value of DB_PASS as PHP reads it, judged by the server's own rule
+          # (bk_config_is_placeholder in db.php): define( 'DB_PASS', ...) with any
+          # spacing or `const DB_PASS = ...` counts the same, and the words in a
+          # comment do not. A grep missed the first two (SEC-W2M-2). The file is
+          # loaded second, so its direct-access guard stays quiet; nothing of it
+          # is printed, and only the marker line decides.
+          cat > "$RUNNER_TEMP/bk_config_check.php" << 'PHPEOF'
+          <?php
+          require $argv[1];
+          foreach (['DB_HOST', 'DB_NAME', 'DB_USER', 'DB_PASS'] as $c) {
+              if (!defined($c)) {
+                  echo "\nBK_CONFIG=missing\n";
+                  exit(0);
+              }
+          }
+          echo in_array(DB_PASS, ['heslo_databaze', 'database_password'], true) ? "\nBK_CONFIG=placeholder\n" : "\nBK_CONFIG=ok\n";
+          PHPEOF
+          verdict=$(php "$RUNNER_TEMP/bk_config_check.php" apps/status/config.php 2> /dev/null | grep -o 'BK_CONFIG=[a-z]*' | tail -n 1 || true)
+          rm -f "$RUNNER_TEMP/bk_config_check.php"
+          case "$verdict" in
+            BK_CONFIG=ok) ;;
+            BK_CONFIG=placeholder)
+              echo "::error::STATUS_CONFIG_PHP still holds the sample's placeholder password. Refusing to deploy."
+              exit 1 ;;
+            BK_CONFIG=missing)
+              echo "::error::STATUS_CONFIG_PHP does not define DB_HOST, DB_NAME, DB_USER and DB_PASS. Refusing to deploy."
+              exit 1 ;;
+            *)
+              echo "::error::STATUS_CONFIG_PHP could not be loaded (output hidden). Refusing to deploy."
+              exit 1 ;;
+          esac
           echo "apps/status/config.php created from the STATUS_CONFIG_PHP secret."
 
       - name: Generate Version File

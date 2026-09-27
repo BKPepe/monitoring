@@ -72,7 +72,7 @@ return [
     'history_today' => 'today',
     'history_tooltip_up' => 'No outages',
     'history_tooltip_down' => 'Outage detected (uptime %s%%)',
-    'tile_health' => 'Infrastructure health',
+    'tile_health' => 'Monitor states',
     'tile_attention' => 'Needs attention',
     'tile_monitors' => 'Monitor list',
     'tile_alerts' => 'Recent alerts',

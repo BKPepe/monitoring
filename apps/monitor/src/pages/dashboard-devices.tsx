@@ -9,6 +9,7 @@ import { breachTone, StatBlock } from '@/components/stat-block';
 import { IconTile } from '@/components/ui/icon-tile';
 import { Panel } from '@/components/ui/panel';
 import { Pill, type PillTone } from '@/components/ui/pill';
+import { Skeleton } from '@/components/ui/states';
 import { useLanguage } from '@/context/language-context';
 import { metricSeverity, thresholdFor } from '@/lib/attention';
 import { windowFor } from '@/lib/chart-window';
@@ -49,15 +50,21 @@ function countOf(v: unknown): number | null {
  *
  * Counts of clients only - never who they are (the agents deliberately send
  * no client names or addresses). A reading the device did not report is a
- * dash, and the ring is the server's score or "—", never a guess.
+ * dash, and the ring is the server's score or "—", never a guess. While the
+ * score loads the ring is a placeholder; after a failed request, or for a
+ * paused monitor, there is no ring at all - "—" would claim the server had too
+ * little data (CORR-1). The network ring above says the failure out loud.
  */
 export function DeviceCards({
   devices,
   health,
+  healthLoading = false,
 }: {
   devices: ApiMonitor[];
   /** action=health assets by monitor id; null while loading or after a failure. */
   health: Map<number, ScoredHealth> | null;
+  /** The first action=health answer has not arrived yet. */
+  healthLoading?: boolean;
 }) {
   const traces = useCpuTraces(devices);
   return (
@@ -67,6 +74,7 @@ export function DeviceCards({
           <DeviceCard
             monitor={m}
             health={health?.get(m.id) ?? null}
+            healthLoading={healthLoading && health === null}
             trace={traces.points[m.id]}
             window={traces.window}
           />
@@ -79,11 +87,13 @@ export function DeviceCards({
 function DeviceCard({
   monitor: m,
   health,
+  healthLoading,
   trace,
   window,
 }: {
   monitor: ApiMonitor;
   health: ScoredHealth | null;
+  healthLoading: boolean;
   trace: SparkSample[] | undefined;
   window: { from: number; to: number } | null;
 }) {
@@ -116,12 +126,19 @@ function DeviceCard({
           </Link>
           <p className="text-muted-foreground truncate text-xs">{model}</p>
         </div>
-        <HealthRing
-          score={health?.score ?? null}
-          grade={health?.grade ?? null}
-          size="sm"
-          caption={t('dashboard.device_health', { name: m.name }, `Zdraví: ${m.name}`)}
-        />
+        {healthLoading ? (
+          <Skeleton className="size-11 shrink-0 rounded-full" />
+        ) : (
+          health &&
+          !health.paused && (
+            <HealthRing
+              score={health.score}
+              grade={health.grade}
+              size="sm"
+              caption={t('dashboard.device_health', { name: m.name }, `Zdraví: ${m.name}`)}
+            />
+          )
+        )}
       </div>
       <div className="grid grid-cols-2 gap-2">
         <StatBlock

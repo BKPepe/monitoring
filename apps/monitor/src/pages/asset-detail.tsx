@@ -997,10 +997,7 @@ export function AssetDetailPage() {
               <Panel
                 icon={Settings2}
                 title={t('asset.system_timeline', 'Systémové události (30 dní)')}
-                hint={t(
-                  'asset.system_timeline_desc',
-                  'Změny stavu, vzdálené akce, SSL varování a překročené limity z monitor_events.'
-                )}
+                hint={t('asset.system_timeline_desc', 'Změny stavu, vzdálené akce, SSL varování a překročené limity.')}
               >
                 <CollapsedTimeline filters events={systemEvents} />
               </Panel>

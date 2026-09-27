@@ -38,9 +38,16 @@ export function UptimeHeatmap({ rows }: { rows: UptimeHistoryRow[] }) {
           <tbody>
             {rows.map((row, rowIdx) => (
               <tr key={row.monitorId}>
-                <th scope="row" className="w-48 pr-3 text-left text-xs font-normal whitespace-nowrap">
+                {/* The name stays pinned while the strip scrolls under it: the box
+                    opens at the newest day, which pushed the names off a phone
+                    and left anonymous strips (V-05). */}
+                <th
+                  scope="row"
+                  className="bg-card sticky left-0 z-10 w-28 max-w-28 truncate pr-3 text-left text-xs font-normal whitespace-nowrap sm:w-48 sm:max-w-48"
+                >
                   <Link
                     to={`/infrastructure/${row.monitorId}`}
+                    title={row.name}
                     className="text-foreground font-semibold hover:underline"
                   >
                     {row.name}

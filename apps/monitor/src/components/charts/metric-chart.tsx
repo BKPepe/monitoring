@@ -206,7 +206,9 @@ export function MetricChart({
           tooltipHtml(params, { data, theme, locale, lang, unit, window: tooltipWindow, t, bars }),
       },
       xAxis: axes.xAxis,
-      yAxis: axes.yAxis,
+      // A short chart gets fewer value labels: at 110 px the default five
+      // steps stacked "9,5 / 9 / 8,5 / 8 …" on top of each other (V-03).
+      yAxis: height < 160 ? { ...axes.yAxis, splitNumber: 2 } : axes.yAxis,
       series: bars
         ? data.series.map((s) => barSeries(theme, s.label, theme.series[s.tone], s.points))
         : [
@@ -246,7 +248,7 @@ export function MetricChart({
             })),
           ],
     };
-  }, [data, theme, reducedMotion, minimap, t, locale, lang, tooltipWindow, totalPoints, fresh, bars]);
+  }, [data, theme, reducedMotion, minimap, t, locale, lang, tooltipWindow, totalPoints, fresh, bars, height]);
 
   const showLegend = legend && data.series.length > 1;
   const caption = actionsRef ? null : bandCaption(data, lang, t);

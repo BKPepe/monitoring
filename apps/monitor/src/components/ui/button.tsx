@@ -34,6 +34,8 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>, VariantProps<typeof buttonVariants> {
   /** Renders the child in place of <button> - for links that should look like a button. */
   asChild?: boolean;
+  /** React 19 passes a ref as a prop; a popover uses it to give focus back to its button. */
+  ref?: React.Ref<HTMLButtonElement>;
 }
 
 export function Button({ className, variant, size, asChild = false, ...props }: ButtonProps) {

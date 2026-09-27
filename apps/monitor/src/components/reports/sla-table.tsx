@@ -102,7 +102,9 @@ export function SlaTable({
                   <TableCell className="hidden sm:table-cell">
                     <MonitorTypeIcon type={item.type} label={monitorTypeLabel(item.type, t)} />
                   </TableCell>
-                  <TableCell className="max-w-[7rem] sm:max-w-[16rem]">
+                  {/* On a phone the name wraps instead of truncating: it is the one
+                      thing a row must show ("Router t…" named nothing, V-04). */}
+                  <TableCell className="min-w-[7rem] sm:max-w-[16rem]">
                     <button
                       type="button"
                       aria-expanded={expanded}
@@ -110,7 +112,7 @@ export function SlaTable({
                       onClick={() => setOpen(expanded ? null : item.id)}
                       className="hover:text-primary flex max-w-full items-center gap-1.5 text-left font-semibold"
                     >
-                      <span className="truncate">{item.name}</span>
+                      <span className="min-w-0 break-words sm:truncate">{item.name}</span>
                       <ChevronDown
                         aria-hidden="true"
                         className={cn(

@@ -73,7 +73,7 @@ return [
     'history_today' => 'dnes',
     'history_tooltip_up' => 'Bez výpadků',
     'history_tooltip_down' => 'Detekován výpadek (dostupnost %s %%)',
-    'tile_health' => 'Zdraví infrastruktury',
+    'tile_health' => 'Stavy monitorů',
     'tile_attention' => 'Vyžaduje pozornost',
     'tile_monitors' => 'Seznam monitorů',
     'tile_alerts' => 'Poslední výstrahy',

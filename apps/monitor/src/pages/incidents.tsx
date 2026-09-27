@@ -198,9 +198,9 @@ export function IncidentsPage() {
   // The count in the heading must match what is listed below it.
   const ongoingCount = liveOutages.length + standaloneIncidents.length;
   const activeBadge = {
-    one: t('incidents.active_badge_one', { count: ongoingCount }, `${ongoingCount} aktivní výpadek`),
-    few: t('incidents.active_badge_few', { count: ongoingCount }, `${ongoingCount} aktivní výpadky`),
-    other: t('incidents.active_badge_other', { count: ongoingCount }, `${ongoingCount} aktivních výpadků`),
+    one: t('incidents.active_badge_one', { count: ongoingCount }, `${ongoingCount} probíhající`),
+    few: t('incidents.active_badge_few', { count: ongoingCount }, `${ongoingCount} probíhající`),
+    other: t('incidents.active_badge_other', { count: ongoingCount }, `${ongoingCount} probíhajících`),
   }[pluralForm(lang, ongoingCount)];
 
   // Resolving an incident closes the RECORD, not the outage. The monitor stays
@@ -529,7 +529,7 @@ export function IncidentsPage() {
           <section aria-labelledby="incidents-ongoing" className="space-y-3">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <h2 id="incidents-ongoing" className="text-base font-semibold tracking-tight">
-                {t('incidents.active_outages', 'Probíhající výpadky cílových služeb')}{' '}
+                {t('incidents.active_outages', 'Probíhající výpadky a incidenty')}{' '}
                 <span className="text-muted-foreground figure text-xs font-normal">({ongoingCount})</span>
               </h2>
               {ongoingCount > 0 ? (

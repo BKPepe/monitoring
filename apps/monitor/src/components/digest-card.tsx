@@ -53,7 +53,7 @@ export function DigestCard() {
     {
       period: 'weekly',
       icon: CalendarDays,
-      title: t('settings.weekly_digest_title', 'Týdenní Souhrn (Weekly Digest)'),
+      title: t('settings.weekly_digest_title', 'Týdenní souhrn'),
       desc: t(
         'settings.weekly_digest_desc',
         'Souhrnný e-mail se statistikami SLA, incidenty a průměrnou latencí za posledních 7 dnů.'
@@ -77,7 +77,7 @@ export function DigestCard() {
   return (
     <Panel
       icon={FileBarChart}
-      title={t('settings.digest_title', 'Týdenní & Měsíční Digest Report')}
+      title={t('settings.digest_title', 'Týdenní a měsíční souhrn')}
       hint={t(
         'settings.digest_desc',
         'Digest se odesílá automaticky cronem (vždy v pondělí / 1. den v měsíci). Zde můžete odeslat ruční e-mailový digest všem administrátorům.'

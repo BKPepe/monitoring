@@ -43,12 +43,12 @@ const FLEET = [
 const day = (status: string) => ({ date: '1.9.', status, uptimePct: status === 'nodata' ? null : 100 });
 const days = (bad?: string) => Array.from({ length: 30 }, (_, i) => day(bad && i === 29 ? bad : 'up'));
 
-function api(monitors: unknown[], series: Record<number, unknown[]> = {}) {
+function api(monitors: unknown[], series: Record<number, unknown[]> = {}, sslAlertDays?: number) {
   return (input: RequestInfo | URL): Promise<Response> => {
     const url = String(input);
     if (url.includes('action=session'))
       return Promise.resolve(json({ authenticated: true, user: { id: 1, username: 'admin', role: 'admin' } }));
-    if (url.includes('action=monitors')) return Promise.resolve(json({ monitors }));
+    if (url.includes('action=monitors')) return Promise.resolve(json({ monitors, sslAlertDays }));
     if (url.includes('action=dashboard_layout')) return Promise.resolve(json({ catalog: [], tiles: [] }));
     if (url.includes('action=public_status'))
       return Promise.resolve(
@@ -100,6 +100,12 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+
+/** The count beside the "Vyžaduje pozornost" heading. */
+function attentionCount(): string | null | undefined {
+  const heading = screen.getByRole('heading', { name: /^Vyžaduje pozornost/ });
+  return heading.querySelector('span')?.textContent;
+}
 
 function renderPage() {
   return render(
@@ -228,5 +234,35 @@ describe('Prázdná instalace (site W1-5 conv-12)', () => {
 
     expect(await screen.findByTestId('dashboard-first-run')).toBeTruthy();
     expect(screen.queryByText('Sonda Frankfurt')).toBeNull();
+  });
+});
+
+describe('Vyžaduje pozornost: stejná pravidla jako zvonek (CR-5, CORR-4)', () => {
+  it('certifikát hlídá podle ssl_alert_days ze serveru, ne podle pevných 14 dní', async () => {
+    const cert = monitor({ id: 40, name: 'Obchod', details: { ssl_days_remaining: 20 } });
+    vi.stubGlobal('fetch', vi.fn(api([cert], {}, 30)));
+    renderPage();
+
+    expect(await screen.findByText('SSL certifikát vyprší za 20 dní')).toBeTruthy();
+  });
+
+  it('bez nastavení ze serveru platí výchozích 14 dní', async () => {
+    const cert = monitor({ id: 40, name: 'Obchod', details: { ssl_days_remaining: 20 } });
+    vi.stubGlobal('fetch', vi.fn(api([cert])));
+    renderPage();
+
+    expect(await screen.findByText('Žádný výpadek ani varování')).toBeTruthy();
+    expect(attentionCount()).toBe('0');
+    expect(screen.queryByText('SSL certifikát vyprší za 20 dní')).toBeNull();
+  });
+
+  it('nová verze agenta je v seznamu, ale nepočítá se jako problém', async () => {
+    const old = monitor({ id: 41, name: 'Server', type: 'vps', agentUpdateAvailable: '0.1.11' });
+    vi.stubGlobal('fetch', vi.fn(api([old])));
+    renderPage();
+
+    expect(await screen.findByText(/Agent je zastaralý/)).toBeTruthy();
+    expect(screen.getByText('Žádný výpadek ani varování')).toBeTruthy();
+    expect(attentionCount()).toBe('0');
   });
 });

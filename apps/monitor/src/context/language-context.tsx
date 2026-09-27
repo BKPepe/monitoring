@@ -1422,8 +1422,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.edit_monitor_title': { cs: 'Upravit nastavení monitoru', en: 'Edit Monitor Settings' },
   'asset.system_timeline': { cs: 'Systémové události (30 dní)', en: 'System Events (30 days)' },
   'asset.system_timeline_desc': {
-    cs: 'Změny stavu, vzdálené akce, SSL varování a překročené limity z monitor_events.',
-    en: 'Status changes, remote actions, SSL warnings, and threshold breaches from monitor_events.',
+    cs: 'Změny stavu, vzdálené akce, SSL varování a překročené limity.',
+    en: 'Status changes, remote actions, SSL warnings and threshold breaches.',
   },
   'asset.tl_down': { cs: 'Výpadek služby', en: 'Service Outage' },
   'asset.tl_up': { cs: 'Obnovení provozu', en: 'Service Restored' },
@@ -1547,7 +1547,9 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'What is broken now, what was, and where the checks come from.',
   },
   'incidents.create': { cs: 'Nahlásit nový incident', en: 'Report New Incident' },
-  'incidents.active_outages': { cs: 'Probíhající výpadky cílových služeb', en: 'Active Service Outages' },
+  // The feed holds open manual incidents (a planned maintenance too), not only
+  // outages, so it is not called outages (V-16).
+  'incidents.active_outages': { cs: 'Probíhající výpadky a incidenty', en: 'Ongoing outages and incidents' },
   'incidents.all_ok': {
     cs: 'Všechny sledované cílové monitory a servery běží v pořádku bez výpadků.',
     en: 'All monitored target services and servers are operating normally without outages.',
@@ -1602,9 +1604,9 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Popis problému, předpokládaná doba vyřešení...',
     en: 'Description of the problem, expected time to resolution...',
   },
-  'incidents.active_badge_one': { cs: '{count} aktivní výpadek', en: '{count} active outage' },
-  'incidents.active_badge_few': { cs: '{count} aktivní výpadky', en: '{count} active outages' },
-  'incidents.active_badge_other': { cs: '{count} aktivních výpadků', en: '{count} active outages' },
+  'incidents.active_badge_one': { cs: '{count} probíhající', en: '{count} ongoing' },
+  'incidents.active_badge_few': { cs: '{count} probíhající', en: '{count} ongoing' },
+  'incidents.active_badge_other': { cs: '{count} probíhajících', en: '{count} ongoing' },
   'incidents.view_outage': { cs: 'Detail výpadku', en: 'View Outage Detail' },
   'incidents.manual_badge': { cs: 'Ručně nahlášeno', en: 'Manually Reported' },
   'incidents.created_label': { cs: 'Vytvořeno', en: 'Created' },
@@ -1870,14 +1872,16 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: ', aby se bezpečnostní záplaty a opravy instalovaly automaticky bez nutnosti ručního zásahu.',
     en: ' so security patches and fixes are installed automatically without manual intervention.',
   },
-  'api_agents.privacy_title': { cs: 'Záruka Soukromí & Zero Telemetry', en: 'Privacy Guarantee & Zero Telemetry' },
+  'api_agents.privacy_title': { cs: 'Soukromí a žádná telemetrie', en: 'Privacy and no telemetry' },
+  'api_agents.privacy_chip': { cs: 'Bez telemetrie', en: 'No telemetry' },
+  // Alerts do leave the server (e-mail, SMS gateways), so the text says which (V-20).
   'api_agents.privacy_desc': {
-    cs: '0 % naměřených dat neopouští vaše servery ani není odesíláno třetím stranám. Všechny metriky se ukládají lokálně ve vaší MySQL/PostgreSQL databázi pod vaší plnou kontrolou.',
-    en: '0% of measured data ever leaves your servers or is sent to third parties. All metrics are stored locally in your own MySQL/PostgreSQL database, fully under your control.',
+    cs: 'Naměřená data se ukládají do databáze na vašem serveru, pod vaší kontrolou. Aplikace neposílá žádnou telemetrii; třetí strana dostane jen upozornění, která sami nastavíte.',
+    en: 'Measured data is stored in the database on your server, under your control. The app sends no telemetry; a third party only receives the alerts you set up yourself.',
   },
   'api_agents.auth_title': {
-    cs: 'Autentizace agentů & Notifikace verze',
-    en: 'Agent Authentication & Version Notifications',
+    cs: 'Autentizace agentů a upozornění na verzi',
+    en: 'Agent authentication and version alerts',
   },
   'api_agents.auth_desc': {
     cs: 'Při detekci zastaralé verze agenta nebo selhání Remote Action systém vygeneruje varovný incident v sekci Incidenty a odešle e-mailovou/SMS výstrahu administrátorům.',
@@ -3118,12 +3122,12 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Kanál je obsazený velkou část času a klienti čekají na vysílání. Vyberte volnější kanál (na 2,4 GHz jen 1, 6 nebo 11) nebo přesuňte klienty na 5 GHz.',
     en: 'The channel is busy much of the time and clients wait for their turn. Pick a quieter channel (on 2.4 GHz only 1, 6 or 11) or move clients to 5 GHz.',
   },
-  'settings.digest_title': { cs: 'Týdenní & Měsíční Digest Report', en: 'Weekly & Monthly Digest Report' },
+  'settings.digest_title': { cs: 'Týdenní a měsíční souhrn', en: 'Weekly and monthly digest' },
   'settings.digest_desc': {
     cs: 'Digest se odesílá automaticky cronem (vždy v pondělí / 1. den v měsíci). Zde můžete odeslat ruční e-mailový digest všem administrátorům.',
     en: 'The digest is sent automatically by cron (every Monday / 1st of the month). Here you can manually send an email digest to all administrators.',
   },
-  'settings.weekly_digest_title': { cs: 'Týdenní Souhrn (Weekly Digest)', en: 'Weekly Summary (Weekly Digest)' },
+  'settings.weekly_digest_title': { cs: 'Týdenní souhrn', en: 'Weekly digest' },
   'settings.weekly_digest_desc': {
     cs: 'Souhrnný e-mail se statistikami SLA, incidenty a průměrnou latencí za posledních 7 dnů.',
     en: 'A summary email with SLA statistics, incidents, and average latency over the last 7 days.',
@@ -4496,6 +4500,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'findings.source_attention': { cs: 'stav zařízení', en: 'device states' },
   'findings.source_insight': { cs: 'trendy a odchylky', en: 'trends and anomalies' },
   'findings.source_router': { cs: 'doporučení pro routery', en: 'router recommendations' },
+  'findings.source_tip': { cs: 'tipy ze znalostní báze', en: 'knowledge-base tips' },
   'findings.title': { cs: 'Upozornění', en: 'Alerts' },
   'iftraffic.rejected': {
     cs: 'Vyřazené dny: {n}. Hlásily víc bajtů, než linka za 24 h přenese – chyba počítadla, ne provoz.',

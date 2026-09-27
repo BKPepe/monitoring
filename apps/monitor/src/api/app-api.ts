@@ -215,6 +215,24 @@ function mutate<T>(action: string, body: unknown): Promise<T> {
   });
 }
 
+/** action=monitors, shared by getMonitors and getMonitorList. */
+function fetchMonitorList(): Promise<{ monitors: ApiMonitor[]; sslAlertDays: number | null }> {
+  return request<{ monitors: ApiMonitor[]; sslAlertDays?: number }>('monitors').then((r) => {
+    // The public view strips every target to null; a signed-in view never
+    // does. A whole list without one means the server no longer sees this
+    // session, so the app asks who is signed in instead of showing the
+    // anonymous answer under a user's name (W1-A7).
+    if (Array.isArray(r.monitors) && r.monitors.length > 0 && r.monitors.every((m) => m.target === null)) {
+      requestSessionRecheck();
+    }
+    const days = r.sslAlertDays;
+    return {
+      monitors: r.monitors,
+      sslAlertDays: typeof days === 'number' && Number.isFinite(days) && days > 0 ? days : null,
+    };
+  });
+}
+
 export const appApi = {
   /**
    * Sends a real test message through one notification channel and returns
@@ -272,17 +290,14 @@ export const appApi = {
     csrfToken = null;
   },
 
-  getMonitors: () =>
-    request<{ monitors: ApiMonitor[] }>('monitors').then((r) => {
-      // The public view strips every target to null; a signed-in view never
-      // does. A whole list without one means the server no longer sees this
-      // session, so the app asks who is signed in instead of showing the
-      // anonymous answer under a user's name (W1-A7).
-      if (Array.isArray(r.monitors) && r.monitors.length > 0 && r.monitors.every((m) => m.target === null)) {
-        requestSessionRecheck();
-      }
-      return r.monitors;
-    }),
+  getMonitors: () => fetchMonitorList().then((r) => r.monitors),
+
+  /**
+   * The list with the settings that judge it. `sslAlertDays` is the server's
+   * ssl_alert_days (app view only; null from an older server or the public
+   * view), so the dashboard warns on the same certificates as the bell (CR-5).
+   */
+  getMonitorList: () => fetchMonitorList(),
 
   /** Archived monitors: read-only history, left out of every live list. */
   getArchivedMonitors: () => request<{ monitors: ApiMonitor[] }>('monitors&archived=1').then((r) => r.monitors),

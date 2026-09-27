@@ -137,12 +137,24 @@ export function AssetHeaderPanel({
         </div>
       </div>
 
+      {/* While the score loads, the breakdown's place is held: it arriving
+          under the ring pushed the whole page down, most on a phone (PA-R3). */}
+      {health.status === 'loading' && (
+        <div aria-hidden="true" className="border-border grid gap-4 border-t pt-4 lg:grid-cols-2 lg:gap-8">
+          <Skeleton className="h-24 w-full" />
+          <Skeleton className="h-24 w-full" />
+        </div>
+      )}
       {/* What the score is made of and what took points off, under the ring's
           row (owner decision); only for a score the server could give. */}
       {scored && scored.score != null && (
-        <div className="border-border grid gap-4 border-t pt-4 lg:grid-cols-2">
+        // Two columns from lg, split by a rule: side by side without one, the
+        // first deduction read as part of the last bar ("92 RAM 41 %", V-19).
+        <div className="border-border grid gap-4 border-t pt-4 lg:grid-cols-2 lg:gap-8">
           <HealthBreakdown components={scored.components} />
-          <HealthDeductions deductions={scored.deductions} />
+          <div className="lg:border-border min-w-0 lg:border-l lg:pl-8">
+            <HealthDeductions deductions={scored.deductions} />
+          </div>
         </div>
       )}
     </Panel>
@@ -161,6 +173,9 @@ function HeaderRing({ health, name }: { health: AssetHealthState; name: string }
   }
   // An older server that does not send the score: no ring, nothing claimed.
   if (health.status === 'ok' && health.health === undefined) return null;
+  // A paused monitor is not scored: the state pill says why, a "—" ring would
+  // claim the server lacked data (CORR-1).
+  if (health.status === 'ok' && health.health?.paused) return null;
   // A failed request, or a server that could not compute it: said, never a "—" ring.
   if (health.status === 'failed' || !health.health) {
     return (

@@ -8942,7 +8942,11 @@ function bk_health_inputs(array $monitor, array $details, ?float $availability, 
     } elseif (!empty($monitor['last_checked']) && ($t = strtotime((string)$monitor['last_checked'])) !== false) {
         $seen[] = $t;
     }
-    $cadence = $type === 'heartbeat' ? max(60, (int)($monitor['heartbeat_interval'] ?? 300)) : (($agent || $type === 'agent_service') ? 60 : 300);
+    // The install steps schedule the OpenWrt agent every minute and the VPS,
+    // Windows and Docker agents every five (lib/agent-install.ts). 60 s for all
+    // of them cost a healthy VPS a 'stale' deduction for 40 % of each cycle
+    // (CORR-2); anything not known to report every minute gets the slow end.
+    $cadence = $type === 'heartbeat' ? max(60, (int)($monitor['heartbeat_interval'] ?? 300)) : ($type === 'openwrt' ? 60 : 300);
     $age = ($reported && $seen) ? max(0, $now - max($seen)) : null;
     $current = $age !== null && $age <= 10 * $cadence;
 

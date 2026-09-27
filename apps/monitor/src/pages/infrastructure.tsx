@@ -848,7 +848,7 @@ export function InfrastructurePage() {
                   className={cn(
                     'px-3.5 py-2 text-xs font-semibold rounded-t-md transition-colors border-b-2 -mb-px',
                     activeTab === tab.id
-                      ? 'border-primary text-primary bg-primary/10'
+                      ? 'border-primary text-link bg-primary/10'
                       : 'border-transparent text-muted-foreground hover:text-foreground'
                   )}
                 >
@@ -1130,7 +1130,7 @@ export function InfrastructurePage() {
                             />
                             <span className="font-medium text-foreground">{m.label}</span>
                             {m.recommended && (
-                              <span className="ml-auto text-3xs bg-primary/10 text-primary px-2 py-0.5 rounded font-semibold">
+                              <span className="ml-auto text-3xs bg-primary/10 text-link px-2 py-0.5 rounded font-semibold">
                                 {t('infra.recommended', 'Doporučeno')}
                               </span>
                             )}
@@ -1190,7 +1190,7 @@ export function InfrastructurePage() {
                             />
                             <span className="font-medium text-foreground">{m.label}</span>
                             {m.recommended && (
-                              <span className="ml-auto text-3xs bg-primary/10 text-primary px-2 py-0.5 rounded font-semibold">
+                              <span className="ml-auto text-3xs bg-primary/10 text-link px-2 py-0.5 rounded font-semibold">
                                 {t('infra.recommended', 'Doporučeno')}
                               </span>
                             )}

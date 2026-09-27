@@ -70,6 +70,7 @@ export function Header({
     };
   }, []);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const bellRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -196,6 +197,7 @@ export function Header({
 
         <div className="relative">
           <Button
+            ref={bellRef}
             variant="outline"
             size="icon"
             className="relative cursor-pointer"
@@ -246,7 +248,11 @@ export function Header({
               role="region"
               aria-label={t('header.notifications_aria', 'Upozornění')}
               onKeyDown={(e) => {
-                if (e.key === 'Escape') setShowNotifications(false);
+                if (e.key !== 'Escape') return;
+                setShowNotifications(false);
+                // Escape from inside the panel: focus goes back to the bell, not
+                // to the page body the panel no longer covers (PA-R7).
+                bellRef.current?.focus();
               }}
               className="bg-popover text-popover-foreground shadow-pop animate-in fade-in-50 zoom-in-95 fixed inset-x-3 top-16 z-50 rounded-xl border border-border p-4 sm:absolute sm:inset-x-auto sm:top-auto sm:right-0 sm:mt-2 sm:w-96"
             >
@@ -269,24 +275,28 @@ export function Header({
                 <Link
                   to="/insights"
                   onClick={() => setShowNotifications(false)}
-                  className="hover:bg-raised focus-visible:ring-ring -mx-1 mb-3 flex flex-wrap items-center gap-1.5 rounded-lg px-1 py-1 focus-visible:ring-2 focus-visible:outline-none"
+                  className="hover:bg-raised focus-visible:ring-ring -mx-1 mb-3 flex items-center gap-1.5 rounded-lg px-1 py-1 focus-visible:ring-2 focus-visible:outline-none"
                 >
-                  {findings.critical > 0 && (
-                    <Pill tone="down" dot>
-                      {findings.critical} {t('rec.severity_critical', 'Kritické')}
-                    </Pill>
-                  )}
-                  {findings.warning > 0 && (
-                    <Pill tone="warning" dot>
-                      {findings.warning} {t('rec.severity_warning', 'Varování')}
-                    </Pill>
-                  )}
-                  {findings.info > 0 && (
-                    <Pill tone="info">
-                      {findings.info} {t('rec.severity_info', 'Pro informaci')}
-                    </Pill>
-                  )}
-                  <ArrowRight aria-hidden="true" className="text-muted-foreground ml-auto size-3.5" />
+                  {/* The chips wrap among themselves; the arrow stays on their
+                      first line instead of dropping alone under them (V-12). */}
+                  <span className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+                    {findings.critical > 0 && (
+                      <Pill tone="down" dot>
+                        {findings.critical} {t('rec.severity_critical', 'Kritické')}
+                      </Pill>
+                    )}
+                    {findings.warning > 0 && (
+                      <Pill tone="warning" dot>
+                        {findings.warning} {t('rec.severity_warning', 'Varování')}
+                      </Pill>
+                    )}
+                    {findings.info > 0 && (
+                      <Pill tone="info">
+                        {findings.info} {t('rec.severity_info', 'Pro informaci')}
+                      </Pill>
+                    )}
+                  </span>
+                  <ArrowRight aria-hidden="true" className="text-muted-foreground size-3.5 shrink-0" />
                 </Link>
               )}
               {countUnknown && <ErrorState tone="warning" className="mb-3" message={unknownText} />}

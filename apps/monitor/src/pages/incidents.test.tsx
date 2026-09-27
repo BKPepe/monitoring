@@ -111,7 +111,7 @@ describe('IncidentsPage', () => {
 
     const notesButton = await screen.findByRole('button', { name: /poznámky a akce|notes & actions/i });
     // Counted once: the outage row and the incident it opened are one outage.
-    expect(screen.getByText(/1 aktivní výpadek|1 active outage/i)).toBeTruthy();
+    expect(screen.getByText(/^1 probíhající$|^1 ongoing$/i)).toBeTruthy();
     // No second card titled after the incident.
     expect(screen.queryByText('Výpadek: Router - Praha')).toBeNull();
 

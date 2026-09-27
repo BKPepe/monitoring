@@ -97,6 +97,13 @@ describe('FindingsList (C-12)', () => {
     expect(await screen.findByText(/Seznam není úplný: doporučení pro routery/)).toBeTruthy();
   });
 
+  it('selhané tipy pojmenuje jako tipy, ne jako stav zařízení (CR-9b)', async () => {
+    serve(answer({ sourceErrors: [{ source: 'tip', monitorId: 7, error: 'tips_unavailable' }] }));
+    renderList(<FindingsList density="all" />);
+    expect(await screen.findByText(/Seznam není úplný: tipy ze znalostní báze/)).toBeTruthy();
+    expect(screen.queryByText(/stav zařízení/)).toBeNull();
+  });
+
   it('selhaný zdroj a žádné zjištění: žádné „nic k řešení“ vedle „seznam není úplný“ (CR-12)', async () => {
     serve(
       answer({

@@ -68,10 +68,9 @@ export function PublicHealthScore({ health, failed }: { health: PublicHealth | n
                 key={`${d.monitorId ?? 'n'}-${d.component}-${i}`}
                 className="grid grid-cols-[minmax(0,1fr)_3.5rem_2.5rem] items-center gap-2.5"
               >
-                <span
-                  className="text-muted-foreground truncate text-right text-xs"
-                  title={d.monitorName ? `${d.monitorName} · ${d.label}` : d.label}
-                >
+                {/* Wraps, never truncates: the cut-off part was the number that
+                    explains the deduction ("Odezva 1 240 ms, nad…", V-11). */}
+                <span className="text-muted-foreground text-right text-xs break-words">
                   {d.monitorName && <span className="text-foreground">{d.monitorName} · </span>}
                   {d.label}
                 </span>

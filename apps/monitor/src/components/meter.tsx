@@ -75,7 +75,10 @@ export function RangeMeter({
             'aria-valuetext': valueText,
           }
         : { role: 'img', 'aria-label': `${label}: ${valueText ?? '—'}` })}
-      className={cn('bg-muted relative h-1.5 w-full rounded-full', className)}
+      // The track is a tint of the text colour, not --muted: in the light
+      // theme --muted equals the --inset well these meters sit in, and the
+      // bar lost its scale there (V-02).
+      className={cn('bg-foreground/10 relative h-1.5 w-full rounded-full', className)}
     >
       {zones?.map((z) => {
         const a = pctOf(Math.min(z.from, z.to), min, max);
@@ -161,7 +164,7 @@ export function RatioBar({
       <div
         role="img"
         aria-label={`${label}: ${legend}`}
-        className="bg-muted flex h-2 w-full overflow-hidden rounded-full"
+        className="bg-foreground/10 flex h-2 w-full overflow-hidden rounded-full"
       >
         {whole > 0 &&
           parts.map((p, i) =>

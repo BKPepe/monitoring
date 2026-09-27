@@ -145,7 +145,9 @@ function SourceErrors({ data }: { data: FindingsResponse }) {
       ? t('findings.source_router', 'doporučení pro routery')
       : source === 'insight'
         ? t('findings.source_insight', 'trendy a odchylky')
-        : t('findings.source_attention', 'stav zařízení')
+        : source === 'tip'
+          ? t('findings.source_tip', 'tipy ze znalostní báze')
+          : t('findings.source_attention', 'stav zařízení')
   );
   return (
     <ErrorState

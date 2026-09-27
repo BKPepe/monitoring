@@ -404,7 +404,7 @@ const raw: Dict = {
     },
     config: {
       title: 'Spusťte instalátor',
-      text: 'Otevřete https://YOUR-DOMAIN/app/setup. Zkontroluje PHP, vyzkouší přihlášení k databázi, zapíše status/config.php (nebo soubor ukáže k nahrání, když do složky PHP zapisovat nesmí), založí tabulky a pak prvního správce. Žádný výchozí účet ani heslo neexistuje a jakmile účet je, instalátor se znovu nespustí. Ručně místo toho: ve složce status/ zkopírujte config.sample.php na config.php a vyplňte připojení:',
+      text: 'Otevřete https://YOUR-DOMAIN/app/setup. Zkontroluje PHP, vyzkouší přihlášení k databázi, zapíše status/config.php (nebo soubor ukáže k nahrání, když do složky PHP zapisovat nesmí), založí tabulky a pak prvního správce. Žádný výchozí účet ani heslo neexistuje a jakmile účet je, instalátor se znovu nespustí. Do té doby ho může spustit kdokoli, kdo adresu najde, proto databázi založte ještě před nahráním a instalátor spusťte hned po něm. Ručně místo toho: ve složce status/ zkopírujte config.sample.php na config.php a vyplňte připojení:',
       optional:
         'Volitelné klíče patří do stejného souboru jako konstanty velkými písmeny, nebo později do aplikace v Nastavení: CRON_KEY, AGENT_REGISTRATION_TOKEN a METRICS_TOKEN. Instalátor dá každé nové instalaci vlastní CRON_KEY. Při ruční cestě zůstane prázdný, dokud ho nenastavíte, a dokud je prázdný, spustí sběr dat kdokoli, kdo zná adresu cron.php.',
       keep: 'config.php obsahuje heslo k databázi. V ZIPu není a nahrání nového vydání ho nepřepíše.',

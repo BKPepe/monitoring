@@ -33,7 +33,8 @@
   --secondary-foreground: #0b0d10;
 
   --muted: #eef0f3;
-  --muted-foreground: #6b7280;
+  /* #6b7280 was 4.23:1 on the #eef0f3 wells (--inset, --secondary). */
+  --muted-foreground: #5f6673;
 
   --accent: #eef0f3;
   --accent-foreground: #0b0d10;
@@ -492,7 +493,7 @@
     --secondary: #eef0f3;
     --secondary-foreground: #0b0d10;
     --muted: #eef0f3;
-    --muted-foreground: #6b7280;
+    --muted-foreground: #5f6673;
     --accent: #eef0f3;
     --accent-foreground: #0b0d10;
     --destructive: #b91c1c;

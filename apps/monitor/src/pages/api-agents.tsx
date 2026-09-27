@@ -459,20 +459,20 @@ export function ApiAgentsPage() {
       <div className="grid gap-4 md:grid-cols-2">
         <Panel
           icon={Lock}
-          title={t('api_agents.privacy_title', 'Záruka Soukromí & Zero Telemetry')}
-          chip={<Pill tone="up">100% Private</Pill>}
+          title={t('api_agents.privacy_title', 'Soukromí a žádná telemetrie')}
+          chip={<Pill tone="up">{t('api_agents.privacy_chip', 'Bez telemetrie')}</Pill>}
         >
           <p className="text-muted-foreground text-xs leading-relaxed">
             {t(
               'api_agents.privacy_desc',
-              '0 % naměřených dat neopouští vaše servery ani není odesíláno třetím stranám. Všechny metriky se ukládají lokálně ve vaší MySQL/PostgreSQL databázi pod vaší plnou kontrolou.'
+              'Naměřená data se ukládají do databáze na vašem serveru, pod vaší kontrolou. Aplikace neposílá žádnou telemetrii; třetí strana dostane jen upozornění, která sami nastavíte.'
             )}
           </p>
         </Panel>
 
         <Panel
           icon={ShieldCheck}
-          title={t('api_agents.auth_title', 'Autentizace agentů & Notifikace verze')}
+          title={t('api_agents.auth_title', 'Autentizace agentů a upozornění na verzi')}
           chip={<Pill tone="up">{t('api_agents.key_hmac_badge', 'Klíč + HMAC-SHA256')}</Pill>}
         >
           <p className="text-muted-foreground text-xs leading-relaxed">

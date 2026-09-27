@@ -99,7 +99,7 @@ export function AgentInstallSteps({ monitorId, platforms }: { monitorId?: number
               className={cn(
                 'rounded-md border px-2.5 py-1 text-2xs font-semibold transition-colors',
                 p === active
-                  ? 'border-primary bg-primary/10 text-primary'
+                  ? 'border-primary bg-primary/10 text-link'
                   : 'border-border text-muted-foreground hover:text-foreground'
               )}
             >
@@ -132,7 +132,7 @@ export function AgentInstallSteps({ monitorId, platforms }: { monitorId?: number
                 <button
                   type="button"
                   onClick={() => void copy(id, step.command)}
-                  className="inline-flex shrink-0 items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-0.5 text-2xs font-semibold text-primary hover:bg-primary/20"
+                  className="inline-flex shrink-0 items-center gap-1 rounded border border-primary/30 bg-primary/10 px-2 py-0.5 text-2xs font-semibold text-link hover:bg-primary/20"
                 >
                   {isCopied ? (
                     <Check className="size-3" aria-hidden="true" />

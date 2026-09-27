@@ -1,10 +1,12 @@
 import * as React from 'react';
 import { Clock, MapPin, Globe } from 'lucide-react';
-import { Badge, StatusDot } from '@/components/ui/badge';
+import { StatusDot } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Pill } from '@/components/ui/pill';
 import type { TimelineEvent } from '@/data/model';
 import { useLanguage } from '@/context/language-context';
 import { collapseRuns, isRoutine, repeatsTitle, runSpan, type TimelineItem } from '@/lib/timeline-collapse';
+import { splitLocationLabel } from '@/lib/public-location';
 import { cn } from '@/lib/utils';
 
 type TranslateFn = ReturnType<typeof useLanguage>['t'];
@@ -33,6 +35,15 @@ function resolutionLabel(resolution: NonNullable<TimelineEvent['resolution']>, t
   if (resolution === 'Resolved') return t('incidents.resolved_label', 'Vyřešeno');
   if (resolution === 'Open') return t('public.incident_open', 'Probíhá');
   return t('timeline.sev_info', 'Informace');
+}
+
+/**
+ * The probe's label without its emoji flag (Windows prints one as two
+ * letters, and the page draws real flags elsewhere), network after a dot.
+ */
+function locationText(label: string): string {
+  const { name, network } = splitLocationLabel(label);
+  return [name, network].filter(Boolean).join(' · ') || label;
 }
 
 function EventRow({ event, last, inRun = false }: { event: TimelineEvent; last: boolean; inRun?: boolean }) {
@@ -65,7 +76,8 @@ function EventRow({ event, last, inRun = false }: { event: TimelineEvent; last: 
               </span>
             )}
           </div>
-          {chip && <Badge variant={resolutionVariant[chip]}>{resolutionLabel(chip, t)}</Badge>}
+          {/* The kit's pill, the same chip the incident history uses (V-07/V-09). */}
+          {chip && <Pill tone={resolutionVariant[chip]}>{resolutionLabel(chip, t)}</Pill>}
         </div>
         {!repeatsTitle(event) && <p className="text-muted-foreground text-xs leading-relaxed">{event.detail}</p>}
         {(event.location || event.method) && (
@@ -79,7 +91,7 @@ function EventRow({ event, last, inRun = false }: { event: TimelineEvent; last: 
             {event.location && (
               <span className="inline-flex items-center gap-1">
                 <MapPin aria-hidden="true" className="size-3 shrink-0" />
-                {t('timeline.node_label', 'Uzel:')} <span className="font-mono">{event.location}</span>
+                {t('timeline.node_label', 'Uzel:')} <span className="font-mono">{locationText(event.location)}</span>
               </span>
             )}
           </p>
@@ -118,9 +130,9 @@ function RunRow({ events, last }: { events: TimelineEvent[]; last: boolean }) {
             {runSpan(events, lang)}
           </span>
           {events.some((e) => e.ongoing) && (
-            <Badge variant={resolutionVariant.Open} className="ml-2 align-middle">
+            <Pill tone={resolutionVariant.Open} className="ml-2 align-middle">
               {resolutionLabel('Open', t)}
-            </Badge>
+            </Pill>
           )}
         </summary>
         <ol className="mt-3">

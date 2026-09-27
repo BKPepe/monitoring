@@ -27,7 +27,7 @@ function readTokens(): ChartTheme {
 
   return {
     text: token('--foreground', '#0b0d10'),
-    textMuted: token('--muted-foreground', '#6b7280'),
+    textMuted: token('--muted-foreground', '#5f6673'),
     grid: token('--chart-grid', 'rgba(0,0,0,0.07)'),
     surface: token('--card', '#f7f8fa'),
     tooltipBg: token('--popover', '#ffffff'),

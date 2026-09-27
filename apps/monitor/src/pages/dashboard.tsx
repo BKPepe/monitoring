@@ -144,15 +144,18 @@ export function DashboardPage() {
   const monitors = monitorsData ?? NO_MONITORS;
   const [monitorsLoading, setMonitorsLoading] = React.useState(true);
   const [monitorsError, setMonitorsError] = React.useState<string | null>(null);
+  // The server's ssl_alert_days; null (older server) falls back to lib/attention's 14.
+  const [sslAlertDays, setSslAlertDays] = React.useState<number | null>(null);
 
   React.useEffect(() => {
     let active = true;
 
     appApi
-      .getMonitors()
-      .then((rows) => {
+      .getMonitorList()
+      .then(({ monitors: rows, sslAlertDays: sslDays }) => {
         if (!active) return;
-        const list = Array.isArray(rows) ? rows : ((rows as any)?.monitors ?? []);
+        const list = Array.isArray(rows) ? rows : [];
+        setSslAlertDays(sslDays);
         const userTargets = list.filter((m: ApiMonitor) => {
           // By type, like api.php - never by name (W1-D2).
           return !isProbeMonitor(m.type);
@@ -404,19 +407,26 @@ export function DashboardPage() {
   // can be tested without a render (see attention.test.ts).
   const needsAttention = React.useMemo(
     () =>
-      buildNeedsAttention(monitors, {
-        down: t('attention.down', 'Služba je nedostupná'),
-        warning: t('attention.warning', 'Monitor hlásí varování'),
-        silent: t('attention.silent', 'Agent přestal hlásit data'),
-        unreachable: t('attention.unreachable', 'Cíl je trvale nedosažitelný — zvažte kontrolu agentem'),
-        sslExpired: t('attention.ssl_expired', 'SSL certifikát vypršel!'),
-        sslExpiring: (days) => t('attention.ssl_expiring', { days }, `SSL certifikát vyprší za ${days} dní`),
-        agentUpdate: (version) =>
-          t('attention.agent_update', { version }, `Agent je zastaralý — k dispozici je verze ${version}`),
-        metricHigh: (metric, value) => t('attention.metric_high', { metric, value }, `${metric} na ${value} %`),
-      }),
-    [monitors, t]
+      buildNeedsAttention(
+        monitors,
+        {
+          down: t('attention.down', 'Služba je nedostupná'),
+          warning: t('attention.warning', 'Monitor hlásí varování'),
+          silent: t('attention.silent', 'Agent přestal hlásit data'),
+          unreachable: t('attention.unreachable', 'Cíl je trvale nedosažitelný — zvažte kontrolu agentem'),
+          sslExpired: t('attention.ssl_expired', 'SSL certifikát vypršel!'),
+          sslExpiring: (days) => t('attention.ssl_expiring', { days }, `SSL certifikát vyprší za ${days} dní`),
+          agentUpdate: (version) =>
+            t('attention.agent_update', { version }, `Agent je zastaralý — k dispozici je verze ${version}`),
+          metricHigh: (metric, value) => t('attention.metric_high', { metric, value }, `${metric} na ${value} %`),
+        },
+        { sslAlertDays }
+      ),
+    [monitors, sslAlertDays, t]
   );
+  // What the panel counts: problems only, like the bell and the tab bar. An
+  // agent update is listed, but it is not a fault (CORR-4).
+  const problemCount = needsAttention.filter((item) => item.severity !== 'info').length;
   // The fleet's states in one sentence over the ring ("1 výpadek, 2 varování"),
   // in the shared status vocabulary; the attention list beside it names the
   // devices and every other finding.
@@ -551,6 +561,11 @@ export function DashboardPage() {
     >
       <DashboardTraffic source={trafficSource} gatewayLatencyMs={trafficSource.gatewayLatencyMs} />
     </React.Suspense>
+  ) : monitorsLoading ? (
+    // Hold the slot until the list says whether there is a series to draw.
+    <Panel key="traffic" className="h-full" aria-busy="true">
+      <Skeleton className="h-64 w-full" />
+    </Panel>
   ) : null;
 
   const attentionSection = (
@@ -560,10 +575,10 @@ export function DashboardPage() {
     <Panel
       key="attention"
       // The check mark only for a measured all-clear, not while loading (V-18).
-      icon={!monitorsLoading && !monitorsError && needsAttention.length === 0 ? CheckCircle2 : TriangleAlert}
+      icon={!monitorsLoading && !monitorsError && problemCount === 0 ? CheckCircle2 : TriangleAlert}
       title={t('attention.title', 'Vyžaduje pozornost')}
       // A failed refresh leaves an old list: its count would be an all-clear nobody measured.
-      count={monitorsLoading || monitorsError ? undefined : needsAttention.length}
+      count={monitorsLoading || monitorsError ? undefined : problemCount}
       viewAll={{ to: '/incidents', label: t('nav.incidents', 'Incidenty') }}
       padding="sm"
     >
@@ -789,6 +804,7 @@ export function DashboardPage() {
         devices={devices.slice(0, DEVICE_CARDS)}
         total={devices.length}
         health={fleetHealth.data?.assets ?? null}
+        healthLoading={fleetHealth.status === 'loading'}
       />
     ) : null;
 
@@ -1036,8 +1052,15 @@ function NetworkHealth({ state }: { state: ReturnType<typeof useFleetHealth> }) 
   const { t } = useLanguage();
   if (state.status === 'loading') {
     return (
-      <div aria-busy="true" className="flex flex-col items-center gap-3">
-        <Skeleton className="size-44 rounded-full" />
+      // The shape of an answer with a score: ring, grade pill, caption and the
+      // one-line breakdown, so the answer does not push the page down.
+      <div aria-busy="true" className="flex w-full flex-col items-center gap-4">
+        <div className="flex flex-col items-center gap-2">
+          <Skeleton className="size-44 rounded-full" />
+          <Skeleton className="h-6 w-20 rounded-full" />
+          <Skeleton className="h-4 w-24" />
+        </div>
+        <Skeleton className="h-9 w-full max-w-sm" />
         <span className="sr-only">{t('dashboard.health_loading', 'Počítám skóre zdraví…')}</span>
       </div>
     );
@@ -1114,10 +1137,12 @@ function DevicesSection({
   devices,
   total,
   health,
+  healthLoading,
 }: {
   devices: ApiMonitor[];
   total: number;
   health: Parameters<typeof DeviceCards>[0]['health'];
+  healthLoading: boolean;
 }) {
   const { t } = useLanguage();
   const headingId = React.useId();
@@ -1153,7 +1178,7 @@ function DevicesSection({
         }
         viewAll={{ to: '/infrastructure' }}
       />
-      <DeviceCards devices={devices} health={health} />
+      <DeviceCards devices={devices} health={health} healthLoading={healthLoading} />
     </section>
   );
 }

@@ -105,11 +105,15 @@ Pozor na detaily, které se snadno ztratí:
   stejně dlouhého okna, u počítadla průměr přírůstků; `null` pod 3 vzorky).
   `metric_series`, `_batch`, `metric_detail`, `metric_heatmap` a
   `metric_correlations` vracejí `label` podle `lang` (anglické názvy metrik).
-- **Skóre zdraví a NetPulse vzhled (w2m):** `action=health` (síť + monitory,
-  veřejně bez `cpu_ram`/`disk`/`temperature` a bez jmen) a
-  `monitor_insights.health` podle `bk_health_score()` (`formulaVersion` 1,
-  vzorec v docs/api.md „Health score“): jen změřené složky, neměřená vypadne a
-  váhy se přepočtou, bez dostupnosti nebo pod 40 z 100 vah = `score: null`.
+- **Skóre zdraví a NetPulse vzhled (w2m):** `action=health` (síť + v aplikaci
+  každý monitor; veřejně JEN skóre sítě veřejné sady, bez
+  `cpu_ram`/`disk`/`temperature`, bez verdiktů routeru a bez skóre po
+  monitorech) a `monitor_insights.health` podle `bk_health_score()`
+  (`formulaVersion` 1, vzorec v docs/api.md „Health score“): jen změřené
+  složky, neměřená vypadne a váhy se přepočtou, bez dostupnosti nebo s méně
+  než 3 změřenými složkami = `score: null`; `deductions` jmenují srážky
+  (`kind`, `label`, `points`), síť je `null` pod polovinou změřených monitorů.
+  `monitor.php` počítá tentýž vzorec.
   `findings` má zdroj `tip` (tipy bez opakování důvodu) a `summary=1` (jen
   počty, u flotily minutu v `settings`, smaže je ztlumení/archivace).
   `regions[].country` (ISO alpha-2 z popisku, jinak `null`). `daily_uptime`

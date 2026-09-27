@@ -4003,6 +4003,15 @@ foreach (['BK_HEALTH_COMPONENTS', 'BK_HEALTH_ROUTER_LATCHES'] as $hs_name) {
     check('zdraví/vstupy: router měří WAN, rozhoduje disk nejblíž limitu své třídy (SSD 67/70, ne NVMe 75/80), čerstvost z agenta',
         [$hs_in['latency_kind'], $hs_in['latency_ms'], $hs_in['disk_temp_c'], $hs_in['disk_temp_limit'], $hs_in['smart_failed'], $hs_in['age_secs'], $hs_in['cadence_secs'], $hs_in['alerts']],
         ['wan', 14.0, 67.0, 70.0, false, 20, 60, []]);
+    // CORR-2: a VPS agent reports every five minutes (the install cron), a
+    // router every minute; 4 min 10 s after its report a VPS is on time.
+    $hs_late = ['last_checked' => date('Y-m-d H:i:s', $hs_now - 250)];
+    $hs_vps = bk_health_inputs(['type' => 'vps'] + $hs_late + $hs_router, ['agent_last_seen' => $hs_now - 250] + $hs_det, 100.0, null, $hs_lim, 14, $hs_now, false);
+    $hs_rtr = bk_health_inputs($hs_late + $hs_router, ['agent_last_seen' => $hs_now - 250] + $hs_det, 100.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: agent VPS hlásí po 5 min, router po minutě (250 s je u VPS včas, u routeru ne)',
+        [$hs_vps['cadence_secs'], in_array('stale', array_column(bk_health_score($hs_vps)['deductions'], 'kind'), true),
+         $hs_rtr['cadence_secs'], in_array('stale', array_column(bk_health_score($hs_rtr)['deductions'], 'kind'), true)],
+        [300, false, 60, true]);
     $hs_in = bk_health_inputs($hs_router, ['storage_disks' => [['rotational' => true, 'smart' => ['passed' => true, 'temperature_c' => 58]], ['smart' => ['passed' => true, 'temperature_c' => 67]]]] + $hs_det, 99.95, null, $hs_lim, 14, $hs_now, false);
     check('zdraví/vstupy: rotační disk 58 °C (limit 60) je blíž limitu než SSD 67 (limit 70)', [$hs_in['disk_temp_c'], $hs_in['disk_temp_limit']], [58.0, 60.0]);
     $hs_in = bk_health_inputs(['type' => 'web', 'status' => 'unknown', 'last_checked' => null] + $hs_router, [], null, ['avg' => 80.0, 'n' => 1], $hs_lim, 14, $hs_now, false);

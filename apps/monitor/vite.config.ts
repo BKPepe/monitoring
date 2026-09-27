@@ -29,7 +29,10 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
   },
-  // i18nSplit: only the visitor's language is on the first download (PA-5).
+  // i18nSplit (PA-5): the Czech half is in the entry, the English half is a
+  // chunk loaded before the first render. A Czech visitor downloads one
+  // language; an English visitor downloads both (the Czech texts are the
+  // fallback of every t() call), plus one more request.
   plugins: [i18nSplit(), react(), tailwindcss()],
   build: {
     rolldownOptions: {

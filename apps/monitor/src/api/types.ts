@@ -955,7 +955,8 @@ export interface WebsitesOverviewResponse {
  * One finding of `action=findings` (C-12): the attention reasons, the
  * insights and the router recommendations in one feed, worst first.
  */
-export type FindingSource = 'status' | 'certificate' | 'check' | 'metric' | 'agent' | 'insight' | 'router';
+// 'tip': the knowledge-base tips (CR-9b), sent since the w2m server.
+export type FindingSource = 'status' | 'certificate' | 'check' | 'metric' | 'tip' | 'agent' | 'insight' | 'router';
 
 export interface Finding {
   /** `<source>:<monitorId>:<kind>`. */
@@ -1001,7 +1002,7 @@ export interface FindingsResponse {
   muted: Finding[];
   canMute: boolean;
   /** Non-empty = the list is incomplete: a source failed and must be named, not read as "nothing found". */
-  sourceErrors: { source: 'attention' | 'router' | 'insight'; monitorId: number | null; error: string }[];
+  sourceErrors: { source: 'attention' | 'router' | 'insight' | 'tip'; monitorId: number | null; error: string }[];
   insightsCachedAt: number | null;
   generatedAt: string;
 }

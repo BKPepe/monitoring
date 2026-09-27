@@ -109,7 +109,7 @@ export function CommandBlock({ command }: { command: string }) {
       <button
         type="button"
         onClick={() => void copy()}
-        className="border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 inline-flex shrink-0 items-center gap-1 rounded border px-2 py-0.5 text-2xs font-semibold"
+        className="border-primary/30 bg-primary/10 text-link hover:bg-primary/20 inline-flex shrink-0 items-center gap-1 rounded border px-2 py-0.5 text-2xs font-semibold"
       >
         {copied ? <Check className="size-3" aria-hidden="true" /> : <Copy className="size-3" aria-hidden="true" />}
         {copied ? t('rec.copied', 'Zkopírováno') : t('rec.copy', 'Kopírovat')}

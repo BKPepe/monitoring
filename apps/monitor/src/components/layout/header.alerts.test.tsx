@@ -147,6 +147,19 @@ describe('Zvonek: selhání není „vše OK“ (W1-A)', () => {
   });
 });
 
+describe('Zvonek z klávesnice (PA-R7)', () => {
+  it('Escape uvnitř panelu ho zavře a vrátí fokus na zvonek', () => {
+    serve(() => json({ events: [] }));
+    openBell({ findings: { critical: 1, warning: 0, info: 0 } });
+    const bell = screen.getByRole('button', { name: 'Upozornění' });
+    const link = screen.getByRole('link', { name: /Kritické/ });
+    link.focus();
+    fireEvent.keyDown(link, { key: 'Escape' });
+    expect(bell.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(bell);
+  });
+});
+
 describe('Hlavička: název stránky, zpět a živost dat', () => {
   function Page({ at }: { at: number | null }) {
     usePageChrome({ freshness: { at, intervalSecs: 60 } });
