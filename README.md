@@ -27,8 +27,7 @@ yet deployed:
 ├── agents/                        # git submodule -> BKPepe/monitoring-agent
 ├── .github/
 │   └── workflows/                 # deploy.yml (site+worker), deploy-hosting.yml (FTP:
-│                                  # status, app, root in one queue), release-agents.yml,
-│                                  # codeql.yml
+│                                  # status, app, root in one queue), release.yml, codeql.yml
 └── package.json                   # NPM workspaces config (site, worker, monitor)
 ```
 
@@ -118,6 +117,12 @@ After the history squash (2026-08) both the app and the agents restarted at
   four versions independently, same bump rule. Self-update triggers on any
   version *difference* (not ordering), so a bump - or even a reset - reaches
   the fleet on its next report cycle.
+- **Releases** (`.github/workflows/release.yml`): pushing a `v*` tag builds the
+  app, copies the agents into `status/`, and publishes
+  `bloodkings-monitoring.zip` + `SHA256SUMS` (plus the agent scripts) as the
+  latest release - never as a pre-release, because `releases/latest` (and so
+  the site's download button and "latest release" line) skips those. Tags are
+  pushed by hand; no workflow creates one.
 
 ## 🔍 Static analysis
 
@@ -150,3 +155,11 @@ psalm --taint-analysis --no-cache
 *   **Performance:** 100/100 on Lighthouse metrics via static Astro compilation with no heavy client-side JS framework, responsive from 360px to 4K.
 *   **Premium design:** minimal, dark-mode-first, red used only as an accent, smooth Vercel-style animations.
 *   **Interactive elements:** a dashboard widget fed by live data from the status API (with an honest error state when the API is unreachable), an interactive SVG agent map, and a working ping-test console (Playground) that measures a real round-trip from the Cloudflare network.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The agents in the `agents/` submodule
+(BKPepe/monitoring-agent) carry the same license in their own LICENSE file.
+Third-party code kept in the repository under its own license (PHPMailer,
+LGPL-2.1, in `apps/status/lib/`) is listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

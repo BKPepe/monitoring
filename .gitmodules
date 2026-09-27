@@ -1,3 +1,6 @@
+# HTTPS, not SSH: `git clone --recursive` must fetch the agents for anyone,
+# without an SSH key registered at GitHub (site W1-4). Pushing to the agents
+# repository still works over SSH with a pushInsteadOf rule or `git remote`.
 [submodule "agents"]
 	path = agents
-	url = git@github.com:BKPepe/monitoring-agent.git
+	url = https://github.com/BKPepe/monitoring-agent.git
