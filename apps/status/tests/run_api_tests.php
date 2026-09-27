@@ -4887,6 +4887,32 @@ $force_schema_bump();
 api_get($base, 'action=public_status');
 check('migrace doplní starší databázi sloupec CPU času agenta (0.1.9)', $column_exists('vps_metrics', 'agent_prev_cpu_ms'), true);
 
+// metric_annotations was only ever in schema.sql: production, set up before
+// it, lacked the table and every annotations request failed with 1146. The
+// migration creates it with the very definition schema.sql gives (the test
+// database was imported from schema.sql), and a second bump leaves it alone.
+$ann_create_sql = function () use ($pdo, $table_exists): string {
+    if (!$table_exists('metric_annotations')) {
+        return '';
+    }
+    $row = $pdo->query("SHOW CREATE TABLE metric_annotations")->fetch(PDO::FETCH_NUM);
+    return (string)preg_replace('/ AUTO_INCREMENT=\d+/', '', (string)($row[1] ?? ''));
+};
+$ann_from_schema = $ann_create_sql();
+$pdo->exec("DROP TABLE metric_annotations");
+check_false('tabulka poznámek ke grafům před migrací chybí', $table_exists('metric_annotations'));
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check('migrace založí chybějící tabulku poznámek ke grafům jako schema.sql', [$table_exists('metric_annotations'),
+    $ann_from_schema !== '' && $ann_create_sql() === $ann_from_schema], [true, true]);
+if ($table_exists('metric_annotations')) {
+    $pdo->exec("INSERT INTO metric_annotations (monitor_id, metric_key, timestamp, note) VALUES (2, 'cpu', NOW(), 'po migraci')");
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    check('opakovaná migrace tabulku poznámek nechá i s řádky', (int)$pdo->query("SELECT COUNT(*) FROM metric_annotations WHERE note = 'po migraci'")->fetchColumn(), 1);
+    $pdo->exec("DELETE FROM metric_annotations WHERE note = 'po migraci'");
+}
+
 // A later schema bump runs the same statements again. A result that a 0.1.7
 // agent really measured (it carries bytes_received) must survive it, however small.
 $pdo->exec("INSERT INTO speedtest_results (monitor_id, measured_at, download_mbps, upload_mbps, source, bytes_received) VALUES (2, '2026-09-04 05:00:00', 0.05, 0.04, 'agent', 93750)");

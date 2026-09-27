@@ -7474,8 +7474,9 @@ if ($action === 'export_csv') {
 /**
  * Annotations for the metric charts ("deploy happened here", "disk swapped").
  *
- * The `metric_annotations` table existed in the database from the start and
- * the chart had clickable controls, but the endpoint they posted to never
+ * schema.sql has defined the `metric_annotations` table since its first
+ * version (an older database gets it from a migration since 20260927r021),
+ * and the chart had clickable controls, but the endpoint they posted to never
  * existed. The note was silently dropped and the user got a 200. Not a
  * single row was ever written into that table.
  */

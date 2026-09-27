@@ -1284,6 +1284,22 @@ try {
         // because nothing confirmed those rows then either.
         "ALTER TABLE notification_log ADD COLUMN delivery VARCHAR(8) DEFAULT NULL",
         "ALTER TABLE notification_log ADD COLUMN provider_reply VARCHAR(190) DEFAULT NULL",
+        // Chart notes (20260927r021). schema.sql has had this table since its
+        // first version, but no migration created it, so a database set up
+        // before that never got it: production answered every annotations
+        // request with error 1146 until the table was made by hand on 27 Sep
+        // 2026. The same definition as schema.sql.
+        "CREATE TABLE IF NOT EXISTS `metric_annotations` (
+          `id` INT AUTO_INCREMENT PRIMARY KEY,
+          `monitor_id` INT NOT NULL,
+          `metric_key` VARCHAR(30) NOT NULL,
+          `timestamp` DATETIME NOT NULL,
+          `note` TEXT NOT NULL,
+          `created_by` INT DEFAULT NULL,
+          `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
+          INDEX (`monitor_id`, `metric_key`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);
