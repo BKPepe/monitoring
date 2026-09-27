@@ -461,6 +461,8 @@ CREATE TABLE IF NOT EXISTS `notification_log` (
   `kind` VARCHAR(32) NOT NULL DEFAULT 'other', -- alert, digest, invitation, password_reset, ... (bk_notification_kinds)
   `subject` VARCHAR(190) DEFAULT NULL, -- the only part of a message ever stored; the body never is
   `method` VARCHAR(16) DEFAULT NULL, -- 'smtp' = an authenticated server confirmed it, 'fallback' = only handed to the local mail(), NULL = nothing confirmed a route (a failed attempt)
+  `delivery` VARCHAR(8) DEFAULT NULL, -- sent = the provider confirmed it took the message, failed, unknown = nobody confirmed, skipped; NULL = an older row, derived when read
+  `provider_reply` VARCHAR(190) DEFAULT NULL, -- the provider's own words, without the message, phone numbers or keys
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   KEY `idx_notif_monitor` (`monitor_id`, `id`),
   KEY `idx_notif_created` (`created_at`),

@@ -332,7 +332,7 @@ try {
 
     // Schema version - bump when changing the migrations below (and schema.sql).
     // Thanks to this, migrations run only once, not on every request.
-    define('BK_SCHEMA_VERSION', '20260925r020');
+    define('BK_SCHEMA_VERSION', '20260927r021');
 
     $bk_current_schema = false;
     try {
@@ -1276,6 +1276,14 @@ try {
         "ALTER TABLE speedtest_results ADD COLUMN uplink VARCHAR(8) DEFAULT NULL",
         "ALTER TABLE speedtest_results ADD COLUMN uplink_source VARCHAR(12) DEFAULT NULL",
         "ALTER TABLE speedtest_results ADD COLUMN proto VARCHAR(5) DEFAULT NULL",
+        // What the provider said, not only whether the sender returned true
+        // (20260927r021). ok = 1 used to cover a CallMeBot refusal answered
+        // with a 2xx and a mail() hand-off nobody confirmed. delivery: sent =
+        // the provider confirmed it took the message, failed, unknown = nobody
+        // confirmed, skipped. NULL = a row from before this: never backfilled,
+        // because nothing confirmed those rows then either.
+        "ALTER TABLE notification_log ADD COLUMN delivery VARCHAR(8) DEFAULT NULL",
+        "ALTER TABLE notification_log ADD COLUMN provider_reply VARCHAR(190) DEFAULT NULL",
     ] as $migration_sql) {
         try {
             $pdo->exec($migration_sql);

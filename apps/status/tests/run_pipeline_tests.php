@@ -789,6 +789,181 @@ if (function_exists('bk_notification_kinds')) {
 }
 
 // =======================================================================
+// WhatsApp (CallMeBot) - what counts as sent
+//
+// Any HTTP 2xx used to be "sent", with the body thrown away. CallMeBot answers
+// its refusals with 2xx too (a used-up quota, a paused account, a wrong key),
+// so those were logged as sent while nothing arrived.
+// =======================================================================
+// The stub transport, defined before the sender is loaded: nothing in this
+// suite can reach CallMeBot. Every URL is kept, so a test can see whether a
+// request was made at all.
+// Fails closed: if the real transport is already loaded (a runner that
+// required functions.php first), the tests below would send real requests,
+// so the suite stops instead of quietly using it. The definition stays inside
+// the else: an unconditional one is bound at compile time, before this check.
+if (function_exists('bk_callmebot_request')) {
+    fwrite(STDERR, "bk_callmebot_request() is already defined, so the WhatsApp tests would reach"
+        . " CallMeBot. Stopping.\n");
+    exit(1);
+} else {
+    function bk_callmebot_request(string $url): array {
+        $GLOBALS['bk_test_callmebot_urls'][] = $url;
+        return $GLOBALS['bk_test_callmebot_answer']
+            ?? ['code' => 0, 'body' => '', 'errno' => 7, 'error' => 'stub: no answer set', 'sent' => false];
+    }
+}
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_send_whatsapp', 'bk_callmebot_verdict', 'bk_callmebot_scrub', 'bk_log_notification',
+]);
+check_true('CallMeBot se volá jen přes testovací náhradu',
+    (new ReflectionFunction('bk_callmebot_request'))->getFileName() === __FILE__);
+
+if (function_exists('bk_callmebot_verdict')) {
+    $wa_phone = '+420 777 123 456';
+    $wa_key = '1234567';
+    // The alert text itself says ERROR: a verdict read from the whole body
+    // would call this refusal a success or this success a refusal.
+    $wa_text = "🟢 Monitor Router & NAS je opět v pořádku. Čas: 27.09.2026 09:25:07. Důvod: disk ERROR cleared <sda>";
+    $wa_echo = fn (string $status): string => '<p>Message to: +420777123456<br>Text to send: '
+        . htmlspecialchars($wa_text, ENT_QUOTES) . '<br><br><b>' . $status . '</b></p>';
+    $wa_v = fn (int $code, string $body, int $errno = 0, string $error = '', bool $sent = true): array
+        => bk_callmebot_verdict($code, $body, $errno, $error, $sent, $wa_phone, $wa_key, $wa_text);
+    $wa_all = [];
+
+    $v = $wa_all[] = $wa_v(200, $wa_echo('Message queued. You will receive it in a few seconds. You have 13 Messages left'));
+    check('200 s „Message queued" je odesláno', $v['delivery'], 'sent');
+    check('a nemá důvod k selhání', $v['reason'], null);
+    check_true('odpověď poskytovatele zůstane, i se zbývajícím počtem',
+        str_contains((string)$v['reply'], 'Message queued') && str_contains((string)$v['reply'], '13 Messages left'));
+    check_false('text zprávy (s ERROR) o verdiktu nerozhodl', str_contains((string)$v['reply'], 'ERROR'));
+
+    $v = $wa_all[] = $wa_v(200, $wa_echo('APIKey is invalid. Please check the key.'));
+    check('200 se špatným klíčem je neodesláno', $v['delivery'], 'failed');
+    check_true('a důvod říká odmítnuto, ne „nerozpoznáno"',
+        str_contains((string)$v['reason'], 'refused') && !str_contains((string)$v['reason'], 'unrecognised'));
+    $v = $wa_all[] = $wa_v(200, $wa_echo('Your Account is Paused due to technical issues. Please send the word "resume" to the bot.'));
+    check('200 s pozastaveným účtem je neodesláno', $v['delivery'], 'failed');
+    check_true('a důvod říká proč', str_contains((string)$v['reason'], 'Paused'));
+    $v = $wa_all[] = $wa_v(200, $wa_echo('Message queued. ERROR: something went wrong'));
+    check('„queued" s chybou v téže odpovědi není potvrzení', $v['delivery'], 'failed');
+    $v = $wa_all[] = $wa_v(200, '');
+    check('200 s prázdným tělem je neodesláno', [$v['delivery'], str_contains((string)$v['reason'], 'empty reply')], ['failed', true]);
+    $v = $wa_all[] = $wa_v(200, $wa_echo('Thank you for using CallMeBot'));
+    check('200 bez značky přijetí je neodesláno', [$v['delivery'], str_contains((string)$v['reason'], 'unrecognised reply')], ['failed', true]);
+    $v = $wa_all[] = $wa_v(200, 'Message queued');
+    check('odpověď bez ozvěny zprávy se čte celá', $v['delivery'], 'sent');
+
+    // The community table (ioBroker whatsapp-cmb): every one of these is a 2xx
+    // that production counted as sent.
+    foreach ([201 => 'Wrong parameters', 202 => 'Number banned', 203 => 'API key incorrect',
+              204 => 'Too many messages', 205 => 'Unknown error', 207 => 'Service down',
+              208 => 'Account paused', 209 => 'Quota exceeded'] as $wa_code => $wa_why) {
+        $v = $wa_all[] = $wa_v($wa_code, $wa_code === 204 ? '' : $wa_echo('Your Account is...'));
+        check("CallMeBot {$wa_code} je neodesláno", $v['delivery'], 'failed');
+        check_true("a {$wa_code} řekne proč", str_contains((string)$v['reason'], $wa_why));
+    }
+    $v = $wa_all[] = $wa_v(206, $wa_echo('?'));
+    check('kód mimo tabulku je neodesláno', [$v['delivery'], str_contains((string)$v['reason'], 'unrecognised')], ['failed', true]);
+    $v = $wa_all[] = $wa_v(210, $wa_echo('Message queued to be sent later'));
+    check('210 (odloženo) je nepotvrzené, ne odeslané', $v['delivery'], 'unknown');
+    $v = $wa_all[] = $wa_v(200, $wa_echo('Message queued to be sent later'));
+    check('táž slova se 200 jsou taky nepotvrzená', $v['delivery'], 'unknown');
+    $v = $wa_all[] = $wa_v(503, '<html><head><title>503 Service Unavailable</title></head><body><h1>Service Unavailable</h1><p>nginx</p></body></html>');
+    check('503 je neodesláno', $v['delivery'], 'failed');
+    check_true('důvod nese kód i slova serveru bez HTML',
+        str_contains((string)$v['reason'], '503') && str_contains((string)$v['reply'], 'Service Unavailable')
+        && !str_contains((string)$v['reply'], '<'));
+    $v = $wa_all[] = $wa_v(301, '<a href="https://www.callmebot.com/">Moved</a>');
+    check('přesměrování není doručení', $v['delivery'], 'failed');
+
+    // Transport errors: before the request left, CallMeBot never saw it; after,
+    // nobody can say.
+    $v = $wa_all[] = $wa_v(0, '', 6, 'Could not resolve host: api.callmebot.com', false);
+    check('nedosažitelný CallMeBot je neodesláno', [$v['delivery'], str_contains((string)$v['reason'], 'Could not resolve host')], ['failed', true]);
+    $v = $wa_all[] = $wa_v(0, '', 28, 'Operation timed out after 5001 milliseconds with 0 bytes received', true);
+    check('vypršení po odeslání požadavku je nepotvrzené', $v['delivery'], 'unknown');
+
+    // An echo that differs from what was sent cannot be told apart from the
+    // tail, so nothing in it may decide - and nothing of it may be stored.
+    $v = $wa_all[] = $wa_v(200, '<p>Message to: +420777123456<br>Text to send: Monitor Router je opet v poradku ERROR<br>Message queued</p>');
+    check('neoddělitelná ozvěna je nepotvrzená, ne hádaná', [$v['delivery'], $v['reply']], ['unknown', null]);
+
+    // The status sentence printed before the echo, nothing after it: not the
+    // known shape, so never sent - but not a bare "empty reply" either, and
+    // CallMeBot's words are kept for whoever has to read the row.
+    $v = $wa_all[] = $wa_v(200, '<p>Message queued. You will receive it in a few seconds.</p>' . $wa_echo(''));
+    check('„queued" před ozvěnou je nepotvrzené, ne odeslané ani neodeslané', $v['delivery'], 'unknown');
+    check_true('a odpověď i důvod nesou slova CallMeBotu',
+        str_contains((string)$v['reply'], 'Message queued') && str_contains((string)$v['reason'], 'before the echoed message'));
+    $v = $wa_all[] = $wa_v(200, '<p>Your Account is Paused.</p>' . $wa_echo(''));
+    check('odmítnutí před ozvěnou je neodesláno', $v['delivery'], 'failed');
+    check_true('s textem před ozvěnou místo „empty reply"',
+        str_contains((string)$v['reason'], 'no text after the echoed message') && str_contains((string)$v['reply'], 'Paused'));
+    $v = $wa_all[] = $wa_v(200, $wa_echo(''));
+    check('holá ozvěna bez stavu je prázdná odpověď',
+        [$v['delivery'], str_contains((string)$v['reason'], 'empty reply'), $v['reply']], ['failed', true, null]);
+
+    // Nothing stored may carry the phone, the key or the message itself.
+    $wa_leaks = [];
+    $wa_slice = mb_substr($wa_text, 20, 12, 'UTF-8');
+    foreach ($wa_all as $i => $v) {
+        foreach ([(string)$v['reason'], (string)$v['reply']] as $wa_stored) {
+            foreach (['777123456', '777 123 456', $wa_key, $wa_slice, 'Router & NAS', '<sda>'] as $wa_secret) {
+                if (str_contains($wa_stored, $wa_secret)) {
+                    $wa_leaks[] = "#{$i} obsahuje {$wa_secret}";
+                }
+            }
+        }
+    }
+    check('odpověď ani důvod nenesou telefon, klíč ani text zprávy', $wa_leaks, []);
+    $v = $wa_v(200, 'Message queued. ID 123456789012, phone +420 777 999 888');
+    check_true('dlouhé řady číslic se neukládají',
+        !preg_match('/\d{7}/', (string)$v['reply']) && !str_contains((string)$v['reply'], '777 999 888'));
+}
+
+if (function_exists('bk_send_whatsapp')) {
+    $GLOBALS['bk_test_callmebot_urls'] = [];
+    $wa_r = bk_send_whatsapp('+420 777 123 456', 'Ahoj', '');
+    check('bez klíče je neodesláno', $wa_r['delivery'], 'failed');
+    $wa_r = bk_send_whatsapp('', 'Ahoj', '1234567');
+    check('bez telefonu je neodesláno', $wa_r['delivery'], 'failed');
+    check('a v obou případech nikam nic neodešlo', count($GLOBALS['bk_test_callmebot_urls']), 0);
+
+    $GLOBALS['bk_test_callmebot_answer'] = ['code' => 200, 'body' => 'Message queued', 'errno' => 0, 'error' => '', 'sent' => true];
+    $wa_r = bk_send_whatsapp('777 123 456', 'Ahoj & čau', '1234567');
+    check('potvrzené přijetí je odesláno', $wa_r['delivery'], 'sent');
+    $wa_url = $GLOBALS['bk_test_callmebot_urls'][0] ?? '';
+    check_true('devítimístné číslo dostane +420 a jde na CallMeBot přes https',
+        str_starts_with($wa_url, 'https://api.callmebot.com/whatsapp.php?phone=420777123456&'));
+    check_true('text a klíč jsou v adrese zakódované',
+        str_contains($wa_url, 'text=' . urlencode('Ahoj & čau')) && str_contains($wa_url, 'apikey=1234567'));
+    $GLOBALS['bk_test_callmebot_answer'] = null;
+}
+
+// bk_log_notification() against a real (SQLite) table: the new columns, the
+// whitelist and the length cap.
+if (function_exists('bk_log_notification') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+    $ln_pdo = new PDO('sqlite::memory:');
+    $ln_pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $ln_pdo->exec("CREATE TABLE notification_log (id INTEGER PRIMARY KEY, monitor_id INTEGER, status TEXT,
+        channel TEXT, recipient TEXT, ok INTEGER, error_message TEXT, kind TEXT, subject TEXT, method TEXT,
+        delivery TEXT, provider_reply TEXT)");
+    bk_log_notification($ln_pdo, 3, 'down', 'whatsapp', '+420777123456', true, null, 'alert',
+        delivery: 'sent', reply: str_repeat('Message queued ', 20));
+    bk_log_notification($ln_pdo, 3, 'down', 'whatsapp', '+420777123456', true, null, 'alert', delivery: 'delivered');
+    bk_log_notification($ln_pdo, 3, 'down', 'discord', null, false, 'HTTP 404', 'alert');
+    $ln_rows = $ln_pdo->query("SELECT delivery, provider_reply, ok FROM notification_log ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+    check('protokol uloží, co poskytovatel potvrdil', $ln_rows[0]['delivery'] ?? null, 'sent');
+    check('odpověď oříznutá na 190 znaků', mb_strlen((string)($ln_rows[0]['provider_reply'] ?? ''), 'UTF-8'), 190);
+    check_true('hodnota mimo čtyři povolené se uloží jako NULL, ne jako potvrzení',
+        array_key_exists('delivery', $ln_rows[1] ?? []) && $ln_rows[1]['delivery'] === null);
+    check('volání bez výsledku doručení nechá NULL', [$ln_rows[2]['delivery'], $ln_rows[2]['provider_reply']], [null, null]);
+} else {
+    check_true('SQLite ovladač pro test protokolu je k dispozici', false);
+}
+
+// =======================================================================
 // Daily reminder - the whole path from the database to the message
 //
 // The rule that counts ("what is broken") is tested in run_tests.php without
@@ -827,8 +1002,11 @@ if (function_exists('bk_send_daily_reminder') && in_array('sqlite', PDO::getAvai
     $dr_pdo->exec("CREATE TABLE monitor_logs (id INTEGER PRIMARY KEY, monitor_id INTEGER, error_message TEXT)");
     $dr_pdo->exec("CREATE TABLE incidents (id INTEGER PRIMARY KEY, title TEXT, impact TEXT, status TEXT,
         created_at TEXT, acknowledged_at TEXT, monitor_id INTEGER)");
+    // Every column bk_log_notification() writes: it swallows a failed INSERT,
+    // so a missing one would leave these tests with no rows to read.
     $dr_pdo->exec("CREATE TABLE notification_log (id INTEGER PRIMARY KEY, monitor_id INTEGER, status TEXT,
-        channel TEXT, recipient TEXT, ok INTEGER, error_message TEXT, kind TEXT, subject TEXT, method TEXT)");
+        channel TEXT, recipient TEXT, ok INTEGER, error_message TEXT, kind TEXT, subject TEXT, method TEXT,
+        delivery TEXT, provider_reply TEXT)");
     $dr_pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, email_lang TEXT, role TEXT,
         phone TEXT, whatsapp_apikey TEXT, whatsapp_notifications INTEGER DEFAULT 0)");
     $dr_pdo->exec("CREATE TABLE user_subscriptions (user_id INTEGER, monitor_id INTEGER, email_notifications INTEGER)");
@@ -981,6 +1159,47 @@ if ($dr_pdo instanceof PDO) {
     check('nepřevzatý incident zprávu vyvolá', $dr_res['problems'], 1);
     check_true('a je v ní jmenovaný',
         str_contains($GLOBALS['bk_test_mails'][0]['body'] ?? '', 'Nikdo nepřevzal'));
+
+    // --- 5. WhatsApp: a refusal is a refusal ------------------------------
+    // The reminder's WhatsApp went through the same 2xx-is-sent check as the
+    // alerts, so a paused CallMeBot account looked like a delivered reminder.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(2 * 86400)]);
+    $dr_pdo->exec("UPDATE users SET phone = '777123456', whatsapp_apikey = '1234567', whatsapp_notifications = 1 WHERE id = 1");
+    $GLOBALS['bk_test_callmebot_answer'] = ['code' => 208, 'body' => 'Message to: +420777123456 Text to send: x Your Account is Paused',
+        'errno' => 0, 'error' => '', 'sent' => true];
+    $dr_wa_row = function () use ($dr_pdo): array {
+        $row = $dr_pdo->query("SELECT ok, delivery, error_message, provider_reply, recipient FROM notification_log
+                               WHERE channel = 'whatsapp' ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        return $row ?: [];
+    };
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    $dr_wa = $dr_wa_row();
+    check('pozastavený CallMeBot: řádek říká neodesláno', [(int)($dr_wa['ok'] ?? -1), $dr_wa['delivery'] ?? null], [0, 'failed']);
+    check_true('s důvodem od CallMeBotu', str_contains((string)($dr_wa['error_message'] ?? ''), 'Account paused'));
+    check('a WhatsApp se nepočítá mezi kanály, které prošly', $dr_res['channels'], 0);
+
+    $GLOBALS['bk_test_callmebot_answer'] = ['code' => 200, 'body' => 'Message queued. You have 3 Messages left',
+        'errno' => 0, 'error' => '', 'sent' => true];
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    $dr_wa = $dr_wa_row();
+    check('potvrzené přijetí: odesláno', [(int)($dr_wa['ok'] ?? -1), $dr_wa['delivery'] ?? null], [1, 'sent']);
+    check('i se slovy CallMeBotu', $dr_wa['provider_reply'] ?? null, 'Message queued. You have 3 Messages left');
+    check('a počítá se', $dr_res['channels'], 1);
+
+    // Switched on, but no key: no row at all used to be written, so the
+    // channel that never worked was also the one nothing said anything about.
+    $dr_pdo->exec("UPDATE users SET whatsapp_apikey = NULL WHERE id = 1");
+    $GLOBALS['bk_test_callmebot_urls'] = [];
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    $dr_wa = $dr_wa_row();
+    check('zapnutý WhatsApp bez klíče: řádek říká neodesláno a proč',
+        [(int)($dr_wa['ok'] ?? -1), $dr_wa['delivery'] ?? null, str_contains((string)($dr_wa['error_message'] ?? ''), 'No CallMeBot key')],
+        [0, 'failed', true]);
+    check('a nikam nic neodešlo', count($GLOBALS['bk_test_callmebot_urls']), 0);
+    $dr_pdo->exec("UPDATE users SET phone = NULL, whatsapp_apikey = NULL, whatsapp_notifications = 0 WHERE id = 1");
+    $GLOBALS['bk_test_callmebot_answer'] = null;
 } elseif (function_exists('bk_send_daily_reminder')) {
     // Reported, never skipped in silence: a suite that quietly tests nothing
     // is the same lie as a chart with invented values.

@@ -4907,6 +4907,10 @@ check('migrace doplní protokolu zpráv druh, předmět a způsob odeslání', [
     $column_exists('notification_log', 'subject'),
     $column_exists('notification_log', 'method'),
 ], [true, true, true]);
+check('a výsledek doručení s odpovědí poskytovatele', [
+    $column_exists('notification_log', 'delivery'),
+    $column_exists('notification_log', 'provider_reply'),
+], [true, true]);
 
 $pdo->exec("DELETE FROM notification_log");
 

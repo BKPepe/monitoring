@@ -7141,37 +7141,11 @@ function bk_deliver_email($to, $subject, $html_body, array $extra_headers = []) 
 
 /**
  * Sends an SMS via Twilio or SMSbrana.cz
+ *
+ * WhatsApp is not an SMS gateway and has its own sender, bk_send_whatsapp().
  */
-function send_sms($phone, $message, $user_whatsapp_apikey = '', $force_gateway = '') {
-    $gateway = !empty($force_gateway) ? $force_gateway : get_setting('sms_gateway_type', '');
-    
-    if ($gateway === 'whatsapp') {
-        // A CallMeBot key is bound to a specific phone number, so it exists
-        // only as each user's personal key - no global fallback.
-        $apikey = $user_whatsapp_apikey;
-        if (empty($apikey) || empty($phone)) {
-            return false;
-        }
-        
-        // Clean the phone number for CallMeBot (digits only)
-        $clean_phone = preg_replace('/[^0-9]/', '', $phone);
-        // If the number lacks an international prefix (has 9 digits), prepend the Czech +420
-        if (strlen($clean_phone) === 9) {
-            $clean_phone = '420' . $clean_phone;
-        }
-        
-        $url = "https://api.callmebot.com/whatsapp.php?phone=" . urlencode($clean_phone) . "&text=" . urlencode($message) . "&apikey=" . urlencode($apikey);
-        
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        curl_setopt($ch, CURLOPT_TIMEOUT, 5);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-        $response = curl_exec($ch);
-        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
-        
-        return ($code >= 200 && $code < 300);
-    }
+function send_sms($phone, $message) {
+    $gateway = get_setting('sms_gateway_type', '');
     
     if ($gateway === 'twilio') {
         $sid = get_setting('twilio_sid');
@@ -7242,6 +7216,206 @@ function send_sms($phone, $message, $user_whatsapp_apikey = '', $force_gateway =
     }
     
     return false;
+}
+
+/**
+ * Sends one WhatsApp message through CallMeBot and says what CallMeBot said.
+ *
+ * It used to count any HTTP 2xx as sent and throw the body away. CallMeBot
+ * reports its refusals as 2xx too (a used-up quota, a paused account, a wrong
+ * key), so those were logged as sent while nothing arrived. The verdict now
+ * comes from bk_callmebot_verdict(); a key is bound to one phone number, so it
+ * exists only per user, with no global fallback.
+ *
+ * @return array{delivery: string, reason: ?string, reply: ?string}
+ */
+function bk_send_whatsapp(string $phone, string $text, string $key): array {
+    $clean_phone = (string)preg_replace('/[^0-9]/', '', $phone);
+    // A number without an international prefix (9 digits) is Czech.
+    if (strlen($clean_phone) === 9) {
+        $clean_phone = '420' . $clean_phone;
+    }
+    if ($key === '' || $clean_phone === '') {
+        return ['delivery' => 'failed', 'reason' => 'No CallMeBot key or phone number for this recipient.', 'reply' => null];
+    }
+    $url = 'https://api.callmebot.com/whatsapp.php?phone=' . urlencode($clean_phone)
+        . '&text=' . urlencode($text) . '&apikey=' . urlencode($key);
+    $res = bk_callmebot_request($url);
+    return bk_callmebot_verdict($res['code'], $res['body'], $res['errno'], $res['error'], $res['sent'],
+        $phone, $key, $text);
+}
+
+/**
+ * The one network call to CallMeBot. A function of its own so the tests can
+ * replace it and never reach the real service.
+ *
+ * TLS is verified: the key travels in the query string. `sent` says whether
+ * the request left this machine, which is what separates "CallMeBot was never
+ * reached" (failed) from "no answer after it had the message" (unknown).
+ *
+ * @return array{code: int, body: string, errno: int, error: string, sent: bool}
+ */
+function bk_callmebot_request(string $url): array {
+    $ch = curl_init($url);
+    if ($ch === false) {
+        return ['code' => 0, 'body' => '', 'errno' => -1, 'error' => 'curl_init failed', 'sent' => false];
+    }
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 3);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 5);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 2);
+    $body = curl_exec($ch);
+    return [
+        'code' => (int)curl_getinfo($ch, CURLINFO_HTTP_CODE),
+        'body' => is_string($body) ? $body : '',
+        'errno' => curl_errno($ch),
+        'error' => curl_error($ch),
+        'sent' => (int)curl_getinfo($ch, CURLINFO_REQUEST_SIZE) > 0,
+    ];
+}
+
+/**
+ * What a CallMeBot answer means: sent, failed or unknown, with the reason and
+ * CallMeBot's own words.
+ *
+ * CallMeBot has no documented error codes. The 201-209 table is the one the
+ * ioBroker adapter keeps (github.com/ioBroker/ioBroker.whatsapp-cmb, main.js),
+ * and only a 200 whose reply says "Message queued" is an acceptance - even
+ * that means queued, not delivered. Everything else is a failure, except the
+ * two cases where nobody can know: 210 ("queued to be sent later") and a
+ * transport error after the request had left.
+ *
+ * The body echoes the message ("Message to: ... Text to send: <text>"), so the
+ * text is cut out first and only CallMeBot's tail is read: an error message
+ * that happens to contain "ERROR" must not decide the verdict, and the stored
+ * reply must never become a copy of the message. The phone, the key and every
+ * run of 7+ digits are removed as well. When the echo cannot be separated from
+ * the tail, the answer is unknown rather than a guess.
+ *
+ * @return array{delivery: string, reason: ?string, reply: ?string}
+ */
+function bk_callmebot_verdict(int $code, string $body, int $errno, string $error, bool $sent,
+                              string $phone, string $key, string $text): array {
+    if ($errno !== 0) {
+        $err = bk_callmebot_scrub($error, $phone, $key);
+        return $sent
+            ? ['delivery' => 'unknown', 'reason' => 'No answer from CallMeBot after the request was sent: ' . $err, 'reply' => null]
+            : ['delivery' => 'failed', 'reason' => 'CallMeBot could not be reached: ' . $err, 'reply' => null];
+    }
+
+    // Tags become spaces (a <br> separates lines), entities become characters.
+    $normalize = fn (string $s): string => trim((string)preg_replace('/\s+/u', ' ',
+        html_entity_decode(strip_tags((string)preg_replace('/<[^>]*>/', ' $0 ', $s)), ENT_QUOTES | ENT_HTML5, 'UTF-8')));
+    $plain = $normalize($body);
+    $tail = $plain;
+    $head = '';
+    $separated = true;
+    // The text as an escaped echo reads after normalizing (a "<sda>" in it
+    // survives), then as an unescaped one (the same "<sda>" read as a tag).
+    $needles = array_values(array_filter(array_unique([
+        (string)preg_replace('/\s+/u', '', $text),
+        (string)preg_replace('/\s+/u', '', $normalize($text)),
+    ]), fn (string $n): bool => $n !== ''));
+    if ($needles !== []) {
+        // Compared without whitespace: the echo may break lines differently.
+        $squeezed = (string)preg_replace('/\s+/u', '', $plain);
+        $at = false;
+        $needle_len = 0;
+        foreach ($needles as $needle) {
+            $at = mb_strpos($squeezed, $needle, 0, 'UTF-8');
+            if ($at !== false) {
+                $needle_len = mb_strlen($needle, 'UTF-8');
+                break;
+            }
+        }
+        if ($at !== false) {
+            $want = $at + $needle_len;
+            $seen = 0;
+            $len = mb_strlen($plain, 'UTF-8');
+            $start = 0;
+            $cut = $len;
+            for ($i = 0; $i < $len; $i++) {
+                if (!preg_match('/\s/u', mb_substr($plain, $i, 1, 'UTF-8'))) {
+                    $seen++;
+                    if ($seen === $at + 1) {
+                        $start = $i;
+                    }
+                    if ($seen === $want) {
+                        $cut = $i + 1;
+                        break;
+                    }
+                }
+            }
+            $tail = trim(mb_substr($plain, $cut, null, 'UTF-8'));
+            // What came before the echo, without its labels and the number:
+            // read only when nothing follows the echo (a status sentence
+            // printed first), so such a reply is not a bare "empty reply".
+            $head = trim((string)preg_replace('/Message to:\s*\+?[0-9 ]*|Text to send:/i', ' ',
+                mb_substr($plain, 0, $start, 'UTF-8')));
+        } elseif (stripos($plain, 'Text to send') !== false) {
+            $separated = false;
+        }
+    }
+    $tail = bk_callmebot_scrub($tail, $phone, $key);
+    $head = $tail === '' ? bk_callmebot_scrub($head, $phone, $key) : '';
+    $said = $tail !== '' ? $tail : $head;
+    $reply = $separated && $said !== '' ? mb_strimwidth($said, 0, 190, '…', 'UTF-8') : null;
+    $excerpt = $reply !== null ? ': ' . mb_strimwidth($said, 0, 150, '…', 'UTF-8') : '';
+
+    if ($code === 210) {
+        return ['delivery' => 'unknown', 'reason' => 'CallMeBot 210: queued to be sent later' . $excerpt, 'reply' => $reply];
+    }
+    $refusals = [
+        201 => 'Wrong parameters',
+        202 => 'Number banned',
+        203 => 'API key incorrect',
+        204 => 'Too many messages',
+        205 => 'Unknown error',
+        207 => 'Service down',
+        208 => 'Account paused; send "resume" to the bot',
+        209 => 'Quota exceeded or banned',
+    ];
+    if (isset($refusals[$code])) {
+        return ['delivery' => 'failed', 'reason' => "CallMeBot {$code}: {$refusals[$code]}" . $excerpt, 'reply' => $reply];
+    }
+    if ($code === 200 && !$separated) {
+        return ['delivery' => 'unknown',
+            'reason' => 'CallMeBot answered 200, but its reply could not be told apart from the echoed message.',
+            'reply' => null];
+    }
+    if ($code === 200 && preg_match('/queued to be sent later/i', $tail)) {
+        // The words of a 210, which is unknown: a 200 does not make them more.
+        return ['delivery' => 'unknown', 'reason' => 'CallMeBot HTTP 200: queued to be sent later' . $excerpt, 'reply' => $reply];
+    }
+    if ($code === 200 && preg_match('/Message queued/i', $tail) && !preg_match('/ERROR|Paused|API ?Key|banned/i', $tail)) {
+        return ['delivery' => 'sent', 'reason' => null, 'reply' => $reply];
+    }
+    if ($code === 200 && $head !== '') {
+        // Not the known shape, so never "sent"; a queued sentence ahead of the
+        // echo is not a refusal either.
+        return preg_match('/Message queued/i', $head) && !preg_match('/ERROR|Paused|API ?Key|banned/i', $head)
+            ? ['delivery' => 'unknown', 'reason' => 'CallMeBot HTTP 200: its status came before the echoed message, not after it'
+                . $excerpt, 'reply' => $reply]
+            : ['delivery' => 'failed', 'reason' => 'CallMeBot HTTP 200: no text after the echoed message' . $excerpt,
+                'reply' => $reply];
+    }
+    $what = $tail === '' ? 'empty reply'
+        : (preg_match('/ERROR|Paused|API ?Key|banned/i', $tail) ? 'refused' : 'unrecognised reply');
+    return ['delivery' => 'failed', 'reason' => "CallMeBot HTTP {$code}: {$what}" . $excerpt, 'reply' => $reply];
+}
+
+/**
+ * Removes what must never be stored from a CallMeBot reply or error: the
+ * phone number (with or without spaces), the key, and any run of 7+ digits.
+ */
+function bk_callmebot_scrub(string $s, string $phone, string $key): string {
+    foreach ([$key, $phone, (string)preg_replace('/[^0-9]/', '', $phone)] as $secret) {
+        if (strlen($secret) >= 3) {
+            $s = str_ireplace($secret, '•••', $s);
+        }
+    }
+    return trim((string)preg_replace('/\+?\d(?:[ \-]?\d){6,}/', '•••', $s));
 }
 
 /**
@@ -7317,6 +7491,12 @@ function bk_incident_lifecycle($pdo, $monitor, $new_status, $error_msg = '') {
  * the recipient is kept as the bare address (no name), because the whole log
  * is personal data that only an administrator gets to see.
  *
+ * $ok means "not refused". $delivery says how much is known beyond that:
+ * 'sent' = the provider confirmed it took the message (not that it arrived),
+ * 'failed' = refused or unreachable, 'unknown' = nobody confirmed anything,
+ * 'skipped' = nothing was due. $reply is the provider's own words, already
+ * stripped of the message, phone numbers and keys by the caller.
+ *
  * Never throws: an alert must go out even when its bookkeeping cannot.
  */
 function bk_log_notification(
@@ -7329,15 +7509,23 @@ function bk_log_notification(
     ?string $error = null,
     string $kind = 'other',
     ?string $subject = null,
-    ?string $method = null
+    ?string $method = null,
+    ?string $delivery = null,
+    ?string $reply = null
 ): void {
     if ($pdo === null) {
         return;
     }
+    // A value outside the four is stored as NULL, which reads back as derived
+    // from ok, never as a confirmation nobody gave.
+    if (!in_array($delivery, ['sent', 'failed', 'unknown', 'skipped'], true)) {
+        $delivery = null;
+    }
     try {
         $stmt = $pdo->prepare("
-            INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message, kind, subject, method)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message, kind, subject, method,
+                                          delivery, provider_reply)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ");
         $stmt->execute([
             $monitor_id !== null && $monitor_id > 0 ? $monitor_id : null,
@@ -7352,6 +7540,8 @@ function bk_log_notification(
             substr($kind !== '' ? $kind : 'other', 0, 32),
             $subject !== null && $subject !== '' ? mb_strimwidth($subject, 0, 190, '', 'UTF-8') : null,
             $method !== null && $method !== '' ? substr($method, 0, 16) : null,
+            $delivery,
+            $reply !== null && $reply !== '' ? mb_strimwidth($reply, 0, 190, '…', 'UTF-8') : null,
         ]);
     } catch (Throwable $e) {
         error_log('[bk_log_notification] ' . $e->getMessage());
@@ -7953,10 +8143,14 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
         // WhatsApp goes through CallMeBot with the user's own key. SMS is
         // deliberately NOT used: a paid message every day is a cost nobody
         // agreed to, and the alert that pays for itself already went out.
-        if (!empty($rec['whatsapp_notifications']) && !empty($rec['phone']) && !empty($rec['whatsapp_apikey'])) {
-            $wa_ok = send_sms($rec['phone'], mb_strimwidth($text, 0, 900, '…', 'UTF-8'), $rec['whatsapp_apikey'], 'whatsapp');
-            bk_log_notification($pdo, null, 'daily_reminder', 'whatsapp', $rec['phone'], (bool)$wa_ok, null, 'daily_reminder');
-            if ($wa_ok) {
+        // Switched on without a key or a number: bk_send_whatsapp() makes no
+        // request and says why, so the row shows a channel nobody can reach.
+        if (!empty($rec['whatsapp_notifications'])) {
+            $wa = bk_send_whatsapp((string)$rec['phone'], mb_strimwidth($text, 0, 900, '…', 'UTF-8'), (string)$rec['whatsapp_apikey']);
+            bk_log_notification($pdo, null, 'daily_reminder', 'whatsapp', $rec['phone'],
+                ok: $wa['delivery'] !== 'failed', error: $wa['reason'], kind: 'daily_reminder',
+                delivery: $wa['delivery'], reply: $wa['reply']);
+            if ($wa['delivery'] !== 'failed') {
                 $result['channels']++;
             }
         }
@@ -8298,9 +8492,13 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
 
         // WhatsApp notifications (CallMeBot) - independent of the SMS gateway, its own channel.
         // The key is bound to a specific phone number, so it exists per-user only.
-        if (($rec['whatsapp_notifications'] ?? 0) && !empty($rec['phone']) && !empty($rec['whatsapp_apikey'])) {
-            $wa_ok = send_sms($rec['phone'], $sms_body, $rec['whatsapp_apikey'], 'whatsapp');
-            bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'whatsapp', $rec['phone'], (bool)$wa_ok, null, 'alert');
+        // Switched on without a key or a number: bk_send_whatsapp() makes no
+        // request and says why; the row used to be missing altogether.
+        if ($rec['whatsapp_notifications'] ?? 0) {
+            $wa = bk_send_whatsapp((string)$rec['phone'], $sms_body, (string)$rec['whatsapp_apikey']);
+            bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'whatsapp', $rec['phone'],
+                ok: $wa['delivery'] !== 'failed', error: $wa['reason'], kind: 'alert',
+                delivery: $wa['delivery'], reply: $wa['reply']);
         }
     }
 
