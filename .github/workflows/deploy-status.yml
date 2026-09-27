@@ -22,6 +22,109 @@ jobs:
           # kazdy nasazeny router by dostal 404 misto aktualizace.
           submodules: true
 
+      # This workflow is the agents' one publisher (the agents repo uploads
+      # nothing since f1cf9ae), and every self-updating agent takes what lands
+      # in public_html/status/. So nothing goes up unless the agents' own
+      # tests passed for exactly the pinned commit: test.yml, which runs on
+      # agents main as the `test` job of "Deploy Cloudflare Worker". Its check
+      # runs are public, the job token reads them (no extra permission).
+      #
+      # Fail closed, before any upload: a missing, red or cancelled run, or no
+      # answer from the API, stops the whole status deploy - a status deploy
+      # that quietly skipped its agents would look green. Runs still going are
+      # waited for (45 min); a run that has not appeared yet gets 5 min.
+      #
+      # To retry after a fix or an API outage: Run workflow on main with
+      # parts = status. "Re-run failed jobs" is safe only while this run is
+      # the newest deploy run: it reuses the `plan` job of deploy-hosting.yml
+      # instead of running it again, so plan's older-run guard is skipped, and
+      # after a newer deploy it would put old code back on the server.
+      #
+      # Rolling the agents back is fix-forward only: revert on agents main,
+      # let its tests go green, move the gitlink there. A gitlink older than
+      # 8ad1c66 (the commit that added test.yml) has no `test / ` check runs
+      # and can never pass this step.
+      - name: Agents tests passed for the pinned commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha=$(git rev-parse HEAD:agents)
+          checked_out=$(git -C agents rev-parse HEAD)
+          if [ "$checked_out" != "$sha" ]; then
+            echo "::error::agents/ is checked out at $checked_out, but the gitlink pins $sha. Refusing to deploy."
+            exit 1
+          fi
+          url=$(git config -f .gitmodules --get submodule.agents.url)
+          if ! [[ "$url" =~ ^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$ ]]; then
+            echo "::error::the agents submodule URL is not a github.com https URL: $url. Refusing to deploy."
+            exit 1
+          fi
+          repo=${BASH_REMATCH[1]%.git}
+
+          # The jobs of test.yml as their check runs are named on agents main
+          # (caller job `test` in deploy-worker.yml). A renamed job fails here
+          # until this list follows it; any other `test / ` job must pass too.
+          required=(
+            "test / Syntax, ShellCheck, sentinel, Worker units"
+            "test / End to end (Linux, OpenWrt, PowerShell)"
+            "test / agent.ps1 under Windows PowerShell 5.1"
+          )
+          tab=$'\t'
+          polls=0 unseen=0 api_errors=0
+          while :; do
+            if ! runs=$(gh api --paginate "repos/$repo/commits/$sha/check-runs?per_page=100" \
+              --jq '.check_runs[] | [.id, .app.slug, .name, .status, (.conclusion // "-")] | @tsv' 2> "$RUNNER_TEMP/gh.err"); then
+              api_errors=$((api_errors + 1))
+              err=$(tr '\n' ' ' < "$RUNNER_TEMP/gh.err")
+              if [ "$api_errors" -ge 5 ]; then
+                echo "::error::could not read the check runs of $repo@$sha (5 tries, last: $err). Nothing was uploaded. Once GitHub answers: Run workflow on main with parts = status (Re-run failed jobs only while this run is the newest deploy run)."
+                exit 1
+              fi
+              echo "GitHub API failed (try $api_errors of 5): $err"
+              sleep 30
+              continue
+            fi
+            api_errors=0
+            # The newest run of each name decides: a re-run replaces a red run.
+            newest=$(printf '%s\n' "$runs" | sort -t "$tab" -k1,1nr | awk -F '\t' 'NF >= 5 && !seen[$2 FS $3]++')
+            tests=$(printf '%s\n' "$newest" | awk -F '\t' '$2 == "github-actions" && index($3, "test / ") == 1')
+            failed='' pending='' missing=''
+            while IFS="$tab" read -r _ _ name status conclusion; do
+              if [ -z "$name" ]; then
+                continue
+              elif [ "$status" != completed ]; then
+                pending+="$name ($status); "
+              elif [ "$conclusion" != success ]; then
+                failed+="$name ($conclusion); "
+              fi
+            done <<< "$tests"
+            for r in "${required[@]}"; do
+              grep -qxF "$r" <<< "$(cut -f 3 <<< "$tests")" || missing+="$r; "
+            done
+            failed=${failed%; } pending=${pending%; } missing=${missing%; }
+
+            if [ -z "$failed$pending$missing" ]; then
+              echo "Agents tests passed for $repo@$sha:"
+              cut -f 3,5 <<< "$tests"
+              break
+            fi
+            if [ -n "$failed" ]; then
+              echo "Check runs at $repo@$sha (newest of each):"; printf '%s\n' "$newest" | cut -f 2-5
+              echo "::error::the agents tests did not pass for $repo@$sha: $failed. Nothing was uploaded; fix the agents and move the gitlink, or re-run their tests, then Run workflow on main with parts = status."
+              exit 1
+            fi
+            polls=$((polls + 1))
+            [ -n "$pending" ] || unseen=$((unseen + 1))
+            if [ "$unseen" -ge 5 ] || [ "$polls" -ge 45 ]; then
+              echo "Check runs at $repo@$sha (newest of each):"; printf '%s\n' "$newest" | cut -f 2-5
+              echo "::error::the agents tests have not passed for $repo@$sha after $polls min (missing: ${missing:-none}, still running: ${pending:-none}). Nothing was uploaded. The commit must be on agents main, whose Deploy Cloudflare Worker runs test.yml; once it is green: Run workflow on main with parts = status (Re-run failed jobs only while this run is the newest deploy run)."
+              exit 1
+            fi
+            echo "Waiting for the agents tests (missing: ${missing:-none}, running: ${pending:-none})"
+            sleep 60
+          done
+
       - name: Zkopirovat agenty ze submodulu do nasazovane slozky
         run: |
           set -e
@@ -36,6 +139,36 @@ jobs:
           done
           echo "Agenti zkopirovani ze submodulu:"
           grep -H -m1 'AGENT_VERSION' apps/status/agent.sh apps/status/agent_openwrt.sh
+
+      # Every agent refuses an update whose last line is not
+      # "# bk-agent-end <offered version>", and the server offers what
+      # bk_get_agent_latest_version() in functions.php reads from the served
+      # file. A file whose two disagree would be refused by the whole fleet.
+      # Checked on the copies that go up, by the shell agents' own rule:
+      # `tail -n 1`, where a CR or a blank last line fails.
+      - name: Every agent ends with its own version
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/bk_agent_version.php" << 'PHPEOF'
+          <?php
+          // The regex of bk_get_agent_latest_version() in functions.php.
+          if (preg_match('/\$?AGENT_VERSION\s*=\s*["\']([0-9][0-9A-Za-z.\-]*)["\']/', (string)file_get_contents($argv[1]), $m)) {
+              echo $m[1];
+          }
+          PHPEOF
+          fail=0
+          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh; do
+            v=$(php "$RUNNER_TEMP/bk_agent_version.php" "apps/status/$f")
+            last=$(tail -n 1 "apps/status/$f")
+            if [ -n "$v" ] && [ "$last" = "# bk-agent-end $v" ]; then
+              echo "$f: $v"
+            else
+              echo "::error file=agents/vps-agent/$f::the last line must be '# bk-agent-end ${v:-<no AGENT_VERSION>}', it is '${last//$'\r'/\\r}'. Every agent would refuse this file. Nothing was uploaded."
+              fail=1
+            fi
+          done
+          rm -f "$RUNNER_TEMP/bk_agent_version.php"
+          exit "$fail"
 
       - name: Run PHP unit tests (pure functions)
         run: php apps/status/tests/run_tests.php

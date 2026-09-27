@@ -108,6 +108,13 @@ go over FTPS through `.github/workflows/deploy-hosting.yml`: one run per push
 deploys every part changed since the last successful run, one part after
 another, so FTP logins never overlap and no part is dropped from the queue.
 
+The `status` part is also the one publisher of the agents: every
+self-updating agent fetches them from `public_html/status/`. It uploads
+nothing unless the agents repo's tests (its `test / ...` check runs) passed
+for exactly the commit the `agents` gitlink pins, and every agent's last line
+is `# bk-agent-end <its AGENT_VERSION>`; otherwise the status deploy fails
+before any upload. So the gitlink moves only to a green commit of agents `main`.
+
 ### GitHub secrets required:
 1.  `CLOUDFLARE_API_TOKEN` — API token with Pages and Workers deploy permissions.
 2.  `CLOUDFLARE_ACCOUNT_ID` — Your Cloudflare account ID.

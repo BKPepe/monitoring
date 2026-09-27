@@ -134,6 +134,9 @@ $not_metrics = [
     // last accepted report, cleared by the next one, so a chart of it would be
     // a sawtooth of the agent's own bookkeeping.
     'agent_prev_total_ms', 'runs_skipped_lock', 'runs_skipped_post', 'runs_skipped_killed',
+    // The --selfcheck line (agent 0.1.12+): the updater reads it on the
+    // host before a swap; it is never sent to the server.
+    'agent_version', 'payload',
     // Keys of the server RESPONSE that the agent parses by name (the regex above
     // sees them like update_available and action_id).
     'speedtests_acked',
