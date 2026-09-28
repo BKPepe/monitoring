@@ -42,7 +42,7 @@
     "@eslint/js": "^10.0.1",
     "eslint": "^10.8.0",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "prettier": "^3.9.6",
+    "prettier": "^3.9.9",
     "semver": "^7.8.5",
     "typescript-eslint": "^8.66.0",
     "vitest": "^4.1.10"
