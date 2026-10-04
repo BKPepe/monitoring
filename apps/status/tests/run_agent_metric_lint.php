@@ -51,8 +51,9 @@ if ($agent_src === '' || $api_src === false || $fn_src === false) {
 // with run_tests.php and run_api_tests.php, so the list lives in one file.
 $not_metrics = require __DIR__ . '/fixtures/agent_not_metrics.php';
 
-// Keys the agents send.
-preg_match_all('/"([a-z_0-9]+)":/', $agent_src, $sent_matches);
+// Keys the agents send. Read from code only: a full-line # comment that
+// quotes something like "_": is prose, not a key in the payload.
+preg_match_all('/"([a-z_0-9]+)":/', preg_replace('/^[ \t]*#.*$/m', '', $agent_src), $sent_matches);
 $sent = array_unique($sent_matches[1] ?? []);
 sort($sent);
 
