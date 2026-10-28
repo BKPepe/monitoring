@@ -149,6 +149,7 @@ return [
     'collection_issue_smart_read_never' => 'never',
     'collection_issue_storage_list_dropped' => 'The router details did not fit and part was dropped: %s.',
     'collection_issue_ingest_dropped' => 'Part of the agent report was not stored: %s.',
+    'collection_issue_report_unreadable' => 'The agent reports, but its report is not valid JSON (%s): the server dropped all of it.',
     'collection_issue_reports_missing' => '%1$d of %2$d minute reports are missing in the last 24 h.',
     'collection_issue_reports_missing_skips' => 'The agent skipped %1$d runs because the previous one was still running, and %2$d reports could not be sent.',
     'collection_issue_reports_missing_killed' => 'A run hung for 5 minutes and was stopped: %d×.',

@@ -14,13 +14,18 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-// Read the JSON body of the request
-$raw_data = file_get_contents('php://input');
-$data = json_decode($raw_data, true);
+// Read the JSON body of the request. One stray byte - a Latin-1 SSID, an
+// operator name - used to void the whole minute with a 400: invalid UTF-8
+// becomes U+FFFD instead.
+$raw_data = (string)file_get_contents('php://input');
+$data = json_decode($raw_data, true, 512, JSON_INVALID_UTF8_SUBSTITUTE);
 
 if (!$data || !is_array($data)) {
-    http_response_code(400);
     $json_err = json_last_error_msg();
+    // Still a 400, but said out loud: logged, and shown on the monitor as a
+    // collection issue rather than as an agent gone quiet.
+    bk_agent_report_unreadable($pdo, $raw_data, $json_err);
+    http_response_code(400);
     echo json_encode(['success' => false, 'message' => 'Neplatný JSON formát: ' . $json_err]);
     exit;
 }
@@ -1049,6 +1054,10 @@ try {
     // actively drops previously collected values, so a stale IP does not
     // linger in last_details pretending to be current.
     unset($old_details['public_ip'], $old_details['asn'], $old_details['asn_name'], $old_details['asn_checked_at']);
+
+    // This report got through, so the record of the last one that did not
+    // (bk_agent_report_unreadable) is over, and its collection issue with it.
+    unset($old_details['report_unreadable']);
 
     // X15: a light "reduced" run (it stepped aside for the router's own speed
     // test) measured almost nothing ON PURPOSE. It is no evidence that

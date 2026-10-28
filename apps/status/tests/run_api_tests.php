@@ -5054,6 +5054,55 @@ $pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
 $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
 $pdo->prepare("DELETE FROM speedtest_results WHERE monitor_id = 2")->execute();
 
+// --- A report the server cannot read --------------------------------------
+// One invalid value used to void the whole minute: a bare 400 before the
+// monitor was even known, nothing logged, and the router looked switched off.
+$ru_post = function (string $body) use ($base): int {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $body,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    curl_exec($ch);
+    return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+};
+$ru_details = function () use ($pdo): array {
+    $d = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true);
+    return is_array($d) ? $d : [];
+};
+$ru_issues = function () use ($pdo, $ru_details): array {
+    $row = $pdo->query("SELECT * FROM monitors WHERE id = 2")->fetch();
+    return array_column(bk_get_collection_issues($row, $ru_details()), null, 'type');
+};
+$ru_json = (string)json_encode($agent_payload + ['hostname' => 'kavarna-@@'], JSON_UNESCAPED_UNICODE);
+check('hlášení s bajtem v Latin-1 server přijme', $ru_post(str_replace('@@', "caf\xE9", $ru_json)), 200);
+check('a bajt uloží jako U+FFFD', $ru_details()['hostname'] ?? null, "kavarna-caf\u{FFFD}");
+
+check('nečitelné hlášení dostane dál 400', $ru_post(substr($ru_json, 0, -1)), 400);
+$ru_first = $ru_details()['report_unreadable'] ?? [];
+check('a monitor si důvod zapíše', [$ru_first['reason'] ?? null, $ru_first['bytes'] ?? null],
+    ['Syntax error', strlen($ru_json) - 1]);
+check_true('hlásí se jako problém se sběrem dat, se stejným důvodem',
+    str_contains((string)($ru_issues()['report_unreadable']['message'] ?? ''), 'Syntax error'));
+// The streak keeps its start and does not log again within the hour.
+$pdo->prepare("UPDATE monitors SET last_details = JSON_SET(last_details,
+    '$.report_unreadable.since', ?, '$.report_unreadable.logged_at', ?) WHERE id = 2")
+    ->execute([(int)$ru_first['at'] - 300, (int)$ru_first['at'] - 60]);
+$ru_post('{"agent_key": "' . $agent_key . '", "cpu": 007}');
+$ru_next = $ru_details()['report_unreadable'] ?? [];
+check('další nečitelné hlášení drží začátek i hodinový log',
+    [$ru_next['since'] ?? null, $ru_next['logged_at'] ?? null], [(int)$ru_first['at'] - 300, (int)$ru_first['at'] - 60]);
+
+check('první čitelné hlášení projde', $ru_post((string)json_encode($agent_payload, JSON_UNESCAPED_UNICODE)), 200);
+check_false('a problém se sběrem zmizí', isset($ru_issues()['report_unreadable']));
+check_false('i záznam v last_details', isset($ru_details()['report_unreadable']));
+$ru_marked = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE last_details LIKE '%report_unreadable%'")->fetchColumn();
+check('nečitelné hlášení bez známého klíče dostane 400', $ru_post('{"agent_key": "' . str_repeat('f', 32) . '", "cpu": }'), 400);
+check('a nezapíše se k žádnému monitoru', $ru_marked(), 0);
+
 // --- Time zone of the database session -------------------------------------
 // db.php puts the SESSION on PHP's clock. Without that, every comparison of
 // SQL NOW() / CURDATE() with a time formatted in PHP silently depends on the

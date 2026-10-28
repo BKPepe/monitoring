@@ -3233,6 +3233,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'collection.kind_details_dropped': { cs: 'Podrobnosti routeru', en: 'Router details' },
   'collection.kind_ingest_dropped': { cs: 'Ukládání hlášení', en: 'Report ingest' },
   'collection.kind_reports_missing': { cs: 'Minutová hlášení', en: 'Minute reports' },
+  'collection.kind_report_unreadable': { cs: 'Formát hlášení', en: 'Report format' },
 
   // Service Discovery
   'discovery.title': { cs: 'Objevené služby', en: 'Discovered Services' },

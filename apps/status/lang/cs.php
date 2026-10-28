@@ -150,6 +150,7 @@ return [
     'collection_issue_smart_read_never' => 'nikdy',
     'collection_issue_storage_list_dropped' => 'Podrobnosti routeru se nevešly do úložiště a část byla zahozena: %s.',
     'collection_issue_ingest_dropped' => 'Část hlášení agenta se neuložila: %s.',
+    'collection_issue_report_unreadable' => 'Agent hlásí, ale jeho hlášení není platný JSON (%s): server ho zahodil celé.',
     'collection_issue_reports_missing' => 'Za posledních 24 h chybí %1$d z %2$d minutových hlášení.',
     'collection_issue_reports_missing_skips' => 'Agent vynechal %1$d běhů, protože předchozí ještě běžel, a %2$d hlášení se nepodařilo odeslat.',
     'collection_issue_reports_missing_killed' => 'Běh visel 5 minut a byl ukončen: %d×.',

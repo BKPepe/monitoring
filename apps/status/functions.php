@@ -18609,6 +18609,18 @@ function bk_get_collection_issues(array $monitor_row, array $details, int $agent
         }
     }
 
+    // 8. A report the server could not read at all (bk_agent_report_unreadable).
+    //    Shown until a report gets through again.
+    $unreadable = is_array($details['report_unreadable'] ?? null) ? $details['report_unreadable'] : [];
+    $unreadable_at = bk_ranged_int($unreadable['at'] ?? null, 1, PHP_INT_MAX);
+    if ($unreadable_at !== null && $unreadable_at >= $agent_last_seen) {
+        $issues[] = [
+            'type' => 'report_unreadable',
+            'message' => sprintf(t('collection_issue_report_unreadable'), (string)($unreadable['reason'] ?? '?')),
+            'since' => date('c', bk_ranged_int($unreadable['since'] ?? null, 1, PHP_INT_MAX) ?? $unreadable_at),
+        ];
+    }
+
     return $issues;
 }
 
@@ -18899,6 +18911,49 @@ function bk_agent_refuse_archived(): void {
         'message' => 'Monitor je archivovaný, hlášení se neukládá. Obnovte ho v aplikaci, nebo agenta na tomto zařízení odinstalujte.',
     ], JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+/**
+ * A report agent_api.php could not decode. It used to get a bare 400 before
+ * the monitor was even known, nothing was logged, and the router looked
+ * switched off. The monitor is found by the agent_key in the raw body; the
+ * reason goes into its last_details (`report_unreadable`, the collection
+ * issue of the same name) and, at most once an hour, into the error log.
+ * Returns the monitor id, or null when no live monitor's key is in the body.
+ */
+function bk_agent_report_unreadable(PDO $pdo, string $raw, string $reason, ?int $now = null): ?int {
+    $now ??= time();
+    if (!preg_match('/"agent_key"\s*:\s*"([A-Za-z0-9_-]{8,128})"/', $raw, $m)) {
+        return null;
+    }
+    $stmt = $pdo->prepare('SELECT id, last_details FROM monitors WHERE agent_key = ? AND archived_at IS NULL LIMIT 1');
+    $stmt->execute([$m[1]]);
+    $row = $stmt->fetch(PDO::FETCH_ASSOC);
+    if (!is_array($row)) {
+        return null;
+    }
+    $details = json_decode((string)($row['last_details'] ?? ''), true);
+    $details = is_array($details) ? $details : [];
+    $prev = is_array($details['report_unreadable'] ?? null) ? $details['report_unreadable'] : [];
+    // One streak until a report gets through: agent_api.php drops this key
+    // from an accepted report's details and moves agent_last_seen past it.
+    $streak = $prev !== [] && (int)($prev['at'] ?? 0) >= (int)($details['agent_last_seen'] ?? 0);
+    $logged_at = $streak ? (int)($prev['logged_at'] ?? 0) : 0;
+    $log_now = $now - $logged_at >= 3600;
+    $details['report_unreadable'] = [
+        'at' => $now,
+        'since' => $streak ? (int)($prev['since'] ?? $now) : $now,
+        'reason' => substr($reason, 0, 120),
+        'bytes' => strlen($raw),
+        'logged_at' => $log_now ? $now : $logged_at,
+    ];
+    $pdo->prepare('UPDATE monitors SET last_details = ? WHERE id = ?')
+        ->execute([json_encode($details, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE), (int)$row['id']]);
+    if ($log_now) {
+        error_log(sprintf('[agent_api] monitor %d: report is not valid JSON (%s, %d bytes), refused whole',
+            (int)$row['id'], $reason, strlen($raw)));
+    }
+    return (int)$row['id'];
 }
 
 /** "Agent routeru" or "Agent serveru" - an OpenWrt monitor is not a VPS. */

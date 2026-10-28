@@ -48,6 +48,18 @@ describe('CollectionIssuesBanner', () => {
     expect(screen.getByText('Kontroly dostupnosti')).toBeTruthy();
   });
 
+  it('names a report the server could not read, apart from a silent agent', () => {
+    renderBanner([
+      {
+        type: 'report_unreadable',
+        message: 'Agent hlásí, ale jeho hlášení není platný JSON (Syntax error)',
+        since: null,
+      },
+    ]);
+    expect(screen.getByText('Formát hlášení')).toBeTruthy();
+    expect(screen.queryByText('Agent')).toBeNull();
+  });
+
   it('still shows a type it does not know, instead of swallowing the row', () => {
     // The server may add a type before the app does; the loud banner is the
     // point, the chip is the extra.

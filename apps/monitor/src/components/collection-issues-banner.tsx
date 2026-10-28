@@ -15,10 +15,10 @@ import { useLanguage } from '@/context/language-context';
  * What stopped being collected, in two or three words.
  *
  * The server sends the sentence (it knows the numbers and the language), the
- * app names the KIND: five of the eight types are new in release 0.1.7 and
- * three of them are about a router's disks or its reports, which read as the
- * same outage in a list of one-line messages. A type nobody mapped here keeps
- * the server's sentence and simply has no chip.
+ * app names the KIND: five of the first eight types came with release 0.1.7,
+ * and three of them are about a router's disks or its reports, which read as
+ * the same outage in a list of one-line messages. A type nobody mapped here
+ * keeps the server's sentence and simply has no chip.
  */
 function issueKindLabel(type: string, t: (key: string, fallback?: string) => string): string | null {
   const byType: Record<string, string> = {
@@ -30,6 +30,7 @@ function issueKindLabel(type: string, t: (key: string, fallback?: string) => str
     storage_list_dropped: t('collection.kind_details_dropped', 'Podrobnosti routeru'),
     ingest_dropped: t('collection.kind_ingest_dropped', 'Ukládání hlášení'),
     reports_missing: t('collection.kind_reports_missing', 'Minutová hlášení'),
+    report_unreadable: t('collection.kind_report_unreadable', 'Formát hlášení'),
   };
   return byType[type] ?? null;
 }
