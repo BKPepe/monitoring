@@ -448,6 +448,9 @@ try {
     // DST and a connection lives for a single request, so the offset cannot go
     // stale. Where both sides already agree - the production case - this
     // changes nothing.
+    // It is TODAY's offset, though: UNIX_TIMESTAMP() of a day or a time from
+    // the other side of a DST switch comes out an hour off. Daily points are
+    // therefore converted in PHP (metric_series in api.php).
     //
     // MySQL only: Postgres reads a bare offset with the opposite sign, and
     // everything below is MySQL syntax anyway. A refused statement is logged

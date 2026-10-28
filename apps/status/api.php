@@ -5166,7 +5166,7 @@ if ($action === 'metric_series') {
             $unit = 'ms';
             $label = bk_metric_label('response_time', 'Doba odezvy (HTTP/Ping)');
             $stmt = $pdo->prepare("
-                SELECT UNIX_TIMESTAMP(day) AS ts, avg_response_ms, checks_total
+                SELECT day, avg_response_ms, checks_total
                 FROM uptime_daily
                 WHERE monitor_id = ? AND day >= DATE_SUB(CURDATE(), INTERVAL ? DAY) AND day < DATE_SUB(CURDATE(), INTERVAL ? DAY)
                 ORDER BY day ASC
@@ -5178,6 +5178,10 @@ if ($action === 'metric_series') {
                 if ($r['avg_response_ms'] === null) {
                     continue;
                 }
+                // The day's local midnight from PHP, not UNIX_TIMESTAMP(day): the
+                // session runs on today's UTC offset (db.php), so after a DST
+                // switch every day of the other season came out an hour off.
+                $r['ts'] = strtotime((string)$r['day']);
                 $points[] = [(int)$r['ts'], round((float)$r['avg_response_ms'], 2)];
                 $daily_range[] = ['ts' => (int)$r['ts'], 'min' => null, 'max' => null, 'samples' => (int)$r['checks_total']];
             }
@@ -5216,7 +5220,7 @@ if ($action === 'metric_series') {
                 // it. A point is the daily AVERAGE; min/max ride along so spikes
                 // the average would hide stay visible.
                 $stmt = $pdo->prepare("
-                    SELECT UNIX_TIMESTAMP(day) as ts, avg_val, min_val, max_val, samples
+                    SELECT day, avg_val, min_val, max_val, samples
                     FROM metrics_daily
                     WHERE monitor_id = ? AND metric_key = ? AND day >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
                     ORDER BY day ASC
@@ -5226,6 +5230,7 @@ if ($action === 'metric_series') {
                     if ($r['avg_val'] === null) {
                         continue;
                     }
+                    $r['ts'] = strtotime((string)$r['day']); // local midnight, as in uptime_daily above
                     if ($is_counter) {
                         // For a counter the daily increment is the difference between the
                         // day's max and min. The average of a counter means nothing.
