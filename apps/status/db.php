@@ -420,6 +420,53 @@ function bk_db_dsn(string $driver, string $host, ?int $port, string $name): stri
     return "mysql:host=" . $host . ";port=" . ($port ?? 3306) . ";dbname=" . $name . ";charset=utf8mb4";
 }
 
+/**
+ * The session's time zone, and whether it turns a winter and a summer time of
+ * this year into the same instants PHP does - i.e. whether a time stored on
+ * the other side of a DST switch reads back right.
+ *
+ * @return array{zone: string, agrees: bool}
+ */
+function bk_db_clock(PDO $pdo): array {
+    $winter = date('Y') . '-01-15 12:00:00';
+    $summer = date('Y') . '-07-15 12:00:00';
+    $stmt = $pdo->prepare('SELECT @@session.time_zone AS tz, UNIX_TIMESTAMP(?) AS w, UNIX_TIMESTAMP(?) AS s');
+    $stmt->execute([$winter, $summer]);
+    $row = (array)$stmt->fetch(PDO::FETCH_ASSOC);
+    return [
+        'zone'   => (string)($row['tz'] ?? ''),
+        'agrees' => (int)($row['w'] ?? 0) === strtotime($winter) && (int)($row['s'] ?? 0) === strtotime($summer),
+    ];
+}
+
+/**
+ * Puts the MySQL session on PHP's clock and returns the zone it ended on.
+ *
+ * The server's own zone stays when it already agrees with PHP in winter and
+ * summer (one query). Otherwise PHP's zone by name, which needs the MySQL
+ * time-zone tables and is kept only if those tables agree with PHP too (stale
+ * ones do not: Brazil dropped DST in 2019). Only then today's UTC offset - the
+ * one setting that reads a time from the other side of a DST switch an hour
+ * off, and what every request ran on before. Throws when even that is refused.
+ */
+function bk_db_clock_sync(PDO $pdo, string $zone): string {
+    $clock = bk_db_clock($pdo);
+    if ($clock['agrees']) {
+        return $clock['zone'];
+    }
+    $set = $pdo->prepare('SET time_zone = ?');
+    try {
+        $set->execute([$zone]);
+        if (bk_db_clock($pdo)['agrees']) {
+            return $zone;
+        }
+    } catch (PDOException $e) {
+        // No time-zone tables, the rule on shared hosting: not a log line per request.
+    }
+    $set->execute([date('P')]);
+    return date('P');
+}
+
 try {
     if (!defined('DB_HOST') || !defined('DB_NAME') || !defined('DB_USER') || !defined('DB_PASS')) {
         throw new PDOException('config.php does not define DB_HOST, DB_NAME, DB_USER and DB_PASS');
@@ -442,15 +489,17 @@ try {
     // reported "checks have not run for 120 minutes" for EVERY monitor: a
     // two-hour shift and not one error anywhere.
     //
-    // Sent as the CURRENT UTC offset (date('P'), e.g. "+02:00"), not as the
-    // zone name: the MySQL time-zone tables are usually not loaded on shared
-    // hosting and 'Europe/Prague' would be refused there. date('P') follows
-    // DST and a connection lives for a single request, so the offset cannot go
-    // stale. Where both sides already agree - the production case - this
-    // changes nothing.
-    // It is TODAY's offset, though: UNIX_TIMESTAMP() of a day or a time from
-    // the other side of a DST switch comes out an hour off. Daily points are
-    // therefore converted in PHP (metric_series in api.php).
+    // The current UTC offset alone (date('P'), e.g. "+01:00") used to be the
+    // whole fix, and it is right only for times from today's side of a DST
+    // switch: after the October switch a summer TIMESTAMP read as text came
+    // back as a +01:00 wall clock that PHP takes for summer time, so July's
+    // incidents, outages and notifications showed an hour early, and a
+    // DATETIME from the summer went through UNIX_TIMESTAMP() an hour late.
+    // bk_db_clock_sync() keeps the server's own zone when it agrees with PHP
+    // in winter and summer, else sets PHP's zone by name (the MySQL time-zone
+    // tables are often missing on shared hosting, and the name is refused
+    // there), and only then falls back to that offset. health.php shows which
+    // one a site ended on.
     //
     // MySQL only: Postgres reads a bare offset with the opposite sign, and
     // everything below is MySQL syntax anyway. A refused statement is logged
@@ -458,8 +507,7 @@ try {
     // unable to open the site at all is worse.
     if ($db_driver !== 'pgsql' && $db_driver !== 'postgres') {
         try {
-            $stmt_tz = $pdo->prepare("SET time_zone = ?");
-            $stmt_tz->execute([date('P')]);
+            bk_db_clock_sync($pdo, date_default_timezone_get());
         } catch (PDOException $e) {
             error_log('[db] the database refused the session time zone ' . date('P') . ': ' . $e->getMessage());
         }

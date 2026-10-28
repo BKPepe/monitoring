@@ -52,6 +52,21 @@ add_check($checks, $all_ok, 'config.php output', $bk_cfg_out === null, $bk_cfg_o
     : sprintf('prints %d bytes (%s), starting "%s"; held back from responses, remove them from the file',
         $bk_cfg_out['bytes'], implode(', ', $bk_cfg_out['where']), $bk_cfg_out['excerpt']));
 
+// 1c. The database clock across DST (see bk_db_clock_sync in db.php). On
+// today's offset alone everything stored on the other side of a DST switch
+// reads an hour off, and nothing else on the site would say so.
+if ($db_driver !== 'pgsql' && $db_driver !== 'postgres') {
+    try {
+        $bk_clock = bk_db_clock($pdo);
+        add_check($checks, $all_ok, 'DB clock across DST', $bk_clock['agrees'], $bk_clock['agrees']
+            ? 'session ' . $bk_clock['zone'] . ' converts winter and summer times as PHP does'
+            : 'session ' . $bk_clock['zone'] . ' reads times from the other side of a DST switch an hour off;'
+                . ' load the MySQL time-zone tables (mysql_tzinfo_to_sql) or run the server in ' . date_default_timezone_get());
+    } catch (PDOException $e) {
+        add_check($checks, $all_ok, 'DB clock across DST', false, $e->getMessage());
+    }
+}
+
 // 2. Required tables
 $required_tables = ['monitors', 'monitor_logs', 'vps_metrics', 'settings', 'users', 'monitor_events', 'agent_actions'];
 $stmt = $pdo->query("SHOW TABLES");

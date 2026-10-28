@@ -39,7 +39,7 @@ $root = realpath(__DIR__ . '/..');
 
 // The suite writes fixture rows that the application then reads, so it has to
 // keep the application's time: config.php below defines TIMEZONE =
-// 'Europe/Prague' and db.php puts the application's SESSION into that offset.
+// 'Europe/Prague' and db.php puts the application's SESSION on that clock.
 // Without the same two settings here the fixtures would be written with the
 // database server's zone (UTC in the container) and every "three minutes ago"
 // row would land two hours away from where the application looks for it.
@@ -59,8 +59,12 @@ try {
     fwrite(STDERR, "Spusť databázi (kontejner bk-test-mysql) nebo oprav BK_TEST_DB_* a zkus to znovu.\n");
     exit(1);
 }
-$pdo_tz = $pdo->prepare("SET time_zone = ?");
-$pdo_tz->execute([date('P')]);
+// The same way db.php does it, or fixtures and api.php would disagree on any
+// time from the other side of a DST switch. Copies in the test namespace:
+// functions.php brings db.php into this process further down, and a second
+// declaration of bk_db_clock() would be fatal.
+$clock_ns = bk_test_load_pinned($root . '/db.php', ['bk_db_clock', 'bk_db_clock_sync']);
+($clock_ns . 'bk_db_clock_sync')($pdo, date_default_timezone_get());
 
 $pdo->exec("DROP DATABASE IF EXISTS `{$db_name}`");
 $pdo->exec("CREATE DATABASE `{$db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
@@ -5050,19 +5054,20 @@ $pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
 $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
 $pdo->prepare("DELETE FROM speedtest_results WHERE monitor_id = 2")->execute();
 
-// --- Časová zóna databázové relace (oprava mimo release) ------------------
-// db.php nastavuje zónu RELACE na aktuální posun PHP. Bez toho každé
-// porovnání SQL NOW() / CURDATE() s časem naformátovaným v PHP mlčky závisí
-// na tom, že databáze běží ve stejné zóně jako PHP: kontejner v UTC a
-// TIMEZONE = 'Europe/Prague' hlásily u KAŽDÉHO monitoru „kontroly neběžely
-// 120 minut", posun o dvě hodiny a nikde ani chyba. Sonda se pouští jako
-// samostatný proces, protože se měří právě to, co udělá db.php při připojení
-// (suita si otevírá vlastní PDO, které db.php nevidí).
+// --- Time zone of the database session -------------------------------------
+// db.php puts the SESSION on PHP's clock. Without that, every comparison of
+// SQL NOW() / CURDATE() with a time formatted in PHP silently depends on the
+// database running in PHP's zone: a UTC container with TIMEZONE =
+// 'Europe/Prague' reported "checks have not run for 120 minutes" for EVERY
+// monitor, a two-hour shift and not one error anywhere. The probe runs as a
+// separate process because it measures what db.php does on connect (the
+// suite opens its own PDO, which db.php never sees).
 $tz_probe_file = sys_get_temp_dir() . '/bk_tz_probe_' . getmypid() . '.php';
 file_put_contents($tz_probe_file, <<<'PROBE'
 <?php
 require getenv('BK_TZ_DB');
 $fixed = $pdo->query("SELECT @@session.time_zone AS tz, NOW() AS now")->fetch();
+$clock = bk_db_clock($pdo);
 // Druhé spojení BEZ opravy: ukazuje, o kolik se obě strany rozcházely.
 $raw_port = defined('DB_PORT') ? (int)DB_PORT : 3306;
 $raw = new PDO("mysql:host=" . DB_HOST . ";port={$raw_port};dbname=" . DB_NAME . ";charset=utf8mb4",
@@ -5070,7 +5075,7 @@ $raw = new PDO("mysql:host=" . DB_HOST . ";port={$raw_port};dbname=" . DB_NAME .
 $plain = $raw->query("SELECT NOW() AS now, TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS srv_offset")->fetch();
 echo '<<TZ>>' . json_encode([
     'tz'            => $fixed['tz'],
-    'offset'        => date('P'),
+    'agrees'        => $clock['agrees'],
     'php_offset'    => (int)date('Z'),
     'skew'          => strtotime($fixed['now']) - time(),
     'raw_skew'      => strtotime($plain['now']) - time(),
@@ -5083,8 +5088,11 @@ $tz_out = (string)shell_exec('BK_TZ_DB=' . escapeshellarg($root . '/db.php')
 @unlink($tz_probe_file);
 $tz = preg_match('/<<TZ>>(\{.*\})/s', $tz_out, $tz_m) ? (json_decode($tz_m[1], true) ?: []) : [];
 
-check('relace běží v aktuálním posunu PHP',
-    $tz['tz'] ?? trim($tz_out), $tz['offset'] ?? 'sonda neodpověděla');
+// Not "the session runs on today's offset": that one read every summer
+// TIMESTAMP an hour off after the October switch. What counts is that a
+// winter and a summer time convert to the same instants as in PHP.
+check('zimní i letní čas převede relace stejně jako PHP',
+    [$tz['tz'] ?? trim($tz_out), $tz['agrees'] ?? null], [$tz['tz'] ?? trim($tz_out), true]);
 check_true('NOW() z databáze je stejný okamžik jako time() v PHP',
     isset($tz['skew']) && abs($tz['skew']) <= 2);
 // Identita, která platí všude a pojmenuje chybu: neopravené spojení se míjí
@@ -5092,6 +5100,25 @@ check_true('NOW() z databáze je stejný okamžik jako time() v PHP',
 check_true('bez nastavení zóny se NOW() míjí přesně o rozdíl zón',
     isset($tz['raw_skew'], $tz['server_offset'], $tz['php_offset'])
         && abs($tz['raw_skew'] - ($tz['server_offset'] - $tz['php_offset'])) <= 2);
+
+// Each branch of bk_db_clock_sync, from a session that disagrees with PHP.
+// The last resort has to be exactly today's offset: never worse than before.
+$tzc = new PDO("mysql:host={$db_host};port={$db_port};charset=utf8mb4", $db_user, $db_pass,
+    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+$tzc->exec("SET time_zone = '+05:00'");
+check('zónu, kterou databáze nezná, nahradí dnešní posun',
+    [bk_db_clock_sync($tzc, 'Bk/Nowhere'), $tzc->query('SELECT @@session.time_zone')->fetchColumn()], [date('P'), date('P')]);
+$tzc->exec("SET time_zone = '+05:00'");
+check('zónu PHP, kterou databáze zná, nastaví jménem', bk_db_clock_sync($tzc, 'Europe/Prague'), 'Europe/Prague');
+check_true('a s ní sedí zimní i letní čas', bk_db_clock($tzc)['agrees']);
+// A name the server knows but converts differently from PHP (stale time-zone
+// tables do that; UTC stands in for them here) is not kept either.
+$tzc->exec("SET time_zone = '+05:00'");
+check('zónu, kterou databáze zná, ale převádí jinak než PHP, nahradí dnešní posun',
+    [bk_db_clock_sync($tzc, 'UTC'), $tzc->query('SELECT @@session.time_zone')->fetchColumn()], [date('P'), date('P')]);
+$tzc->exec("SET time_zone = 'Europe/Prague'");
+check('zóna, která s PHP už souhlasí, zůstane', bk_db_clock_sync($tzc, 'Bk/Nowhere'), 'Europe/Prague');
+$tzc = null;
 
 // --- Router release migration (schema 20260920) ---------------------------
 // The schema lint compares db.php with schema.sql as TEXT. Only a real run on

@@ -5178,9 +5178,9 @@ if ($action === 'metric_series') {
                 if ($r['avg_response_ms'] === null) {
                     continue;
                 }
-                // The day's local midnight from PHP, not UNIX_TIMESTAMP(day): the
-                // session runs on today's UTC offset (db.php), so after a DST
-                // switch every day of the other season came out an hour off.
+                // The day's local midnight from PHP, not UNIX_TIMESTAMP(day): on
+                // db.php's last resort the session runs on today's UTC offset,
+                // and then every day of the other season comes out an hour off.
                 $r['ts'] = strtotime((string)$r['day']);
                 $points[] = [(int)$r['ts'], round((float)$r['avg_response_ms'], 2)];
                 $daily_range[] = ['ts' => (int)$r['ts'], 'min' => null, 'max' => null, 'samples' => (int)$r['checks_total']];
