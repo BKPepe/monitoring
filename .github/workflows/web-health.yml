@@ -27,6 +27,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
+          check-latest: true
 
       # Every check runs, so one red run lists everything that is wrong.
       - name: security.txt na obou hostech (Expires aspoň 30 dní dopředu)
