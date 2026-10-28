@@ -121,6 +121,7 @@ describe('asset detail per monitor type', () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -210,6 +211,10 @@ describe('asset detail per monitor type', () => {
   });
 
   it('never cuts a date in half in the parameter list', async () => {
+    // The label counts from now: pinned, or it reads "Před 2 měsíci" once the
+    // fixture's status change is two months old and the match below fails.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(2026, 8, 23, 12, 0));
     stubFetch([service, parent]);
     renderDetail();
     // "Před 1 měsíci (12. 8. 2026 0:27:52)" was clipped to "(12. 8. 2026 0:…"
