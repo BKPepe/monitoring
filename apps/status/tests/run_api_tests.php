@@ -2478,6 +2478,11 @@ check_true('details se vešly do sloupce (<= 60 000 B)', strlen($raw) <= 60000 &
 $d = $lte_details();
 check_true('skalární hodnoty přežily ořez (cpu z hlášení)', isset($d['cpu']));
 check('a další hlášení po něm projde', $post_agent($wan_ok), 200);
+// The lists are ballast of this case only. Left in place, the ~50 KB that
+// survived the trim would decide what a much later report of the same router
+// has to shed, so a later "nothing was dropped" check would test them.
+$fat_d = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode(array_diff_key($fat_d, $fat))]);
 
 $ch_agent = curl_init($base . '/agent_api.php');
 curl_setopt_array($ch_agent, [
@@ -4328,6 +4333,41 @@ check('DNS resolver: dvě selhání s funkční linkou ohlásí výpadek resolve
 $ra_dnsr0 = $ra_ev('dns_resolver_restored');
 $post_agent(['dns_resolver_ok' => true, 'wan_internet' => true, 'wan_up' => true]);
 check('DNS resolver: odpovídající resolver ohlásí návrat', $ra_ev('dns_resolver_restored') - $ra_dnsr0, 1);
+
+// Public addresses (IPv6 first, phase 1). A loss needs the public address
+// seen first, goes out as a notification without the address in it, and the
+// derived scope reaches last_details for the router page.
+$ra_reset(['public_ipv4_seen', 'public_ipv4_bad_streak', 'public_ipv4_alert_sent',
+    'wan_ipv6_seen', 'wan_ipv6_bad_streak', 'wan_ipv6_alert_sent']);
+$ra_line = ['wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => true];
+$ra_v4_0 = $ra_ev('public_ipv4_lost');
+$ra_v4n0 = $ra_notif('public_ipv4_lost');
+$post_agent($ra_line + ['wan_ipv4' => '203.0.113.10', 'wan_ipv6' => '2001:db8::1']);
+check('Veřejná adresa: rozsah IPv4 a globální IPv6 jsou v details',
+    [$ra_details()['wan_ipv4_scope'] ?? null, $ra_details()['wan_ipv6_global'] ?? null], ['public', true]);
+$post_agent($ra_line + ['wan_ipv4' => '100.64.3.4', 'wan_ipv6' => '2001:db8::1']);
+check('Veřejná adresa: jedno hlášení za CGNAT ještě mlčí', $ra_ev('public_ipv4_lost') - $ra_v4_0, 0);
+$post_agent($ra_line + ['wan_ipv4' => '100.64.3.4', 'wan_ipv6' => '2001:db8::1']);
+check('Veřejná adresa: druhé hlášení za CGNAT ohlásí ztrátu právě jednou, i notifikací',
+    [$ra_ev('public_ipv4_lost') - $ra_v4_0, $ra_notif('public_ipv4_lost') - $ra_v4n0, $ra_details()['wan_ipv4_scope'] ?? null],
+    [1, 1, 'cgnat']);
+$ra_v4_desc = (string)$pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'public_ipv4_lost' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('Veřejná adresa: událost adresu neprozradí', str_contains($ra_v4_desc, 'CGNAT') && !str_contains($ra_v4_desc, '100.64'));
+$ra_v6_0 = $ra_ev('wan_ipv6_lost');
+$post_agent($ra_line + ['wan_ipv4' => '100.64.3.4']);
+$post_agent($ra_line + ['wan_ipv4' => '100.64.3.4']);
+check('Veřejná adresa: dvě hlášení bez IPv6 ještě mlčí', $ra_ev('wan_ipv6_lost') - $ra_v6_0, 0);
+$post_agent($ra_line + ['wan_ipv4' => '100.64.3.4']);
+check('Veřejná adresa: třetí hlášení bez IPv6 ohlásí ztrátu', $ra_ev('wan_ipv6_lost') - $ra_v6_0, 1);
+$ra_v6r0 = $ra_ev('wan_ipv6_restored');
+$ra_v4r0 = $ra_ev('public_ipv4_restored');
+$post_agent($ra_line + ['wan_ipv4' => '203.0.113.10', 'wan_ipv6' => '2001:db8::2']);
+check('Veřejná adresa: návrat IPv4 i IPv6 se ohlásí každý jednou',
+    [$ra_ev('public_ipv4_restored') - $ra_v4r0, $ra_ev('wan_ipv6_restored') - $ra_v6r0], [1, 1]);
+// The blocks below post payloads without wan_ipv6; with the latch armed
+// they would raise wan_ipv6_lost into suites that count events by type.
+$ra_reset(['public_ipv4_seen', 'public_ipv4_bad_streak', 'public_ipv4_alert_sent',
+    'wan_ipv6_seen', 'wan_ipv6_bad_streak', 'wan_ipv6_alert_sent']);
 
 // Restart (G21) and OOM kills (G31): timeline only.
 $ra_rb0 = $ra_ev('router_rebooted');

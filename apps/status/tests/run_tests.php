@@ -96,6 +96,9 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_speedtest_in_report',
     'bk_router_alert_event',
     'bk_wan_link_baseline_rules',
+    'bk_ipv4_scope',
+    'bk_ipv6_is_global',
+    'bk_wan_address_rules',
     'bk_router_alert_eval',
     'bk_format_duration_secs',
     'bk_reports_24h_expected',
@@ -1799,6 +1802,65 @@ if (function_exists('bk_router_alert_eval')) {
         [['oom_kill'], 'Jádro ukončilo 2 proces(y) pro nedostatek paměti.', $ra_now]);
     check('po restartu se nulovaný OOM čítač za událost nepovažuje',
         $ra_types($ra_run(['oom_kills' => 0, 'uptime' => 120], ['oom_kills' => 5, 'uptime' => 400000], $ra_now)), ['router_rebooted']);
+
+    // Public addresses (IPv6 first, phase 1): judged only on a working line,
+    // and a loss needs the good state seen first.
+    check('rozsahy IPv4: veřejná, CGNAT, privátní, speciální, žádná',
+        array_map('bk_ipv4_scope', ['203.0.113.10', '100.64.0.1', '100.127.255.254', '100.128.0.1', '10.1.2.3',
+            '172.31.0.1', '172.32.0.1', '192.168.8.100', '192.0.0.2', '169.254.1.1', '127.0.0.1', '0.0.0.0',
+            '224.0.0.1', '255.255.255.255', '', null, 'abc', '2001:db8::1']),
+        ['public', 'cgnat', 'cgnat', 'public', 'private',
+            'private', 'public', 'private', 'special', 'special', 'special', 'special',
+            'special', 'special', null, null, null, null]);
+    check('IPv6: globální je jen 2000::/3',
+        array_map('bk_ipv6_is_global', ['2001:db8::1', '2a00:1028::1', 'fd00::1', 'fe80::1', '::1', '', null, '203.0.113.10']),
+        [true, true, false, false, false, null, null, null]);
+    $ra_addr = fn (?string $v4, ?string $v6, bool $up = true, ?bool $inet = true): array =>
+        ['wan_up' => $up, 'wan_internet' => $inet, 'wan_ipv4' => $v4, 'wan_ipv6' => $v6];
+    $ra_seq = function (array $reports, array $state) use ($ra_run, $ra_types, $ra_now): array {
+        $types = [];
+        foreach ($reports as $i => $cur) {
+            $res = $ra_run($cur, $state, $ra_now + 60 * $i);
+            $state = $res['state'];
+            $types[] = $ra_types($res);
+        }
+        return [$types, $state];
+    };
+
+    [$ra_t, $ra_s] = $ra_seq([$ra_addr('100.64.3.4', null), $ra_addr('100.64.3.4', null)], []);
+    check('router, který k serveru přišel už za CGNAT, nic neztratil', [$ra_t, $ra_s['public_ipv4_seen']], [[[], []], false]);
+    [$ra_t, $ra_s] = $ra_seq([$ra_addr('203.0.113.10', '2001:db8::1'), $ra_addr('100.64.3.4', '2001:db8::1'),
+        $ra_addr('100.64.3.4', '2001:db8::1'), $ra_addr('100.64.3.4', '2001:db8::1')], []);
+    check('veřejná IPv4 viděná: ztráta až po druhém hlášení za CGNAT a jen jednou', $ra_t, [[], [], ['public_ipv4_lost'], []]);
+    $ra_ev4 = $ra_run($ra_addr('100.64.3.4', '2001:db8::1'), ['public_ipv4_seen' => true, 'public_ipv4_bad_streak' => 1], $ra_now)['events'][0];
+    check('ztráta veřejné IPv4 jde do notifikace a adresu neprozradí',
+        [$ra_ev4['status'], str_contains($ra_ev4['message'], 'CGNAT'), str_contains($ra_ev4['message'], '100.64')],
+        ['public_ipv4_lost', true, false]);
+    check('bez funkční linky se nerozhoduje ani o návratu (wan_lost mluví sám)',
+        [$ra_types($ra_run($ra_addr('203.0.113.10', null, false), $ra_s, $ra_now)),
+            $ra_types($ra_run($ra_addr('203.0.113.10', null, true, false), $ra_s, $ra_now))],
+        [[], []]);
+    [$ra_t, $ra_s2] = $ra_seq([$ra_addr('203.0.113.10', '2001:db8::1'), $ra_addr('203.0.113.10', '2001:db8::1')], $ra_s);
+    check('veřejná IPv4 zpět se ohlásí jednou', [$ra_t, $ra_s2['public_ipv4_alert_sent']], [[['public_ipv4_restored'], []], false]);
+
+    [$ra_t, $ra_s] = $ra_seq([$ra_addr('203.0.113.10', '2001:db8::1'), $ra_addr('203.0.113.10', null),
+        $ra_addr('203.0.113.10', null), $ra_addr('203.0.113.10', '2001:db8::1')], []);
+    check('dvě hlášení bez IPv6 po reconnectu ještě mlčí a návrat sérii vynuluje',
+        [$ra_t, $ra_s['wan_ipv6_bad_streak']], [[[], [], [], []], 0]);
+    [$ra_t, $ra_s] = $ra_seq([$ra_addr('203.0.113.10', '2001:db8::1'), $ra_addr('203.0.113.10', null),
+        $ra_addr('203.0.113.10', null), $ra_addr('203.0.113.10', 'fd00::1'), $ra_addr('203.0.113.10', null)], []);
+    check('třetí hlášení bez globální IPv6 (jen ULA) ohlásí ztrátu jednou', $ra_t, [[], [], [], ['wan_ipv6_lost'], []]);
+    [$ra_t, $ra_s] = $ra_seq([$ra_addr('203.0.113.10', '2001:db8::2'), $ra_addr('203.0.113.10', '2001:db8::2')], $ra_s);
+    check('globální IPv6 zpět se ohlásí jednou', [$ra_t, $ra_s['wan_ipv6_alert_sent']], [[['wan_ipv6_restored'], []], false]);
+    [$ra_t, $ra_s] = $ra_seq(array_fill(0, 4, $ra_addr('203.0.113.10', null)), []);
+    check('WAN bez vlastní IPv6 (poskytovatel deleguje jen prefix) nikdy nehlásí ztrátu', [$ra_t, $ra_s['wan_ipv6_seen']],
+        [[[], [], [], []], false]);
+
+    check('upozornění na veřejné adresy: ztráta varuje, návrat je dobrá zpráva, nic nestránkuje',
+        [bk_alert_color_class('public_ipv4_lost'), bk_alert_color_class('wan_ipv6_lost'),
+            bk_alert_color_class('public_ipv4_restored'), bk_alert_color_class('wan_ipv6_restored'),
+            bk_pagerduty_action('public_ipv4_lost'), bk_pagerduty_action('wan_ipv6_restored')],
+        ['warn', 'warn', 'good', 'good', null, null]);
 }
 
 // --- bk_reports_24h_expected / bk_wireguard_peer_count ----------------------

@@ -610,6 +610,8 @@ try {
         'wan_link_dev' => $ow_wan_link_dev,
         'wan_up' => $ow_wan_up,
         'wan_internet' => $ow_wan_internet,
+        'wan_ipv4' => $ow_wan_ipv4,
+        'wan_ipv6' => $ow_wan_ipv6,
         'conntrack_pct' => $ow_conntrack_pct,
         'conntrack_drops' => $ow_wan_steps['steps']['conntrack_drops'],
         'firewall_enabled' => $ow_firewall_enabled,
@@ -677,6 +679,10 @@ try {
         'wan_l3_device' => $ow_wan_l3_device,
         'wan_ipv4' => $ow_wan_ipv4,
         'wan_ipv6' => $ow_wan_ipv6,
+        // What the two addresses mean for reaching the router from outside -
+        // null where the agent reported none (bk_ipv4_scope, bk_ipv6_is_global).
+        'wan_ipv4_scope' => bk_ipv4_scope($ow_wan_ipv4),
+        'wan_ipv6_global' => bk_ipv6_is_global($ow_wan_ipv6),
         'wan_gateway' => $ow_wan_gateway,
         'wan_dns' => $ow_wan_dns,
         'wan_uptime' => $ow_wan_uptime,
@@ -727,6 +733,12 @@ try {
         'firewall_off_since' => $bk_router_alerts['state']['firewall_off_since'],
         'dns_resolver_bad_streak' => $bk_router_alerts['state']['dns_resolver_bad_streak'],
         'dns_resolver_alert_sent' => $bk_router_alerts['state']['dns_resolver_alert_sent'],
+        'public_ipv4_seen' => $bk_router_alerts['state']['public_ipv4_seen'],
+        'public_ipv4_bad_streak' => $bk_router_alerts['state']['public_ipv4_bad_streak'],
+        'public_ipv4_alert_sent' => $bk_router_alerts['state']['public_ipv4_alert_sent'],
+        'wan_ipv6_seen' => $bk_router_alerts['state']['wan_ipv6_seen'],
+        'wan_ipv6_bad_streak' => $bk_router_alerts['state']['wan_ipv6_bad_streak'],
+        'wan_ipv6_alert_sent' => $bk_router_alerts['state']['wan_ipv6_alert_sent'],
         // When the last OOM kill happened: the insight is limited to 24 h,
         // because the counter itself only resets at the next reboot (G31).
         'oom_kill_at' => $bk_router_alerts['state']['oom_kill_at'],

@@ -33,6 +33,10 @@ const WARNING = [
   'firewall_disabled',
   'dns_resolver_failed',
   'oom_kill',
+  // A public address gone from the router's WAN: the router keeps working,
+  // only reaching it from the internet does not.
+  'public_ipv4_lost',
+  'wan_ipv6_lost',
 ];
 
 /** Types that say the thing is back. */
@@ -50,6 +54,8 @@ const UP = [
   'conntrack_normal',
   'firewall_restored',
   'dns_resolver_restored',
+  'public_ipv4_restored',
+  'wan_ipv6_restored',
 ];
 
 export function timelineSeverity(type: string): TimelineEvent['severity'] {
@@ -108,6 +114,13 @@ export function timelineTitle(type: string, t: TranslateFn): string {
     dns_resolver_restored: t('asset.tl_dns_resolver_restored', 'DNS resolver routeru opět odpovídá'),
     router_rebooted: t('asset.tl_router_rebooted', 'Router se restartoval'),
     oom_kill: t('asset.tl_oom_kill', 'Došla paměť, systém ukončil proces'),
+    // The router's public addresses. `ipv6_prefix_changed` was logged all
+    // along and arrived here as its raw key.
+    public_ipv4_lost: t('asset.tl_public_ipv4_lost', 'Router přišel o veřejnou IPv4'),
+    public_ipv4_restored: t('asset.tl_public_ipv4_restored', 'Router má opět veřejnou IPv4'),
+    wan_ipv6_lost: t('asset.tl_wan_ipv6_lost', 'WAN přišla o veřejnou IPv6'),
+    wan_ipv6_restored: t('asset.tl_wan_ipv6_restored', 'WAN má opět veřejnou IPv6'),
+    ipv6_prefix_changed: t('asset.tl_ipv6_prefix_changed', 'Změnil se IPv6 prefix'),
   };
   return titleByType[type] ?? type;
 }

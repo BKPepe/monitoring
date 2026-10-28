@@ -574,6 +574,8 @@ export function MetricDetailPage() {
                 'conntrack_full',
                 'firewall_disabled',
                 'dns_resolver_failed',
+                'public_ipv4_lost',
+                'wan_ipv6_lost',
               ].includes(e.type)
                 ? ('alert' as const)
                 : ('info' as const),

@@ -52,6 +52,30 @@ describe('timelineTitle', () => {
   });
 });
 
+describe('public address events', () => {
+  const ADDRESS_TYPES = [
+    'public_ipv4_lost',
+    'public_ipv4_restored',
+    'wan_ipv6_lost',
+    'wan_ipv6_restored',
+    'ipv6_prefix_changed',
+  ];
+
+  it('reads every one of them, with a cs/en pair in the dictionary', () => {
+    const dictionary = readFileSync(join(__dirname, '../context/language-context.tsx'), 'utf8');
+    for (const type of ADDRESS_TYPES) {
+      expect(timelineTitle(type, t), type).not.toBe(type);
+      expect(dictionary.includes(`'asset.tl_${type}':`), type).toBe(true);
+    }
+  });
+
+  it('tones a lost address as a warning, its return as up and a new prefix as a note', () => {
+    expect(['public_ipv4_lost', 'wan_ipv6_lost'].map((type) => timelineSeverity(type))).toEqual(['warning', 'warning']);
+    expect(['public_ipv4_restored', 'wan_ipv6_restored'].map((type) => timelineSeverity(type))).toEqual(['up', 'up']);
+    expect(timelineSeverity('ipv6_prefix_changed')).toBe('info');
+  });
+});
+
 describe('timelineSeverity', () => {
   it('tones the four notifying failures as warnings', () => {
     // Alert sheet 2.2: their colour class is warn, not down - the monitor

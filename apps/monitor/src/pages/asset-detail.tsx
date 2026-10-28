@@ -105,6 +105,7 @@ import { isTeamSpeakMonitor, monitorTypeLabel, monitorTypeProfile, type MonitorT
 import { parseMonitorId } from '@/lib/monitor-route';
 import { NotFoundPage } from '@/pages/not-found';
 import { processUsage } from '@/lib/monitor-grouping';
+import { publicIpv4Label, publicIpv6Label } from '@/lib/wan-address';
 import {
   agentRunText,
   agentSkippedText,
@@ -2098,7 +2099,9 @@ function NetworkTab({
             />
             <Row label={t('net.proto', 'Protokol')} value={d.wan_proto} />
             <Row label="IPv4" value={d.wan_ipv4} />
+            <Row label={t('net.public_ipv4', 'Veřejná IPv4')} value={publicIpv4Label(d.wan_ipv4_scope, t)} />
             <Row label="IPv6" value={d.wan_ipv6} />
+            <Row label={t('net.public_ipv6', 'Veřejná IPv6')} value={publicIpv6Label(d.wan_ipv6_global, t)} />
             <Row label={t('net.gateway', 'Brána')} value={d.wan_gateway} />
             <Row label="DNS" value={d.wan_dns} />
             <Row label={t('net.wan_uptime', 'WAN uptime')} value={fmtDur(d.wan_uptime)} to={history('wan_uptime')} />

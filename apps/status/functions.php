@@ -3677,14 +3677,19 @@ function bk_alert_color_class(string $status): string {
     if (in_array($status, ['up', 'wan_restored', 'lte_backup_restored', 'latency_recovered', 'storage_recovered',
         // Router recoveries of alert sheet 2.2 - a restored link, firewall or
         // resolver is good news and must not arrive painted like an outage.
-        'wan_link_restored', 'firewall_restored', 'dns_resolver_restored'], true)) {
+        'wan_link_restored', 'firewall_restored', 'dns_resolver_restored',
+        // A public address back on the WAN.
+        'public_ipv4_restored', 'wan_ipv6_restored'], true)) {
         return 'good';
     }
     if (in_array($status, ['maintenance', 'vps_warning', 'latency_degraded', 'ssl_expiring', 'config_change', 'storage_warning',
         // The router keeps working through all four: a slower WAN port, a full
         // connection table, missing firewall rules and a silent local resolver
         // are things to look at, not outages of the monitor itself.
-        'wan_link_degraded', 'conntrack_full', 'firewall_disabled', 'dns_resolver_failed'], true)) {
+        'wan_link_degraded', 'conntrack_full', 'firewall_disabled', 'dns_resolver_failed',
+        // A public address gone from the WAN: the router itself keeps working,
+        // only reaching it from the internet does not.
+        'public_ipv4_lost', 'wan_ipv6_lost'], true)) {
         return 'warn';
     }
     return 'bad';
@@ -8842,10 +8847,14 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     // are measured by the agent like the ones above, so they follow the same
     // admin-only default and the same switch. None of them pages (X14):
     // bk_pagerduty_action() is null for all seven.
+    // public_ipv4_lost/restored, wan_ipv6_lost/restored: the router's public
+    // addresses (bk_wan_address_rules). Measured by the agent too - same
+    // default, same switch, and no page either.
     $bk_agent_statuses = ['vps_warning', 'lte_backup_lost', 'lte_backup_restored', 'wan_lost', 'wan_restored',
         'storage_failing', 'storage_warning', 'storage_recovered',
         'wan_link_degraded', 'wan_link_restored', 'conntrack_full',
-        'firewall_disabled', 'firewall_restored', 'dns_resolver_failed', 'dns_resolver_restored'];
+        'firewall_disabled', 'firewall_restored', 'dns_resolver_failed', 'dns_resolver_restored',
+        'public_ipv4_lost', 'public_ipv4_restored', 'wan_ipv6_lost', 'wan_ipv6_restored'];
     $is_agent_event = $new_status === 'agent_offline' || in_array($new_status, $bk_agent_statuses, true);
     if (in_array($new_status, $bk_agent_statuses, true)
         && get_setting('agent_notifications_enabled', '1') !== '1') {
@@ -8914,6 +8923,18 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         $emoji = '⚠️';
     } elseif ($new_status === 'dns_resolver_restored') {
         $status_text = 'DNS RESOLVER ROUTERU OPĚT ODPOVÍDÁ';
+        $emoji = '🟢';
+    } elseif ($new_status === 'public_ipv4_lost') {
+        $status_text = 'ROUTER BEZ VEŘEJNÉ IPv4';
+        $emoji = '⚠️';
+    } elseif ($new_status === 'public_ipv4_restored') {
+        $status_text = 'VEŘEJNÁ IPv4 ROUTERU ZPĚT';
+        $emoji = '🟢';
+    } elseif ($new_status === 'wan_ipv6_lost') {
+        $status_text = 'WAN BEZ VEŘEJNÉ IPv6';
+        $emoji = '⚠️';
+    } elseif ($new_status === 'wan_ipv6_restored') {
+        $status_text = 'VEŘEJNÁ IPv6 NA WAN ZPĚT';
         $emoji = '🟢';
     } elseif ($new_status === 'ssl_expiring') {
         // A certificate about to expire is a warning about the future, not an
@@ -8995,6 +9016,10 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         'firewall_restored' => 'alert_status_firewall_restored',
         'dns_resolver_failed' => 'alert_status_dns_resolver_failed',
         'dns_resolver_restored' => 'alert_status_dns_resolver_restored',
+        'public_ipv4_lost' => 'alert_status_public_ipv4_lost',
+        'public_ipv4_restored' => 'alert_status_public_ipv4_restored',
+        'wan_ipv6_lost' => 'alert_status_wan_ipv6_lost',
+        'wan_ipv6_restored' => 'alert_status_wan_ipv6_restored',
     ];
     $alert_status_key = $alert_status_keys[$new_status] ?? 'alert_status_down';
 
@@ -12610,6 +12635,52 @@ function bk_wan_line_guards(array $agreeing, string $dir, array $ctx, string $re
     return $verdict('line_limited', $reason === '' ? null : $reason, $conf, $numbers);
 }
 
+/**
+ * What kind of IPv4 address the router's WAN holds: 'public', 'cgnat'
+ * (RFC 6598 - the ISP's shared space behind its own NAT), 'private'
+ * (RFC 1918 - another NAT in front of the router, the ISP's or a modem's) or
+ * 'special' (this network, loopback, link-local, 192.0.0.0/24 with DS-Lite's
+ * B4 address, multicast and reserved space - never routed). Null without a
+ * valid address: nothing reported is nothing to classify.
+ *
+ * The documentation ranges count as public on purpose: no ISP hands them
+ * out, and the test fixtures use them for a router with a public address.
+ */
+function bk_ipv4_scope(?string $ip): ?string {
+    $n = $ip !== null && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false ? ip2long($ip) : false;
+    if ($n === false) {
+        return null;
+    }
+    foreach ([
+        ['100.64.0.0', 10, 'cgnat'],
+        ['10.0.0.0', 8, 'private'],
+        ['172.16.0.0', 12, 'private'],
+        ['192.168.0.0', 16, 'private'],
+        ['0.0.0.0', 8, 'special'],
+        ['127.0.0.0', 8, 'special'],
+        ['169.254.0.0', 16, 'special'],
+        ['192.0.0.0', 24, 'special'],
+        ['224.0.0.0', 3, 'special'],
+    ] as [$net, $bits, $scope]) {
+        if (($n >> (32 - $bits)) === ((int)ip2long($net) >> (32 - $bits))) {
+            return $scope;
+        }
+    }
+    return 'public';
+}
+
+/**
+ * Whether an IPv6 address is global unicast (2000::/3), the kind the internet
+ * can reach. False for a ULA or a link-local one, null without a valid address.
+ */
+function bk_ipv6_is_global(?string $ip): ?bool {
+    $bin = $ip !== null && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false ? inet_pton($ip) : false;
+    if ($bin === false) {
+        return null;
+    }
+    return (ord($bin[0]) & 0xE0) === 0x20;
+}
+
 /** One event of the router rules. `status` null = timeline only, no notification (X14). */
 function bk_router_alert_event(string $type, ?string $status, string $message): array {
     return ['type' => $type, 'status' => $status, 'message' => mb_substr($message, 0, 255)];
@@ -12680,6 +12751,72 @@ function bk_wan_link_baseline_rules(array $st, ?float $mbit, ?string $dev, int $
 }
 
 /**
+ * The router's public addresses (IPv6 first, phase 1): a public IPv4 that
+ * turned into a CGNAT, private or unroutable one, and a global IPv6 that left
+ * the WAN. Judged only while the line itself works - with the WAN down
+ * `wan_lost` already speaks, and the addresses that went with it are no news.
+ *
+ * Both need the good state SEEN first. A router that came to this server
+ * behind CGNAT never had a public IPv4 the server knows of, so it lost
+ * nothing. The IPv6 address is read from the netifd interface `wan6` only,
+ * and an ISP that delegates a prefix without giving the WAN an address of
+ * its own leaves it empty for good - never seen, never reported missing.
+ *
+ * IPv4 needs two reports in a row, like the WAN alert. IPv6 needs three:
+ * after a reconnect DHCPv6 can come a minute later than the link.
+ *
+ * @param array<string, mixed> $st
+ * @return array{0: array<string, mixed>, 1: list<array<string, mixed>>}
+ */
+function bk_wan_address_rules(array $st, ?string $ipv4, ?string $ipv6, ?bool $wan_up, ?bool $wan_internet): array {
+    $events = [];
+    if ($wan_up !== true || $wan_internet === false) {
+        return [$st, $events]; // no working line, no verdict - the latches carry over
+    }
+
+    $scope = bk_ipv4_scope($ipv4);
+    if ($scope === 'public') {
+        $st['public_ipv4_seen'] = true;
+        $st['public_ipv4_bad_streak'] = 0;
+        if (!empty($st['public_ipv4_alert_sent'])) {
+            $events[] = bk_router_alert_event('public_ipv4_restored', 'public_ipv4_restored',
+                'Router má na WAN opět veřejnou IPv4 adresu.');
+            $st['public_ipv4_alert_sent'] = false;
+        }
+    } elseif ($scope !== null && !empty($st['public_ipv4_seen'])) {
+        $st['public_ipv4_bad_streak'] = (int)($st['public_ipv4_bad_streak'] ?? 0) + 1;
+        if (empty($st['public_ipv4_alert_sent']) && $st['public_ipv4_bad_streak'] >= 2) {
+            $events[] = bk_router_alert_event('public_ipv4_lost', 'public_ipv4_lost', match ($scope) {
+                'cgnat' => 'Router přišel o veřejnou IPv4: WAN má adresu ze sdíleného rozsahu poskytovatele (CGNAT), zvenku na něj přes IPv4 nejde.',
+                'private' => 'Router přišel o veřejnou IPv4: WAN má privátní adresu, před routerem je další NAT.',
+                default => 'Router přišel o veřejnou IPv4: WAN má adresu, která se do internetu nesměruje.',
+            });
+            $st['public_ipv4_alert_sent'] = true;
+        }
+    }
+
+    // An empty or a local address is an absence here, not a gap: the line
+    // works, so the agent read the interface and found no global address.
+    if (bk_ipv6_is_global($ipv6) === true) {
+        $st['wan_ipv6_seen'] = true;
+        $st['wan_ipv6_bad_streak'] = 0;
+        if (!empty($st['wan_ipv6_alert_sent'])) {
+            $events[] = bk_router_alert_event('wan_ipv6_restored', 'wan_ipv6_restored',
+                'WAN routeru má opět veřejnou IPv6 adresu.');
+            $st['wan_ipv6_alert_sent'] = false;
+        }
+    } elseif (!empty($st['wan_ipv6_seen'])) {
+        $st['wan_ipv6_bad_streak'] = (int)($st['wan_ipv6_bad_streak'] ?? 0) + 1;
+        if (empty($st['wan_ipv6_alert_sent']) && $st['wan_ipv6_bad_streak'] >= 3) {
+            $events[] = bk_router_alert_event('wan_ipv6_lost', 'wan_ipv6_lost',
+                'WAN routeru přišla o veřejnou IPv6 adresu (rozhraní wan6), linka přitom funguje.');
+            $st['wan_ipv6_alert_sent'] = true;
+        }
+    }
+    return [$st, $events];
+}
+
+/**
  * The router latches and events of X14 / alert sheet 2.2, in one pass.
  *
  * All of them follow the debounce the WAN and LTE alerts already use: a
@@ -12708,6 +12845,12 @@ function bk_router_alert_eval(array $cur, array $state, int $now): array {
         'dns_resolver_bad_streak' => max(0, (int)($state['dns_resolver_bad_streak'] ?? 0)),
         'dns_resolver_alert_sent' => !empty($state['dns_resolver_alert_sent']),
         'oom_kill_at' => bk_ranged_int($state['oom_kill_at'] ?? null, 1, 4102444800),
+        'public_ipv4_seen' => !empty($state['public_ipv4_seen']),
+        'public_ipv4_bad_streak' => max(0, (int)($state['public_ipv4_bad_streak'] ?? 0)),
+        'public_ipv4_alert_sent' => !empty($state['public_ipv4_alert_sent']),
+        'wan_ipv6_seen' => !empty($state['wan_ipv6_seen']),
+        'wan_ipv6_bad_streak' => max(0, (int)($state['wan_ipv6_bad_streak'] ?? 0)),
+        'wan_ipv6_alert_sent' => !empty($state['wan_ipv6_alert_sent']),
     ];
     $events = [];
 
@@ -12795,6 +12938,13 @@ function bk_router_alert_eval(array $cur, array $state, int $now): array {
             }
         }
     }
+
+    [$st, $address_events] = bk_wan_address_rules($st,
+        is_string($cur['wan_ipv4'] ?? null) ? $cur['wan_ipv4'] : null,
+        is_string($cur['wan_ipv6'] ?? null) ? $cur['wan_ipv6'] : null,
+        is_bool($cur['wan_up'] ?? null) ? $cur['wan_up'] : null,
+        is_bool($cur['wan_internet'] ?? null) ? $cur['wan_internet'] : null);
+    $events = array_merge($events, $address_events);
 
     // Restart (G21). The cause is never claimed: the router records none.
     // Timeline only - the weekly rule `router_restarts` is what reaches the
@@ -13560,6 +13710,10 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
             'firewall_restored' => 'digest_event_firewall_restored',
             'dns_resolver_failed' => 'digest_event_dns_resolver_failed',
             'dns_resolver_restored' => 'digest_event_dns_resolver_restored',
+            'public_ipv4_lost' => 'digest_event_public_ipv4_lost',
+            'public_ipv4_restored' => 'digest_event_public_ipv4_restored',
+            'wan_ipv6_lost' => 'digest_event_wan_ipv6_lost',
+            'wan_ipv6_restored' => 'digest_event_wan_ipv6_restored',
         ];
         if ($ev['event_type'] === 'monitor_added') {
             // monitor_id still exists here (the monitor was just added) - the link works.
