@@ -1424,8 +1424,16 @@ if (!empty($cookie_jar)) {
         check_true('heartbeat_info bez přihlášení je odmítnut', in_array($anon_code, [401, 403], true));
 
         // The token must not appear in the regular monitor list either.
-        [, , $mon_raw] = api_get_auth($base, 'action=monitors', $cookie_jar);
+        [, $mon_list, $mon_raw] = api_get_auth($base, 'action=monitors', $cookie_jar);
         check_true('token není v seznamu monitorů', $hb_token !== '' && !str_contains($mon_raw, $hb_token));
+
+        // The edit form saves interval and grace back, so the list has to carry
+        // them - without them it saved its own 60/5 minutes over the job's.
+        $hb_by_id = array_column($mon_list['monitors'] ?? [], null, 'id');
+        check('seznam pro admina nese interval heartbeatu v sekundách', $hb_by_id[$hb_id]['heartbeatIntervalSecs'] ?? null, 3600);
+        check('a toleranci v sekundách', $hb_by_id[$hb_id]['heartbeatGraceSecs'] ?? null, 300);
+        $hb_web = $hb_by_id[1] ?? [];
+        check_true('monitor jiného typu má interval null', array_key_exists('heartbeatIntervalSecs', $hb_web) && $hb_web['heartbeatIntervalSecs'] === null);
 
         // --- The signal intake itself -----------------------------------
         [$hb_code, $hb_res] = hb_ping($base, $hb_token);

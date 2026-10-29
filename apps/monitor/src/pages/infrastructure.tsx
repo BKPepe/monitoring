@@ -453,6 +453,15 @@ export function InfrastructurePage() {
     setPresetId(mon.presetId != null ? String(mon.presetId) : '');
     setLatencyThresholdMs(mon.latencyThresholdMs != null ? String(mon.latencyThresholdMs) : '');
     setLatencyThresholdMins(mon.latencyThresholdMins != null ? String(mon.latencyThresholdMins) : '5');
+    // The stored heartbeat, in the form's minutes. The form kept its 60/5 (or
+    // the last dialog's values) and saving wrote them over a daily job's 1440.
+    // Not set = empty: an interval nobody stored is typed in, not assumed.
+    // Seconds that are no whole minute round up: rounding 89 s down to 1 minute
+    // saved back a deadline the job missed on every run; up only adds slack.
+    setHeartbeatIntervalMins(
+      mon.heartbeatIntervalSecs != null ? String(Math.ceil(mon.heartbeatIntervalSecs / 60)) : ''
+    );
+    setHeartbeatGraceMins(mon.heartbeatGraceSecs != null ? String(Math.ceil(mon.heartbeatGraceSecs / 60)) : '');
     setRamThreshold(mon.ramThreshold != null ? String(mon.ramThreshold) : '95');
     setHddThreshold(mon.hddThreshold != null ? String(mon.hddThreshold) : '90');
     setRemoteActionsEnabled(mon.remoteActionsEnabled ?? false);
@@ -579,8 +588,12 @@ export function InfrastructurePage() {
           body_keyword: bodyKeyword || null,
           // The form works in minutes, the API in seconds. Other types send
           // null, so saving does not smuggle an interval where it does not belong.
+          // An empty grace stays null (checked exactly on the interval).
           heartbeat_interval: monitorType === 'heartbeat' ? (parseInt(heartbeatIntervalMins, 10) || 0) * 60 : null,
-          heartbeat_grace: monitorType === 'heartbeat' ? (parseInt(heartbeatGraceMins, 10) || 0) * 60 : null,
+          heartbeat_grace:
+            monitorType === 'heartbeat' && heartbeatGraceMins !== ''
+              ? (parseInt(heartbeatGraceMins, 10) || 0) * 60
+              : null,
           sq_username: sqUsername || null,
           sq_password: sqPassword || null,
           ts3_filetransfer_port: ts3FiletransferPort ? parseInt(ts3FiletransferPort, 10) : 30033,
@@ -657,6 +670,10 @@ export function InfrastructurePage() {
     setMaintenanceDescription('');
     setCpanelStatsUrl('');
     setBodyKeyword('');
+    // An edit leaves its heartbeat here (empty for any other type), and an
+    // empty grace saves as none at all under a placeholder reading 5.
+    setHeartbeatIntervalMins('60');
+    setHeartbeatGraceMins('5');
     setSqUsername('serveradmin');
     setMonDiscord('');
     setMonSlack('');
@@ -916,7 +933,18 @@ export function InfrastructurePage() {
                           <button
                             key={opt.id}
                             type="button"
-                            onClick={() => setMonitorType(opt.id as any)}
+                            onClick={() => {
+                              // An edited monitor of another type has no heartbeat, so
+                              // its fields are empty, and an empty grace saved no
+                              // tolerance under a placeholder reading 5. Switching to
+                              // Heartbeat starts where Add does; a click on the type
+                              // already chosen keeps what is stored.
+                              if (opt.id === 'heartbeat' && monitorType !== 'heartbeat') {
+                                setHeartbeatIntervalMins((v) => (v === '' ? '60' : v));
+                                setHeartbeatGraceMins((v) => (v === '' ? '5' : v));
+                              }
+                              setMonitorType(opt.id as any);
+                            }}
                             className={cn(
                               'p-3 rounded-lg border text-left transition-colors space-y-0.5',
                               monitorType === opt.id

@@ -82,6 +82,9 @@ export interface ApiMonitor {
   presetId?: number | null;
   latencyThresholdMs?: number | null;
   latencyThresholdMins?: number;
+  /** A heartbeat's interval and grace in seconds; null = not set. Admin view only, absent on an older server. */
+  heartbeatIntervalSecs?: number | null;
+  heartbeatGraceSecs?: number | null;
   /**
    * The limits that actually decide: the preset when one is assigned, then the
    * monitor's own value, then null for "nobody set one". The three raw fields

@@ -468,7 +468,9 @@ allowlisted `details` keys.
 
 An administrator's list also carries `isPublic` (the effective answer: the
 owner's choice, or the type's default when never chosen) and `logLinesEnabled`
-(whether a router may send its masked log lines, see `agent_api.php`).
+(whether a router may send its masked log lines, see `agent_api.php`), and
+`heartbeatIntervalSecs` / `heartbeatGraceSecs` (a heartbeat's interval and grace
+in seconds, `null` when not set) so the edit form saves back what is stored.
 
 Both views carry a top-level `collectionFresh` beside `monitors`: whether cron
 has finished a run within `collection_max_age_secs` (the rule `public_status`

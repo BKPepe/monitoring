@@ -470,7 +470,7 @@ if ($action === 'monitors') {
             $stmt2 = $pdo->query("
                 SELECT id, timeout, email_notifications, sms_notifications, notes, maintenance, maintenance_description,
                        maintenance_start, maintenance_end, monitored_processes, cpu_threshold, ram_threshold, hdd_threshold, preset_id,
-                       latency_threshold_ms, latency_threshold_mins,
+                       latency_threshold_ms, latency_threshold_mins, heartbeat_interval, heartbeat_grace,
                        body_keyword, cpanel_stats_url, sq_username, ts3_filetransfer_port, rcon_port,
                        discord_webhook_url, slack_webhook_url, telegram_bot_token, telegram_chat_id,
                        (sq_password IS NOT NULL AND sq_password <> '') AS sq_password_set,
@@ -509,6 +509,10 @@ if ($action === 'monitors') {
                 // null = upozornovani na zpomaleni je vypnute
                 $monitors[$mid]['latencyThresholdMs'] = $r['latency_threshold_ms'] !== null ? (int)$r['latency_threshold_ms'] : null;
                 $monitors[$mid]['latencyThresholdMins'] = (int)($r['latency_threshold_mins'] ?? 5);
+                // The edit form saves both back. Without them it saved its own
+                // 60/5 minutes, and a daily job went down an hour after each run.
+                $monitors[$mid]['heartbeatIntervalSecs'] = $r['heartbeat_interval'] !== null ? (int)$r['heartbeat_interval'] : null;
+                $monitors[$mid]['heartbeatGraceSecs'] = $r['heartbeat_grace'] !== null ? (int)$r['heartbeat_grace'] : null;
                 $monitors[$mid]['bodyKeyword'] = $r['body_keyword'];
                 $monitors[$mid]['cpanelStatsUrl'] = $r['cpanel_stats_url'];
                 // The per-monitor channel overrides, so the form can show what is

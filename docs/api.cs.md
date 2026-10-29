@@ -462,7 +462,10 @@ veřejnou sadu (viz „Které monitory jsou veřejné") s `target`, `port`,
 
 Seznam pro administrátora nese navíc `isPublic` (platná odpověď: volba
 vlastníka, nebo výchozí hodnota typu, když nikdy nezvolil) a `logLinesEnabled`
-(jestli router smí posílat své maskované řádky logu, viz `agent_api.php`).
+(jestli router smí posílat své maskované řádky logu, viz `agent_api.php`) a
+`heartbeatIntervalSecs` / `heartbeatGraceSecs` (interval a tolerance heartbeatu
+v sekundách, `null`, když nejsou nastavené), aby formulář úprav uložil zpět to,
+co je uložené.
 
 Oba pohledy nesou vedle `monitors` ještě `collectionFresh`: jestli cron dokončil
 běh v rámci `collection_max_age_secs` (pravidlo, podle kterého soudí
