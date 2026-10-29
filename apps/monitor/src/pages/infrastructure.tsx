@@ -54,7 +54,7 @@ import { Pill } from '@/components/ui/pill';
 import { IconTile } from '@/components/ui/icon-tile';
 import { FilterPills, type FilterOption, type FilterTone } from '@/components/filter-pills';
 import { DeviceCard } from '@/components/infrastructure/device-card';
-import { useFleetHealth } from '@/components/infrastructure/use-fleet-health';
+import { useFleetHealth } from '@/api/use-fleet-health';
 import { usePageChrome } from '@/components/layout/shell-context';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -235,7 +235,6 @@ export function InfrastructurePage() {
   // zařízení…" for ever.
   const [monitorsLoaded, setMonitorsLoaded] = React.useState(false);
   const [listVersion, setListVersion] = React.useState(0);
-  const [healthAttempt, setHealthAttempt] = React.useState(0);
 
   const loadMonitors = React.useCallback(() => {
     let active = true;
@@ -263,7 +262,7 @@ export function InfrastructurePage() {
 
   // The ring on each card: the server's scores, refetched with every reload
   // of the list (and by the retry of their own failure).
-  const fleetHealth = useFleetHealth(monitorsLoaded, `${listVersion}:${healthAttempt}`);
+  const fleetHealth = useFleetHealth(lang, listVersion, monitorsLoaded);
 
   // The archive is a list of its own: monitors kept for their history and out
   // of everything live - no checks, no alerts, no overviews.
@@ -2130,11 +2129,11 @@ export function InfrastructurePage() {
       {/* The scores are the server's. A failed request is said once, here,
           and the cards then carry no ring - a dash ring would claim "not
           enough data", which nobody measured. */}
-      {monitorsLoaded && rawMonitors.length > 0 && fleetHealth.status === 'error' && (
+      {monitorsLoaded && rawMonitors.length > 0 && fleetHealth.status === 'failed' && (
         <ErrorState
           tone="warning"
           message={t('infra.health_failed', 'Skóre zdraví se nepodařilo načíst - karty jsou bez něj.')}
-          onRetry={() => setHealthAttempt((n) => n + 1)}
+          onRetry={fleetHealth.retry}
         />
       )}
 

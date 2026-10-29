@@ -58,7 +58,7 @@ import { splitHistory, statusCounts, verdictSentence, worstNamedState } from '@/
 import { pluralForm } from '@/lib/plural';
 import { isProbeMonitor, normalizeMonitorType } from '@/lib/monitor-type';
 import { LoadingState, EmptyState, ErrorState, Skeleton } from '@/components/ui/states';
-import { useFleetHealth } from './dashboard-health';
+import { useFleetHealth } from '@/api/use-fleet-health';
 import { DeviceCards, isDeviceMonitor } from './dashboard-devices';
 import type { TrafficSource } from './dashboard-traffic';
 

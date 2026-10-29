@@ -1,6 +1,7 @@
 import { Link } from 'react-router';
 import { ChevronRight, type LucideIcon } from 'lucide-react';
 import type { ApiMonitor } from '@/api/app-api';
+import type { FleetHealthState } from '@/api/use-fleet-health';
 import { HealthRing } from '@/components/health-ring';
 import { RangeMeter } from '@/components/meter';
 import { StatusDot } from '@/components/ui/badge';
@@ -11,7 +12,6 @@ import { useLanguage } from '@/context/language-context';
 import { formatDuration, formatNumber } from '@/lib/metric-format';
 import { statusLabel, statusMeta, type StatusKey } from '@/lib/status';
 import { cn } from '@/lib/utils';
-import type { FleetHealth } from './use-fleet-health';
 
 /**
  * One device of the infrastructure list (NetPulse "Devices" card): the kind
@@ -91,7 +91,7 @@ export function DeviceCard({
   since: number | null;
   /** The monitor row the figures come from. */
   monitor: ApiMonitor | undefined;
-  health: FleetHealth;
+  health: FleetHealthState;
 }) {
   const { t, lang } = useLanguage();
   const meta = statusMeta(asset.statusKey);
@@ -99,7 +99,9 @@ export function DeviceCard({
   const edge = meta.variant === 'down' ? 'tone-down' : meta.variant === 'warning' ? 'tone-warning' : null;
   const figures = figuresOf(monitor, lang, t('common.response', 'Odezva'));
   const phoneFigure = figures[0] ?? null;
-  const entry = health.status === 'ready' ? health.byMonitor.get(asset.monitorId) : undefined;
+  // Only a fresh answer draws rings: after a failed refresh the list says
+  // once that the scores are missing, and an older ring would contradict it.
+  const entry = health.status === 'ok' ? health.data.assets.get(asset.monitorId) : undefined;
 
   return (
     <Link

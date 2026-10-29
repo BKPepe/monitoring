@@ -4,7 +4,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
 import type { ApiMonitor } from '@/api/app-api';
-import type { ScoredHealth } from '@/components/health-deductions';
+import type { ScoredHealth } from '@/lib/health';
 import { DeviceCards } from './dashboard-devices';
 
 /**

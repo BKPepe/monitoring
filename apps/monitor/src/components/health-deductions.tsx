@@ -1,39 +1,8 @@
 import { Link } from 'react-router';
 import { useLanguage } from '@/context/language-context';
-import type { HealthScore } from '@/lib/health';
+import type { HealthDeduction } from '@/lib/health';
 import { formatNumber } from '@/lib/metric-format';
 import { cn } from '@/lib/utils';
-
-/**
- * One named deduction of the health score (SCORE, formulaVersion 1): what
- * took points off and how many. The server words `label` in the request's
- * language and already names the value and the limit ("Teplota CPU 71 °C,
- * nad 65 °C"); the app only draws it. On the network score `points` is what
- * the item costs the NETWORK (its device's points divided by the devices
- * scored), and `monitorId`/`monitorName` say whose it is.
- */
-export interface HealthDeduction {
-  component: string;
-  kind: string;
-  label?: string;
-  points: number;
-  value?: number | null;
-  limit?: number | null;
-  unit?: string | null;
-  monitorId?: number;
-  monitorName?: string | null;
-}
-
-/**
- * The score answer as the server sends it now: lib/health's shape plus the
- * named deductions and the paused flag (requests.md "From SCORE"). Local to
- * the pages until the typed API carries it (APP-CORE request).
- */
-export type ScoredHealth = HealthScore & {
-  deductions?: HealthDeduction[];
-  paused?: true;
-  measuredComponents?: number;
-};
 
 /**
  * The kinds that name an outage or a broken part rather than a value past a

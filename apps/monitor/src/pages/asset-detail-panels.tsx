@@ -5,7 +5,7 @@ import type { ChartData, MetricPoint, StorageDisk, WifiRadio } from '@/api/types
 import { MetricChart } from '@/components/charts/metric-chart';
 import { displayData, formatChartTime, summarizeSeries } from '@/components/charts/chart-style';
 import { HealthBreakdown, HealthRing } from '@/components/health-ring';
-import { HealthDeductions, type ScoredHealth } from '@/components/health-deductions';
+import { HealthDeductions } from '@/components/health-deductions';
 import { RangeMeter } from '@/components/meter';
 import { MonitorTypeIcon } from '@/components/monitor-type-icon';
 import { StatBlock, StatRow } from '@/components/stat-block';
@@ -14,6 +14,7 @@ import { Pill, type PillTone } from '@/components/ui/pill';
 import { ErrorState, Skeleton } from '@/components/ui/states';
 import { useLanguage } from '@/context/language-context';
 import { diskVerdict, tempLabel, tempTone } from '@/lib/disk-health';
+import type { ScoredHealth } from '@/lib/health';
 import { formatDuration, formatNumber } from '@/lib/metric-format';
 import { rateChannelBusy } from '@/lib/signal-quality';
 import { signalLevelLabel } from '@/lib/signal-texts';

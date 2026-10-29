@@ -1,3 +1,4 @@
+import { parseFleetHealth, type FleetHealth } from '@/lib/health';
 import { STATUS_API } from './http-source';
 import { requestSessionRecheck } from './session-recheck';
 import type {
@@ -351,6 +352,15 @@ export const appApi = {
     // The action on the request line, so run_api_action_lint sees who calls it.
     return request<FindingsResponse>('findings' + query);
   },
+
+  /**
+   * The health scores of the network and of every monitor the viewer may
+   * see, in the viewer's language (the server words the deductions). One
+   * parser for the dashboard and the device list; an answer that is not the
+   * documented shape rejects like a failed request.
+   */
+  getHealth: (lang: string): Promise<FleetHealth> =>
+    request<unknown>('health' + `&lang=${encodeURIComponent(lang)}`).then(parseFleetHealth),
 
   /** The websites' SLA map and the server's certificate alert limit (`sslAlertDays`). */
   getWebsitesOverview: () => request<WebsitesOverviewResponse>('websites_overview'),

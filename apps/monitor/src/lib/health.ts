@@ -41,6 +41,91 @@ export interface HealthScore {
 }
 
 /**
+ * One named deduction of the health score (SCORE, formulaVersion 1): what
+ * took points off and how many. The server words `label` in the request's
+ * language and already names the value and the limit ("Teplota CPU 71 °C,
+ * nad 65 °C"); the app only draws it. On the network score `points` is what
+ * the item costs the NETWORK (its device's points divided by the devices
+ * scored), and `monitorId`/`monitorName` say whose it is.
+ */
+export interface HealthDeduction {
+  component: string;
+  kind: string;
+  label?: string;
+  points: number;
+  value?: number | null;
+  limit?: number | null;
+  unit?: string | null;
+  monitorId?: number;
+  monitorName?: string | null;
+}
+
+/**
+ * The score answer as the server sends it now: the shape above plus the
+ * named deductions and the paused flag (requests.md "From SCORE").
+ */
+export type ScoredHealth = HealthScore & {
+  deductions?: HealthDeduction[];
+  paused?: true;
+  measuredComponents?: number;
+};
+
+/**
+ * `action=health` in the app view: the network score with its named
+ * deductions, and every monitor's own score by monitor id (a paused monitor
+ * carries `paused` and no score). The dashboard and the device list read it
+ * through appApi.getHealth(); the public page has its own reading
+ * (lib/public-health.ts), because its answer has no monitor scores.
+ */
+export interface FleetHealth {
+  network: ScoredHealth;
+  assets: ReadonlyMap<number, ScoredHealth>;
+}
+
+const GRADES: readonly HealthGrade[] = ['good', 'fair', 'poor'];
+
+/**
+ * One score as documented: `score` a finite number or null, `grade` one of
+ * the three bands or null, `paused` only when it is true, `components` a
+ * list (empty when none came). Everything else (the components themselves,
+ * deductions, labels) is drawn as the server sent it.
+ */
+function readScored(raw: Record<string, unknown>): ScoredHealth {
+  const { paused, ...rest } = raw;
+  const health = {
+    ...rest,
+    score: typeof raw.score === 'number' && Number.isFinite(raw.score) ? raw.score : null,
+    grade: GRADES.includes(raw.grade as HealthGrade) ? (raw.grade as HealthGrade) : null,
+    components: Array.isArray(raw.components) ? raw.components : [],
+  } as ScoredHealth;
+  if (paused === true) health.paused = true;
+  return health;
+}
+
+/**
+ * Reads the app view of `action=health`; throws when the answer is not that
+ * shape. A missing network score or a missing list of monitor scores is a
+ * failure the page says out loud - never an empty fleet, never a "—" ring,
+ * which is the server's verdict "too little data".
+ */
+export function parseFleetHealth(body: unknown): FleetHealth {
+  const b = body as { network?: unknown; assets?: unknown } | null;
+  const network = b?.network;
+  if (!network || typeof network !== 'object' || !Array.isArray((network as { components?: unknown }).components)) {
+    throw new Error('health: no network score');
+  }
+  if (!Array.isArray(b?.assets)) throw new Error('health: no monitor scores');
+  const assets = new Map<number, ScoredHealth>();
+  for (const a of b.assets as unknown[]) {
+    if (!a || typeof a !== 'object') continue;
+    const id = (a as { monitorId?: unknown }).monitorId;
+    if (typeof id !== 'number' || !Number.isInteger(id) || id <= 0) continue;
+    assets.set(id, readScored(a as Record<string, unknown>));
+  }
+  return { network: readScored(network as Record<string, unknown>), assets };
+}
+
+/**
  * The grade of a score by the server's bands (good from 90, fair from 70).
  * Used only when an answer carries a score without its grade; the bands are
  * pinned by lib/health.test.ts against the documented formula.

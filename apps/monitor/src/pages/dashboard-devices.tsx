@@ -3,7 +3,6 @@ import { Link } from 'react-router';
 import { Clock, Cpu, HardDrive, MemoryStick, Router as RouterIcon, Server, Thermometer, Users } from 'lucide-react';
 import type { ApiMonitor } from '@/api/app-api';
 import { HealthRing } from '@/components/health-ring';
-import type { ScoredHealth } from '@/components/health-deductions';
 import { Sparkline } from '@/components/sparkline';
 import { breachTone, StatBlock } from '@/components/stat-block';
 import { IconTile } from '@/components/ui/icon-tile';
@@ -13,6 +12,7 @@ import { Skeleton } from '@/components/ui/states';
 import { useLanguage } from '@/context/language-context';
 import { metricSeverity, thresholdFor } from '@/lib/attention';
 import { windowFor } from '@/lib/chart-window';
+import type { ScoredHealth } from '@/lib/health';
 import { formatDuration, formatNumber } from '@/lib/metric-format';
 import { monitorStatusKey, statusLabel, statusMeta } from '@/lib/status';
 import { monitorTypeLabel, normalizeMonitorType } from '@/lib/monitor-type';
@@ -62,7 +62,7 @@ export function DeviceCards({
 }: {
   devices: ApiMonitor[];
   /** action=health assets by monitor id; null while loading or after a failure. */
-  health: Map<number, ScoredHealth> | null;
+  health: ReadonlyMap<number, ScoredHealth> | null;
   /** The first action=health answer has not arrived yet. */
   healthLoading?: boolean;
 }) {
