@@ -999,7 +999,9 @@ identifier, an array is capped at 8 KB and at most 64 new keys are added at once
 
 `action_result` arrives as a separate lightweight POST - the confirmation of a
 performed Remote Action. It carries no telemetry fields, so it is handled before
-their validation.
+their validation. Its `status` is `executed` or `failed`; anything else is
+stored as `failed`. Agents never put it in a full report, and the server does
+not read it there.
 
 **Registration** (`{"action": "register", "token": "…", "hostname": "…",
 "agent_type": "openwrt"|…}`; the bash and OpenWrt agents send it for

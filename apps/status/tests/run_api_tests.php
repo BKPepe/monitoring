@@ -1380,6 +1380,8 @@ if (!empty($cookie_jar)) {
     $r142_priv = (int)$pdo->lastInsertId();
     $r142_reg_id = 0;
     $r142_reg_asset = null;
+    $r142_anon_id = 0;
+    $r142_anon_asset = null;
     try {
         $r142_row = function (int $id) use ($base, $cookie_jar): array {
             [, $list] = api_get_auth($base, 'action=monitors', $cookie_jar);
@@ -1427,6 +1429,18 @@ if (!empty($cookie_jar)) {
         check_true('registrovaný agent dostane vlastní zařízení', $r142_reg_id > 0 && $r142_reg_asset !== null && $r142_reg_asset !== false
             && (int)$pdo->query('SELECT COUNT(*) FROM assets WHERE id = ' . (int)$r142_reg_asset)->fetchColumn() === 1);
 
+        // The agents send `hostname`; no agent version ever sent `name`, so
+        // it is not read and a registration without hostname gets the
+        // dated default name.
+        [$code, , $r142_anon_body] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode([
+            'action' => 'register', 'token' => 'r142-test-token', 'name' => 'r142-name-only', 'agent_type' => 'vps',
+        ]));
+        $r142_anon_id = (int)(json_decode($r142_anon_body, true)['monitor_id'] ?? 0);
+        $r142_anon_asset = $pdo->query("SELECT asset_id FROM monitors WHERE id = {$r142_anon_id}")->fetchColumn();
+        check('registrace bez hostname projde', $code, 200);
+        check_true('a agent dostane výchozí jméno, klíč name se nečte',
+            str_starts_with((string)$pdo->query("SELECT name FROM monitors WHERE id = {$r142_anon_id}")->fetchColumn(), 'VPS Agent '));
+
         // Asset and monitor are one transaction: a failed monitors INSERT
         // left an empty device behind on every retry of --register.
         $pdo->exec("CREATE TRIGGER r142_register_fail BEFORE INSERT ON monitors FOR EACH ROW
@@ -1441,8 +1455,8 @@ if (!empty($cookie_jar)) {
         $pdo->exec("DROP TRIGGER IF EXISTS r142_register_fail");
         $pdo->exec("DELETE FROM assets WHERE name = 'r142-fail.example.com'");
         $pdo->exec("DELETE FROM settings WHERE key_name = 'agent_registration_token'");
-        $pdo->prepare("DELETE FROM monitors WHERE id IN (?, ?, ?) OR asset_id = ?")->execute([$r142_id, $r142_priv, $r142_reg_id, $r142_asset]);
-        $pdo->prepare("DELETE FROM assets WHERE id IN (?, ?)")->execute([$r142_asset, (int)$r142_reg_asset]);
+        $pdo->prepare("DELETE FROM monitors WHERE id IN (?, ?, ?, ?) OR asset_id = ?")->execute([$r142_id, $r142_priv, $r142_reg_id, $r142_anon_id, $r142_asset]);
+        $pdo->prepare("DELETE FROM assets WHERE id IN (?, ?, ?)")->execute([$r142_asset, (int)$r142_reg_asset, (int)$r142_anon_asset]);
     }
 }
 
@@ -2673,6 +2687,41 @@ check('neznámé hodnoty zůstanou NULL, ne nula', [$null_row['cpu_usage'] ?? 'c
 check_true('a řádek se opravdu uložil', array_key_exists('cpu_usage', $null_row) && $null_row['cpu_usage'] === null);
 check('hlášení bez klíče se dál odmítne', $post_agent(['agent_key' => '']), 400);
 
+// --- Remote Action result: its own POST, one list of states -------------------------
+//
+// Every agent acknowledges an action with a separate POST without telemetry,
+// which takes only executed or failed. A second reader inside the full
+// report took any string as the state; no agent ever sent one there.
+$ra_post = fn (array $body): array => bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode($body, JSON_UNESCAPED_UNICODE));
+$ra_ids = [];
+$ra_action = function () use ($pdo, &$ra_ids): int {
+    $pdo->exec("INSERT INTO agent_actions (monitor_id, action_type, service_name, status) VALUES (2, 'restart_service', 'nginx', 'sent')");
+    return $ra_ids[] = (int)$pdo->lastInsertId();
+};
+$ra_row = fn (int $id): array => $pdo->query("SELECT status, result_message FROM agent_actions WHERE id = {$id}")->fetch() ?: [];
+try {
+    $ra_done = $ra_action();
+    [$ra_code] = $ra_post(['agent_key' => $agent_key, 'action_result' => ['action_id' => $ra_done, 'status' => 'executed', 'message' => "Služba 'nginx' restartována"]]);
+    check('potvrzení akce se uloží', [$ra_code, $ra_row($ra_done)], [200, ['status' => 'executed', 'result_message' => "Služba 'nginx' restartována"]]);
+    $ra_odd = $ra_action();
+    $ra_post(['agent_key' => $agent_key, 'action_result' => ['action_id' => $ra_odd, 'status' => 'owned', 'message' => 'x']]);
+    check('stav mimo executed a failed se uloží jako failed', $ra_row($ra_odd)['status'] ?? null, 'failed');
+    $ra_full = $ra_action();
+    check('plné hlášení s výsledkem akce agent přijme', $post_agent(['action_result' => ['action_id' => $ra_full, 'status' => 'owned']]), 200);
+    check('ale výsledek akce z něj nečte, ten chodí zvlášť', $ra_row($ra_full)['status'] ?? null, 'sent');
+    // Both mini-requests share one check of the key.
+    foreach (['action_result' => ['action_id' => $ra_done, 'status' => 'failed'], 'service_check_results' => []] as $ra_kind => $ra_value) {
+        [$ra_none] = $ra_post([$ra_kind => $ra_value]);
+        [$ra_unknown] = $ra_post(['agent_key' => 'neexistujici-klic', $ra_kind => $ra_value]);
+        check("{$ra_kind}: bez klíče 400, s neznámým klíčem 401", [$ra_none, $ra_unknown], [400, 401]);
+    }
+    check('odmítnuté potvrzení stav akce nezmění', $ra_row($ra_done)['status'] ?? null, 'executed');
+} finally {
+    foreach ($ra_ids as $ra_id) {
+        $pdo->exec("DELETE FROM agent_actions WHERE id = {$ra_id}");
+    }
+}
+
 // --- Archive: a monitor gone for good ------------------------------------------------
 $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, agent_key) VALUES (97, 'Starý router', 'openwrt', 'Turris - domov', 'down', 'Síť', 'archive-test-key-97')");
 $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES (97, 'down', 'Agent routeru neodpovídá', NOW())");
@@ -2722,6 +2771,12 @@ check('instalační údaje archivovaného monitoru se nevydají', $arc_info, 409
 $arc_metrics_before = (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = 97")->fetchColumn();
 check('hlášení agenta archivovaného monitoru se odmítne', $post_agent(['agent_key' => 'archive-test-key-97']), 403);
 check('a nic se z něj neuloží', (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = 97")->fetchColumn(), $arc_metrics_before);
+$arc_action = (int)$pdo->query("SELECT id FROM agent_actions WHERE monitor_id = 97")->fetchColumn();
+[$arc_ack, , $arc_ack_body] = $ra_post(['agent_key' => 'archive-test-key-97', 'action_result' => ['action_id' => $arc_action, 'status' => 'executed']]);
+[$arc_sc, , $arc_sc_body] = $ra_post(['agent_key' => 'archive-test-key-97', 'service_check_results' => []]);
+check('potvrzení akce i výsledky služeb se odmítnou stejně', [$arc_ack, json_decode($arc_ack_body, true)['archived'] ?? null, $arc_sc, json_decode($arc_sc_body, true)['archived'] ?? null],
+    [403, true, 403, true]);
+check('a selhaná akce tak zůstane', $pdo->query("SELECT status FROM agent_actions WHERE id = {$arc_action}")->fetchColumn(), 'failed');
 
 [$arc_restore] = api_post($base, 'action=unarchive_monitor', ['id' => 97], $cookie_jar);
 check('admin monitor obnoví', $arc_restore, 200);

@@ -31,29 +31,13 @@ if (!$data || !is_array($data)) {
 }
 
 // --- Standalone Remote Action result acknowledgement ---
-// The agent (agent_openwrt.sh) sends this as a lightweight follow-up POST
-// right after executing an action, separately from the main telemetry
-// (already sent for this cycle). It has no cpu/ram/hdd, so it must be
-// handled before the usual required-telemetry validation below.
+// Every agent sends this as a lightweight follow-up POST right after
+// executing an action, separately from the main telemetry (already sent
+// for this cycle). It has no cpu/ram/hdd, so it must be handled before the
+// usual required-telemetry validation below. This is the only place an
+// action result is stored: a full report never carries one.
 if (isset($data['action_result']) && is_array($data['action_result']) && !isset($data['cpu'])) {
-    $ar_agent_key = bk_agent_str($data, 'agent_key', 128) ?? '';
-    if (empty($ar_agent_key)) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'Chybí agent_key.']);
-        exit;
-    }
-    $stmt_ar_mon = $pdo->prepare("SELECT id, archived_at FROM monitors WHERE agent_key = ? LIMIT 1");
-    $stmt_ar_mon->execute([$ar_agent_key]);
-    $ar_row = $stmt_ar_mon->fetch();
-    $ar_monitor_id = $ar_row ? $ar_row['id'] : false;
-    if ($ar_row && !empty($ar_row['archived_at'])) {
-        bk_agent_refuse_archived();
-    }
-    if (!$ar_monitor_id) {
-        http_response_code(401);
-        echo json_encode(['success' => false, 'message' => 'Neplatný agent_key.']);
-        exit;
-    }
+    $ar_monitor_id = bk_agent_mini_request_monitor($pdo, $data)['id'];
 
     $act_res = $data['action_result'];
     $act_id = intval($act_res['action_id'] ?? 0);
@@ -75,24 +59,7 @@ if (isset($data['action_result']) && is_array($data['action_result']) && !isset(
 // the response and sends the results. A result may only be written to
 // 'agent_service' monitors of the SAME asset the agent_key belongs to.
 if (isset($data['service_check_results']) && is_array($data['service_check_results']) && !isset($data['cpu'])) {
-    $sc_agent_key = bk_agent_str($data, 'agent_key', 128) ?? '';
-    if (empty($sc_agent_key)) {
-        http_response_code(400);
-        echo json_encode(['success' => false, 'message' => 'Chybí agent_key.']);
-        exit;
-    }
-    $stmt_sc_mon = $pdo->prepare("SELECT id, asset_id, archived_at FROM monitors WHERE agent_key = ? LIMIT 1");
-    $stmt_sc_mon->execute([$sc_agent_key]);
-    $sc_agent = $stmt_sc_mon->fetch();
-    if (!$sc_agent) {
-        http_response_code(401);
-        echo json_encode(['success' => false, 'message' => 'Neplatný agent_key.']);
-        exit;
-    }
-    if (!empty($sc_agent['archived_at'])) {
-        bk_agent_refuse_archived();
-    }
-    require_once __DIR__ . '/lang.php';
+    $sc_agent = bk_agent_mini_request_monitor($pdo, $data);
     $sc_applied = 0;
     foreach (array_slice($data['service_check_results'], 0, 50) as $res) {
         if (!is_array($res)) continue;
@@ -129,7 +96,7 @@ if (isset($data['action']) && $data['action'] === 'register') {
         exit;
     }
     
-    $name = bk_agent_str($data, 'hostname', 100) ?? bk_agent_str($data, 'name', 100) ?? ('VPS Agent ' . date('Y-m-d H:i'));
+    $name = bk_agent_str($data, 'hostname', 100) ?? ('VPS Agent ' . date('Y-m-d H:i'));
     $type = (isset($data['agent_type']) && $data['agent_type'] === 'openwrt') ? 'openwrt' : 'vps';
     $agent_key = bin2hex(random_bytes(16));
 
@@ -1569,18 +1536,6 @@ try {
         $stmt_update->execute([$details, $monitor_id]);
     }
     
-    if (isset($data['action_result']) && is_array($data['action_result'])) {
-        $act_res = $data['action_result'];
-        $act_id = intval($act_res['action_id'] ?? 0);
-        $act_status = bk_agent_str($act_res, 'status', 32) ?? 'failed';
-        $act_msg = bk_agent_str($act_res, 'message', 1000) ?? '';
-        
-        if ($act_id > 0) {
-            $stmt_act = $pdo->prepare("UPDATE agent_actions SET status = ?, result_message = ?, executed_at = NOW() WHERE id = ? AND monitor_id = ?");
-            $stmt_act->execute([$act_status, $act_msg, $act_id, $monitor_id]);
-        }
-    }
-
     if ($pdo->inTransaction()) {
         $pdo->commit();
     }

@@ -19653,6 +19653,33 @@ function bk_agent_refuse_archived(): void {
 }
 
 /**
+ * The monitor behind an agent's mini-request (action_result,
+ * service_check_results): its id, asset_id and archived_at. A request
+ * without a key ends in 400, an unknown key in 401 and an archived
+ * monitor's in the same 403 a full report gets.
+ */
+function bk_agent_mini_request_monitor(PDO $pdo, array $data): array {
+    $key = bk_agent_str($data, 'agent_key', 128) ?? '';
+    if (empty($key)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Chybí agent_key.']);
+        exit;
+    }
+    $stmt = $pdo->prepare("SELECT id, asset_id, archived_at FROM monitors WHERE agent_key = ? LIMIT 1");
+    $stmt->execute([$key]);
+    $row = $stmt->fetch();
+    if (!$row) {
+        http_response_code(401);
+        echo json_encode(['success' => false, 'message' => 'Neplatný agent_key.']);
+        exit;
+    }
+    if (!empty($row['archived_at'])) {
+        bk_agent_refuse_archived();
+    }
+    return $row;
+}
+
+/**
  * A report agent_api.php could not decode. It used to get a bare 400 before
  * the monitor was even known, nothing was logged, and the router looked
  * switched off. The monitor is found by the agent_key in the raw body; the

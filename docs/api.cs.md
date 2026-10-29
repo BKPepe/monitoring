@@ -979,6 +979,8 @@ pole má strop 8 KB a najednou přibude nejvýš 64 nových klíčů.
 
 Odděleným lehkým POSTem chodí `action_result` - potvrzení provedené Remote
 Action. Nemá telemetrická pole, proto se zpracovává dřív než jejich validace.
+Jeho `status` je `executed` nebo `failed`, cokoli jiného se uloží jako
+`failed`. Agenti ho do plného hlášení nedávají a server ho tam nečte.
 
 **Registrace** (`{"action": "register", "token": "…", "hostname": "…",
 "agent_type": "openwrt"|…}`; agenti pro bash a OpenWrt ji posílají při
