@@ -173,6 +173,22 @@ jobs:
       - name: Honesty lint (žádné vymyšlené nuly)
         run: php apps/status/tests/run_honesty_lint.php
 
+      # The agents' own checks (syntax, ShellCheck, Worker units, Docker e2e)
+      # run in the agents repo's test.yml on the very commit the gitlink pins,
+      # and deploy-status.yml uploads nothing unless they passed there. Only
+      # the two lints below are this repo's rules about the agents.
+      #
+      # Vymyslene nuly nevznikaji jen v PHP/TS: awk 'END{print sum+0}' hlasil
+      # "0 zahozenych paketu" na routeru, kde se firewall vubec nemeri.
+      - name: Honesty lint agentů (žádné vymyšlené nuly)
+        run: php apps/status/tests/run_agent_honesty_lint.php
+
+      # Busybox se staví per cíl a OpenWrt kompiluje mensi sadu appletu nez
+      # obraz busybox:1.36, ve kterem bezi e2e harness. `stat -c %s` a
+      # `sort -t -k` proto prosly kazdym testem a na routeru tise nedelaly nic.
+      - name: Busybox lint (OpenWrt agent nepoužívá, co router nemá)
+        run: php apps/status/tests/run_openwrt_busybox_lint.php
+
       - name: Detekce mrtvého kódu
         run: php apps/status/tests/find_dead_code.php
 
@@ -276,84 +292,6 @@ jobs:
       # a build shodi.
       - name: Psalm taint analýza
         run: psalm --taint-analysis --no-cache --no-progress
-
-  agents:
-    name: Agent skripty (shell, python, powershell)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          submodules: true
-
-      - name: Shell syntaxe
-        run: |
-          set -e
-          # agent.sh má shebang #!/bin/bash a bashismy používá záměrně;
-          # agent_openwrt.sh musí být čistý POSIX (routery mají ash/dash).
-          bash -n agents/vps-agent/agent.sh
-          dash -n agents/vps-agent/agent_openwrt.sh
-          echo "Shell agenti se parsují."
-
-      # Blokujici: na urovni 'error' jsou agenti dnes ciste, takze cokoli
-      # noveho je regrese. Nizsi urovne (warning/info) zamerne netestujeme -
-      # 13 zbylych nalezu jsou stylisticke veci, ne chyby.
-      - name: ShellCheck
-        uses: ludeeus/action-shellcheck@master
-        with:
-          scandir: './apps/status'
-          severity: error
-          additional_files: 'agent.sh agent_openwrt.sh'
-
-      - name: Setup PHP pro lint agentů
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.4'
-          extensions: mbstring
-
-      # Vymyslene nuly nevznikaji jen v PHP/TS: awk 'END{print sum+0}' hlasil
-      # "0 zahozenych paketu" na routeru, kde se firewall vubec nemeri.
-      - name: Honesty lint agentů (žádné vymyšlené nuly)
-        run: php apps/status/tests/run_agent_honesty_lint.php
-
-      # Busybox se staví per cíl a OpenWrt kompiluje mensi sadu appletu nez
-      # obraz busybox:1.36, ve kterem bezi e2e harness. `stat -c %s` a
-      # `sort -t -k` proto prosly kazdym testem a na routeru tise nedelaly nic.
-      - name: Busybox lint (OpenWrt agent nepoužívá, co router nemá)
-        run: php apps/status/tests/run_openwrt_busybox_lint.php
-
-      - name: Python agent
-        run: python3 -m py_compile agents/vps-agent/agent.py
-
-      - name: PowerShell agent
-        shell: pwsh
-        run: |
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile(
-            "$PWD/agents/vps-agent/agent.ps1", [ref]$null, [ref]$errors) | Out-Null
-          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
-          Write-Host "agent.ps1 se parsuje."
-
-      # The Worker's location label goes unchanged onto the public page; its
-      # tests gate the Worker deploy in the agents repo and, here, a submodule
-      # bump. Node 22+: they import the Worker's plain .js as an ES module.
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '22'
-          check-latest: true
-      - name: Cloudflare Worker agent (node --test)
-        run: node --test agents/tests/*.test.mjs
-
-      # Naostro, ne jen syntaxe: agent.sh a agent.py v Debianu (dva behy, aby
-      # vznikly delty; druhy pod zatezi), agent_openwrt.sh v busyboxu (ash,
-      # busybox awk/sed) se zastupnymi wg/mwan3/tc/uci/logread/iwinfo/nft/ubus.
-      # Kontroluje se validni JSON, poctive null pri prvnim behu a ze parsery
-      # ctou spravne sloupce - presne to, co syntaxe ani shellcheck nevidi
-      # (WireGuard dump posilal neplatny JSON a agent.py padal na NameError,
-      # oboje s cistym lintem).
-      - name: Agenti naostro (Docker e2e)
-        run: |
-          bash agents/tests/run_linux_e2e.sh
-          bash agents/tests/run_openwrt_e2e.sh
 
   go:
     name: Go backend (vet, testy)
