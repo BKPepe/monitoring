@@ -33,7 +33,7 @@ interface StatusPage {
   slug: string;
   description: string | null;
   isPublic: boolean;
-  /** An empty array = the page shows all monitors. */
+  /** An empty array = the page shows all public monitors. */
   monitorIds: number[];
   displayOptions?: DisplayOptions;
 }
@@ -270,7 +270,7 @@ export function StatusPagesPage() {
             >
               <p className="text-muted-foreground text-2xs">
                 {p.monitorIds.length === 0
-                  ? t('sp.all_monitors', 'Zobrazuje všechny monitory')
+                  ? t('sp.all_monitors', 'Zobrazuje všechny veřejné monitory')
                   : t(
                       'sp.selected_monitors',
                       { count: p.monitorIds.length },
@@ -466,22 +466,35 @@ function PageDialog({
               {t('sp.field_monitors', 'Zobrazené monitory')}
             </span>
             <p className="text-muted-foreground mb-1.5 text-2xs">
-              {t('sp.monitors_hint', 'Nevyberete-li nic, stránka ukáže všechny monitory.')}
+              {t(
+                'sp.monitors_hint',
+                'Nevyberete-li nic, stránka ukáže všechny veřejné monitory. Neveřejný monitor stránka nezobrazí, zveřejnit ho jde v jeho nastavení.'
+              )}
             </p>
             <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-border p-2">
-              {monitors.map((m) => (
-                <label key={m.id} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(m.id)}
-                    onChange={(e) =>
-                      setSelected((prev) => (e.target.checked ? [...prev, m.id] : prev.filter((id) => id !== m.id)))
-                    }
-                  />
-                  <span className="truncate">{m.name}</span>
-                  <span className="text-muted-foreground ml-auto shrink-0 text-2xs">{m.type}</span>
-                </label>
-              ))}
+              {monitors.map((m) => {
+                // The page lists the public set only: a private monitor ticked
+                // here never appeared, and a page made of them read "all online"
+                // over nothing. One already on the page stays tickable off.
+                const isPrivate = m.isPublic === false;
+                const checked = selected.includes(m.id);
+                return (
+                  <label key={m.id} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={isPrivate && !checked}
+                      onChange={(e) =>
+                        setSelected((prev) => (e.target.checked ? [...prev, m.id] : prev.filter((id) => id !== m.id)))
+                      }
+                    />
+                    <span className="truncate">{m.name}</span>
+                    <span className="text-muted-foreground ml-auto shrink-0 text-2xs">
+                      {isPrivate ? `${t('sp.monitor_private', 'neveřejný')} · ${m.type}` : m.type}
+                    </span>
+                  </label>
+                );
+              })}
             </div>
           </div>
         </div>

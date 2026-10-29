@@ -1193,6 +1193,21 @@ if ($logged_in) {
     [$code] = api_get($base, 'action=status_page');
     check('chybějící slug vrací 400', $code, 400);
 
+    // A failed query is not a missing page: its 404 made /app/public say
+    // "Stránka nenalezena", noindex the page and judge the whole fleet.
+    $pdo->exec("RENAME TABLE status_pages TO status_pages_sp");
+    try {
+        [$code_sp_fail, $sp_fail, $raw_sp_fail] = api_get($base, 'action=status_page&slug=verejny-prehled');
+    } finally {
+        $pdo->exec("RENAME TABLE status_pages_sp TO status_pages");
+    }
+    check_true("selhaný dotaz status_page: 5xx, ne 404 (dostal {$code_sp_fail})", $code_sp_fail >= 500 && $code_sp_fail < 600);
+    check('a kód chyby status_page_unavailable', $sp_fail['error'] ?? null, 'status_page_unavailable');
+    check_false('a netvrdí, že stránka neexistuje', str_contains($raw_sp_fail, 'nenalezena'));
+    check_false('a nic neprozradí', str_contains($raw_sp_fail, 'SQLSTATE') || str_contains($raw_sp_fail, 'status_pages'));
+    [$code] = api_get($base, 'action=status_page&slug=verejny-prehled');
+    check('po obnovení tabulky stránka zase odpovídá', $code, 200);
+
     // --- Status page display options ------------------------------------
     //
     // NULL in the database = "show everything". A page created before this

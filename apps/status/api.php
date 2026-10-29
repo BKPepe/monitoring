@@ -4386,7 +4386,7 @@ if ($action === 'status_page') {
         echo json_encode([
             'title' => $sp_row['title'],
             'description' => $sp_row['description'],
-            // Prazdny vyber znamena "vsechny monitory" - stejne jako legacy.
+            // Prazdny vyber znamena "vsechny verejne monitory" - stejne jako legacy.
             'monitorIds' => is_array($sp_ids) ? array_map('intval', $sp_ids) : [],
             'displayOptions' => [
                 'showRegions' => $sp_opts['showRegions'] ?? true,
@@ -4397,9 +4397,9 @@ if ($action === 'status_page') {
             ],
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        // Bez tabulky (stara DB) se stranka tvari jako neexistujici.
-        http_response_code(404);
-        echo json_encode(['error' => 'Stránka nenalezena.'], JSON_UNESCAPED_UNICODE);
+        // A failed query is not a missing page. Its 404 made /app/public say
+        // "Stránka nenalezena", noindex the page and judge the whole fleet.
+        bk_api_fail('status_page_unavailable', 500, $e, 'Status stránku se nepodařilo načíst.');
     }
     exit;
 }
@@ -4422,7 +4422,7 @@ if ($action === 'status_pages') {
                 'slug' => $r['slug'],
                 'description' => $r['description'],
                 'isPublic' => $public,
-                // An empty list = the page shows all monitors.
+                // An empty list = the page shows all public monitors.
                 'monitorIds' => is_array($ids) ? array_values(array_map('intval', $ids)) : [],
                 'displayOptions' => (function () use ($r) {
                     $o = json_decode($r['display_options'] ?? '', true) ?: [];

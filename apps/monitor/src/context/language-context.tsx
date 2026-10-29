@@ -718,6 +718,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Below is the last known status. The next attempt runs in a minute.',
   },
   'public.partial': { cs: 'Provoz je částečně omezen', en: 'Service is partially degraded' },
+  // R4: a page that lists no service (its selection private or deleted) is not "all online".
+  'public.empty': { cs: 'Na této stránce nejsou žádné veřejné služby', en: 'This page lists no public services' },
   // R3: the stored states while nothing checks them (cron stopped) are not "online".
   'public.unverified': { cs: 'Stav služeb nelze ověřit', en: 'Service status cannot be verified' },
   'public.unverified_desc': {
@@ -729,6 +731,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.unverified_desc_unknown': {
     cs: 'Aktuální stav teď nelze ověřit. Níže je poslední známý stav.',
     en: 'The current status cannot be verified right now. Below is the last known status.',
+  },
+  // A ?page= whose selection did not arrive: what failed, never why.
+  'public.unverified_desc_page': {
+    cs: 'Výběr služeb této stránky se nepodařilo načíst. Další pokus proběhne za minutu.',
+    en: "This page's selection of services could not be loaded. The next attempt runs in a minute.",
   },
   'public.partial_desc': {
     cs: '{services} hlásí zhoršení nebo neznámý stav',
@@ -3653,7 +3660,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'sp.public': { cs: 'Veřejná', en: 'Public' },
   'sp.hidden': { cs: 'Skrytá', en: 'Hidden' },
-  'sp.all_monitors': { cs: 'Zobrazuje všechny monitory', en: 'Shows all monitors' },
+  'sp.all_monitors': { cs: 'Zobrazuje všechny veřejné monitory', en: 'Shows all public monitors' },
   'sp.selected_monitors': { cs: 'Vybráno {count} monitorů', en: '{count} monitors selected' },
   'sp.field_title': { cs: 'Název', en: 'Title' },
   'sp.field_slug': { cs: 'Adresa (slug)', en: 'Address (slug)' },
@@ -3668,9 +3675,10 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Used in the /status/?page=… address. Left empty, it is generated from the title.',
   },
   'sp.monitors_hint': {
-    cs: 'Nevyberete-li nic, stránka ukáže všechny monitory.',
-    en: 'Select nothing and the page shows all monitors.',
+    cs: 'Nevyberete-li nic, stránka ukáže všechny veřejné monitory. Neveřejný monitor stránka nezobrazí, zveřejnit ho jde v jeho nastavení.',
+    en: 'Select nothing and the page shows all public monitors. It never shows a private monitor; make one public in its settings.',
   },
+  'sp.monitor_private': { cs: 'neveřejný', en: 'private' },
   'regions.title': { cs: 'Měřicí místa', en: 'Probe locations' },
   'regions.subtitle': {
     cs: 'Odkud se kontroly za posledních 7 dní skutečně prováděly.',

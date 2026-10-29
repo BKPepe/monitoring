@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
 import { PublicStatusPage } from './public-status';
@@ -358,5 +358,170 @@ describe('Veřejná stránka: zastavený sběr dat není „vše v pořádku“ 
 
     expect(await screen.findByText('Všechny systémy jsou online')).toBeTruthy();
     expect(pillOf(container)?.getAttribute('data-state')).toBe('fresh');
+  });
+});
+
+describe('Veřejná stránka: stránka bez veřejné služby není „vše v pořádku“ (R4)', () => {
+  it('?page= vybírá jen neveřejné (nebo smazané) monitory: žádná služba, nadpis to řekne, nikdy „všechny online“', async () => {
+    const api = answering([monitor(1, 'E-shop', 'up')], { pageIds: [7, 8] });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => api(String(input)))
+    );
+    renderPage('/public?page=servery');
+
+    expect(await screen.findByText('Na této stránce nejsou žádné veřejné služby')).toBeTruthy();
+    expect(screen.queryByText('Všechny systémy jsou online')).toBeNull();
+    expect(screen.queryByText('E-shop')).toBeNull();
+  });
+
+  // The answers that come with the fleet: the list (with regions beside it)
+  // and the fleet summary. Before the fix the hero judged these alone.
+  const fleetIn = () =>
+    waitFor(() => {
+      expect(tileValue('Míst měření')).toBe('1');
+      expect(tileValue('Dostupnost 30 dní')).toBe('99,90 %');
+    });
+
+  it('?page=: výběr stránky přijde až po ostatních odpovědích - do té doby „Zjišťuji stav…“, ne verdikt celé flotily', async () => {
+    let answerPage!: (r: Response) => void;
+    const api = answering([monitor(1, 'E-shop', 'up')]);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).includes('action=status_page')
+          ? new Promise<Response>((resolve) => {
+              answerPage = resolve;
+            })
+          : api(String(input))
+      )
+    );
+    renderPage('/public?page=servery');
+
+    await fleetIn();
+    expect(screen.getByText('Zjišťuji stav…')).toBeTruthy();
+    expect(screen.queryByText('Všechny systémy jsou online')).toBeNull();
+    expect(tileValue('Online')).toBe('—');
+    expect(tileValue('Mimo provoz')).toBe('—');
+
+    await act(async () => answerPage(json({ title: 'Servery', monitorIds: [7, 8] })));
+    expect(await screen.findByText('Na této stránce nejsou žádné veřejné služby')).toBeTruthy();
+    expect(screen.queryByText('Všechny systémy jsou online')).toBeNull();
+  });
+
+  it('?page=: selhaný status_page je „nelze ověřit“ bez vymyšlené příčiny a za minutu se zkusí znovu', async () => {
+    // Only the page's refresh is faked: Date.now stays the spy, waitFor keeps real timeouts.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      let pageCalls = 0;
+      const api = answering([monitor(1, 'E-shop', 'up')], {
+        pageIds: [7, 8],
+        lastUpdated: new Date(Date.now() - 30_000).toISOString(),
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes('action=status_page') && ++pageCalls === 1)
+            return json({ error: 'database_unavailable' }, 500);
+          return api(url);
+        })
+      );
+      const { container } = renderPage('/public?page=servery');
+
+      expect(await screen.findByText('Stav služeb nelze ověřit')).toBeTruthy();
+      await fleetIn();
+      expect(
+        screen.getByText('Výběr služeb této stránky se nepodařilo načíst. Další pokus proběhne za minutu.')
+      ).toBeTruthy();
+      expect(screen.queryByText('Všechny systémy jsou online')).toBeNull();
+      // A 500 does not say the page is missing; only a 404 does.
+      expect(screen.queryByText('Stránka nenalezena')).toBeNull();
+      expect(screen.queryByText('Tato status stránka neexistuje nebo není veřejná.')).toBeNull();
+      expect(document.head.querySelector('meta[name="robots"]')).toBeNull();
+      expect(tileValue('Online')).toBe('—');
+      expect(tileValue('Mimo provoz')).toBe('—');
+      expect(container.querySelector('[data-slot="pill"][data-state]')?.getAttribute('data-state')).toBe('unverified');
+
+      act(() => vi.advanceTimersByTime(60_000));
+      expect(await screen.findByText('Na této stránce nejsou žádné veřejné služby')).toBeTruthy();
+      expect(screen.queryByText('Stav služeb nelze ověřit')).toBeNull();
+      expect(pageCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('?page=: 404 při obnovení po dobré odpovědi výběr nezahodí - žádné „Stránka nenalezena“ ani „všechny online“', async () => {
+    // An api.php older than this SPA answered 404 for a failed query too, so
+    // a 404 after the page answered is not proof that the page is gone.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      let pageCalls = 0;
+      const api = answering([monitor(1, 'E-shop', 'up')], { pageIds: [7, 8] });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url.includes('action=status_page') && ++pageCalls === 2)
+            return json({ error: 'Stránka nenalezena.' }, 404);
+          return api(url);
+        })
+      );
+      renderPage('/public?page=servery');
+
+      expect(await screen.findByText('Na této stránce nejsou žádné veřejné služby')).toBeTruthy();
+      await fleetIn();
+
+      act(() => vi.advanceTimersByTime(60_000));
+      await waitFor(() => expect(pageCalls).toBe(2));
+      // Let the 404 settle before looking.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(screen.getByText('Na této stránce nejsou žádné veřejné služby')).toBeTruthy();
+      expect(screen.queryByText('Všechny systémy jsou online')).toBeNull();
+      expect(screen.queryByText('Stránka nenalezena')).toBeNull();
+      expect(document.head.querySelector('meta[name="robots"]')).toBeNull();
+      expect(tileValue('Online')).toBe('0');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('?page=: dokud výběr nepřišel, plánovaná údržba i počet služeb patří k seznamu pod nimi', async () => {
+    const api = answering([
+      monitor(1, 'E-shop', 'up', {
+        maintenance: true,
+        maintenanceStart: new Date(Date.now() + 24 * 60 * 60_000).toISOString(),
+        maintenanceEnd: new Date(Date.now() + 26 * 60 * 60_000).toISOString(),
+      }),
+    ]);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).includes('action=status_page') ? failAll() : api(String(input))
+      )
+    );
+    renderPage('/public?page=servery');
+
+    expect(await screen.findByText('Stav služeb nelze ověřit')).toBeTruthy();
+    await fleetIn();
+    // The card below and the announcement of its window, both.
+    await waitFor(() => expect(screen.getAllByText('E-shop')).toHaveLength(2));
+    expect(screen.getByRole('heading', { name: /Plánovaná údržba/ })).toBeTruthy();
+    expect(document.querySelector('#public-services-heading > span')?.textContent).toBe('1');
+  });
+
+  it('hlavní stránka bez jediné veřejné služby totéž', async () => {
+    const api = answering([], { status: 'unknown' });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => api(String(input)))
+    );
+    renderPage();
+
+    expect(await screen.findByText('Na této stránce nejsou žádné veřejné služby')).toBeTruthy();
+    expect(screen.queryByText('Všechny systémy jsou online')).toBeNull();
   });
 });

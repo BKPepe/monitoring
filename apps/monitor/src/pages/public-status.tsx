@@ -1,6 +1,16 @@
 import * as React from 'react';
 import { useSearchParams } from 'react-router';
-import { Activity, CheckCircle2, CircleHelp, CloudOff, History, Siren, TriangleAlert, Wrench } from 'lucide-react';
+import {
+  Activity,
+  CheckCircle2,
+  CircleHelp,
+  CloudOff,
+  History,
+  Inbox,
+  Siren,
+  TriangleAlert,
+  Wrench,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { PublicMonitorCard, typeIcon, type PublicMonitor, type UptimeWindows } from '@/components/public/monitor-card';
@@ -78,6 +88,23 @@ export function PublicStatusPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlLang]);
 
+  // Auto-refresh for everything the page shows, not just the headline stats:
+  // the tick re-runs every fetch effect below. Failed refreshes keep the last
+  // known data on screen - a blink to an empty page would claim an outage of
+  // the STATUS PAGE as an outage of the services.
+  const [refreshTick, setRefreshTick] = React.useState(0);
+  // "Now" for comparing maintenance windows lives in state - Date.now() right
+  // in render is impure (and the lint rightly refuses it); minute granularity
+  // is plenty here, maintenance windows are not announced to the second.
+  const [nowTs, setNowTs] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const id = window.setInterval(() => {
+      setRefreshTick((n) => n + 1);
+      setNowTs(Date.now());
+    }, REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, []);
+
   // Custom status page (?page=slug): narrows the monitor list and swaps the
   // title. A hidden page 404s for anonymous visitors exactly like a
   // nonexistent slug - that behaviour lives on the server, not here.
@@ -93,23 +120,47 @@ export function PublicStatusPage() {
       detailLevel: 'full' | 'status';
     };
   } | null>(null);
-  const [pageError, setPageError] = React.useState(false);
+  // The server said there is no such public page (404).
+  const [pageMissing, setPageMissing] = React.useState(false);
+  // The latest status_page request failed some other way: why is not known,
+  // so nothing on the page may say "not found".
+  const [pageFailed, setPageFailed] = React.useState(false);
   // The indexed head (public.html) names the main page; a custom page is its
   // own canonical address (W1-G4).
   React.useEffect(() => {
     syncPublicCanonical(document, pageSlug);
   }, [pageSlug]);
+  // The slug whose page has answered in this tab. A 404 after that is taken
+  // as a failed refresh, not as the page being gone: an api.php older than
+  // this SPA (the two deploy apart) answered 404 for a failed query too.
+  const pageSeenRef = React.useRef<string | null>(null);
+  // Asked again on every refresh like the rest of the page: a failed answer
+  // is retried a minute later, and an edited selection reaches an open tab.
   React.useEffect(() => {
     if (!pageSlug) {
       setPageMeta(null);
-      setPageError(false);
+      setPageMissing(false);
+      setPageFailed(false);
       return;
     }
     let active = true;
     fetch(`/status/api.php?action=status_page&slug=${encodeURIComponent(pageSlug)}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((r) => {
+        if (r.status === 404) return null;
+        return r.ok ? r.json() : Promise.reject(new Error(String(r.status)));
+      })
       .then((d) => {
-        if (active)
+        if (!active) return;
+        // A selection already known stays: one failed refresh does not unknow it.
+        if (d === null && pageSeenRef.current === pageSlug) {
+          setPageFailed(true);
+          return;
+        }
+        setPageFailed(false);
+        setPageMissing(d === null);
+        if (d === null) setPageMeta(null);
+        else {
+          pageSeenRef.current = pageSlug;
           setPageMeta({
             title: d.title ?? '',
             monitorIds: d.monitorIds ?? [],
@@ -123,14 +174,16 @@ export function PublicStatusPage() {
               detailLevel: 'full',
             },
           });
+        }
       })
+      // Nor does any other failure; why it failed is not known.
       .catch(() => {
-        if (active) setPageError(true);
+        if (active) setPageFailed(true);
       });
     return () => {
       active = false;
     };
-  }, [pageSlug]);
+  }, [pageSlug, refreshTick]);
   const [monitors, setMonitors] = React.useState<PublicMonitor[] | null>(null);
   // The LATEST monitors request failed. `monitors` may still hold the last
   // known list, but the verdict can no longer vouch for the present.
@@ -183,23 +236,6 @@ export function PublicStatusPage() {
   // The public services score; null = not answered yet (or failed before any answer).
   const [health, setHealth] = React.useState<PublicHealth | null>(null);
   const [healthFailed, setHealthFailed] = React.useState(false);
-
-  // Auto-refresh for everything the page shows, not just the headline stats:
-  // the tick re-runs the whole fetch effect. Failed refreshes keep the last
-  // known data on screen - a blink to an empty page would claim an outage of
-  // the STATUS PAGE as an outage of the services.
-  const [refreshTick, setRefreshTick] = React.useState(0);
-  // "Now" for comparing maintenance windows lives in state - Date.now() right
-  // in render is impure (and the lint rightly refuses it); minute granularity
-  // is plenty here, maintenance windows are not announced to the second.
-  const [nowTs, setNowTs] = React.useState(() => Date.now());
-  React.useEffect(() => {
-    const id = window.setInterval(() => {
-      setRefreshTick((n) => n + 1);
-      setNowTs(Date.now());
-    }, REFRESH_MS);
-    return () => window.clearInterval(id);
-  }, []);
 
   React.useEffect(() => {
     let active = true;
@@ -336,6 +372,11 @@ export function PublicStatusPage() {
     };
   }, [refreshTick, lang, pageSlug]);
 
+  // Whether the page's selection is known: the main page has none, a missing
+  // page falls back to the whole public set. Until a ?page= answers (or while
+  // its answers fail) the fleet is not what the page is about.
+  const selectionKnown = !pageSlug || pageMeta !== null || pageMissing;
+  const selectionFailed = !selectionKnown && pageFailed;
   // A custom page's selection; null = the whole public set.
   const allowed = React.useMemo(
     () => (pageMeta && pageMeta.monitorIds.length > 0 ? new Set(pageMeta.monitorIds) : null),
@@ -354,14 +395,18 @@ export function PublicStatusPage() {
     return [...groups.entries()];
   }, [monitors, t, allowed]);
 
+  // What the service list shows: the selection, or the whole public set while
+  // a ?page= selection is unknown. Its count and the maintenance ahead follow it.
+  const listedMonitors = React.useMemo(() => {
+    if (!allowed || monitors === null) return monitors;
+    return monitors.filter((m) => allowed.has(m.id));
+  }, [monitors, allowed]);
   // On a filtered page the verdict and counts must describe the SELECTION,
   // not the whole fleet - "all systems online" about services the page does
   // not even show would be a lie told by an accurate number. A list that has
   // not arrived is not an empty selection: null, so nothing is judged yet.
-  const visibleMonitors = React.useMemo(() => {
-    if (!allowed || monitors === null) return monitors;
-    return monitors.filter((m) => allowed.has(m.id));
-  }, [monitors, allowed]);
+  // Nor is a selection that has not arrived the whole fleet.
+  const visibleMonitors = selectionKnown ? listedMonitors : null;
 
   const filtered = pageMeta !== null && pageMeta.monitorIds.length > 0;
   const opts = pageMeta?.displayOptions ?? {
@@ -461,15 +506,16 @@ export function PublicStatusPage() {
     [eventItems, eventsShown]
   );
 
-  // null = not known yet or the request failed. `?? 0` here once turned "the
-  // API did not answer" into "nothing is down".
-  const down: number | null = filtered
-    ? visibleMonitors === null
-      ? null
-      : visibleMonitors.filter((m) => m.status === 'down').length
-    : status
-      ? status.downMonitors
-      : null;
+  // null = not known yet (a ?page= selection included) or the request failed.
+  // `?? 0` here once turned "the API did not answer" into "nothing is down".
+  const down: number | null =
+    filtered || !selectionKnown
+      ? visibleMonitors === null
+        ? null
+        : visibleMonitors.filter((m) => m.status === 'down').length
+      : status
+        ? status.downMonitors
+        : null;
   // Announced maintenance is still unavailability. A verdict of "all systems
   // online" next to a service that is down for maintenance would be false -
   // the visitor gets an amber verdict naming the maintenance instead.
@@ -492,19 +538,26 @@ export function PublicStatusPage() {
   const unverified =
     status?.status === 'unknown' || collectionFresh === false || (collectionFresh === null && monitors !== null);
   // The order of bk_overall_verdict: down > degraded > unknown > maintenance.
-  const verdict: 'error' | 'loading' | 'down' | 'partial' | 'unverified' | 'maintenance' | 'ok' = failed
+  // A page with no service on it is not "all online" either: a ?page= whose
+  // selection is private (or deleted) lists nothing, and nothing is down. A
+  // ?page= whose selection failed to arrive vouches for nothing on it.
+  const verdict: 'error' | 'loading' | 'down' | 'partial' | 'empty' | 'unverified' | 'maintenance' | 'ok' = failed
     ? 'error'
-    : visibleMonitors === null || down === null
-      ? 'loading'
-      : down > 0
-        ? 'down'
-        : partial > 0
-          ? 'partial'
-          : unverified
-            ? 'unverified'
-            : inMaintenance > 0
-              ? 'maintenance'
-              : 'ok';
+    : selectionFailed
+      ? 'unverified'
+      : visibleMonitors === null || down === null
+        ? 'loading'
+        : down > 0
+          ? 'down'
+          : partial > 0
+            ? 'partial'
+            : visibleMonitors.length === 0
+              ? 'empty'
+              : unverified
+                ? 'unverified'
+                : inMaintenance > 0
+                  ? 'maintenance'
+                  : 'ok';
 
   // The tab and search-result title: a running outage comes first, so a tab
   // left open says so without being looked at (W1-G4). Only a verdict built
@@ -569,7 +622,7 @@ export function PublicStatusPage() {
       : lastUpdated;
 
   // Announced FUTURE maintenance - the window is yet to come, the service still runs.
-  const upcoming = (visibleMonitors ?? []).filter(
+  const upcoming = (listedMonitors ?? []).filter(
     (m) =>
       m.maintenance === true &&
       m.status !== 'maintenance' &&
@@ -599,11 +652,13 @@ export function PublicStatusPage() {
           ? downText
           : verdict === 'partial'
             ? t('public.partial', 'Provoz je částečně omezen')
-            : verdict === 'unverified'
-              ? t('public.unverified', 'Stav služeb nelze ověřit')
-              : verdict === 'maintenance'
-                ? maintenanceText
-                : t('public.all_ok', 'Všechny systémy jsou online');
+            : verdict === 'empty'
+              ? t('public.empty', 'Na této stránce nejsou žádné veřejné služby')
+              : verdict === 'unverified'
+                ? t('public.unverified', 'Stav služeb nelze ověřit')
+                : verdict === 'maintenance'
+                  ? maintenanceText
+                  : t('public.all_ok', 'Všechny systémy jsou online');
   const verdictLook: { icon: typeof Activity; tone: IconTileTone } =
     verdict === 'ok'
       ? { icon: CheckCircle2, tone: 'up' }
@@ -613,11 +668,13 @@ export function PublicStatusPage() {
           ? { icon: TriangleAlert, tone: 'warning' }
           : verdict === 'unverified'
             ? { icon: CircleHelp, tone: 'neutral' }
-            : verdict === 'maintenance'
-              ? { icon: Wrench, tone: 'info' }
-              : verdict === 'error'
-                ? { icon: CloudOff, tone: 'neutral' }
-                : { icon: Activity, tone: 'neutral' };
+            : verdict === 'empty'
+              ? { icon: Inbox, tone: 'neutral' }
+              : verdict === 'maintenance'
+                ? { icon: Wrench, tone: 'info' }
+                : verdict === 'error'
+                  ? { icon: CloudOff, tone: 'neutral' }
+                  : { icon: Activity, tone: 'neutral' };
   const rssHref = pageSlug ? `/status/rss.php?page=${encodeURIComponent(pageSlug)}` : '/status/rss.php';
 
   return (
@@ -625,7 +682,7 @@ export function PublicStatusPage() {
       <title>{docTitle}</title>
       {/* A custom page that does not exist (or is not public) must not be
           indexed as an empty status page; it answers 200 like every route. */}
-      {pageError && <meta name="robots" content="noindex" />}
+      {pageMissing && <meta name="robots" content="noindex" />}
       <PublicHeader
         siteTitle={branding === null ? null : branding.siteTitle || 'Blood Kings'}
         logoUrl={branding?.customLogoUrl ?? ''}
@@ -634,8 +691,9 @@ export function PublicStatusPage() {
 
       <main className="mx-auto max-w-6xl space-y-5 px-4 py-5 sm:space-y-6 sm:px-6 sm:py-8">
         {/* An unknown or hidden page is indistinguishable from a missing one -
-            the server already made that decision; here it just gets a face. */}
-        {pageError && (
+            the server already made that decision; here it just gets a face.
+            Only its 404 says so: a request that failed otherwise names no cause. */}
+        {pageMissing && (
           <Panel className="text-center">
             <p className="text-sm font-semibold">{t('public.page_not_found', 'Stránka nenalezena')}</p>
             <p className="text-muted-foreground mt-1 text-xs">
@@ -671,18 +729,24 @@ export function PublicStatusPage() {
                   </p>
                   {verdict === 'partial' && <p className="text-muted-foreground text-sm">{partialText}</p>}
                   {/* The cause only when the server named it: cron known stale.
-                      A missing flag or a bare 'unknown' says no more than that. */}
+                      A missing flag or a bare 'unknown' says no more than that,
+                      and a failed ?page= answer only that it failed. */}
                   {verdict === 'unverified' && (
                     <p className="text-muted-foreground text-sm">
-                      {collectionFresh === false
+                      {selectionFailed
                         ? t(
-                            'public.unverified_desc',
-                            'Pravidelné kontroly v poslední době neproběhly. Níže je poslední známý stav.'
+                            'public.unverified_desc_page',
+                            'Výběr služeb této stránky se nepodařilo načíst. Další pokus proběhne za minutu.'
                           )
-                        : t(
-                            'public.unverified_desc_unknown',
-                            'Aktuální stav teď nelze ověřit. Níže je poslední známý stav.'
-                          )}
+                        : collectionFresh === false
+                          ? t(
+                              'public.unverified_desc',
+                              'Pravidelné kontroly v poslední době neproběhly. Níže je poslední známý stav.'
+                            )
+                          : t(
+                              'public.unverified_desc_unknown',
+                              'Aktuální stav teď nelze ověřit. Níže je poslední známý stav.'
+                            )}
                     </p>
                   )}
                   {verdict === 'error' && (
@@ -703,8 +767,14 @@ export function PublicStatusPage() {
                     API stopped. Cron writes every 1-5 minutes, hence 300 s. An
                     agent report keeps that check recent with cron stopped, so an
                     unverified collection is never live, whichever answer says
-                    so first. */}
-                <FreshnessPill at={updatedMs} intervalSecs={300} failed={failed} okAt={okAt} unverified={unverified} />
+                    so first, and neither is a ?page= whose selection failed. */}
+                <FreshnessPill
+                  at={updatedMs}
+                  intervalSecs={300}
+                  failed={failed}
+                  okAt={okAt}
+                  unverified={unverified || selectionFailed}
+                />
                 {updatedAt && (
                   <p className="text-muted-foreground text-xs">
                     {t('public.updated', { at: updatedAt }, `Aktualizováno ${updatedAt}`)}
@@ -803,7 +873,7 @@ export function PublicStatusPage() {
               <SectionTitle
                 headingId="public-services-heading"
                 title={t('public.services', 'Služby')}
-                count={visibleMonitors === null ? undefined : visibleMonitors.length}
+                count={listedMonitors === null ? undefined : listedMonitors.length}
                 action={
                   opts.showUptime ? (
                     <RangePills
