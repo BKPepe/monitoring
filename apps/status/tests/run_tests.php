@@ -3388,9 +3388,32 @@ if (function_exists('bk_rec_command')) {
 // the one decision the whole reminder rests on - what gets into it, and what
 // must never, because a message that cries wolf daily is a message nobody reads.
 bk_test_load_functions(__DIR__ . '/../functions.php', [
-    'bk_daily_reminder_due', 'bk_daily_reminder_select',
+    'bk_daily_reminder_due', 'bk_daily_reminder_select', 'bk_daily_reminder_scoped',
     'bk_get_collection_issues', 'bk_disk_label',
 ]);
+
+// Each recipient reads only their own part: the report used to be rendered
+// once and sent to everybody, so a user with one monitor read the names,
+// error texts and incidents of all the others.
+if (function_exists('bk_daily_reminder_scoped')) {
+    $ds_report = [
+        'outages' => [['id' => 1, 'name' => 'Web'], ['id' => 2, 'name' => 'Server']],
+        'silent' => [['id' => 2, 'name' => 'Server'], ['id' => 0, 'name' => 'bez id']],
+        'incidents' => [['id' => 7, 'monitor_id' => 1], ['id' => 8, 'monitor_id' => 2], ['id' => 9, 'monitor_id' => null]],
+        'cron' => ['last' => null, 'age_secs' => null, 'stale' => true],
+        'problem_count' => 7,
+    ];
+    check('administrátor (null) čte všechno', bk_daily_reminder_scoped($ds_report, null), $ds_report);
+    $ds_one = bk_daily_reminder_scoped($ds_report, [1]);
+    check('uživatel s monitorem 1: jen jeho výpadek a incident, nic bez monitoru',
+        [array_column($ds_one['outages'], 'id'), $ds_one['silent'], array_column($ds_one['incidents'], 'id'), $ds_one['problem_count']],
+        [[1], [], [7], 2]);
+    check('bez monitorů nic', bk_daily_reminder_scoped($ds_report, [])['problem_count'], 0);
+    $ds_quiet = bk_daily_reminder_scoped($ds_report, [1, 2], false);
+    check('bez tichého sběru zůstanou výpadky a incidenty',
+        [count($ds_quiet['outages']), $ds_quiet['silent'], count($ds_quiet['incidents']), $ds_quiet['problem_count']],
+        [2, [], 2, 4]);
+}
 
 if (function_exists('bk_daily_reminder_select')) {
     // Relative to the real clock, not a fixed date: the selection asks

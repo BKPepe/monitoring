@@ -1177,7 +1177,8 @@ if (function_exists('bk_notification_problems')) {
 // =======================================================================
 bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_send_daily_reminder', 'bk_daily_reminder_collect', 'bk_daily_reminder_select',
-    'bk_daily_reminder_recipients', 'bk_daily_reminder_due', 'bk_daily_reminder_text',
+    'bk_daily_reminder_recipients', 'bk_daily_reminder_scope', 'bk_daily_reminder_scoped',
+    'bk_daily_reminder_due', 'bk_daily_reminder_text',
     'bk_render_daily_reminder', 'render_email_wrapper', 'bk_log_notification', 'bk_send_shared_channels',
     'bk_heartbeat_evaluate', 'bk_alert_color_class', 'bk_format_duration_secs',
 ]);
@@ -1476,6 +1477,73 @@ if ($dr_pdo instanceof PDO) {
     bk_public_sub_notify($ps_flaky, ['id' => 1, 'name' => 'Skrytý web'], 'down');
     check('chyba databáze: odběratelům nic, žádný odhad podle typu', count($GLOBALS['bk_test_mails']), 0);
     bk_public_monitor_ids($dr_pdo, true);
+
+    // --- 7. Each recipient reads only their own part -------------------------
+    // The reminder was rendered once and went to every recipient: a user who
+    // may see only "Web" read the server next to it, its error text and its
+    // incident. Jana still subscribes to the server, but her access to it is
+    // gone, so it is not hers any more.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400)]);
+    $dr_add(['id' => 2, 'name' => 'Tajný server', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400)]);
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, error_message) VALUES (2, 'connect to db.internal:5432 refused')");
+    $dr_pdo->exec("INSERT INTO incidents (id, title, impact, status, created_at, acknowledged_at, monitor_id)
+                   VALUES (3, 'Únik na serveru', 'major', 'investigating', '2026-09-20 08:00:00', NULL, 2)");
+    $dr_pdo->exec("INSERT INTO users (id, email, email_lang, role, phone, whatsapp_apikey, whatsapp_notifications)
+                   VALUES (2, 'jana@example.com', 'cs', 'user', '777123456', '1234567', 1)");
+    $dr_pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications) VALUES (2, 1, 1), (2, 2, 1)");
+    $dr_pdo->exec("INSERT INTO monitor_users (user_id, monitor_id) VALUES (2, 1)");
+    $GLOBALS['bk_test_callmebot_urls'] = [];
+    $GLOBALS['bk_test_callmebot_answer'] = ['code' => 200, 'body' => 'Message queued. You have 3 Messages left',
+        'errno' => 0, 'error' => '', 'sent' => true];
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    $GLOBALS['bk_test_callmebot_answer'] = null;
+    $dr_by = array_column($GLOBALS['bk_test_mails'], 'body', 'to');
+    $dr_to = array_keys($dr_by);
+    sort($dr_to);
+    check('administrátor i Jana dostanou zprávu', [$dr_res['emails'], $dr_to], [2, ['admin@example.com', 'jana@example.com']]);
+    $dr_admin = $dr_by['admin@example.com'] ?? '';
+    check_true('administrátor čte obojí i s incidentem',
+        str_contains($dr_admin, 'Tajný server') && str_contains($dr_admin, 'Web') && str_contains($dr_admin, 'Únik na serveru'));
+    $dr_jana = $dr_by['jana@example.com'] ?? '';
+    check_true('Jana čte svůj Web', str_contains($dr_jana, 'Web'));
+    check_true('ale ne cizí server, jeho chybu ani jeho incident', !str_contains($dr_jana, 'Tajný server')
+        && !str_contains($dr_jana, 'db.internal') && !str_contains($dr_jana, 'Únik na serveru'));
+    // Her WhatsApp carries the same part (the administrator has none set up).
+    $dr_wa_text = urldecode(implode(' ', $GLOBALS['bk_test_callmebot_urls'] ?? []));
+    check_true('ani na WhatsAppu: jedna zpráva, jen s jejím Webem', count($GLOBALS['bk_test_callmebot_urls'] ?? []) === 1
+        && str_contains($dr_wa_text, 'Web') && !str_contains($dr_wa_text, 'Tajný server') && !str_contains($dr_wa_text, 'Únik na serveru'));
+    $dr_pdo->exec("UPDATE users SET phone = NULL, whatsapp_apikey = NULL, whatsapp_notifications = 0 WHERE id = 2");
+
+    // Only a silent agent of hers, with agent_notify_admin_only on (the
+    // default): agent internals stay with the administrators.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400)]);
+    $dr_add(['id' => 3, 'name' => 'Router', 'type' => 'vps', 'status' => 'up', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400), 'last_details' => json_encode(['agent_last_seen' => $dr_now - 7200])]);
+    $dr_pdo->exec("DELETE FROM user_subscriptions");
+    $dr_pdo->exec("DELETE FROM monitor_users");
+    $dr_pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications) VALUES (2, 3, 1)");
+    $dr_pdo->exec("INSERT INTO monitor_users (user_id, monitor_id) VALUES (2, 3)");
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('jen tichý agent: Janě nic, administrátorovi ano', array_column($GLOBALS['bk_test_mails'], 'to'), ['admin@example.com']);
+    // Her outage and her silent router: the outage reaches her, the
+    // collection diagnostics stay with the administrators.
+    $GLOBALS['bk_test_mails'] = [];
+    $dr_pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications) VALUES (2, 1, 1)");
+    $dr_pdo->exec("INSERT INTO monitor_users (user_id, monitor_id) VALUES (2, 1)");
+    bk_send_daily_reminder($dr_pdo, $dr_now);
+    $dr_by = array_column($GLOBALS['bk_test_mails'], 'body', 'to');
+    check_true('výpadek i tichý agent: Jana čte Web, ale ne diagnostiku sběru',
+        str_contains($dr_by['jana@example.com'] ?? '', 'Web') && !str_contains($dr_by['jana@example.com'] ?? '', 'Router')
+        && !str_contains($dr_by['jana@example.com'] ?? '', 'Tichý sběr dat'));
+    check_true('administrátor ji čte', str_contains($dr_by['admin@example.com'] ?? '', 'Router'));
+    $dr_pdo->exec("DELETE FROM user_subscriptions");
+    $dr_pdo->exec("DELETE FROM monitor_users");
+    $dr_pdo->exec("DELETE FROM users WHERE id = 2");
 } elseif (function_exists('bk_send_daily_reminder')) {
     // Reported, never skipped in silence: a suite that quietly tests nothing
     // is the same lie as a chart with invented values.

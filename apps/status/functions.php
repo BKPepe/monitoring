@@ -8119,6 +8119,7 @@ function bk_daily_reminder_select(
             'monitor_name' => ($inc['monitor_name'] ?? null) !== null && $inc['monitor_name'] !== ''
                 ? (string)$inc['monitor_name']
                 : null,
+            'monitor_id' => ($inc['monitor_id'] ?? null) !== null ? (int)$inc['monitor_id'] : null,
             'age_secs' => $age_of($inc['created_at'] ?? null),
         ];
     }
@@ -8211,7 +8212,7 @@ function bk_daily_reminder_collect(PDO $pdo, ?int $now = null): array {
     // Open incidents nobody has taken over. An acknowledged one has an owner -
     // reminding them daily is what makes people filter the sender.
     $inc_stmt = $pdo->query("
-        SELECT i.id, i.title, i.impact, i.status, i.created_at, m.name AS monitor_name
+        SELECT i.id, i.title, i.impact, i.status, i.created_at, i.monitor_id, m.name AS monitor_name
         FROM incidents i
         LEFT JOIN monitors m ON m.id = i.monitor_id
         WHERE i.status != 'resolved' AND i.acknowledged_at IS NULL
@@ -8288,6 +8289,65 @@ function bk_daily_reminder_recipients(PDO $pdo, array $monitor_ids, bool $admins
                              FROM users WHERE role = 'admin' AND email IS NOT NULL AND email != ''");
         return $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
     }
+}
+
+/**
+ * Which monitors one reminder recipient is told about: null for an
+ * administrator (all of them), otherwise the ones that would alert this user -
+ * subscribed, still accessible and with e-mail on, the rule
+ * bk_daily_reminder_recipients() admitted them by. A database that cannot
+ * answer gives an empty list: nothing of somebody else's goes out on a guess.
+ *
+ * @return ?int[]
+ */
+function bk_daily_reminder_scope(PDO $pdo, array $rec): ?array {
+    if (($rec['role'] ?? '') === 'admin') {
+        return null;
+    }
+    try {
+        $stmt = $pdo->prepare("
+            SELECT s.monitor_id
+            FROM user_subscriptions s
+            JOIN monitors m ON m.id = s.monitor_id
+            JOIN monitor_users mu ON mu.user_id = s.user_id AND mu.monitor_id = s.monitor_id
+            WHERE s.user_id = ? AND COALESCE(s.email_notifications, m.email_notifications) = 1
+        ");
+        $stmt->execute([(int)($rec['id'] ?? 0)]);
+        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
+    } catch (PDOException $e) {
+        return [];
+    }
+}
+
+/**
+ * The part of the reminder one recipient may read. Pure. null = all of it;
+ * otherwise only the outages and silent agents of those monitors and their
+ * incidents. An incident that belongs to no monitor stays with the
+ * administrators.
+ *
+ * The report used to be rendered once and sent to every recipient, so a user
+ * assigned one monitor read the names, error texts and incidents of all the
+ * others - by e-mail and on WhatsApp.
+ *
+ * $with_silent = false leaves out the silent section: with
+ * agent_notify_admin_only on, the collection diagnostics stay with the
+ * administrators even next to an outage of the same user.
+ *
+ * @param ?int[] $monitor_ids
+ */
+function bk_daily_reminder_scoped(array $report, ?array $monitor_ids, bool $with_silent = true): array {
+    if ($monitor_ids === null) {
+        return $report;
+    }
+    $allowed = array_flip(array_map('intval', $monitor_ids));
+    $mine = static fn (array $item, string $key): bool => isset($item[$key]) && isset($allowed[(int)$item[$key]]);
+    $report['outages'] = array_values(array_filter($report['outages'], static fn (array $i): bool => $mine($i, 'id')));
+    $report['silent'] = $with_silent
+        ? array_values(array_filter($report['silent'], static fn (array $i): bool => $mine($i, 'id')))
+        : [];
+    $report['incidents'] = array_values(array_filter($report['incidents'], static fn (array $i): bool => $mine($i, 'monitor_id')));
+    $report['problem_count'] = count($report['outages']) + count($report['silent']) + count($report['incidents']);
+    return $report;
 }
 
 /**
@@ -8458,17 +8518,27 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
     // Nothing but silent collection and unacknowledged incidents means nothing
     // a subscriber would have been alerted about either - that is the agent
     // class of events, and agent_notify_admin_only keeps those internal.
-    $admins_only = get_setting('agent_notify_admin_only', '1') === '1' && $report['outages'] === [];
+    $notify_admin_only = get_setting('agent_notify_admin_only', '1') === '1';
+    $admins_only = $notify_admin_only && $report['outages'] === [];
     $recipients = bk_daily_reminder_recipients($pdo, $monitor_ids, $admins_only);
 
-    $rendered_by_lang = [];
+    $rendered = [];
     $text = bk_daily_reminder_text($report);
     foreach ($recipients as $rec) {
-        $lang = in_array($rec['email_lang'] ?? '', ['cs', 'en'], true) ? $rec['email_lang'] : $default_lang;
-        if (!isset($rendered_by_lang[$lang])) {
-            $rendered_by_lang[$lang] = bk_with_email_lang($lang, fn (): array => bk_render_daily_reminder($report));
+        // Everyone reads only their own part, and agent internals that
+        // agent_notify_admin_only keeps in-house stay out of it. Nothing of
+        // theirs broken, or nothing but those: no message for them today.
+        $scope = bk_daily_reminder_scope($pdo, $rec);
+        $mine = bk_daily_reminder_scoped($report, $scope, $scope === null || !$notify_admin_only);
+        if ($mine['problem_count'] === 0 || ($scope !== null && $notify_admin_only && $mine['outages'] === [])) {
+            continue;
         }
-        [$subject, $html_body] = $rendered_by_lang[$lang];
+        $lang = in_array($rec['email_lang'] ?? '', ['cs', 'en'], true) ? $rec['email_lang'] : $default_lang;
+        $key = $lang . '|' . ($scope === null ? '*' : implode(',', $scope));
+        if (!isset($rendered[$key])) {
+            $rendered[$key] = bk_with_email_lang($lang, fn (): array => bk_render_daily_reminder($mine));
+        }
+        [$subject, $html_body] = $rendered[$key];
         // send_email() writes the log row itself - one per attempt, failures included.
         if (send_email($rec['email'], $subject, $html_body, [], ['kind' => 'daily_reminder'])) {
             $result['emails']++;
@@ -8480,7 +8550,7 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
         // Switched on without a key or a number: bk_send_whatsapp() makes no
         // request and says why, so the row shows a channel nobody can reach.
         if (!empty($rec['whatsapp_notifications'])) {
-            $wa = bk_send_whatsapp((string)$rec['phone'], mb_strimwidth($text, 0, 900, '…', 'UTF-8'), (string)$rec['whatsapp_apikey']);
+            $wa = bk_send_whatsapp((string)$rec['phone'], mb_strimwidth(bk_daily_reminder_text($mine), 0, 900, '…', 'UTF-8'), (string)$rec['whatsapp_apikey']);
             bk_log_notification($pdo, null, 'daily_reminder', 'whatsapp', $rec['phone'],
                 ok: $wa['delivery'] !== 'failed', error: $wa['reason'], kind: 'daily_reminder',
                 delivery: $wa['delivery'], reply: $wa['reply']);
