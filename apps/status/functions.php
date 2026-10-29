@@ -1625,8 +1625,7 @@ function bk_insights_cache_read(?string $key): ?array {
  */
 function bk_insights_cache_write(PDO $pdo, string $key, array $items): void {
     try {
-        $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-        $stmt->execute([$key, json_encode(['at' => time(), 'v' => 2, 'insights' => $items], JSON_UNESCAPED_UNICODE)]);
+        bk_setting_set($pdo, $key, json_encode(['at' => time(), 'v' => 2, 'insights' => $items], JSON_UNESCAPED_UNICODE));
     } catch (Throwable $e) {
         // The cache is optional - the answer still goes out, the log says why it was not kept.
         error_log('[insights] cache not stored: ' . $e->getMessage());
@@ -8997,9 +8996,7 @@ function bk_self_check_run(PDO $pdo, ?string $url, int $now, ?array $config_outp
     $prev = json_decode((string)$read->fetchColumn(), true);
     $prev = is_array($prev) ? $prev : [];
     $save = function (array $state) use ($pdo): void {
-        $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('self_check_state', ?)
-                       ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
-            ->execute([json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)]);
+        bk_setting_set($pdo, 'self_check_state', json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
     };
 
     if ($url === null) {
@@ -14345,8 +14342,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
             'regions' => $region_latency_map, 'saved_at' => date('c'),
         ];
         try {
-            $stmt_snap = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-            $stmt_snap->execute([$snapshot_key, json_encode($new_snapshot, JSON_UNESCAPED_UNICODE)]);
+            bk_setting_set($pdo, $snapshot_key, json_encode($new_snapshot, JSON_UNESCAPED_UNICODE));
         } catch (PDOException $e) {
             // Ignored - the report still goes out, only the next trend will lack a comparison
         }
@@ -16015,8 +16011,7 @@ function bk_render_setup_wizard($pdo, $me) {
             if (empty($cron_key)) {
                 $error = 'Cron key nesmí být prázdný.';
             } else {
-                $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('cron_key', ?) ON DUPLICATE KEY UPDATE key_value = ?");
-                $stmt->execute([$cron_key, $cron_key]);
+                bk_setting_set($pdo, 'cron_key', $cron_key);
                 bk_audit_log($pdo, 'wizard_step_completed', 'Krok 2 - cron_key', 'user', $me['id']);
                 header('Location: admin.php?action=setup_wizard&step=3');
                 exit;
@@ -16026,8 +16021,7 @@ function bk_render_setup_wizard($pdo, $me) {
             $new_site_title = trim($_POST['site_title'] ?? '') ?: 'Blood Kings Status';
             $new_site_url = trim($_POST['site_url'] ?? '');
             foreach (['site_title' => $new_site_title, 'site_url' => $new_site_url, 'setup_completed' => '1'] as $k => $v) {
-                $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
-                $stmt->execute([$k, $v, $v]);
+                bk_setting_set($pdo, $k, $v);
             }
             bk_audit_log($pdo, 'wizard_completed', $new_site_title, 'user', $me['id']);
             header('Location: admin.php');

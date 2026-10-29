@@ -311,9 +311,7 @@ if ($user_role === 'admin' && get_setting('setup_completed', '') !== '1') {
     // vlastní cron_key jasně znamená, že instalace není "čerstvá" a nemá smysl
     // nutit admina projít wizard od nuly jen kvůli chybějícímu flagu.
     if (trim((string)get_setting('cron_key', '')) !== '') {
-        $stmt_sc = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('setup_completed', '1') ON DUPLICATE KEY UPDATE key_value = '1'");
-        $stmt_sc->execute();
-        $GLOBALS['system_settings']['setup_completed'] = '1';
+        bk_setting_set($pdo, 'setup_completed', '1');
     } elseif (!(isset($_GET['action']) && $_GET['action'] === 'logout')) {
         bk_render_setup_wizard($pdo, $me);
         exit;
@@ -550,6 +548,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings']) && $
 
     try {
         $pdo->beginTransaction();
+        // Not bk_setting_set(): after a rollback the snapshot would hold values
+        // the table never kept.
         $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
         foreach ($settings_to_save as $key) {
             // Pokud je hodnota bezpečně definována v config.php nebo prostředí, nebudeme ji přepisovat
@@ -1107,8 +1107,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test_email']) && $use
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['redetect_location']) && $user_role === 'admin') {
     bk_csrf_check();
     $loc = detect_server_location();
-    $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
-    $stmt_set->execute(['ip_loc_local', $loc, $loc]);
+    bk_setting_set($pdo, 'ip_loc_local', $loc);
     bk_audit_log($pdo, 'location_redetected', $loc);
     // Not escaped here any more - the message is escaped where it is printed.
     $success_msg = 'Lokace serveru byla úspěšně znovuzjištěna: ' . $loc;

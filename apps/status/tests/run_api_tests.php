@@ -1722,6 +1722,82 @@ $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 2");
 $pdo->exec("UPDATE monitors SET preset_id = NULL, cpu_threshold = 90, ram_threshold = 95 WHERE id = 2");
 $pdo->exec("DELETE FROM metric_presets WHERE id = 77");
 
+// bk_setting_set() and bk_setting_add_if_absent() replace the hand-written
+// settings upserts. The row must be what those upserts stored, NULL and ''
+// included, and get_setting() in the same request must see it: before, it
+// answered the value read at the start of the request (a cron run with an
+// empty ip_loc_local looked the location up again for every monitor).
+$sw_row = function (string $key) use ($pdo) {
+    $stmt = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = ?");
+    $stmt->execute([$key]);
+    $rows = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    return $rows === [] ? 'bez řádku' : $rows[0];
+};
+$sw_keys = ['bk_test_sw_old', 'bk_test_sw_new', 'bk_test_sw_seed_old', 'bk_test_sw_seed_new'];
+try {
+    $sw_old = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
+    $sw_same = [];
+    foreach (['stará', 'nová', '', null, '1', '{"at":1767225600,"data":{"a":"ě"}}', '🇨🇿 Praha, CZ'] as $sw_v) {
+        $sw_old->execute(['bk_test_sw_old', $sw_v, $sw_v]);
+        bk_setting_set($pdo, 'bk_test_sw_new', $sw_v);
+        $sw_same[] = [$sw_row('bk_test_sw_old'), $sw_row('bk_test_sw_new')];
+    }
+    check('zápis nastavení uloží totéž co ruční upsert, NULL i prázdný řetězec',
+        $sw_same, [['stará', 'stará'], ['nová', 'nová'], ['', ''], [null, null], ['1', '1'],
+            ['{"at":1767225600,"data":{"a":"ě"}}', '{"at":1767225600,"data":{"a":"ě"}}'], ['🇨🇿 Praha, CZ', '🇨🇿 Praha, CZ']]);
+    check('get_setting hned po zápisu vrátí novou hodnotu, ne tu ze začátku požadavku',
+        [get_setting('bk_test_sw_new', 'výchozí'), $GLOBALS['system_settings']['bk_test_sw_new'] ?? 'chybí'],
+        ['🇨🇿 Praha, CZ', '🇨🇿 Praha, CZ']);
+    bk_setting_set($pdo, 'bk_test_sw_new', null);
+    check('uložené NULL čte get_setting jako nenastavené (výchozí hodnota)',
+        [get_setting('bk_test_sw_new', 'výchozí'), array_key_exists('bk_test_sw_new', $GLOBALS['system_settings'])],
+        ['výchozí', true]);
+
+    // A write that fails throws and leaves the snapshot as it was.
+    $sw_dead = new class ('mysql:') extends PDO {
+        public function __construct(string $dsn) {}
+        public function prepare(string $query, array $options = []): PDOStatement|false {
+            throw new PDOException('zápis selhal');
+        }
+    };
+    bk_setting_set($pdo, 'bk_test_sw_new', 'uložená');
+    try {
+        bk_setting_set($sw_dead, 'bk_test_sw_new', 'neuložená');
+        $sw_threw = false;
+    } catch (PDOException $e) {
+        $sw_threw = true;
+    }
+    check('nepovedený zápis vyhodí výjimku a v paměti nechá uloženou hodnotu',
+        [$sw_threw, get_setting('bk_test_sw_new', 'výchozí'), $sw_row('bk_test_sw_new')], [true, 'uložená', 'uložená']);
+
+    // add_if_absent is the migrations' `ON DUPLICATE KEY UPDATE key_value = key_value`.
+    $sw_seed_old = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = key_value");
+    $sw_seed = [];
+    foreach (['výchozí', 'jiná', ''] as $sw_v) {
+        $sw_seed_old->execute(['bk_test_sw_seed_old', $sw_v]);
+        bk_setting_add_if_absent($pdo, 'bk_test_sw_seed_new', $sw_v);
+        $sw_seed[] = [$sw_row('bk_test_sw_seed_old'), $sw_row('bk_test_sw_seed_new'), get_setting('bk_test_sw_seed_new', 'chybí')];
+    }
+    check('výchozí hodnota se zapíše jen bez řádku, existující řádek ani paměť nepřepíše',
+        $sw_seed, [['výchozí', 'výchozí', 'výchozí'], ['výchozí', 'výchozí', 'výchozí'], ['výchozí', 'výchozí', 'výchozí']]);
+    $pdo->exec("UPDATE settings SET key_value = 'od jiného procesu' WHERE key_name = 'bk_test_sw_seed_new'");
+    bk_setting_add_if_absent($pdo, 'bk_test_sw_seed_new', 'výchozí');
+    check('existující řádek zůstane, i když ho paměť zná jinak',
+        [$sw_row('bk_test_sw_seed_new'), get_setting('bk_test_sw_seed_new', 'chybí')], ['od jiného procesu', 'výchozí']);
+    // A snapshot without the key (a migration runs before it is loaded) takes
+    // the row's value, not the seed the row turned down.
+    unset($GLOBALS['system_settings']['bk_test_sw_seed_new']);
+    bk_setting_add_if_absent($pdo, 'bk_test_sw_seed_new', 'výchozí');
+    check('paměť bez klíče převezme hodnotu existujícího řádku, ne výchozí',
+        [$sw_row('bk_test_sw_seed_new'), get_setting('bk_test_sw_seed_new', 'chybí'), $GLOBALS['system_settings']['bk_test_sw_seed_new'] ?? 'chybí'],
+        ['od jiného procesu', 'od jiného procesu', 'od jiného procesu']);
+} finally {
+    $pdo->prepare("DELETE FROM settings WHERE key_name IN (?, ?, ?, ?)")->execute($sw_keys);
+    foreach ($sw_keys as $sw_k) {
+        unset($GLOBALS['system_settings'][$sw_k]);
+    }
+}
+
 
 // Settings load once at startup into the `$system_settings` global (db.php)
 // and get_setting() reads from there. A database write alone therefore changes

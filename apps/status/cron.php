@@ -699,8 +699,7 @@ foreach ($monitors as $monitor) {
         if (empty($loc)) {
             $loc = detect_server_location();
             // Store into the settings cache
-            $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
-            $stmt_set->execute(['ip_loc_local', $loc, $loc]);
+            bk_setting_set($pdo, 'ip_loc_local', $loc);
         }
     }
     // check_stages (DNS/TCP/TLS/HTTP/body breakdown for 'web', ServerQuery/service/
@@ -866,11 +865,9 @@ try {
         $metric_rows = bk_rollup_daily_metrics($pdo, $metric_days);
 
         if ($metrics_backfilled !== '1') {
-            $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('metrics_daily_backfilled', '1') ON DUPLICATE KEY UPDATE key_value = '1'")
-                ->execute();
+            bk_setting_set($pdo, 'metrics_daily_backfilled', '1');
         }
-        $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('last_metrics_rollup', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
-            ->execute([date('Y-m-d H:i:s')]);
+        bk_setting_set($pdo, 'last_metrics_rollup', date('Y-m-d H:i:s'));
         echo "Denní agregace metrik: {$metric_rows} řádků.\n";
     }
 } catch (Throwable $e) {
@@ -878,8 +875,7 @@ try {
 }
 if ($backfill_done !== '1') {
     try {
-        $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('uptime_daily_backfilled', '1') ON DUPLICATE KEY UPDATE key_value = '1'")
-            ->execute();
+        bk_setting_set($pdo, 'uptime_daily_backfilled', '1');
     } catch (Throwable $e) {
         // Bez priznaku se backfill priste zopakuje - je idempotentni.
     }
@@ -899,10 +895,9 @@ try {
         $time_days = $time_backfilled ? 5 : 29;
         $time_rows = bk_rollup_daily_uptime_time($pdo, $time_days);
         if ($time_rows >= 0) {
-            $stmt_tr = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-            $stmt_tr->execute(['last_uptime_time_rollup', date('Y-m-d H:i:s')]);
+            bk_setting_set($pdo, 'last_uptime_time_rollup', date('Y-m-d H:i:s'));
             if (!$time_backfilled) {
-                $stmt_tr->execute(['uptime_daily_time_backfilled', '1']);
+                bk_setting_set($pdo, 'uptime_daily_time_backfilled', '1');
             }
             echo "Denní dostupnost v čase: {$time_rows} zápisů (okno {$time_days} dní).\n";
         } else {
@@ -985,8 +980,7 @@ try {
         if ($last_weekly !== $current_week) {
             echo "Odesílám týdenní digest...\n";
             if (send_digest_report($pdo, 'weekly')) {
-                $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('last_weekly_digest_sent', ?) ON DUPLICATE KEY UPDATE key_value = ?");
-                $stmt_set->execute([$current_week, $current_week]);
+                bk_setting_set($pdo, 'last_weekly_digest_sent', $current_week);
                 echo "Týdenní digest odeslán.\n";
             }
         }
@@ -999,8 +993,7 @@ try {
         if ($last_monthly !== $current_month) {
             echo "Odesílám měsíční digest...\n";
             if (send_digest_report($pdo, 'monthly')) {
-                $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('last_monthly_digest_sent', ?) ON DUPLICATE KEY UPDATE key_value = ?");
-                $stmt_set->execute([$current_month, $current_month]);
+                bk_setting_set($pdo, 'last_monthly_digest_sent', $current_month);
                 echo "Měsíční digest odeslán.\n";
             }
         }
@@ -1027,11 +1020,7 @@ try {
         && bk_daily_reminder_due((string)get_setting('last_daily_reminder_sent', ''),
             (int)get_setting('daily_reminder_hour', '8'))) {
         $reminder = bk_send_daily_reminder($pdo);
-        $stmt_rem = $pdo->prepare(
-            "INSERT INTO settings (key_name, key_value) VALUES ('last_daily_reminder_sent', ?)
-             ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)"
-        );
-        $stmt_rem->execute([date('Y-m-d')]);
+        bk_setting_set($pdo, 'last_daily_reminder_sent', date('Y-m-d'));
         if ($reminder['problems'] === 0) {
             echo "Denní připomínka: nic rozbitého, neodesílá se.\n";
         } elseif ($reminder['sent']) {
@@ -1103,13 +1092,9 @@ try {
 // speaks up when the value grows stale.
 try {
     $bk_cron_duration_ms = (int)round((microtime(true) - $bk_cron_started) * 1000);
-    $stmt_run = $pdo->prepare(
-        "INSERT INTO settings (key_name, key_value) VALUES (?, ?)
-         ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)"
-    );
-    $stmt_run->execute(['last_cron_run', date('Y-m-d H:i:s')]);
-    $stmt_run->execute(['last_cron_duration_ms', (string)$bk_cron_duration_ms]);
-    $stmt_run->execute(['last_cron_monitors', (string)count($monitors)]);
+    bk_setting_set($pdo, 'last_cron_run', date('Y-m-d H:i:s'));
+    bk_setting_set($pdo, 'last_cron_duration_ms', (string)$bk_cron_duration_ms);
+    bk_setting_set($pdo, 'last_cron_monitors', (string)count($monitors));
 } catch (PDOException $e) {
     error_log('[cron] Zápis otisku běhu selhal: ' . $e->getMessage());
 }

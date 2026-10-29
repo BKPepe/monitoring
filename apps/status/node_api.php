@@ -100,8 +100,7 @@ if ($action === 'post_results') {
                     $node_location = $flag . ' ' . ($city ? $city . ', ' : '') . $cc;
                     
                     // Store into settings as a cache
-                    $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
-                    $stmt_set->execute([$cache_key, $node_location, $node_location]);
+                    bk_setting_set($pdo, $cache_key, $node_location);
                 }
             }
             

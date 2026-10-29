@@ -286,6 +286,11 @@ preg_match_all("/execute\(\s*\[\s*'([a-z0-9_]+)'/", $all_src, $param_writes);
 foreach ($param_writes[1] ?? [] as $k) {
     $written_anywhere[$k] = true;
 }
+// Writes through db.php's writer: bk_setting_set($pdo, 'ip_loc_local', ...).
+preg_match_all("/bk_setting_(?:set|add_if_absent)\(\s*\\\$\w+\s*,\s*'([a-z0-9_]+)'/", $all_src, $helper_writes);
+foreach ($helper_writes[1] ?? [] as $k) {
+    $written_anywhere[$k] = true;
+}
 
 $phantom_settings = [];
 foreach (array_unique($read_keys[1] ?? []) as $key) {

@@ -789,8 +789,7 @@ try {
         // Ignorujeme
     }
     try {
-        $stmt_sla = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('sla_goal_pct', '99.95') ON DUPLICATE KEY UPDATE key_value = key_value");
-        $stmt_sla->execute();
+        bk_setting_add_if_absent($pdo, 'sla_goal_pct', '99.95');
     } catch (PDOException $e) {
         // Ignorujeme
     }
@@ -821,8 +820,7 @@ try {
         }
     }
     try {
-        $stmt_ts3v = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('ts3_latest_version', '') ON DUPLICATE KEY UPDATE key_value = key_value");
-        $stmt_ts3v->execute();
+        bk_setting_add_if_absent($pdo, 'ts3_latest_version', '');
     } catch (PDOException $e) {
         // Ignorujeme
     }
@@ -1539,8 +1537,7 @@ try {
 
     // Store the current schema version - migrations get skipped next time
     try {
-        $stmt_ver = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('schema_version', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-        $stmt_ver->execute([BK_SCHEMA_VERSION]);
+        bk_setting_set($pdo, 'schema_version', BK_SCHEMA_VERSION);
     } catch (PDOException $e) {
         // The settings table does not exist (before schema import) - migrations will run again
     }
@@ -1630,6 +1627,55 @@ function get_setting($key, $default = '') {
         }
     }
     return $val === null ? $default : $val;
+}
+
+/**
+ * Stores one setting and keeps this request's snapshot in step with the row.
+ *
+ * $system_settings is read once per request, and all but one of the upserts
+ * this replaced (setup_completed) wrote the row only: a get_setting() after
+ * them answered the old value for the rest of the request, so a cron run that
+ * found ip_loc_local empty asked the geolocation service again for every
+ * monitor. NULL stores NULL, as the upserts did. A failed write throws and
+ * leaves the snapshot alone; whether that matters is the caller's call.
+ *
+ * Not for a write inside a transaction: a rollback takes the row back but
+ * not the snapshot. The two bulk saves (admin.php, api.php save_settings)
+ * keep their own upsert and reload or exit after the commit.
+ */
+function bk_setting_set(PDO $pdo, string $key, ?string $value): void {
+    global $system_settings;
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+        ->execute([$key, $value]);
+    if (!is_array($system_settings)) {
+        // A migration writes before the snapshot is first read.
+        $system_settings = [];
+    }
+    $system_settings[$key] = $value;
+}
+
+/**
+ * Stores a setting only when no row has its key yet (a default a migration
+ * seeds). An existing row keeps its value, and so does its snapshot entry; a
+ * snapshot without the key takes what the row holds, seed or not.
+ */
+function bk_setting_add_if_absent(PDO $pdo, string $key, ?string $value): void {
+    global $system_settings;
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = key_value")
+        ->execute([$key, $value]);
+    if (!is_array($system_settings)) {
+        $system_settings = [];
+    }
+    if (!array_key_exists($key, $system_settings)) {
+        // The row may predate this call with another value (a migration runs
+        // before the snapshot is loaded), so the snapshot learns the row.
+        $stmt = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = ?");
+        $stmt->execute([$key]);
+        $row = $stmt->fetch(PDO::FETCH_NUM);
+        if ($row !== false) {
+            $system_settings[$key] = $row[0];
+        }
+    }
 }
 
 /**

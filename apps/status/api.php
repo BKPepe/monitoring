@@ -1263,8 +1263,7 @@ if ($action === 'upload_logo') {
         }
         // Cache-bust via mtime so a logo swap is not hostage to the browser cache.
         $url = '/status/uploads/custom-logo.' . $ext . '?v=' . filemtime($dest);
-        $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('custom_logo_url', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-        $stmt->execute([$url]);
+        bk_setting_set($pdo, 'custom_logo_url', $url);
         bk_audit_log($pdo, 'setting_changed', 'custom_logo_url (upload loga, ' . strtoupper($ext) . ', ' . round($f['size'] / 1024) . ' kB)');
         echo json_encode(['success' => true, 'url' => $url], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -1445,8 +1444,7 @@ if ($action === 'dashboard_layout') {
             ];
         }
         try {
-            $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-            $stmt->execute(['dashboard_layout_user_' . $uid, json_encode($tiles, JSON_UNESCAPED_UNICODE)]);
+            bk_setting_set($pdo, 'dashboard_layout_user_' . $uid, json_encode($tiles, JSON_UNESCAPED_UNICODE));
             echo json_encode(['success' => true, 'tiles' => $tiles], JSON_UNESCAPED_UNICODE);
         } catch (Throwable $e) {
             http_response_code(500);
@@ -1654,8 +1652,7 @@ if ($action === 'redetect_location') {
     bk_require_admin();
     try {
         $rl_loc = detect_server_location();
-        $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
-        $stmt_set->execute(['ip_loc_local', $rl_loc, $rl_loc]);
+        bk_setting_set($pdo, 'ip_loc_local', $rl_loc);
         bk_audit_log($pdo, 'location_redetected', $rl_loc);
         echo json_encode(['success' => true, 'location' => $rl_loc], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -2248,6 +2245,8 @@ if ($action === 'save_settings') {
 
     try {
         $pdo->beginTransaction();
+        // Not bk_setting_set(): after a rollback the snapshot would hold values
+        // the table never kept.
         $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
 
         foreach ($input['settings'] as $key => $val) {
@@ -2284,8 +2283,7 @@ if ($action === 'generate_metrics_token') {
         // The settings table has key_name/key_value columns - the earlier
         // setting_key/setting_value crashed the INSERT here and the
         // "Activate token" button ended in a 500.
-        $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('metrics_token', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-        $stmt->execute([$new_token]);
+        bk_setting_set($pdo, 'metrics_token', $new_token);
 
         echo json_encode(['success' => true, 'metricsToken' => $new_token], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
@@ -2991,8 +2989,7 @@ if ($action === 'findings') {
         // as the answer for a minute after it recovers.
         if ($fd_summary_key !== null && $fd_errors === []) {
             try {
-                $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
-                    ->execute([$fd_summary_key, json_encode(['at' => time(), 'summary' => $fd_summary_body], JSON_UNESCAPED_UNICODE)]);
+                bk_setting_set($pdo, $fd_summary_key, json_encode(['at' => time(), 'summary' => $fd_summary_body], JSON_UNESCAPED_UNICODE));
             } catch (Throwable $fd_e) {
                 error_log('[api.php action=findings] summary not kept: ' . $fd_e->getMessage());
             }
@@ -3071,8 +3068,7 @@ if ($action === 'health') {
                 }
             } else {
                 try {
-                    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('health_cache_public', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
-                        ->execute([json_encode(['at' => time(), 'data' => $hs_payload], JSON_UNESCAPED_UNICODE)]);
+                    bk_setting_set($pdo, 'health_cache_public', json_encode(['at' => time(), 'data' => $hs_payload], JSON_UNESCAPED_UNICODE));
                 } catch (Throwable $he) {
                     error_log('[api.php action=health] cache not stored: ' . $he->getMessage());
                 }
@@ -4550,8 +4546,7 @@ if ($action === 'regions') {
 
         $regions_payload = ['days' => $days, 'regions' => $regions, 'cachedAt' => date('c')];
         try {
-            $stmt_c = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-            if ($rg_cacheable) $stmt_c->execute([$regions_cache_key, json_encode(['at' => time(), 'data' => $regions_payload], JSON_UNESCAPED_UNICODE)]);
+            if ($rg_cacheable) bk_setting_set($pdo, $regions_cache_key, json_encode(['at' => time(), 'data' => $regions_payload], JSON_UNESCAPED_UNICODE));
         } catch (Throwable $e) {
             // Cache je optimalizace - kdyz se nezapise, odpoved stejne odejde.
             error_log('[api.php action=' . $action . '] cache not stored: ' . $e->getMessage());
@@ -4671,8 +4666,7 @@ if ($action === 'websites_overview') {
             'monitors' => $sla,
         ];
         try {
-            $stmt2 = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('websites_overview_cache', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-            $stmt2->execute([json_encode(['at' => time(), 'data' => $data], JSON_UNESCAPED_UNICODE)]);
+            bk_setting_set($pdo, 'websites_overview_cache', json_encode(['at' => time(), 'data' => $data], JSON_UNESCAPED_UNICODE));
         } catch (Throwable $e) {
             // The cache is an optimisation - if it fails to store, the endpoint just computes more often.
             error_log('[api.php action=' . $action . '] cache not stored: ' . $e->getMessage());
