@@ -755,6 +755,8 @@ foreach ([
     'notification_health' => 'action=notification_health',
     // An excerpt of config.php.
     'site_health' => 'action=site_health',
+    // Every monitor's SLA, incidents and router findings in one page.
+    'digest_preview' => 'action=digest_preview&period=weekly',
 ] as $ra_name => $ra_query) {
     [$ra_code] = api_get_auth($base, $ra_query, $jar3);
     check("běžný uživatel nedostane {$ra_name}", $ra_code, 403);
@@ -4159,19 +4161,22 @@ if ($logged_in) {
 }
 
 // =======================================================================
-// The digest in the recipient's language - the admin.php preview renders with
-// the same template as the real e-mail. The EN version must not leak a single
-// Czech template string; Czech data (monitor names from the seeds) is removed
+// The digest in the recipient's language - the preview renders with the same
+// template as the real e-mail. The EN version must not leak a single Czech
+// template string; Czech data (monitor names from the seeds) is removed
 // before the check, because it rightfully stays untranslated.
+//
+// The app opens the preview from api.php (it used to open admin.php). Until
+// the legacy UI goes, admin.php keeps its own, and the two must be one page.
 // =======================================================================
 if (isset($cookie_jar)) {
     // admin.php has an install gate: a logged-in admin without setup_completed
     // gets the wizard-completion page instead of content. The test DB never ran
     // the wizard, so the flag is set directly.
     $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('setup_completed', '1') ON DUPLICATE KEY UPDATE key_value = '1'");
-    $digest_preview = function (string $lang) use ($pdo, $base, $cookie_jar): string {
-        $pdo->exec("UPDATE users SET email_lang = " . ($lang === '' ? 'NULL' : "'{$lang}'") . " WHERE username = 'admin'");
-        $ch = curl_init($base . '/admin.php?action=preview_weekly_digest');
+    /** [status, Content-Type, body] of one page with the admin's session. */
+    $digest_fetch = function (string $path) use ($base, $cookie_jar): array {
+        $ch = curl_init($base . $path);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_COOKIEJAR => $cookie_jar,
@@ -4179,8 +4184,30 @@ if (isset($cookie_jar)) {
             CURLOPT_TIMEOUT => 30,
         ]);
         $body = (string)curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $type = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
         curl_close($ch);
-        return $body;
+        return [$code, $type, $body];
+    };
+    $digest_preview = function (string $lang) use ($pdo, $digest_fetch): string {
+        $pdo->exec("UPDATE users SET email_lang = " . ($lang === '' ? 'NULL' : "'{$lang}'") . " WHERE username = 'admin'");
+        return $digest_fetch('/api.php?action=digest_preview&period=weekly')[2];
+    };
+    // The same page, not the same instant: the footer prints the minute it
+    // was rendered and the windows and outage lengths run up to NOW(), so a
+    // number can tick between the two requests, and once in a while a window
+    // edge passes a fixture row in between, which adds or drops a whole line.
+    // That edge passes at most once, so a mismatch fetches both pages again;
+    // a page that differs twice is a real difference.
+    $digest_same = fn (string $a, string $b): bool
+        => preg_replace('/\d+/', '#', $a) === preg_replace('/\d+/', '#', $b);
+    $digest_parity = function (string $api_path, string $admin_path) use ($digest_fetch, $digest_same): bool {
+        for ($try = 0; $try < 2; $try++) {
+            if ($digest_same($digest_fetch($api_path)[2], $digest_fetch($admin_path)[2])) {
+                return true;
+            }
+        }
+        return false;
     };
 
     $digest_en = $digest_preview('en');
@@ -4192,9 +4219,44 @@ if (isset($cookie_jar)) {
         $digest_leaks = array_slice(array_unique($m[0]), 0, 5);
     }
     check('EN digest nepropouští české řetězce šablony', $digest_leaks, []);
+    check_true('EN náhled z api.php je táž stránka jako náhled v admin.php',
+        $digest_parity('/api.php?action=digest_preview&period=weekly', '/admin.php?action=preview_weekly_digest'));
+
+    // A preview must not move the trend base the next real digest compares
+    // against. A known snapshot goes in first, so "unchanged" is not "absent".
+    $dp_snapshot_saved = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'digest_snapshot_weekly'")->fetchColumn();
+    $dp_snapshot = '{"score":42,"saved_at":"2026-01-05T06:00:00+01:00"}';
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('digest_snapshot_weekly', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+        ->execute([$dp_snapshot]);
 
     $digest_cs = $digest_preview('cs');
     check_true('CS digest je česky', str_contains($digest_cs, 'Týdenní report'));
+    check_true('CS náhled z api.php je táž stránka jako náhled v admin.php',
+        $digest_parity('/api.php?action=digest_preview&period=weekly', '/admin.php?action=preview_weekly_digest'));
+    check('náhled nepřepíše snímek, se kterým srovná příští souhrn',
+        $pdo->query("SELECT key_value FROM settings WHERE key_name = 'digest_snapshot_weekly'")->fetchColumn(), $dp_snapshot);
+    if ($dp_snapshot_saved === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'digest_snapshot_weekly'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'digest_snapshot_weekly'")->execute([$dp_snapshot_saved]);
+    }
+
+    [$dp_code, $dp_type, $dp_monthly] = $digest_fetch('/api.php?action=digest_preview&period=monthly');
+    check('měsíční náhled z api.php: adminovi 200', $dp_code, 200);
+    check_true('náhled je HTML, ne JSON (dostal ' . $dp_type . ')', str_starts_with($dp_type, 'text/html'));
+    check_true('měsíční náhled je měsíční report', str_contains($dp_monthly, 'Měsíční report'));
+    check_true('měsíční náhled z api.php je táž stránka jako náhled v admin.php',
+        $digest_parity('/api.php?action=digest_preview&period=monthly', '/admin.php?action=preview_monthly_digest'));
+
+    // An unknown period is refused, never shown as the weekly digest.
+    foreach (['&period=yearly' => 'neznámé období', '' => 'chybějící období'] as $dp_query => $dp_label) {
+        [$dp_bad_code, , $dp_bad_body] = $digest_fetch('/api.php?action=digest_preview' . $dp_query);
+        check("náhled souhrnu: {$dp_label} je 400", $dp_bad_code, 400);
+        check_false("náhled souhrnu: {$dp_label} nevrátí týdenní report", str_contains($dp_bad_body, 'Týdenní report'));
+    }
+    [$dp_anon_code, , $dp_anon_body] = api_get($base, 'action=digest_preview&period=weekly');
+    check('náhled souhrnu bez přihlášení: 403', $dp_anon_code, 403);
+    check_false('a bez kousku souhrnu', str_contains($dp_anon_body, 'report'));
 
     // Cleanup: the admin back to the global language.
     $digest_preview('');
@@ -5323,14 +5385,14 @@ if (function_exists('bk_digest_routers')) {
         $pdo->query("SELECT DISTINCT first_digest_week FROM router_rec_state WHERE monitor_id = 2 AND active = 1")->fetchAll(PDO::FETCH_COLUMN),
         [$dg_week]);
 
-    // 7. And the same thing as HTML: the admin preview renders with the very
+    // 7. And the same thing as HTML: the preview renders with the very
     //    template the e-mail uses, so this is the only place where a fatal in
     //    the section or a missing dictionary key would show up.
     if (isset($cookie_jar)) {
         // site_url as the old label asked for it - the URL of the status page.
         // The link is built from its origin, so it cannot lose /status.
         $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('site_url', 'https://bloodkings.eu/status') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-        $ch = curl_init($base . '/admin.php?action=preview_weekly_digest');
+        $ch = curl_init($base . '/api.php?action=digest_preview&period=weekly');
         curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIEJAR => $cookie_jar,
             CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_TIMEOUT => 30]);
         $dg_html = (string)curl_exec($ch);
@@ -6724,12 +6786,12 @@ try {
     check_true('administrace: SLA stroje 99.99 %, ne 100.00 % (řádek ' . ($fs_asset_row === '' ? 'chybí' : 'nalezen') . ')',
         str_contains($fs_asset_row, '99.99%') && !str_contains($fs_asset_row, '100.00%'));
 
-    $fs_weekly = $fs_page('/admin.php?action=preview_weekly_digest', $cookie_jar);
+    $fs_weekly = $fs_page('/api.php?action=digest_preview&period=weekly', $cookie_jar);
     check('týdenní digest: monitor s výpadkem 99.99 %, ne 100 %',
         preg_match('/Pět sekund výpadku<\/td><td[^>]*>([^<]*)</u', $fs_weekly, $fs_m) ? $fs_m[1] : null, '99.99%');
     check('týdenní digest: místo měření 99.99 %, ne 100 %',
         preg_match('/Zkušební region<\/td><td[^>]*>([^<]*)</u', $fs_weekly, $fs_m) ? $fs_m[1] : null, '99.99%');
-    $fs_monthly = $fs_page('/admin.php?action=preview_monthly_digest', $cookie_jar);
+    $fs_monthly = $fs_page('/api.php?action=digest_preview&period=monthly', $cookie_jar);
     check_true('měsíční digest: den s výpadkem 99.99 %, ne 100 %',
         str_contains($fs_monthly, date('d.m.', $fs_day) . ' &middot; 99.99%') && !str_contains($fs_monthly, date('d.m.', $fs_day) . ' &middot; 100%'));
     check_true('měsíční digest: místo měření 99.99 %, ne 100 %',
@@ -6770,7 +6832,7 @@ try {
     $zs_card = preg_match('/id="monitor-item-192".*?(?=id="monitor-item-|$)/s', $zs_index, $zs_m) ? $zs_m[0] : '';
     check_true('stará stránka: selhání bez vlastní sekundy výpadku - karta 99,99 %, ne 100,00 %',
         str_contains($zs_card, '99,99%') && !str_contains($zs_card, '100,00%'));
-    $zs_weekly = $fs_page('/admin.php?action=preview_weekly_digest', $cookie_jar);
+    $zs_weekly = $fs_page('/api.php?action=digest_preview&period=weekly', $cookie_jar);
     check('týdenní digest: selhání bez vlastní sekundy výpadku 99.99 %, ne 100 %',
         preg_match('/Selhání v téže sekundě<\/td><td[^>]*>([^<]*)</u', $zs_weekly, $zs_m) ? $zs_m[1] : null, '99.99%');
 } finally {

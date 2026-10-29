@@ -6010,6 +6010,40 @@ if ($action === 'send_digest') {
     exit;
 }
 
+// 2f. Digest preview in the browser, nothing sent (admin-only)
+//
+// The same page as admin.php's own preview, so the app no longer opens
+// admin.php for it. A GET read: build_digest_data(..., false) leaves the trend
+// snapshot the next real digest compares against untouched.
+if ($action === 'digest_preview') {
+    bk_require_admin();
+    // An unknown period is refused, never shown as the weekly digest.
+    $dp_raw = $_GET['period'] ?? '';
+    if ($dp_raw !== 'weekly' && $dp_raw !== 'monthly') {
+        http_response_code(400);
+        echo json_encode(['error' => 'Období musí být weekly nebo monthly.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $dp_period = $dp_raw === 'monthly' ? 'monthly' : 'weekly';
+    try {
+        // In the language the digest would reach the viewing admin in, as in admin.php.
+        $stmt_dp = $pdo->prepare("SELECT email_lang FROM users WHERE id = ? LIMIT 1");
+        $stmt_dp->execute([(int)($_SESSION['admin_id'] ?? 0)]);
+        $dp_user_lang = (string)$stmt_dp->fetchColumn();
+        $dp_lang = in_array($dp_user_lang, ['cs', 'en'], true) ? $dp_user_lang : get_setting('email_lang', 'cs');
+        $dp_html = bk_with_email_lang($dp_lang, function () use ($pdo, $dp_period) {
+            return render_digest_html(build_digest_data($pdo, $dp_period, false));
+        });
+    } catch (Throwable $e) {
+        bk_api_fail('digest_preview_failed', 500, $e, 'Náhled souhrnu se nepodařilo sestavit.');
+    }
+    // Set only now, so a failure above still answers as JSON.
+    header('Content-Type: text/html; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo $dp_html;
+    exit;
+}
+
 // 2f. Notification subscriptions of the current user
 if ($action === 'get_subscriptions') {
     bk_require_login();

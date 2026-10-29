@@ -59,7 +59,7 @@ export function DigestCard() {
         'Souhrnný e-mail se statistikami SLA, incidenty a průměrnou latencí za posledních 7 dnů.'
       ),
       send: t('settings.send_weekly_digest', 'Odeslat Týdenní Digest'),
-      preview: '/status/admin.php?action=preview_weekly_digest',
+      preview: '/status/api.php?action=digest_preview&period=weekly',
     },
     {
       period: 'monthly',
@@ -70,7 +70,7 @@ export function DigestCard() {
         'Kompletní měsíční auditní zpráva pro vedení se všemi výpadky, MTTR a plněním SLA.'
       ),
       send: t('settings.send_monthly_digest', 'Odeslat Měsíční Digest'),
-      preview: '/status/admin.php?action=preview_monthly_digest',
+      preview: '/status/api.php?action=digest_preview&period=monthly',
     },
   ];
 
