@@ -4811,16 +4811,19 @@ if ($action === 'sla_report') {
         // end, percentiles) - N+1 in its purest form. Now three batched
         // queries before the loop; results live in maps keyed by monitor_id and
         // the values are bit-for-bit identical (pinned by integration tests).
+        // One query per monitor is left in the loop, and only for a monitor
+        // with a down row: where its last outage started ($stmt_out_start).
         $sla_outage_by_mid = [];
         // No catch of its own: a failed read here used to report "never down"
         // (lastOutage null) for every monitor. It fails the report instead.
-        // The latest down row of every monitor + the nearest following up
-        // (the correlated subquery runs only for monitors that ever went down).
+        // The latest down row of every monitor + the nearest following 'up' or
+        // 'maintenance' row, where that outage ended (the correlated subquery
+        // runs only for monitors that ever went down).
         $stmt_out_all = $pdo->query("
             SELECT l.monitor_id, l.id, l.checked_at, l.error_message,
                    (SELECT u.checked_at FROM monitor_logs u
-                    WHERE u.monitor_id = l.monitor_id AND u.status = 'up' AND u.id > l.id
-                    ORDER BY u.id ASC LIMIT 1) AS next_up_at
+                    WHERE u.monitor_id = l.monitor_id AND u.status IN ('up', 'maintenance') AND u.id > l.id
+                    ORDER BY u.id ASC LIMIT 1) AS end_at
             FROM monitor_logs l
             JOIN (SELECT monitor_id, MAX(id) AS max_id FROM monitor_logs WHERE status = 'down' GROUP BY monitor_id) ld
               ON ld.max_id = l.id
@@ -4828,6 +4831,46 @@ if ($action === 'sla_report') {
         foreach ($stmt_out_all->fetchAll() as $orow) {
             $sla_outage_by_mid[(int)$orow['monitor_id']] = $orow;
         }
+        // When that outage STARTED: cron writes a row on every check, so the
+        // latest down row is the outage's last minute, and a two-hour outage
+        // read as "11:59 -> 12:00 (1 min)" with an MTTR of one minute. The
+        // start is the first down row after the last 'up' or 'maintenance'
+        // row before it: the first failed check, while the incident opens only
+        // once alert_confirm_failures confirms the failure. The outage ends at
+        // the next 'up' or 'maintenance' row, and a warning inside does not
+        // split it. A maintenance window bounds it the way availability counts
+        // it (maintenance time is outside the percentage and the outage
+        // minutes): a window's rows end an outage and are not one, but a
+        // 'down' row logged inside a window (a remote probe's 503) is an
+        // outage until the window's next row, as it is in availability. The
+        // incident stays open over a window and closes at the next 'up'.
+        // A row counts whoever wrote it, as in availability (monitor_logs does
+        // not record that): a remote probe's 'up' ends or splits the outage
+        // like cron's, and its 'down' starts one.
+        // "Before" / "after" is an earlier / later second, or the same second
+        // written earlier / later: cron and a remote probe both log a monitor,
+        // so an 'up' and a 'down' can share a second. b.at is the second of
+        // that last 'up' or 'maintenance' row, the subquery on u its id within
+        // that second. An earlier second is one MAX() per status: over an IN
+        // list MySQL reads the whole range instead of diving to its end.
+        // Without either in the kept logs (30 days) the start is the oldest
+        // down row there is, so an older outage is clipped to it. The lookups
+        // run on idx_logs_cover_latency (monitor_id, status, checked_at).
+        $stmt_out_start = $pdo->prepare("
+            SELECT MIN(d.checked_at) FROM monitor_logs d
+            CROSS JOIN (SELECT COALESCE(
+                  (SELECT MAX(checked_at) FROM monitor_logs
+                   WHERE monitor_id = ? AND status IN ('up', 'maintenance') AND checked_at = ? AND id < ?),
+                  GREATEST(
+                      COALESCE((SELECT MAX(checked_at) FROM monitor_logs
+                                WHERE monitor_id = ? AND status = 'up' AND checked_at < ?), '1970-01-01 00:00:00'),
+                      COALESCE((SELECT MAX(checked_at) FROM monitor_logs
+                                WHERE monitor_id = ? AND status = 'maintenance' AND checked_at < ?), '1970-01-01 00:00:00'))) AS at) b
+            WHERE d.monitor_id = ? AND d.status = 'down' AND d.checked_at <= ? AND d.checked_at >= b.at
+              AND (d.checked_at > b.at OR d.id > (
+                  SELECT COALESCE(MAX(u.id), 0) FROM monitor_logs u
+                  WHERE u.monitor_id = ? AND u.status IN ('up', 'maintenance') AND u.checked_at = b.at AND u.id < ?))
+        ");
 
         $sla_pct_by_mid = [];
         try {
@@ -4950,20 +4993,26 @@ if ($action === 'sla_report') {
             }
 
             // The last outage from the batched map - the outage end is the nearest
-            // following 'up' row, same as action=events.
+            // following 'up' or 'maintenance' row (action=events ends one at the
+            // next 'up' only). A monitor that left 'down' for warning or unknown
+            // without either since has no measured end: end and duration stay
+            // null (it used to end at its own start, 0 s, and that went into
+            // the MTTR).
             $last_outage = null;
             $out_row = $sla_outage_by_mid[$mid] ?? null;
             if ($out_row) {
-                $out_start = strtotime($out_row['checked_at']);
+                $out_at = (string)$out_row['checked_at'];
+                $out_id = (int)$out_row['id'];
+                $stmt_out_start->execute([$mid, $out_at, $out_id, $mid, $out_at, $mid, $out_at, $mid, $out_at, $mid, $out_id]);
+                $out_start = strtotime((string)($stmt_out_start->fetchColumn() ?: $out_at));
                 $resolved = $m['current_status'] !== 'down';
-                $out_end_ts = time();
-                if ($resolved) {
-                    $out_end_ts = $out_row['next_up_at'] ? strtotime($out_row['next_up_at']) : $out_start;
-                }
+                $out_end_ts = $resolved
+                    ? ($out_row['end_at'] ? strtotime($out_row['end_at']) : null)
+                    : time();
                 $last_outage = [
                     'start' => date('d.m.Y H:i:s', $out_start),
-                    'end' => $resolved ? date('d.m.Y H:i:s', $out_end_ts) : null,
-                    'durationSec' => max(0, $out_end_ts - $out_start),
+                    'end' => $resolved && $out_end_ts !== null ? date('d.m.Y H:i:s', $out_end_ts) : null,
+                    'durationSec' => $out_end_ts !== null ? max(0, $out_end_ts - $out_start) : null,
                     'reason' => $out_row['error_message'] ?: 'Port neodpovídá',
                     'resolved' => $resolved,
                 ];

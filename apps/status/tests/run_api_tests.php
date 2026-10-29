@@ -7957,6 +7957,163 @@ try {
 }
 
 // =======================================================================
+// R143: sla_report's last outage starts where the outage started.
+//
+// cron writes a row on every check, and the outage used to start at the
+// latest down row: a two-hour outage read as one minute, so did its MTTR,
+// an ongoing one was always a minute old, and a monitor that left 'down'
+// for 'warning' without an 'up' ended at its own start, 0 s. A maintenance
+// window bounds an outage as an 'up' does, the way availability counts it:
+// its rows are no outage, but a 'down' logged inside it is one until the
+// window's next row.
+// =======================================================================
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at) VALUES
+            (1431, 'R143 vyřešený', 'web', 'https://r143-a.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1432, 'R143 trvá', 'web', 'https://r143-b.example.com', 'down', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1433, 'R143 varování', 'web', 'https://r143-c.example.com', 'warning', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1434, 'R143 down po up v téže sekundě', 'web', 'https://r143-d.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1435, 'R143 down před up v téže sekundě', 'web', 'https://r143-e.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1436, 'R143 výpadek do údržby', 'web', 'https://r143-f.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1437, 'R143 sonda v údržbě', 'web', 'https://r143-g.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1438, 'R143 výpadek po údržbě', 'web', 'https://r143-h.example.com', 'down', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1439, 'R143 down po údržbě v téže sekundě', 'web', 'https://r143-i.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1440, 'R143 down před údržbou v téže sekundě', 'web', 'https://r143-j.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY))");
+try {
+    // Oldest first, so the ids follow time as they do for cron; whole minutes
+    // from one NOW(), or the seconds the inserts take land in the durations.
+    $r143_now = (string)$pdo->query('SELECT NOW()')->fetchColumn();
+    $r143_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at)
+                               VALUES (?, ?, ?, ?, DATE_SUB(?, INTERVAL ? MINUTE))");
+    $r143_run = function (int $mid, string $status, int $from_min, int $to_min) use ($r143_log, $r143_now): void {
+        // A failed check and a maintenance tick measured no response time.
+        $words = ['down' => 'HTTP 503', 'maintenance' => 'Plánovaná údržba'];
+        for ($min = $from_min; $min >= $to_min; $min--) {
+            $r143_log->execute([$mid, $status, isset($words[$status]) ? null : 100, $words[$status] ?? null, $r143_now, $min]);
+        }
+    };
+    // An earlier outage, then two hours down with one warning check inside
+    // (the incident stays open over it), then up again an hour ago.
+    $r143_run(1431, 'up', 300, 241);
+    $r143_run(1431, 'down', 240, 231);
+    $r143_run(1431, 'up', 230, 181);
+    $r143_run(1431, 'down', 180, 121);
+    $r143_run(1431, 'warning', 120, 120);
+    $r143_run(1431, 'down', 119, 61);
+    $r143_run(1431, 'up', 60, 0);
+    // Down for three hours and still down; no 'up' anywhere in the logs.
+    $r143_run(1432, 'down', 180, 0);
+    // Down for an hour, then warning for half an hour, no 'up' since.
+    $r143_run(1433, 'up', 120, 91);
+    $r143_run(1433, 'down', 90, 31);
+    $r143_run(1433, 'warning', 30, 0);
+    // cron and a remote probe both log a monitor, so an 'up' and a 'down' can
+    // share a second; the id says which came first. 1434: the outage's first
+    // down row is written after the 'up' in that second, and it counts.
+    $r143_run(1434, 'up', 180, 121);
+    $r143_run(1434, 'down', 121, 61);
+    $r143_run(1434, 'up', 60, 0);
+    // 1435: a down row written before the 'up' in that second is not part of
+    // the outage that follows it.
+    $r143_run(1435, 'up', 180, 122);
+    $r143_run(1435, 'down', 121, 121);
+    $r143_run(1435, 'up', 121, 121);
+    $r143_run(1435, 'down', 120, 61);
+    $r143_run(1435, 'up', 60, 0);
+    // An hour down, then an hour of maintenance (cron logs 'maintenance' and
+    // checks nothing; the incident stays open), then up again.
+    $r143_run(1436, 'up', 240, 181);
+    $r143_run(1436, 'down', 180, 121);
+    $r143_run(1436, 'maintenance', 120, 61);
+    $r143_run(1436, 'up', 60, 0);
+    // No outage of its own: an hour of maintenance in which a remote probe
+    // logged the planned work's 503 every five minutes, 20 s after cron's
+    // row. Each such 'down' is down until cron's next row, 40 s, which is
+    // what availability counts - not one outage across the whole window.
+    $r143_probe = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at)
+                                 VALUES (?, 'down', NULL, 'HTTP 503', DATE_SUB(?, INTERVAL ? SECOND))");
+    $r143_run(1437, 'up', 180, 121);
+    for ($min = 120; $min >= 61; $min--) {
+        $r143_run(1437, 'maintenance', $min, $min);
+        if ($min % 5 === 0) {
+            $r143_probe->execute([1437, $r143_now, $min * 60 - 20]);
+        }
+    }
+    $r143_run(1437, 'up', 60, 0);
+    // Down before an hour of maintenance and down again after it, still.
+    $r143_run(1438, 'down', 180, 121);
+    $r143_run(1438, 'maintenance', 120, 61);
+    $r143_run(1438, 'down', 60, 0);
+    // The same tie with a 'maintenance' row, which bounds an outage as an
+    // 'up' does. 1439: a probe's 'down' written after the window's first
+    // row in that second is an outage until the window's next row, 60 s,
+    // not part of the one before the window.
+    $r143_run(1439, 'up', 240, 181);
+    $r143_run(1439, 'down', 180, 121);
+    $r143_run(1439, 'maintenance', 120, 120);
+    $r143_run(1439, 'down', 120, 120);
+    $r143_run(1439, 'maintenance', 119, 61);
+    $r143_run(1439, 'up', 60, 0);
+    // 1440: a 'down' written before the window's last row in that second
+    // is not part of the outage that follows the window.
+    $r143_run(1440, 'maintenance', 180, 122);
+    $r143_run(1440, 'down', 121, 121);
+    $r143_run(1440, 'maintenance', 121, 121);
+    $r143_run(1440, 'down', 120, 61);
+    $r143_run(1440, 'up', 60, 0);
+
+    [$r143_code, $r143_sla] = api_get_auth($base, 'action=sla_report&days=7', $cookie_jar);
+    check('R143: sla_report vrací 200', $r143_code, 200);
+    $r143_rows = array_column($r143_sla['monitors'] ?? [], null, 'id');
+    $r143_a = $r143_rows[1431]['lastOutage'] ?? [];
+    check('R143: vyřešený výpadek trvá od prvního down po posledním up do dalšího up, ne jednu kontrolu',
+        [$r143_a['durationSec'] ?? null, $r143_rows[1431]['mttrSec'] ?? null, $r143_a['resolved'] ?? null], [7200, 7200, true]);
+    $r143_a_start = DateTime::createFromFormat('d.m.Y H:i:s', (string)($r143_a['start'] ?? ''));
+    $r143_a_end = DateTime::createFromFormat('d.m.Y H:i:s', (string)($r143_a['end'] ?? ''));
+    check('R143: konec minus začátek je ta délka',
+        $r143_a_start !== false && $r143_a_end !== false ? $r143_a_end->getTimestamp() - $r143_a_start->getTimestamp() : null, 7200);
+
+    $r143_b = $r143_rows[1432]['lastOutage'] ?? [];
+    check_true('R143: trvající výpadek běží od nejstaršího down, ne od poslední kontroly (dostal ' . json_encode($r143_b['durationSec'] ?? null) . ')',
+        ($r143_b['resolved'] ?? null) === false && ($r143_b['durationSec'] ?? 0) >= 10800 && ($r143_b['durationSec'] ?? 0) < 10800 + 300);
+    // array_key_exists, not ?? - the ?? operator treats NULL as a missing value.
+    check('R143: a nemá konec ani MTTR',
+        [array_key_exists('end', $r143_b) ? $r143_b['end'] : 'chybí', array_key_exists('mttrSec', $r143_rows[1432] ?? []) ? $r143_rows[1432]['mttrSec'] : 'chybí'],
+        [null, null]);
+
+    $r143_c = $r143_rows[1433]['lastOutage'] ?? [];
+    check('R143: výpadek bez dalšího up nemá konec ani délku, ne 0 s',
+        [
+            $r143_c['resolved'] ?? null,
+            array_key_exists('end', $r143_c) ? $r143_c['end'] : 'chybí',
+            array_key_exists('durationSec', $r143_c) ? $r143_c['durationSec'] : 'chybí',
+            array_key_exists('mttrSec', $r143_rows[1433] ?? []) ? $r143_rows[1433]['mttrSec'] : 'chybí',
+        ],
+        [true, null, null, null]);
+    check_true('R143: a začátek má', is_string($r143_c['start'] ?? null) && $r143_c['start'] !== '');
+
+    check('R143: down zapsaný v téže sekundě po up výpadek začíná, ne až další kontrola',
+        [$r143_rows[1434]['lastOutage']['durationSec'] ?? null, $r143_rows[1434]['mttrSec'] ?? null], [3660, 3660]);
+    check('R143: down zapsaný v téže sekundě před up do výpadku po něm nepatří',
+        [$r143_rows[1435]['lastOutage']['durationSec'] ?? null, $r143_rows[1435]['mttrSec'] ?? null], [3600, 3600]);
+
+    $r143_f = $r143_rows[1436]['lastOutage'] ?? [];
+    check('R143: výpadek, který přešel do údržby, končí jejím začátkem; údržba do délky ani MTTR nepatří',
+        [$r143_f['durationSec'] ?? null, $r143_rows[1436]['mttrSec'] ?? null, $r143_f['resolved'] ?? null], [3600, 3600, true]);
+    check('R143: down sondy v údržbě trvá do další kontroly cronu jako v dostupnosti, ne celé okno',
+        [$r143_rows[1437]['lastOutage']['durationSec'] ?? null, $r143_rows[1437]['mttrSec'] ?? null], [40, 40]);
+    $r143_h = $r143_rows[1438]['lastOutage'] ?? [];
+    check_true('R143: výpadek po údržbě běží od jejího konce, ne od výpadku před ní (dostal ' . json_encode($r143_h['durationSec'] ?? null) . ')',
+        ($r143_h['resolved'] ?? null) === false && ($r143_h['durationSec'] ?? 0) >= 3600 && ($r143_h['durationSec'] ?? 0) < 3600 + 300);
+    check('R143: down zapsaný v téže sekundě po začátku údržby trvá do její další kontroly, ne od výpadku před ní',
+        [$r143_rows[1439]['lastOutage']['durationSec'] ?? null, $r143_rows[1439]['mttrSec'] ?? null], [60, 60]);
+    check('R143: down zapsaný v téže sekundě před koncem údržby do výpadku po ní nepatří',
+        [$r143_rows[1440]['lastOutage']['durationSec'] ?? null, $r143_rows[1440]['mttrSec'] ?? null], [3600, 3600]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (1431, 1432, 1433, 1434, 1435, 1436, 1437, 1438, 1439, 1440)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (1431, 1432, 1433, 1434, 1435, 1436, 1437, 1438, 1439, 1440)");
+}
+
+// =======================================================================
 // First run: the installer (site W1-5).
 //
 // db.php used to copy config.sample.php over a missing config.php, so a fresh

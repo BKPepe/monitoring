@@ -1710,6 +1710,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'reports.p99_value_label': { cs: 'p99 (Kritické špičky):', en: 'p99 (Critical Spikes):' },
   'reports.last_outage_title': { cs: 'Poslední výpadek', en: 'Last Outage' },
   'reports.outage_ongoing': { cs: 'dosud', en: 'ongoing' },
+  'reports.outage_end_unmeasured': { cs: 'konec nezměřen', en: 'end not measured' },
+  'reports.mttr_unmeasured': { cs: 'Nezměřeno', en: 'Not measured' },
   'reports.resolved_badge': { cs: 'Vyřešeno', en: 'Resolved' },
   'reports.ongoing_badge': { cs: 'Probíhá', en: 'Ongoing' },
   'reports.reason_label': { cs: 'Důvod:', en: 'Reason:' },

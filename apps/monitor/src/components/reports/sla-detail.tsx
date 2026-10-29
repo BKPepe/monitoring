@@ -9,8 +9,10 @@ import { statusKeyOf, statusLabel, statusMeta } from '@/lib/status';
 
 export interface OutageDetail {
   start: string;
+  /** null = still down, or it left 'down' without an 'up' or 'maintenance' check since. */
   end: string | null;
-  durationSec: number;
+  /** null = no measured end (see `end`). */
+  durationSec: number | null;
   reason: string;
   resolved: boolean;
 }
@@ -67,7 +69,13 @@ export function SlaDetail({ item, days }: { item: MonitorSla; days: number }) {
         <div className={cell}>
           <p className="text-muted-foreground text-3xs">{t('reports.mttr_label', 'MTTR (doba obnovení)')}</p>
           <p className="font-semibold tabular-nums">
-            {item.mttrSec !== null ? formatDuration(item.mttrSec, lang) : t('reports.no_outage', 'Bez výpadku')}
+            {/* A resolved outage without a measured end has no recovery time,
+                and it is not "no outage" either: the block below shows it. */}
+            {item.mttrSec !== null
+              ? formatDuration(item.mttrSec, lang)
+              : item.lastOutage?.resolved
+                ? t('reports.mttr_unmeasured', 'Nezměřeno')
+                : t('reports.no_outage', 'Bez výpadku')}
           </p>
         </div>
         <div className={cell}>
@@ -148,8 +156,12 @@ export function SlaDetail({ item, days }: { item: MonitorSla; days: number }) {
             </Badge>
           </p>
           <p className="tabular-nums">
-            {item.lastOutage.start} → {item.lastOutage.end ?? t('reports.outage_ongoing', 'dosud')} (
-            {formatDuration(item.lastOutage.durationSec, lang)})
+            {item.lastOutage.start} →{' '}
+            {item.lastOutage.end ??
+              (item.lastOutage.resolved
+                ? t('reports.outage_end_unmeasured', 'konec nezměřen')
+                : t('reports.outage_ongoing', 'dosud'))}{' '}
+            ({item.lastOutage.durationSec !== null ? formatDuration(item.lastOutage.durationSec, lang) : '—'})
           </p>
           <p>
             <span className="text-muted-foreground">{t('reports.reason_label', 'Důvod:')}</span>{' '}
