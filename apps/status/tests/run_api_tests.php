@@ -3931,6 +3931,25 @@ if ($logged_in) {
     $pdo->prepare("UPDATE users SET phone = NULL WHERE username = ?")->execute(['admin']);
     $pdo->exec("DELETE FROM notification_log");
 
+    // Which kinds a channel is judged by, end to end: one failed e-mail of
+    // every kind (and one nobody declared), each to its own domain. Only the
+    // messages about the monitoring come back.
+    $nh_kind_ins = $pdo->prepare("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind, delivery,
+                                      error_message, created_at)
+                                  VALUES (NULL, 'down', 'email', ?, 0, ?, 'failed', 'SMTP Error', DATE_SUB(NOW(), INTERVAL 5 MINUTE))");
+    foreach (array_merge(bk_notification_kinds(), ['neznamy_druh']) as $nh_kind) {
+        $nh_kind_ins->execute(['k@' . str_replace('_', '-', $nh_kind) . '.example.com', $nh_kind]);
+    }
+    [, $nh_k] = api_get_auth($base, 'action=notification_health', $cookie_jar);
+    $nh_k_kinds = [];
+    foreach ($nh_k['problems'] ?? [] as $p) {
+        $nh_k_kinds[] = preg_match('/@(.+)\.example\.com$/', (string)($p['recipient'] ?? ''), $nh_k_m) ? $nh_k_m[1] : '?';
+    }
+    sort($nh_k_kinds);
+    check('stav kanálů čte výstrahy, připomínky, souhrny, oznámení a eskalace', $nh_k_kinds,
+        ['admin-notice', 'alert', 'daily-reminder', 'digest', 'escalation']);
+    $pdo->exec("DELETE FROM notification_log");
+
     // Every status change is stored as kind 'alert', so the kind alone named
     // a recovered disk "Outage alert". The row carries the tone the e-mail
     // uses; it is derived when read, so rows written before it get it too.

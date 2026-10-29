@@ -3688,7 +3688,20 @@ function render_insights_panel(array $insights) {
  * a server that routinely runs at 85 % CPU never triggers here, even though
  * the fixed Knowledge threshold (>80 %) would report "high" nonstop.
  *
- * @param array $baseline_values Numeric values from the "calm" period (excluding the last few days)
+ * The baseline comes as statistics computed in SQL. The original pulled all
+ * 30 days of measurements into PHP for the mean and deviation - over 43,000
+ * rows per monitor for an agent reporting every minute. The status page did
+ * that per monitor, and it was the largest share of the fifteen seconds the
+ * page took to assemble.
+ *
+ * AVG and STDDEV_POP compute exactly what the PHP loop used to (population
+ * variance, divides by n), so the threshold moved nowhere.
+ *
+ * @param ?float $mean  Baseline mean of the "calm" period (excluding the last
+ *                      few days); NULL = insufficient data
+ * @param ?float $sigma Population standard deviation
+ * @param ?int   $count Number of values behind the statistic.
+ *                      NULL = the query returned nothing, which is not the same as zero samples.
  * @param float $current The current (latest) value, outside the baseline window
  * @param float $min_sigma Floor for the effective sigma - guards against false
  *        alarms on a monitor with a suspiciously flat history (sigma near 0)
@@ -3696,52 +3709,12 @@ function render_insights_panel(array $insights) {
  * @return array{low: float, high: float, mean: float, current: float}|null
  *         null = insufficient data, or the value is normal
  */
-/**
- * Same as bk_compute_baseline_anomaly(), but from statistics computed in SQL.
- *
- * The original pulled all 30 days of measurements into PHP for the mean and
- * deviation - over 43,000 rows per monitor for an agent reporting every
- * minute. The status page did that per monitor, and it was the largest
- * share of the fifteen seconds the page took to assemble.
- *
- * AVG and STDDEV_POP compute exactly what the loop used to (population
- * variance, divides by n), so the threshold moved nowhere.
- *
- * @param ?float $mean  Baseline mean; NULL = insufficient data
- * @param ?float $sigma Population standard deviation
- * @param ?int   $count Number of values behind the statistic.
- *                      NULL = the query returned nothing, which is not the same as zero samples.
- */
 function bk_baseline_anomaly_from_stats(?float $mean, ?float $sigma, ?int $count, float $current, float $min_sigma, float $sigma_multiplier = 2.5) {
     if ($mean === null || $sigma === null || $count === null || $count < 20) {
         return null; // Málo historie na to, aby průměr/sigma dávaly smysl
     }
 
     $effective_sigma = max($sigma, $min_sigma);
-    if (abs($current - $mean) <= $sigma_multiplier * $effective_sigma) {
-        return null; // V normálu pro tenhle konkrétní monitor
-    }
-
-    return [
-        'low' => $mean - $sigma_multiplier * $effective_sigma,
-        'high' => $mean + $sigma_multiplier * $effective_sigma,
-        'mean' => $mean,
-        'current' => $current,
-    ];
-}
-
-function bk_compute_baseline_anomaly(array $baseline_values, float $current, float $min_sigma, float $sigma_multiplier = 2.5) {
-    $baseline_values = array_values(array_filter($baseline_values, fn($v) => $v !== null));
-    $n = count($baseline_values);
-    if ($n < 20) {
-        return null; // Málo historie na to, aby průměr/sigma dávaly smysl
-    }
-
-    $mean = array_sum($baseline_values) / $n;
-    $variance = array_sum(array_map(fn($v) => ($v - $mean) ** 2, $baseline_values)) / $n;
-    $sigma = sqrt($variance);
-    $effective_sigma = max($sigma, $min_sigma);
-
     if (abs($current - $mean) <= $sigma_multiplier * $effective_sigma) {
         return null; // V normálu pro tenhle konkrétní monitor
     }
@@ -4265,7 +4238,7 @@ function bk_get_network_insights($pdo, $monitor, $details) {
 
 /**
  * Insights v2 (Level 2 Anomaly Detection) - three rules (CPU/RAM/latency),
- * all over bk_compute_baseline_anomaly(). The baseline window is 3-30 days
+ * all over bk_baseline_anomaly_from_stats(). The baseline window is 3-30 days
  * back (a gap before "now", so an ongoing anomaly does not skew its own
  * baseline), the current value is the latest real sample outside that window.
  */
@@ -5927,25 +5900,6 @@ function detect_config_changes($pdo, $monitor, $check_result) {
     } catch (PDOException $e) {
         // Ignorujeme
     }
-}
-
-/**
- * ICMP ping - returns latency in ms or null on failure.
- * Uses the system `ping` with 1 packet and a 2s timeout.
- */
-function bk_ping_host($host, $timeout_ms = 2000) {
-    if (empty($host)) return null;
-    $host = escapeshellarg($host);
-    $timeout_s = max(1, (int)ceil($timeout_ms / 1000));
-    // Linux ping: -c 1 packet, -W timeout in seconds
-    $cmd = "ping -c 1 -W $timeout_s $host 2>/dev/null";
-    $output = @shell_exec($cmd);
-    if ($output === null) return null;
-    // Parses "time=1.23 ms" or "time=1 ms"
-    if (preg_match('/time[=<]\s*([0-9.]+)\s*ms/i', $output, $m)) {
-        return round((float)$m[1], 1);
-    }
-    return null;
 }
 
 /**
@@ -7874,25 +7828,30 @@ function bk_log_notification(
 /**
  * The canonical kinds of outgoing message.
  *
- * One list so the admin filter, the tests and the call sites cannot drift
- * apart. It is deliberately NOT an allow-list for writing - see the comment
- * at the INSERT above.
+ * One list so notification_health, the tests and the call sites cannot drift
+ * apart; each kind says here whether it exists to reach a person about the
+ * monitoring. It is deliberately NOT an allow-list for writing - see the
+ * comment at the INSERT above.
+ *
+ * @param bool $monitoring_only Only the kinds a channel's health is judged by.
+ *        Invitations, resets, previews and tests are one-offs.
  */
-function bk_notification_kinds(): array {
-    return [
-        'alert',
-        'daily_reminder',
-        'digest',
-        'digest_preview',
-        'invitation',
-        'password_reset',
-        'subscriber_confirm',
-        'subscriber_broadcast',
-        'admin_notice',
-        'escalation',
-        'test',
-        'other',
+function bk_notification_kinds(bool $monitoring_only = false): array {
+    $kinds = [
+        'alert' => true,
+        'daily_reminder' => true,
+        'digest' => true,
+        'digest_preview' => false,
+        'invitation' => false,
+        'password_reset' => false,
+        'subscriber_confirm' => false,
+        'subscriber_broadcast' => false,
+        'admin_notice' => true,
+        'escalation' => true,
+        'test' => false,
+        'other' => false,
     ];
+    return array_keys($monitoring_only ? array_filter($kinds) : $kinds);
 }
 
 /**

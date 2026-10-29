@@ -7,40 +7,155 @@
  *
  * Why: the repo long carried functions nobody called and settings that were
  * saved and never read. A manual audit found them once; this script can do it
- * again any time and guards in CI that dead code does not accumulate.
+ * again any time. With --strict any dead function, test-only function or dead
+ * setting exits non-zero, so a gate that passes it keeps them from piling up.
  */
 
 $strict = in_array('--strict', $argv, true);
 $dir = realpath(__DIR__ . '/..');
 
-$php_files = array_filter(
-    array_merge(glob($dir . '/*.php') ?: [], glob($dir . '/tests/*.php') ?: []),
-    fn($f) => !str_contains($f, '/lib/') && !str_contains($f, 'config.php')
-);
+$ours = fn($f) => !str_contains($f, '/lib/') && !str_contains($f, 'config.php');
+$app_files = array_values(array_filter(glob($dir . '/*.php') ?: [], $ours));
+$test_files = array_values(array_filter(glob($dir . '/tests/*.php') ?: [], $ours));
+$php_files = array_merge($app_files, $test_files);
+$is_test = array_fill_keys($test_files, true);
 
 $all_src = '';
+$file_tokens = [];
 foreach ($php_files as $f) {
-    $all_src .= "\n" . file_get_contents($f);
+    $src = (string)file_get_contents($f);
+    $all_src .= "\n" . $src;
+    $file_tokens[$f] = @token_get_all($src);
 }
 
 // --- 1. Functions defined but never called ---------------------------------
+// Counted from tokens, so a name in a comment or in a test's list of functions
+// to load is not a call. A function of the application counts only calls from
+// the application: one that only a test calls runs nowhere in production, the
+// test just keeps it company, so it is listed apart. A helper defined in a
+// test counts calls from anywhere.
+$method_modifiers = [T_PUBLIC, T_PROTECTED, T_PRIVATE, T_STATIC, T_ABSTRACT, T_FINAL];
 $defs = [];
-foreach ($php_files as $f) {
-    $src = file_get_contents($f);
-    if (preg_match_all('/^\s*function\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/m', $src, $m)) {
-        foreach ($m[1] as $fn) {
-            $defs[$fn] = basename($f);
+$app_defs = [];
+foreach ($file_tokens as $f => $tokens) {
+    $count = count($tokens);
+    for ($i = 0; $i < $count; $i++) {
+        if (!is_array($tokens[$i]) || $tokens[$i][0] !== T_FUNCTION) {
+            continue;
+        }
+        // A method is never called by its bare name, so it is not counted.
+        $k = $i - 1;
+        while ($k >= 0 && is_array($tokens[$k]) && in_array($tokens[$k][0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+            $k--;
+        }
+        if ($k >= 0 && is_array($tokens[$k]) && in_array($tokens[$k][0], $method_modifiers, true)) {
+            continue;
+        }
+        // function &name() returns by reference; a closure has no name at all.
+        $j = $i + 1;
+        while ($j < $count && (!is_array($tokens[$j]) ? $tokens[$j] === '&'
+            : in_array($tokens[$j][0], [T_WHITESPACE, T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG], true))) {
+            $j++;
+        }
+        if ($j < $count && is_array($tokens[$j]) && $tokens[$j][0] === T_STRING) {
+            $defs[$tokens[$j][1]] = basename($f);
+            if (!isset($is_test[$f])) {
+                $app_defs[$tokens[$j][1]] = basename($f);
+            }
+        }
+    }
+}
+
+// A call is the name followed by '('. A string equal to a function's name
+// counts as a call too: ($fetch ?? 'bk_self_check_fetch')($url) passes one
+// around as a callable. That errs on the side of keeping a function.
+$app_uses = [];
+$test_uses = [];
+foreach ($file_tokens as $f => $tokens) {
+    $count = count($tokens);
+    for ($i = 0; $i < $count; $i++) {
+        $tok = $tokens[$i];
+        if (!is_array($tok)) {
+            continue;
+        }
+        if ($tok[0] === T_CONSTANT_ENCAPSED_STRING) {
+            $name = substr($tok[1], 1, -1);
+        } elseif ($tok[0] === T_STRING || $tok[0] === T_NAME_FULLY_QUALIFIED) {
+            $name = ltrim($tok[1], '\\');
+            $j = $i + 1;
+            while ($j < $count && is_array($tokens[$j]) && $tokens[$j][0] === T_WHITESPACE) {
+                $j++;
+            }
+            if ($j >= $count || $tokens[$j] !== '(') {
+                continue;
+            }
+            $k = $i - 1;
+            while ($k >= 0 && is_array($tokens[$k]) && $tokens[$k][0] === T_WHITESPACE) {
+                $k--;
+            }
+            // The definition itself, a method, a static method, new Class().
+            if ($k >= 0 && is_array($tokens[$k]) && in_array($tokens[$k][0],
+                [T_FUNCTION, T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON, T_NEW], true)) {
+                continue;
+            }
+        } else {
+            continue;
+        }
+        if (!isset($defs[$name])) {
+            continue;
+        }
+        if (isset($is_test[$f])) {
+            $test_uses[$name] = ($test_uses[$name] ?? 0) + 1;
+        } else {
+            $app_uses[$name] = ($app_uses[$name] ?? 0) + 1;
         }
     }
 }
 
 $dead_functions = [];
+$test_only_functions = [];
 foreach ($defs as $fn => $file) {
-    // Number of "name(" occurrences outside the definition itself.
-    $uses = preg_match_all('/(?<![a-zA-Z0-9_$>])' . preg_quote($fn, '/') . '\s*\(/', $all_src);
-    $definitions = preg_match_all('/^\s*function\s+' . preg_quote($fn, '/') . '\s*\(/m', $all_src);
-    if ($uses <= $definitions) {
-        $dead_functions[$fn] = $file;
+    $in_app = $app_uses[$fn] ?? 0;
+    $in_tests = $test_uses[$fn] ?? 0;
+    if (!isset($app_defs[$fn])) {
+        if ($in_app + $in_tests === 0) {
+            $dead_functions[$fn] = $file;
+        }
+    } elseif ($in_app === 0) {
+        if ($in_tests > 0) {
+            $test_only_functions[$fn] = $app_defs[$fn];
+        } else {
+            $dead_functions[$fn] = $app_defs[$fn];
+        }
+    }
+}
+
+// JavaScript in the pages' inline HTML (onclick handlers, chart renderers) has
+// no PHP tokens, so its functions are found by text as they always were: a
+// definition at the start of a line in the HTML, a use the name followed by
+// '(' in the HTML or in a string the app echoes. A PHP comment is not looked
+// at; a JS comment still counts as a use.
+$js_defs = [];
+$js_text = '';
+foreach ($app_files as $f) {
+    foreach ($file_tokens[$f] as $tok) {
+        if (!is_array($tok) || !in_array($tok[0], [T_INLINE_HTML, T_CONSTANT_ENCAPSED_STRING, T_ENCAPSED_AND_WHITESPACE], true)) {
+            continue;
+        }
+        $js_text .= "\n" . $tok[1];
+        if ($tok[0] === T_INLINE_HTML && preg_match_all('/^[ \t]*function\s+([A-Za-z_$][\w$]*)\s*\(/m', $tok[1], $m)) {
+            foreach ($m[1] as $fn) {
+                $js_defs[$fn] = basename($f);
+            }
+        }
+    }
+}
+foreach ($js_defs as $fn => $file) {
+    $q = preg_quote($fn, '/');
+    $uses = preg_match_all('/(?<![\w$>])' . $q . '\s*\(/', $js_text)
+        - preg_match_all('/^[ \t]*function\s+' . $q . '\s*\(/m', $js_text);
+    if ($uses <= 0) {
+        $dead_functions[$fn] = $file . ', JS';
     }
 }
 
@@ -66,11 +181,10 @@ $known_external = array_flip([
 ]);
 
 $undefined_calls = [];
-foreach ($php_files as $f) {
+foreach ($file_tokens as $f => $tokens) {
     // token_get_all() misto regexu: rozumi komentarum, retezcum i vlozenemu
     // HTML/JS, takze "poskytovatele(" v ceskem komentari uz nikdo nehlasi
     // jako volani funkce.
-    $tokens = @token_get_all(file_get_contents($f));
     $count = count($tokens);
 
     for ($i = 0; $i < $count; $i++) {
@@ -119,12 +233,13 @@ foreach ($php_files as $f) {
 }
 
 // --- 2. Settings saved in the admin but read nowhere ----------------------
-$admin = file_get_contents($dir . '/admin.php');
-$saved = [];
-if (preg_match('/settings_to_save\s*=\s*\[(.*?)\];/s', $admin, $m)) {
-    preg_match_all("/'([a-z0-9_]+)'/", $m[1], $keys);
-    $saved = $keys[1];
-}
+// The saved keys are bk_settings_keys(), the one list the admin form and the
+// API's save_settings both take. It is extracted from db.php the way the tests
+// extract functions (db.php connects to the database when included), and a
+// rename throws there instead of leaving this section an empty list to check.
+require_once __DIR__ . '/assert_helpers.php';
+bk_test_load_functions($dir . '/db.php', ['bk_settings_keys']);
+$saved = bk_settings_keys();
 $dead_settings = [];
 foreach ($saved as $key) {
     $read_direct = preg_match("/get_setting\(\s*'" . preg_quote($key, '/') . "'/", $all_src);
@@ -205,7 +320,7 @@ foreach ($lm[1] as $key) {
 }
 
 // --- Output ----------------------------------------------------------------
-printf("Prohledáno %d PHP souborů, %d funkcí.\n\n", count($php_files), count($defs));
+printf("Prohledáno %d PHP souborů, %d funkcí.\n\n", count($php_files), count($defs) + count($js_defs));
 
 if ($dead_functions) {
     echo "Funkce bez jediného volání (" . count($dead_functions) . "):\n";
@@ -217,10 +332,20 @@ if ($dead_functions) {
     echo "Funkce bez volání: žádné\n\n";
 }
 
+if ($test_only_functions) {
+    echo "Funkce volané jen z testů (" . count($test_only_functions) . "):\n";
+    foreach ($test_only_functions as $fn => $file) {
+        printf("  %s  (%s)\n", $fn, $file);
+    }
+    echo "\n";
+} else {
+    echo "Funkce volané jen z testů: žádné\n\n";
+}
+
 if ($phantom_settings) {
     echo "Nastavení čtená, ale nikde neukládaná (" . count($phantom_settings) . "):\n";
     foreach ($phantom_settings as $key) {
-        echo "  get_setting('{$key}') - klíč není v settings_to_save ani se nikam nezapisuje,\n";
+        echo "  get_setting('{$key}') - klíč není v bk_settings_keys() ani se nikam nezapisuje,\n";
         echo "    takže vždycky vrátí výchozí hodnotu. Překlep v názvu?\n";
     }
     echo "\n";
@@ -252,7 +377,7 @@ if ($undefined_calls) {
 }
 
 // An undefined call is always a runtime error, so it fails even without --strict.
-$problems = count($dead_functions) + count($dead_settings) + count($phantom_settings);
+$problems = count($dead_functions) + count($test_only_functions) + count($dead_settings) + count($phantom_settings);
 if ($undefined_calls) {
     fwrite(STDERR, "Nalezena volání nedefinovaných funkcí - stránka by skončila fatální chybou.\n");
     exit(1);

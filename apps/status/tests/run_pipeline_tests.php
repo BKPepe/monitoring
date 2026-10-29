@@ -16,7 +16,7 @@ require_once __DIR__ . '/../lang.php';
 require_once __DIR__ . '/assert_helpers.php';
 bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_get_collection_issues', 'bk_disk_label', 'bk_ranged_int', 'bk_get_network_insights', 'bk_lte_backup_state', 'bk_wan_link_state', 'bk_with_email_lang', 'bk_enrich_threshold_tip',
-    'bk_relative_time_label', 'bk_format_duration', 'bk_compute_baseline_anomaly',
+    'bk_relative_time_label', 'bk_format_duration', 'bk_baseline_anomaly_from_stats',
     'bk_half_window_rate', 'bk_latency_score', 'bk_notification_kinds', 'bk_reports_24h_applies',
 ]);
 // Every check_* copy taken from functions.php below times its answer with
@@ -284,19 +284,30 @@ if (function_exists('bk_enrich_threshold_tip')) {
 // =======================================================================
 // 4. ANOMALY AND TREND DETECTION (the basis for notifications and insights)
 // =======================================================================
-if (function_exists('bk_compute_baseline_anomaly')) {
-    // A stable series + a value in the norm = no anomaly.
-    $stable = array_fill(0, 30, 20.0);
+if (function_exists('bk_baseline_anomaly_from_stats')) {
+    // A stable series (30 values of 20.0: mean 20, deviation 0) + a value in
+    // the norm = no anomaly.
     check('hodnota v normálu není anomálie',
-        bk_compute_baseline_anomaly($stable, 21.0, 5.0), null);
+        bk_baseline_anomaly_from_stats(20.0, 0.0, 30, 21.0, 5.0), null);
 
-    // A marked deviation above the baseline must be an anomaly.
-    $spike = bk_compute_baseline_anomaly($stable, 90.0, 5.0);
-    check_true('výrazný výkyv je anomálie', is_array($spike));
+    // A marked deviation above the baseline must be an anomaly; the floor of
+    // 5 stands in for the flat history's zero deviation.
+    check('výrazný výkyv je anomálie',
+        bk_baseline_anomaly_from_stats(20.0, 0.0, 30, 90.0, 5.0),
+        ['low' => 7.5, 'high' => 32.5, 'mean' => 20.0, 'current' => 90.0]);
 
-    // Empty history must claim nothing (there is nothing to compare with).
+    // Empty history must claim nothing (there is nothing to compare with):
+    // AVG and STDDEV_POP over no rows are NULL, COUNT is 0.
     check('bez historie se anomálie nehlásí',
-        bk_compute_baseline_anomaly([], 90.0, 5.0), null);
+        bk_baseline_anomaly_from_stats(null, null, 0, 90.0, 5.0), null);
+    // A query that returned nothing is not zero samples, and says nothing either.
+    check('bez odpovědi dotazu se anomálie nehlásí',
+        bk_baseline_anomaly_from_stats(20.0, 0.0, null, 90.0, 5.0), null);
+    // Under 20 values the mean and deviation mean nothing yet.
+    check('s 19 hodnotami se anomálie nehlásí',
+        bk_baseline_anomaly_from_stats(20.0, 0.0, 19, 90.0, 5.0), null);
+    check_true('s 20 hodnotami už ano',
+        is_array(bk_baseline_anomaly_from_stats(20.0, 0.0, 20, 90.0, 5.0)));
 }
 
 if (function_exists('bk_half_window_rate')) {
@@ -803,7 +814,10 @@ if (function_exists('bk_notification_kinds')) {
     $kinds = bk_notification_kinds();
     check_true('seznam druhů zná výstrahu i denní připomínku',
         in_array('alert', $kinds, true) && in_array('daily_reminder', $kinds, true));
-    check('a nemá duplicity', count($kinds), count(array_unique($kinds)));
+    // notification_health judges a channel by these and no others; written
+    // out so a kind moving in or out of it is a decision someone sees here.
+    check('stav kanálů čte jen zprávy o monitoringu', bk_notification_kinds(true),
+        ['alert', 'daily_reminder', 'digest', 'admin_notice', 'escalation']);
     // Every kind that a call site really uses must be in the canonical list,
     // otherwise the admin filter would offer a value nothing ever writes - or
     // worse, hide one that does.

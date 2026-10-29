@@ -143,6 +143,46 @@ try {
 check_true('neznámé jméno v načítání funkcí shodí běh', $loader_error !== null
     && str_contains($loader_error, 'bk_test_jmeno_ktere_neexistuje()'));
 
+// --- find_dead_code.php: what counts as a use -------------------------------
+// The finder runs over a small tree of its own. A PHP function named only in a
+// comment or called only from a test is no use by the app, and an inline JS
+// function nothing calls is as dead as a PHP one. The helpers it requires are
+// copied along and left out of the lists.
+$dc_dir = sys_get_temp_dir() . '/bk_dead_code_' . bin2hex(random_bytes(4));
+$dc_files = [
+    'tests/find_dead_code.php' => (string)file_get_contents(__DIR__ . '/find_dead_code.php'),
+    'tests/assert_helpers.php' => (string)file_get_contents(__DIR__ . '/assert_helpers.php'),
+    'tests/fx_test.php' => "<?php\necho bk_fx_test_only();\n",
+    'lang/cs.php' => "<?php\nreturn [];\n",
+    'db.php' => "<?php\nfunction bk_settings_keys(): array {\n    return [];\n}\n",
+    'page.php' => "<?php\n// bk_fx_commented() is named here only.\n"
+        . "function bk_fx_used(): int { return 1; }\nfunction bk_fx_commented(): int { return 2; }\n"
+        . "function bk_fx_test_only(): int { return 3; }\necho bk_fx_used() + count(bk_settings_keys());\n?>\n"
+        . "<button onclick=\"fxUsed()\">x</button>\n<script>\nfunction fxUsed() {}\nfunction fxUnused() {}\n</script>\n",
+];
+foreach ($dc_files as $dc_path => $dc_src) {
+    @mkdir(dirname($dc_dir . '/' . $dc_path), 0700, true);
+    file_put_contents($dc_dir . '/' . $dc_path, $dc_src);
+}
+exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($dc_dir . '/tests/find_dead_code.php') . ' 2>&1', $dc_out, $dc_rc);
+$dc_text = implode("\n", $dc_out) . "\n";
+$dc_list = function (string $title) use ($dc_text): array {
+    if (!preg_match('/^' . preg_quote($title, '/') . ' \(\d+\):\n((?:  .+\n)+)/m', $dc_text, $m)) {
+        return [];
+    }
+    $lines = array_map('trim', explode("\n", rtrim($m[1])));
+    return array_values(array_filter($lines, fn($l) => !str_ends_with($l, '(assert_helpers.php)')));
+};
+check('mrtvý kód: bez volání je funkce jen z komentáře i nevolaná JS funkce',
+    [$dc_rc, $dc_list('Funkce bez jediného volání')], [0, ['bk_fx_commented  (page.php)', 'fxUnused  (page.php, JS)']]);
+check('mrtvý kód: funkce volaná jen z testu je zvlášť', $dc_list('Funkce volané jen z testů'), ['bk_fx_test_only  (page.php)']);
+foreach (array_keys($dc_files) as $dc_path) {
+    @unlink($dc_dir . '/' . $dc_path);
+}
+@rmdir($dc_dir . '/tests');
+@rmdir($dc_dir . '/lang');
+@rmdir($dc_dir);
+
 
 // --- bk_validate_import_target: imported targets ----------------------------
 // Everything a hosting-side check can never reach is blocked. Exactly this

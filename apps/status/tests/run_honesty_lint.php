@@ -14,7 +14,7 @@
  *   $_GET['id'] ?? 0            OK  - a request parameter, not a measurement
  *   $stats['up_count'] ?? 0     OK  - COUNT() without rows really is zero
  *   $d['response_time'] ?? 0    ERROR - a nonexistent measurement is not 0 ms
- *   bk_ping_host($h) ?? 0       ERROR - a failed ping is not 0 ms
+ *   $probe['latency'] ?? 0      ERROR - a failed ping is not 0 ms
  */
 
 /** Names denoting a MEASURED quantity - for them a zero is a lie. */

@@ -2179,17 +2179,19 @@ if ($action === 'notification_health') {
     try {
         // The messages that exist to reach a person about the monitoring.
         // Invitations, resets and tests are one-offs, not a channel's health.
+        $nh_kinds = bk_notification_kinds(true);
+        $nh_in = implode(',', array_fill(0, count($nh_kinds), '?'));
         $nh_delivery = bk_notification_delivery_sql('n');
         $stmt = $pdo->prepare("
             SELECT n.id, n.channel, n.recipient, n.error_message, n.provider_reply, n.created_at,
                    {$nh_delivery} AS delivery_read, n.delivery AS delivery_stored
             FROM notification_log n
             WHERE n.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-              AND n.kind IN ('alert', 'daily_reminder', 'digest', 'admin_notice', 'escalation')
+              AND n.kind IN ({$nh_in})
               AND {$nh_delivery} <> 'skipped'
             ORDER BY n.id DESC
             LIMIT " . ($nh_limit + 1));
-        $stmt->execute();
+        $stmt->execute($nh_kinds);
         $nh_fetched = $stmt->fetchAll();
         // Newest first, so a cut drops the oldest rows - never the latest
         // attempt, which is the one that decides.
