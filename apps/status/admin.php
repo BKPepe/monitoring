@@ -1604,10 +1604,10 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                                                     <strong>Uptime:</strong> <?php echo format_uptime_cz($det['uptime']); ?><br>
                                                                 <?php endif; ?>
                                                                 <?php if (!empty($det['ports'])): ?>
-                                                                    <strong>Porty:</strong> <?php echo implode(', ', $det['ports']); ?><br>
+                                                                    <strong>Porty:</strong> <?php echo htmlspecialchars(implode(', ', array_filter((array)$det['ports'], 'is_scalar'))); ?><br>
                                                                 <?php endif; ?>
                                                                 <?php if (!empty($det['processes'])): 
-                                                                    $proc_arr = array_filter(array_unique($det['processes']));
+                                                                    $proc_arr = array_filter(array_unique(array_filter((array)$det['processes'], 'is_scalar')));
                                                                     ?>
                                                                     <strong>Procesy:</strong> <?php echo htmlspecialchars(implode(', ', array_slice($proc_arr, 0, 8))) . (count($proc_arr) > 8 ? '...' : ''); ?><br>
                                                                 <?php endif; ?>

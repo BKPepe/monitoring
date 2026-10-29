@@ -2488,6 +2488,35 @@ check('a další hlášení po něm projde', $post_agent($wan_ok), 200);
 $fat_d = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
 $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode(array_diff_key($fat_d, $fat))]);
 
+// The listening ports end up in last_details and on admin.php, so only port
+// numbers may get there; a list with markup in it used to be stored as sent.
+check('hlášení s nesmysly mezi porty agent přijme', $post_agent(['ports' => [443, '<img src=x onerror=alert(1)>', '22', 0, 70000, 443]]), 200);
+check('uloží se jen čísla portů 1-65535, každé jednou', $lte_details()['ports'] ?? null, [22, 443]);
+// admin.php escapes the list as well, and a row stored before the fix has only
+// that. A string where the page expects the process list must not stop it.
+// The page has an install gate (see setup_completed further down), passed
+// for this one request.
+$pt_d = $lte_details();
+$pt_setup = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'setup_completed'")->fetchColumn();
+$pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('setup_completed', '1') ON DUPLICATE KEY UPDATE key_value = '1'");
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")
+    ->execute([json_encode(['ports' => ['<img src=x onerror=alert(1)>', 22], 'processes' => 'x'] + $pt_d)]);
+$pt_ch = curl_init($base . '/admin.php');
+curl_setopt_array($pt_ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30,
+    CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_COOKIEJAR => $cookie_jar]);
+$pt_admin = (string)curl_exec($pt_ch);
+check('administrace se starým řádkem s kódem v portech se načte', (int)curl_getinfo($pt_ch, CURLINFO_RESPONSE_CODE), 200);
+check_true('kód z portů vypíše jako text (seznam monitorů ' . (str_contains($pt_admin, 'monitor-bulk-cb') ? 'je' : 'chybí')
+    . ', řádek Porty ' . (str_contains($pt_admin, 'Porty:') ? 'je' : 'chybí') . ')',
+    str_contains($pt_admin, '&lt;img src=x onerror=alert(1)&gt;') && !str_contains($pt_admin, '<img src=x onerror'));
+check_true('řetězec místo seznamu procesů stránku nezastaví', str_contains($pt_admin, '</html>'));
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($pt_d)]);
+if ($pt_setup === false) {
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'setup_completed'");
+} else {
+    $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'setup_completed'")->execute([$pt_setup]);
+}
+
 $ch_agent = curl_init($base . '/agent_api.php');
 curl_setopt_array($ch_agent, [
     CURLOPT_RETURNTRANSFER => true,

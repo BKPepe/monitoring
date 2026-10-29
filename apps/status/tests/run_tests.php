@@ -40,6 +40,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_ssl_alert_due',
     'bk_maintenance_window_expired',
     'bk_agent_str',
+    'bk_agent_ports',
     'bk_smart_is_missing',
     'bk_agent_bool',
     'bk_http_verdict',
@@ -735,6 +736,12 @@ if (function_exists('bk_agent_str')) {
     check_true('"null" od starého agenta = null', bk_agent_str(['h' => 'null'], 'h') === null);
     check_true('bool = null', bk_agent_str(['h' => true], 'h') === null);
     check('číslo se vrátí jako řetězec', bk_agent_str(['h' => 12], 'h'), '12');
+}
+if (function_exists('bk_agent_ports')) {
+    check('porty: jen celá čísla 1-65535, každé jednou a seřazená',
+        bk_agent_ports(['ports' => [443, '<img src=x onerror=alert(1)>', '22', 0, 70000, 443, 3.5, '8a', -1, ['x'], null, true]]), [22, 443]);
+    check('porty: chybějící klíč nebo řetězec místo seznamu = prázdný seznam',
+        [bk_agent_ports([]), bk_agent_ports(['ports' => '22, 80'])], [[], []]);
 }
 if (function_exists('bk_agent_bool')) {
     check_true('true/false projdou', bk_agent_bool(['a' => true], 'a') === true && bk_agent_bool(['a' => false], 'a') === false);

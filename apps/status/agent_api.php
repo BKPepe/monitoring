@@ -678,7 +678,7 @@ try {
         'agent_version' => bk_agent_str($data, 'version', 32),
         'uptime' => bk_agent_int($data, 'uptime'),
         'smart' => bk_agent_str($data, 'smart', 255),
-        'ports' => isset($data['ports']) && is_array($data['ports']) ? $data['ports'] : [],
+        'ports' => bk_agent_ports($data),
         'os' => bk_agent_str($data, 'os', 128),
         // Which agent reports (bash/python/powershell/openwrt) - stored so the
         // dashboard can compare the reported version against the right "latest"

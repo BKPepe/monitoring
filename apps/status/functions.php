@@ -741,6 +741,33 @@ function bk_agent_str(array $data, string $key, int $max = 255): ?string {
 }
 
 /**
+ * The listening ports an agent reports: whole numbers 1-65535, each once and
+ * in ascending order; anything else in the list goes. The list used to be
+ * stored as it came and admin.php printed it unescaped, so whoever held one
+ * device's agent key (it sits in agent.cfg) could run a script in the admin's
+ * session.
+ *
+ * @return list<int>
+ */
+function bk_agent_ports(array $data): array {
+    $raw = $data['ports'] ?? null;
+    if (!is_array($raw)) {
+        return [];
+    }
+    $ports = [];
+    foreach ($raw as $p) {
+        if (is_int($p) || (is_string($p) && ctype_digit($p))) {
+            $n = (int)$p;
+            if ($n >= 1 && $n <= 65535) {
+                $ports[$n] = $n;
+            }
+        }
+    }
+    ksort($ports);
+    return array_values($ports);
+}
+
+/**
  * Daily aggregation of agent metrics into `metrics_daily`.
  *
  * Raw `vps_metrics` is pruned after 30 days. Availability outlived that
