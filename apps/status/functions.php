@@ -19900,6 +19900,22 @@ function bk_require_login(): void {
 }
 
 /**
+ * Stops the request with 403 unless an administrator is signed in.
+ *
+ * An anonymous caller gets 403 here too, not 401: that is what every admin
+ * action has always answered. An action that tells the two apart calls
+ * bk_require_login() first. The role is already re-read from the users table
+ * (bk_sync_session_account()), so a demoted account is refused at once.
+ */
+function bk_require_admin(): void {
+    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+}
+
+/**
  * Stops the request unless the viewer may see the monitor: 401 for an
  * anonymous caller, 404 for a signed-in user it is not assigned to. The 404 is
  * the same answer as for a monitor that does not exist, so a user cannot probe

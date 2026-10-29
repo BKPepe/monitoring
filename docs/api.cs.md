@@ -111,7 +111,7 @@ i jméno operátora.
 |---|---|
 | 400 | Chybí nebo je neplatný parametr |
 | 401 | Nepřihlášen |
-| 403 | Přihlášen, ale nemá roli `admin` |
+| 403 | Bez role `admin` u akce pro administrátora. Nepřihlášený volající tam dostane také 403, kromě `users`, `audit_logs` a `metrics_history` za celou flotilu, které se nejdřív ptají na přihlášení (401). `install_cron` místo toho odpoví 409 `installer_locked`, a to po dokončené instalaci každému kromě administrátora |
 | 404 | Objekt neexistuje (nebo se to nemá prozradit - viz heartbeat) |
 | 405 | Špatná HTTP metoda |
 | 500 | Chyba na straně serveru |

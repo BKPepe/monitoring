@@ -598,11 +598,7 @@ if ($action === 'monitors') {
 
 // 2b. Insert or update a monitor directly in the MySQL database
 if ($action === 'save_monitor') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
     $id = isset($input['id']) ? (int)$input['id'] : 0;
     bk_refuse_archived_write($pdo, $id);
@@ -802,11 +798,7 @@ if ($action === 'save_monitor') {
  * typ monitoru vznikl.
  */
 if ($action === 'heartbeat_info') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
 
     $hb_id = (int)($_GET['monitor_id'] ?? 0);
     $regenerate = ($_GET['regenerate'] ?? '') === '1';
@@ -866,11 +858,7 @@ if ($action === 'heartbeat_info') {
 
 // 2b2. Delete a monitor from the MySQL database
 if ($action === 'delete_monitor') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
     $del_id = (int)($input['id'] ?? 0);
     if ($del_id > 0) {
@@ -897,11 +885,7 @@ if ($action === 'delete_monitor') {
 // summary, cron skips it, nobody is alerted and its agent's reports are refused.
 // A detail by id stays readable, and restoring brings it back as it was.
 if ($action === 'archive_monitor' || $action === 'unarchive_monitor') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $am_input = json_decode((string)file_get_contents('php://input'), true) ?: [];
     $am_id = (int)($am_input['id'] ?? 0);
     $am_archive = $action === 'archive_monitor';
@@ -961,11 +945,7 @@ if ($action === 'archive_monitor' || $action === 'unarchive_monitor') {
 // installed by its instructions stopped at "AGENT_KEY is not set". The key is a
 // credential: admin-only, and every read is written to the audit log.
 if ($action === 'agent_install_info') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $ai_id = (int)($_GET['monitor_id'] ?? 0);
     try {
         $stmt_ai = $pdo->prepare("SELECT id, name, type, agent_key, archived_at FROM monitors WHERE id = ? LIMIT 1");
@@ -1019,11 +999,7 @@ if ($action === 'agent_install_info') {
 // (agent_api.php) and admin.php can import it, but none of the front-end apps
 // (apps/monitor React SPA) ever read it back - hence this endpoint.
 if ($action === 'discovered_services') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     try {
         // Already-monitored services are not proposed again - otherwise an
         // imported service stayed in the panel as "unmonitored" (reported: kresd twice).
@@ -1127,11 +1103,7 @@ if ($action === 'discovered_services') {
 // the "propose -> confirm" step). Mirrors admin.php action_import_service,
 // jen jako JSON API pro React SPA.
 if ($action === 'import_discovered_service') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
     $s_name = trim($input['name'] ?? '');
     $s_type = trim($input['type'] ?? 'web');
@@ -1252,11 +1224,7 @@ if ($action === 'import_discovered_service') {
 // run them on our domain. The file is stored under a fixed name in uploads/
 // and the URL goes straight into the custom_logo_url setting.
 if ($action === 'upload_logo') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     if (empty($_FILES['logo']) || !is_array($_FILES['logo'])) {
         http_response_code(400);
         echo json_encode(['error' => 'Chybí soubor (pole "logo").'], JSON_UNESCAPED_UNICODE);
@@ -1338,11 +1306,7 @@ if ($action === 'ui_config') {
 // The same double consent check: global type list + per-monitor
 // allowed_actions; restart_service additionally requires a valid service name.
 if ($action === 'trigger_remote_action') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
     $ra_mid = (int)($input['monitorId'] ?? 0);
     $ra_action = trim((string)($input['action'] ?? ''));
@@ -1387,11 +1351,7 @@ if ($action === 'trigger_remote_action') {
 // monitors whose target sits on a private network - an active check from the
 // hosting never succeeds there and only generates false outages.
 if ($action === 'convert_to_agent_check') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
     $cv_id = (int)($input['id'] ?? 0);
     $cv_proc = trim((string)($input['process'] ?? ''));
@@ -1601,11 +1561,7 @@ if ($action === 'dashboard_layout') {
 
 // 2b3. Read the system settings (admin-only, masked passwords)
 if ($action === 'get_settings') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
 
     // The list is shared with the write path and the legacy admin (db.php).
     // When read and write drift apart, the form shows an empty field and saves it.
@@ -1643,11 +1599,7 @@ if ($action === 'get_settings') {
 // monitor's own name back: a stray click on a button labelled "clear" must not
 // be able to delete months of measurements.
 if ($action === 'clear_monitor_history') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $ch_input = json_decode((string)file_get_contents('php://input'), true);
     $ch_id = (int)($ch_input['monitor_id'] ?? 0);
     $ch_confirm = trim((string)($ch_input['confirm_name'] ?? ''));
@@ -1699,11 +1651,7 @@ if ($action === 'clear_monitor_history') {
 // a setting and every check writes it into its log row, so a wrong one follows
 // the data around until somebody forces a new lookup.
 if ($action === 'redetect_location') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     try {
         $rl_loc = detect_server_location();
         $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
@@ -1728,11 +1676,7 @@ if ($action === 'toggle_maintenance') {
     // Admin only. Maintenance silences every alert for the monitors it covers,
     // and without an end it lasts forever: a 'user' account - the kind created
     // for notification subscriptions - could switch off alerting for the fleet.
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $tm_input = json_decode((string)file_get_contents('php://input'), true);
     $tm_ids = [];
     foreach ((array)($tm_input['monitor_ids'] ?? []) as $tm_id) {
@@ -1941,11 +1885,7 @@ if ($action === 'interface_traffic_daily') {
 // recipients and carries the delivery errors of the channels.
 if ($action === 'notification_log') {
     // Admin only: it names the recipients and carries the channels' delivery errors.
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $nl_monitor = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
     $nl_limit = min(200, max(1, (int)($_GET['limit'] ?? 50)));
     // Paging by cursor, not by OFFSET: rows keep being written while somebody
@@ -2134,11 +2074,7 @@ if ($action === 'notification_log') {
 // from every response), or null. selfCheck: the cron's last check of the
 // public API (bk_self_check_run()), or null before its first run.
 if ($action === 'site_health') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     try {
         $sh_stmt = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = 'self_check_state'");
         $sh_stmt->execute();
@@ -2170,11 +2106,7 @@ if ($action === 'site_health') {
 // Which channel has stopped reaching whom (the /app warning). Admin only:
 // even masked, it says who is not being notified.
 if ($action === 'notification_health') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $nh_limit = 5000;
     try {
         // The messages that exist to reach a person about the monitoring.
@@ -2250,11 +2182,7 @@ if ($action === 'notification_health') {
 }
 
 if ($action === 'test_notification') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $tn_input = json_decode((string)file_get_contents('php://input'), true);
     $tn_channel = is_array($tn_input) ? (string)($tn_input['channel'] ?? '') : '';
     if (!in_array($tn_channel, ['email', 'discord', 'telegram', 'slack'], true)) {
@@ -2282,11 +2210,7 @@ if ($action === 'test_notification') {
 }
 
 if ($action === 'save_settings') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
 
     $input = json_decode(file_get_contents('php://input'), true);
     if (!$input || !isset($input['settings']) || !is_array($input['settings'])) {
@@ -2353,11 +2277,7 @@ if ($action === 'save_settings') {
 
 // 2b5. Generate and activate the Prometheus token (admin-only)
 if ($action === 'generate_metrics_token') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
 
     try {
         $new_token = bin2hex(random_bytes(16));
@@ -3673,11 +3593,7 @@ if ($action === 'incidents') {
 // resolve with a note, postmortem. Every step is written into
 // incident_updates - the timeline stays complete no matter who did what.
 if ($action === 'incident_action') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $input = json_decode(file_get_contents('php://input'), true) ?: [];
     $incident_id = (int)($input['id'] ?? 0);
     $op = (string)($input['op'] ?? '');
@@ -3765,11 +3681,7 @@ if ($action === 'incident_action') {
 // 2c3. Manual incident report (admin-only) - writes into `incidents` + the first
 // message into `incident_updates`.
 if ($action === 'create_incident') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $input = json_decode(file_get_contents('php://input'), true) ?: [];
     $title = trim($input['title'] ?? '');
     $message = trim($input['message'] ?? '');
@@ -3892,11 +3804,7 @@ if ($action === 'presets') {
 }
 
 if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'assign_preset') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $input = json_decode(file_get_contents('php://input'), true) ?: [];
 
     try {
@@ -4036,11 +3944,7 @@ if ($action === 'check_stages') {
 // desitky MB a pro obnovu nastaveni k nicemu.
 if ($action === 'export_config') {
     // Admin only: internal targets, notes, SMTP and SMS account identifiers.
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
 
     try {
         $export = [
@@ -4119,11 +4023,7 @@ if ($action === 'export_config') {
 // stavajici heslo, samotny profil ne. Cizi ucet tudy zmenit nejde - ID se
 // bere VYHRADNE ze session.
 if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oauth_unlink') {
-    if (empty($_SESSION['admin_logged_in']) || empty($_SESSION['admin_id'])) {
-        http_response_code(401);
-        echo json_encode(['error' => 'Vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_login();
     $mp_uid = (int)$_SESSION['admin_id'];
 
     if ($action === 'my_profile') {
@@ -4286,11 +4186,7 @@ if ($action === 'set_password') {
 // secret zije jen v session, dokud uzivatel kodem nepotvrdi, ze se mu QR
 // opravdu naskenoval - jinak by sel ucet zamknout neoverenym secretem.
 if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_disable' || $action === 'totp_recovery_regenerate') {
-    if (empty($_SESSION['admin_logged_in']) || empty($_SESSION['admin_id'])) {
-        http_response_code(401);
-        echo json_encode(['error' => 'Vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_login();
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         http_response_code(405);
         echo json_encode(['error' => 'Vyžadován POST.'], JSON_UNESCAPED_UNICODE);
@@ -4480,11 +4376,7 @@ if ($action === 'status_pages') {
 }
 
 if ($action === 'save_status_page' || $action === 'delete_status_page') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadováno přihlášení.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $input = json_decode(file_get_contents('php://input'), true) ?: [];
     try {
         if ($action === 'delete_status_page') {
@@ -5124,11 +5016,7 @@ if ($action === 'audit_logs') {
     // Admin only: the raw check history of every monitor. It used to answer
     // anyone, with error texts naming processes and internal targets.
     bk_require_login();
-    if (!bk_viewer()['is_admin']) {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     try {
         $limit = min(200, max(10, (int)($_GET['limit'] ?? 50)));
 
@@ -6107,11 +5995,7 @@ if ($action === 'metric_series_batch') {
 
 // 2f. Manual digest send (admin-only)
 if ($action === 'send_digest') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
     $period = ($input['period'] ?? $_GET['period'] ?? '') === 'monthly' ? 'monthly' : 'weekly';
     try {
@@ -6128,11 +6012,7 @@ if ($action === 'send_digest') {
 
 // 2f. Notification subscriptions of the current user
 if ($action === 'get_subscriptions') {
-    if (empty($_SESSION['admin_logged_in'])) {
-        http_response_code(401);
-        echo json_encode(['error' => 'Nepřihlášen'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_login();
     $user_id = (int)($_SESSION['admin_id'] ?? 0);
     try {
         // Alerts only about monitors this account may see.
@@ -6172,11 +6052,7 @@ if ($action === 'get_subscriptions') {
 
 // 2g. Save the notification subscriptions
 if ($action === 'save_subscriptions') {
-    if (empty($_SESSION['admin_logged_in'])) {
-        http_response_code(401);
-        echo json_encode(['error' => 'Nepřihlášen'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_login();
     $user_id = (int)($_SESSION['admin_id'] ?? 0);
     $input = json_decode(file_get_contents('php://input'), true);
     if (!$input || !isset($input['subscriptions'])) {
@@ -6247,11 +6123,7 @@ if ($action === 'save_subscriptions') {
 // action fell through to the default response with HTTP 200 and no error key -
 // and the UI reported "saved" while nothing happened at all. Same logic as the admin.php handlers.
 if ($action === 'save_user' || $action === 'delete_user') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $su_input = json_decode(file_get_contents('php://input'), true) ?: [];
 
     if ($action === 'delete_user') {
@@ -6416,18 +6288,10 @@ if ($action === 'save_user' || $action === 'delete_user') {
 }
 
 if ($action === 'users') {
-    if (empty($_SESSION['admin_logged_in'])) {
-        http_response_code(401);
-        echo json_encode(['error' => 'Unauthorized'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
     // Admin only: every account's e-mail, phone and 2FA state. A non-admin
     // needs at most their own row, which my_profile already returns.
-    if (($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_login();
+    bk_require_admin();
     try {
         $stmt = $pdo->query("SELECT id, username, email, phone, role, totp_enabled, oauth_provider, created_at FROM users ORDER BY id ASC");
         $rows = $stmt->fetchAll();
@@ -6470,11 +6334,9 @@ if ($action === 'metrics_history') {
     // agent in the fleet, which only an admin may see.
     if ($monitor_id > 0) {
         bk_require_monitor_view($pdo, $monitor_id);
-    } elseif (!bk_viewer()['is_admin']) {
+    } else {
         bk_require_login();
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_require_admin();
     }
 
     $result = [
@@ -6942,11 +6804,7 @@ if ($action === 'router_recommendations') {
  * it is heard again.
  */
 if ($action === 'router_recommendation_mute') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $rm_input = json_decode((string)file_get_contents('php://input'), true);
     if (!is_array($rm_input)) {
         $rm_input = $_POST;
@@ -7306,11 +7164,7 @@ if ($action === 'wan_bottleneck') {
  * clamping it would store a plan the owner never entered.
  */
 if ($action === 'wan_settings_save') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     $ws_input = json_decode((string)file_get_contents('php://input'), true);
     if (!is_array($ws_input)) {
         $ws_input = $_POST;
@@ -7392,11 +7246,7 @@ if ($action === 'wan_settings_save') {
  * attempts and IP addresses.
  */
 if ($action === 'user_audit_log') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
 
     $ua_limit = max(10, min(500, (int)($_GET['limit'] ?? 100)));
 
@@ -7549,11 +7399,7 @@ if ($action === 'public_unsubscribe') {
 // Admin overview of public subscribers - the admin must be able to see and
 // remove addresses (somebody asks to be removed by hand, GDPR requests...).
 if ($action === 'public_subscribers' || $action === 'delete_public_subscriber') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
     try {
         if ($action === 'delete_public_subscriber') {
             $dps_input = json_decode(file_get_contents('php://input'), true) ?: [];
@@ -7774,11 +7620,7 @@ if ($action === 'export_csv') {
  * single row was ever written into that table.
  */
 if ($action === 'save_annotation') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
 
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
     $ann_monitor_id = (int)($input['monitor_id'] ?? 0);
@@ -7880,11 +7722,7 @@ if ($action === 'annotations') {
 
 /** Deleting a chart note. Admin-only, the same gate as creating one. */
 if ($action === 'delete_annotation') {
-    if (empty($_SESSION['admin_logged_in']) || ($_SESSION['admin_role'] ?? '') !== 'admin') {
-        http_response_code(403);
-        echo json_encode(['error' => 'Přístup odepřen — vyžadována role administrátora.'], JSON_UNESCAPED_UNICODE);
-        exit;
-    }
+    bk_require_admin();
 
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
     $ann_id = (int)($input['id'] ?? 0);

@@ -113,7 +113,7 @@ and the operator's name.
 |---|---|
 | 400 | A parameter is missing or invalid |
 | 401 | Not logged in |
-| 403 | Logged in, but without the `admin` role |
+| 403 | Without the `admin` role on an admin action. An anonymous caller gets 403 there too, except from `users`, `audit_logs` and the fleet-wide `metrics_history`, which ask for a login first (401). `install_cron` answers 409 `installer_locked` instead, to anyone but an administrator once the install is finished |
 | 404 | The object does not exist (or must not be revealed - see heartbeat) |
 | 405 | Wrong HTTP method |
 | 500 | Server-side error |

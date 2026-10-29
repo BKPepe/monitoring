@@ -759,6 +759,72 @@ foreach ([
     [$ra_code] = api_get_auth($base, $ra_query, $jar3);
     check("běžný uživatel nedostane {$ra_name}", $ra_code, 403);
 }
+
+// Every admin action stops a 'user' account at one gate, bk_require_admin(),
+// with one answer, writes and reads alike - it used to be 33 copies with three
+// different messages. The account carries a valid CSRF token, so a write
+// reaches the role check instead of the CSRF guard.
+$ag_denied = 'Přístup odepřen — vyžadována role administrátora.';
+foreach ([
+    'save_monitor', 'delete_monitor', 'archive_monitor', 'unarchive_monitor',
+    'import_discovered_service', 'upload_logo', 'trigger_remote_action',
+    'convert_to_agent_check', 'clear_monitor_history', 'redetect_location',
+    'toggle_maintenance', 'test_notification', 'save_settings',
+    'generate_metrics_token', 'incident_action', 'create_incident',
+    'save_preset', 'delete_preset', 'assign_preset', 'save_status_page',
+    'delete_status_page', 'send_digest', 'save_user', 'delete_user',
+    'router_recommendation_mute', 'wan_settings_save', 'delete_public_subscriber',
+    'save_annotation', 'delete_annotation',
+] as $ag_action) {
+    [$ag_code, $ag_body] = api_post($base, "action={$ag_action}", [], $jar3, $u3_csrf);
+    check("běžný uživatel neprojde zápisem {$ag_action}", $ag_code, 403);
+    check("a {$ag_action} odpoví jednou hláškou", $ag_body['error'] ?? null, $ag_denied);
+}
+$ag_reads = [
+    'heartbeat_info' => 'action=heartbeat_info&monitor_id=1',
+    'agent_install_info' => 'action=agent_install_info&monitor_id=2',
+    'discovered_services' => 'action=discovered_services',
+    'get_settings' => 'action=get_settings',
+    'notification_log' => 'action=notification_log',
+    'site_health' => 'action=site_health',
+    'notification_health' => 'action=notification_health',
+    'export_config' => 'action=export_config',
+    'user_audit_log' => 'action=user_audit_log',
+    'public_subscribers' => 'action=public_subscribers',
+];
+foreach ($ag_reads + [
+    'users' => 'action=users',
+    'audit_logs' => 'action=audit_logs',
+    'metrics_history celé flotily' => 'action=metrics_history&period=24h',
+] as $ag_name => $ag_query) {
+    [$ag_code, $ag_body] = api_get_auth($base, $ag_query, $jar3);
+    check("běžný uživatel neprojde čtením {$ag_name}", $ag_code, 403);
+    check("a {$ag_name} odpoví jednou hláškou", $ag_body['error'] ?? null, $ag_denied);
+}
+// An anonymous caller gets the same 403 from an admin read. A write never
+// reaches the gate anonymously - the CSRF guard answers first.
+foreach ($ag_reads as $ag_name => $ag_query) {
+    [$ag_code, $ag_body] = api_get($base, $ag_query);
+    check("anonym neprojde čtením {$ag_name}", $ag_code, 403);
+    check("a anonymovi {$ag_name} odpoví toutéž hláškou", $ag_body['error'] ?? null, $ag_denied);
+}
+// These ask for a login first, so an anonymous caller gets 401 there.
+foreach ([
+    'users' => 'action=users',
+    'audit_logs' => 'action=audit_logs',
+    'metrics_history celé flotily' => 'action=metrics_history&period=24h',
+    'my_profile' => 'action=my_profile',
+    'get_subscriptions' => 'action=get_subscriptions',
+] as $ag_name => $ag_query) {
+    [$ag_code, $ag_body] = api_get($base, $ag_query);
+    check("anonym bez přihlášení nedostane {$ag_name}", $ag_code, 401);
+    check("a {$ag_name} mu odpoví hláškou přihlášení", $ag_body['error'] ?? null, 'Unauthorized');
+}
+// install_cron belongs to the installer, which answers before this gate: on a
+// finished install anyone but an administrator gets its lock, not a 403.
+[$ag_code, $ag_body] = api_get_auth($base, 'action=install_cron', $jar3);
+check('běžný uživatel nedostane cron řádek, jen zámek instalátoru', [$ag_code, $ag_body['error'] ?? null], [409, 'installer_locked']);
+
 // A monitor that is not assigned answers exactly like one that does not exist.
 foreach ([
     'process_top' => 'action=process_top&monitor_id=1',
