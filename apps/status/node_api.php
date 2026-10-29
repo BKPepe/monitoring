@@ -19,14 +19,10 @@ require_once __DIR__ . '/db.php';
 // is_in_maintenance(), as cron applies it.
 require_once __DIR__ . '/functions.php';
 
-// 1. Ensure the checked_from column exists in monitor_logs
-try {
-    $pdo->exec("ALTER TABLE monitor_logs ADD COLUMN checked_from VARCHAR(50) DEFAULT 'Main Server'");
-} catch (PDOException $e) {
-    // Column already exists, ignore the error
-}
+// monitor_logs.checked_from comes from schema.sql and db.php's migrations;
+// this file no longer adds it again on every request.
 
-// 2. API key security check - no hardcoded fallback key.
+// API key security check - no hardcoded fallback key.
 // An empty cron_key means the endpoint is switched off entirely (fail closed),
 // not that some publicly known default applies (a real hole, because the same
 // literal is published in node_client.php as the copy-paste default).

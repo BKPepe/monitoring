@@ -7429,6 +7429,14 @@ try {
     check('sonda zapíše měření do historie i s místem; bez času je odezva NULL, ne 0 ms; do běžící údržby nic, po jejím konci ano',
         array_map(fn ($r) => [(int)$r['monitor_id'], $r['status'], $r['response_time'] === null ? null : (int)$r['response_time'], $r['error_message'], $r['checked_from']], $np_logs),
         [[176, 'down', 8000, 'Timeout after 8000ms', 'Testovací uzel'], [179, 'up', null, null, 'Testovací uzel']]);
+    // The column above comes from schema.sql (db.php's migration adds it to
+    // an older database). node_api.php ran the same ALTER TABLE on every
+    // request and swallowed the duplicate-column error.
+    check('sloupec místa měření je ve schema.sql i v migraci db.php, node_api.php schéma nemění', [
+        preg_match('/`checked_from` VARCHAR\(50\)/', (string)file_get_contents($root . '/schema.sql')),
+        preg_match('/ALTER TABLE monitor_logs ADD COLUMN checked_from\b/', (string)file_get_contents($root . '/db.php')),
+        preg_match_all('/\b(?:ALTER|CREATE|DROP)\s+TABLE\b/i', (string)file_get_contents($root . '/node_api.php')),
+    ], [1, 1, 0]);
 
     // Cron confirmed the outage, then a probe's 'up' became the newest row:
     // the finding still gives the reason of the check that found it down.
