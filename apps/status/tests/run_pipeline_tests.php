@@ -2105,7 +2105,4 @@ check('honesty lint najde nulovou odezvu i jako 0.0, přiřazení a INSERT s VAL
 @rmdir(dirname($hl_tmp));
 
 $failed = bk_test_report('sběr, e-maily, notifikace');
-// Under the coverage runner the process does not exit - the report would never generate.
-if (!defined('BK_COVERAGE_RUN')) {
-    exit($failed > 0 ? 1 : 0);
-}
+exit($failed > 0 ? 1 : 0);

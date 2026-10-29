@@ -91,7 +91,7 @@ jobs:
         run: npm run check:bundle
 
   php:
-    name: PHP (testy, coverage, lint, mrtvý kód)
+    name: PHP (testy, lint, mrtvý kód)
     runs-on: ubuntu-latest
     steps:
       # Agent linty ctou soubory ze submodulu `agents` - bez nej by nemely co
@@ -100,13 +100,17 @@ jobs:
         with:
           submodules: true
 
-      - name: Setup PHP s Xdebug (kvůli coverage)
+      - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           # Musi odpovidat produkci (cPanel ea-php84) - testovat na jine
           # verzi znamena netestovat to, co uzivatelum opravdu bezi.
           php-version: '8.4'
-          coverage: xdebug
+          # No PHP coverage: the suites test eval()'d copies of the functions,
+          # which Xdebug credits to tests/, so the number only ever measured
+          # installer.php, lang.php, lang/*.php and cloudflare_colos.php (336
+          # lines), never functions.php or api.php.
+          coverage: none
           extensions: mbstring, curl, pdo
 
       # The whole PHP gate in one command, the same one the deploy and
@@ -122,24 +126,6 @@ jobs:
       # the agent lints here are this repo's rules about the agents.
       - name: PHP brána (run_all.php)
         run: php apps/status/tests/run_all.php
-
-      # BK_COVERAGE_MIN je rohatka: az bude zmerena skutecna hodnota z CI,
-      # doplni se sem a pokryti uz nesmi klesnout niz.
-      - name: Coverage report (Cobertura + Clover)
-        env:
-          # Namerena hodnota z prvniho behu CI; snizovat se nema, zvysovat ano.
-          BK_COVERAGE_MIN: '55'
-        run: |
-          mkdir -p coverage
-          php -d xdebug.mode=coverage apps/status/tests/run_coverage.php
-
-      - name: Upload coverage artefaktu
-        uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: php-coverage
-          path: coverage/
-          if-no-files-found: ignore
 
   api:
     name: API integrační testy (api.php nad MySQL)

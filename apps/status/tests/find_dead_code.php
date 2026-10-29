@@ -176,8 +176,6 @@ $known_external = array_flip([
     'Exception', 'DateTime', 'DateTimeZone', 'DateInterval', 'PDO', 'PDOException',
     'Throwable', 'SimpleXMLElement', 'RecursiveIteratorIterator', 'RecursiveDirectoryIterator',
     'FilesystemIterator', 'ArrayObject', 'stdClass', 'Closure', 'Generator', 'JsonException',
-    // Xdebug nemusi byt nainstalovany; volani jsou hlidana function_exists().
-    'xdebug_start_code_coverage', 'xdebug_stop_code_coverage', 'xdebug_get_code_coverage',
 ]);
 
 $undefined_calls = [];

@@ -8742,6 +8742,4 @@ try {
 }
 
 $failed = bk_test_report('api.php (integrační)');
-if (!defined('BK_COVERAGE_RUN')) {
-    exit($failed > 0 ? 1 : 0);
-}
+exit($failed > 0 ? 1 : 0);

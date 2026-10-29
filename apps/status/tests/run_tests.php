@@ -5168,7 +5168,4 @@ check('úryvek: krátká a obyčejná slova zůstanou čitelná', array_map('bk_
 ]), ['Ah', 'Warning', 'Ahoj\\n', '••• hunter']);
 
 $failed = bk_test_report('čisté funkce');
-// Under the coverage runner the process does not exit - the report would never generate.
-if (!defined('BK_COVERAGE_RUN')) {
-    exit($failed > 0 ? 1 : 0);
-}
+exit($failed > 0 ? 1 : 0);
