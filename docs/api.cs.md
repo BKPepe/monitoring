@@ -907,20 +907,11 @@ LTE zálohu; to číslo je skutečné, jen to není rychlost linky.
 | Endpoint | Přístup | Popis |
 |---|---|---|
 | `action=incidents` | veřejný stav / přiřazené | Seznam incidentů. Začátek výpadku je okamžik, kdy monitor spadl (`last_status_change`), ne poslední potvrzení výpadku. Veřejný pohled vynechá cíle, jména operátorů a důvody kontrol, i v `updates` |
-| `action=create_incident` | přihlášený | Ruční založení. Volitelné `monitorId` naváže incident na monitor: 404 neznámý, 409 archivovaný, 409 když už monitor otevřený incident má |
-| `action=incident_action` | přihlášený | `op`: acknowledge / resolve / postmortem. `resolve` vrátí `monitorStillDown: true`, když je monitor i po uzavření incidentu dál nedostupný |
+| `action=create_incident` | admin | Ruční založení. Volitelné `monitorId` naváže incident na monitor: 404 neznámý, 409 archivovaný, 409 když už monitor otevřený incident má |
+| `action=incident_action` | admin | `op`: acknowledge / resolve / postmortem. `resolve` vrátí `monitorStillDown: true`, když je monitor i po uzavření incidentu dál nedostupný |
 | `action=events&monitor_id=&limit=` | veřejný stav / přiřazené | Události monitoru Navíc vrací `statusChange`: kontrolu, která zaznamenala poslední změnu stavu (přišpendlenou na `monitors.last_status_change`, se stavem, ze kterého se přešlo: stavem řádku zapsaného před ní, který může patřit vzdálené sondě, viz `node_api.php` níž), nebo `null` - v samotném seznamu ten řádek často není, protože okno drží nejnovější kontroly plus nejnovější výpadky. Každá událost nese `statusKey` / `statusLabel` / `statusTone` ze sdíleného slovníku stavů (`up`, `warning`, `down`, `maintenance`, `paused`, `unknown_new`, `unknown_stale`); údržba ani neznámý stav už nejsou `"OK"` a řádek bez zprávy dostane větu svého stavu |
 | `action=sla_report&days=` | přiřazený monitor | SLA přehled v čase: `uptimePct` (`null` bez jediné naměřené sekundy), `outageMinutes` = skutečné minuty výpadku včetně mlčení agenta, `silentMinutes` = kolik z nich agent mlčel, `unmeasuredMinutes` = čas, který nikdo neměřil (mimo procento). `upChecks` / `downChecks` zůstávají počty řádků; za 30 dní (`days` 90 / 365) jdou z `uptime_daily` plus dnešních logů, ne z měsíce logů, který zbyl. Odpověď nese `days`, `windowStart` (první den okna), `since` (první den s daty, i u každého řádku) a `percentileDays` (percentily latence čtou syrové logy, nejvýš 30 dní). U řádku navíc `measuredMinutes`, `budgetMinutes` (výpadek, který cíl SLA dovolí za změřený čas, proti `outageMinutes`) a `incidentCount` (incidenty otevřené v okně; `null`, když se nepodařilo je přečíst). `lastOutage` běží od první kontroly `down` po poslední kontrole `up` nebo `maintenance` do další kontroly `up` nebo `maintenance` a `warning` uvnitř ho nerozdělí. Okno údržby ho ohraničí stejně jako `outageMinutes`: jeho kontroly `maintenance` výpadek ukončí a samy výpadkem nejsou, ale kontrola `down` zapsaná uvnitř okna (503 vzdálené sondy) je výpadek až do další kontroly okna, stejně jako v dostupnosti, a jde i do `mttrSec`. Incident monitoru zůstává přes okno otevřený a zavře se až dalším `up`. Řádek se počítá bez ohledu na to, kdo ho zapsal (`monitor_logs` to nezaznamenává): `up` vzdálené sondy výpadek ukončí nebo rozdělí stejně jako cron a její `down` ho začne. Monitor, který z `down` odešel bez další kontroly `up` nebo `maintenance`, má `end` i `durationSec` `null` a `mttrSec` je délka vyřešeného výpadku. Bez kontroly `up` nebo `maintenance` v uchovaných lozích (30 dní) je `start` nejstarší uchovaná kontrola `down`, takže starší výpadek je na ni oříznutý a jeho `durationSec` i `mttrSec` vycházejí kratší. Selhání je `500 {"error": "sla_report_unavailable"}` |
 | `action=audit_logs&limit=` | admin | Poslední kontroly napříč monitory. Formulované sdíleným slovníkem stavů (`statusKey`, `statusLabel`, `statusTone`) |
-
-> **Pozor:** `audit_logs` a `sla_report` jsou dnes bez přihlášení a vracejí
-> názvy monitorů a texty chybových hlášek. Ty můžou obsahovat interní hostname
-> nebo detail infrastruktury. Není to záměr návrhu, je to stav kódu - stojí za
-> rozhodnutí, jestli je schovat za přihlášení.
->
-> Ověřeno 13. 8. 2026: posledních 200 záznamů včetně všech 50 výpadkových
-> neslo jen obecné hlášky („Discord API neodpovídá (kód 503)", „cURL chyba:
-> Operation timed out"), žádné interní adresy.
 
 ---
 
@@ -942,6 +933,7 @@ LTE zálohu; to číslo je skutečné, jen to není rychlost linky.
 | `action=wan_settings_save` | admin | POST `{monitor_id, plan_down_mbit?, plan_up_mbit?, plan_ok_pct?}`: tarif routeru. `null` nebo prázdný řetězec hodnotu smaže; číslo mimo 1-100000 (30-100 u procent) je 400 a nikdy se neořízne, protože oříznutý tarif je tarif, který majitel nezadal. Chybějící klíč `probe_enabled` nechá uložený souhlas být |
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | veřejné čtení, admin zápis | Profily metrik |
 | `action=status_pages` / `save_status_page` / `delete_status_page` | seznam veřejný, skryté stránky a zápis admin | Veřejné status stránky |
+| `action=status_page&slug=` | veřejná, skrytá stránka admin | Jedna status stránka podle slugu pro veřejnou stránku: `title`, `description`, `monitorIds` (prázdné = všechny veřejné monitory) a `displayOptions` s doplněnými výchozími hodnotami. Skrytá stránka vrací každému kromě administrátora 404, stejně jako stránka, která neexistuje, takže slugy nejde zkoušet. Chybějící `slug` je 400; selhané čtení je `500 {"error": "status_page_unavailable"}`, nikdy 404 |
 | `action=dashboard_layout` | přihlášený | Pořadí a viditelnost dlaždic |
 | `action=users` | admin | Seznam uživatelů, každý účet se svými `monitorIds` |
 | `action=export_config` | admin | Export konfigurace bez tajemství |

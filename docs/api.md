@@ -926,20 +926,11 @@ LTE backup; that figure is real, it is just not the line speed.
 | Endpoint | Access | Description |
 |---|---|---|
 | `action=incidents` | public status / assigned | List of incidents. An outage starts when the monitor went down (`last_status_change`), not when the outage was last confirmed. The public view drops targets, operator names and check reasons, also from `updates` |
-| `action=create_incident` | logged in | Manual creation. Optional `monitorId` ties the incident to a monitor: 404 unknown, 409 archived, 409 when that monitor already has an open incident |
-| `action=incident_action` | logged in | `op`: acknowledge / resolve / postmortem. `resolve` answers `monitorStillDown: true` when the monitor is down even after the incident is closed |
+| `action=create_incident` | admin | Manual creation. Optional `monitorId` ties the incident to a monitor: 404 unknown, 409 archived, 409 when that monitor already has an open incident |
+| `action=incident_action` | admin | `op`: acknowledge / resolve / postmortem. `resolve` answers `monitorStillDown: true` when the monitor is down even after the incident is closed |
 | `action=events&monitor_id=&limit=` | public status / assigned | Monitor events Additionally returns `statusChange`: the check that recorded the last status change (pinned to `monitors.last_status_change`, with the status it came from: that of the row logged before it, which can be a remote probe's, see `node_api.php` below), or `null` - that row is often absent from the list itself, whose window is the newest checks plus the newest failures. Each event carries `statusKey` / `statusLabel` / `statusTone` from the shared status vocabulary (`up`, `warning`, `down`, `maintenance`, `paused`, `unknown_new`, `unknown_stale`); a maintenance or unknown row is no longer `"OK"`, and a row without a message gets the sentence of its own state |
 | `action=sla_report&days=` | assigned monitor | SLA overview in time: `uptimePct` (`null` without a measured second), `outageMinutes` = real minutes of outage including an agent's silence, `silentMinutes` = the part of it an agent was silent, `unmeasuredMinutes` = time nobody measured (outside the percentage). `upChecks` / `downChecks` stay row counts; past 30 days (`days` 90 / 365) they come from `uptime_daily` plus today's logs, not from the month of logs that is left. The answer carries `days`, `windowStart` (the window's first day), `since` (the first day with data, also per row) and `percentileDays` (latency percentiles read raw logs, at most 30 days). Per row also `measuredMinutes`, `budgetMinutes` (the downtime the SLA goal allows over the measured time, to set `outageMinutes` against) and `incidentCount` (incidents opened in the window; `null` when they could not be read). `lastOutage` runs from the first `down` check after the last `up` or `maintenance` check to the next `up` or `maintenance` check, and a `warning` inside does not split it. A maintenance window bounds it the way it bounds `outageMinutes`: its `maintenance` checks end an outage and are not one, but a `down` check logged inside a window (a remote probe's 503) is an outage until the window's next check, as it is in availability, and goes into `mttrSec` too. The monitor's incident stays open over a window and closes at the next `up`. A row counts whoever logged it (`monitor_logs` does not record that): a remote probe's `up` ends or splits the outage like cron's, and its `down` starts one. A monitor that left `down` without an `up` or `maintenance` check since has `end` and `durationSec` `null`, and `mttrSec` is the duration of a resolved one. Without either in the kept logs (30 days) `start` is the oldest kept `down` check, so an older outage is clipped to it and its `durationSec` and `mttrSec` come out too short. A failure is `500 {"error": "sla_report_unavailable"}` |
 | `action=audit_logs&limit=` | admin | Latest checks across monitors. Worded with the shared status vocabulary (`statusKey`, `statusLabel`, `statusTone`) |
-
-> **Careful:** `audit_logs` and `sla_report` are currently unauthenticated and
-> return monitor names and error message texts. Those can contain internal
-> hostnames or infrastructure detail. It is not a design decision, it is the
-> state of the code - worth deciding whether to put them behind a login.
->
-> Checked on 13 Aug 2026: the 200 most recent records, including all 50 failures,
-> carried only generic messages ("Discord API is not responding (code 503)",
-> "cURL error: Operation timed out"), with no internal addresses.
 
 ---
 
@@ -961,6 +952,7 @@ LTE backup; that figure is real, it is just not the line speed.
 | `action=wan_settings_save` | admin | POST `{monitor_id, plan_down_mbit?, plan_up_mbit?, plan_ok_pct?}`: the router's tariff. `null` or an empty string clears a value; a number outside 1-100000 (30-100 for the percentage) is a 400 and is never clamped, because a clamped plan is a plan the owner did not enter. An absent `probe_enabled` key leaves the stored consent alone |
 | `action=presets` / `save_preset` / `delete_preset` / `assign_preset` | public read, admin write | Metric profiles |
 | `action=status_pages` / `save_status_page` / `delete_status_page` | list public, hidden pages and writes admin | Public status pages |
+| `action=status_page&slug=` | public, a hidden page admin | One status page by its slug, for the public page: `title`, `description`, `monitorIds` (empty = every public monitor) and `displayOptions` with every default filled in. A hidden page answers 404 to anyone but an administrator, the same as a page that does not exist, so slugs cannot be probed. A missing `slug` is 400; a failed read is `500 {"error": "status_page_unavailable"}`, never a 404 |
 | `action=dashboard_layout` | logged in | Tile order and visibility |
 | `action=users` | admin | User list, each account with its `monitorIds` |
 | `action=export_config` | admin | Configuration export without secrets |
