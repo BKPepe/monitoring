@@ -482,6 +482,11 @@ v SPA): `up`, `warning`, `down`, `maintenance`, `paused`, `unknown_new` (nikdy
 nehlásil - čeká na první data, neutrální) nebo `unknown_stale` (hlásil a zmlkl -
 varování).
 
+`assetId` je zařízení monitoru (`assets.id`), `null`, když žádné nemá - nikdy
+vlastní id monitoru, které je z jiné řady. `unreachableTarget: true` pro
+administrátora označí kontrolu cíle v privátní síti, jejíž zařízení má živého
+agenta (`vps`/`openwrt`), kterému ji `convert_to_agent_check` může předat.
+
 ### `POST api.php?action=save_monitor`
 
 **Admin.** Vytvoří (`id: 0`) nebo upraví monitor. Tělo je JSON.
@@ -503,6 +508,10 @@ Vybrané parametry:
 | `allowed_actions` | `openwrt` | Jen s `remote_actions_enabled` |
 | `is_public` | vše | Na veřejné status stránce: `true`/`false` (nebo `1`/`0`); `null` vrátí volbu výchozí hodnotě typu. Vynechaný = beze změny. Cokoli jiného je `400 {"error": "invalid_switch", "invalidKeys": ["is_public"]}` |
 | `log_lines_enabled` | `openwrt` | Jestli router smí posílat své maskované řádky logu (výchozí zapnuto). Vynechaný = beze změny; ne-boolean = `400 invalid_switch` |
+
+`asset_id` jmenuje existující zařízení; id, které v `assets` nemá řádek, je `400`.
+`null` nebo vynechané `asset_id` dá novému monitoru (`id: 0`) vlastní zařízení
+a upravovaný monitor od jeho zařízení odpojí.
 
 Hesla (`sq_password`, `rcon_password`) se přepíší jen při zadání nové hodnoty -
 prázdné pole uložené heslo nesmaže. Heartbeat token se při editaci
@@ -971,7 +980,8 @@ Action. Nemá telemetrická pole, proto se zpracovává dřív než jejich valid
 
 **Registrace** (`{"action": "register", "token": "…", "hostname": "…",
 "agent_type": "openwrt"|…}`; agenti pro bash a OpenWrt ji posílají při
-`--register TOKEN URL`) založí monitor a vrátí jeho `agent_key`. Token je
+`--register TOKEN URL`) založí monitor s vlastním zařízením (assetem) a vrátí
+jeho `agent_key`. Token je
 `agent_registration_token` z Nastavení. **Když je toto nastavení prázdné,
 přijme se místo něj klíč cronu (`cron_key`)** - flotila se tedy zaregistruje
 i jen s klíčem cronu a kdo má klíč cronu, může přidávat monitory. Instalátor

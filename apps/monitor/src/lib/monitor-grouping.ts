@@ -35,9 +35,11 @@ export function nestUnderAgents(rows: ApiMonitor[]): { row: ApiMonitor; child: b
 /** CPU/RAM of an agent-side check's process from its agent's rankings. */
 export function processUsage(row: ApiMonitor, rows: ApiMonitor[]): { cpu: number | null; ram: number | null } {
   if ((row.type || '').toLowerCase() !== 'agent_service') return { cpu: row.cpu, ram: row.ram };
-  const parent = rows.find(
-    (m) => m.assetId === row.assetId && ['openwrt', 'vps'].includes((m.type || '').toLowerCase())
-  );
+  // No asset, no parent: two monitors without one are not on the same device.
+  const parent =
+    row.assetId != null
+      ? rows.find((m) => m.assetId === row.assetId && ['openwrt', 'vps'].includes((m.type || '').toLowerCase()))
+      : undefined;
   const proc = (row.target || '').toLowerCase();
   if (!parent || !proc) return { cpu: null, ram: null };
   const findIn = (list: unknown): any =>

@@ -81,6 +81,12 @@ describe('processUsage', () => {
     expect(processUsage(svc, [svc])).toEqual({ cpu: null, ram: null });
   });
 
+  it('služba bez zařízení si nepůjčí žebříčky agenta, který zařízení taky nemá', () => {
+    const orphan = mon({ ...parent, assetId: null });
+    const svc = mon({ id: 3, type: 'agent_service', assetId: null, target: 'kresd' });
+    expect(processUsage(svc, [orphan, svc])).toEqual({ cpu: null, ram: null });
+  });
+
   it('běžný monitor vrací vlastní naměřené hodnoty beze změny', () => {
     const vps = mon({ id: 5, type: 'vps', cpu: 12.5, ram: 60 });
     expect(processUsage(vps, [vps])).toEqual({ cpu: 12.5, ram: 60 });

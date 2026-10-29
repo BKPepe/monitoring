@@ -132,15 +132,37 @@ if (isset($data['action']) && $data['action'] === 'register') {
     $name = bk_agent_str($data, 'hostname', 100) ?? bk_agent_str($data, 'name', 100) ?? ('VPS Agent ' . date('Y-m-d H:i'));
     $type = (isset($data['agent_type']) && $data['agent_type'] === 'openwrt') ? 'openwrt' : 'vps';
     $agent_key = bin2hex(random_bytes(16));
-    
-    $stmt = $pdo->prepare("
-        INSERT INTO monitors (name, type, target, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold)
-        VALUES (?, ?, 'Local VPS Agent', 'unknown', ?, ?, ?, ?)
-    ");
-    // RAM and disk were swapped here (90/95) against the alerts below.
-    $stmt->execute([$name, $type, $agent_key, BK_DEFAULT_THRESHOLDS['cpu'], BK_DEFAULT_THRESHOLDS['ram'], BK_DEFAULT_THRESHOLDS['hdd']]);
-    $new_id = (int)$pdo->lastInsertId();
-    
+
+    // Its own 1:1 asset, as save_monitor gives every new monitor. Without one
+    // the agent stayed asset-less until the next schema migration, and the
+    // agent-side checks of a service had no device to hang under.
+    // One transaction: a failed monitors INSERT left the asset behind, and
+    // every retry of --register added another empty device.
+    try {
+        $pdo->beginTransaction();
+        $pdo->prepare("INSERT INTO assets (name) VALUES (?)")->execute([$name]);
+        $asset_id = (int)$pdo->lastInsertId();
+
+        $stmt = $pdo->prepare("
+            INSERT INTO monitors (name, type, target, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold, asset_id)
+            VALUES (?, ?, 'Local VPS Agent', 'unknown', ?, ?, ?, ?, ?)
+        ");
+        // RAM and disk were swapped here (90/95) against the alerts below.
+        $stmt->execute([$name, $type, $agent_key, BK_DEFAULT_THRESHOLDS['cpu'], BK_DEFAULT_THRESHOLDS['ram'], BK_DEFAULT_THRESHOLDS['hdd'], $asset_id]);
+        $new_id = (int)$pdo->lastInsertId();
+        $pdo->commit();
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            try {
+                $pdo->rollBack();
+            } catch (Throwable $re) {}
+        }
+        error_log('[agent_api] Agent registration failed: ' . $e->getMessage());
+        http_response_code(500);
+        echo json_encode(['success' => false, 'message' => 'Registrace agenta se nezdařila, nic nebylo uloženo.']);
+        exit;
+    }
+
     log_monitor_event($pdo, $new_id, $name, $type, 'monitor_added', "Automatická registrace agenta ({$type})");
     
     echo json_encode([

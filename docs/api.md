@@ -489,6 +489,12 @@ the SPA's `lib/status.ts`): `up`, `warning`, `down`, `maintenance`, `paused`,
 `unknown_new` (never reported - waiting for the first data, neutral) or
 `unknown_stale` (reported before and went quiet - a warning).
 
+`assetId` is the monitor's device (`assets.id`), `null` when it has none - never
+the monitor's own id, which is a different id space. An administrator's
+`unreachableTarget: true` marks a check against a private-network target whose
+device has a live agent (`vps`/`openwrt`) that `convert_to_agent_check` can hand
+it to.
+
 ### `POST api.php?action=save_monitor`
 
 **Admin.** Creates (`id: 0`) or edits a monitor. The body is JSON.
@@ -510,6 +516,10 @@ Selected parameters:
 | `allowed_actions` | `openwrt` | Only with `remote_actions_enabled` |
 | `is_public` | all | On the public status page: `true`/`false` (or `1`/`0`); `null` hands the choice back to the type's default. Left out = unchanged. Anything else is `400 {"error": "invalid_switch", "invalidKeys": ["is_public"]}` |
 | `log_lines_enabled` | `openwrt` | Whether the router may send its masked log lines (default on). Left out = unchanged; not a boolean = `400 invalid_switch` |
+
+`asset_id` names an existing device; an id with no row in `assets` is `400`.
+`null` or a left-out `asset_id` gives a new monitor (`id: 0`) a device of its
+own, and detaches an edited monitor from its device.
 
 Passwords (`sq_password`, `rcon_password`) are only overwritten when a new value
 is supplied - an empty field does not erase a stored password. The heartbeat
@@ -991,7 +1001,8 @@ their validation.
 
 **Registration** (`{"action": "register", "token": "…", "hostname": "…",
 "agent_type": "openwrt"|…}`; the bash and OpenWrt agents send it for
-`--register TOKEN URL`) creates the monitor and answers its `agent_key`. The
+`--register TOKEN URL`) creates the monitor with its own device (asset) and
+answers its `agent_key`. The
 token is `agent_registration_token` from Settings. **When that setting is empty,
 the cron key (`cron_key`) is accepted in its place** - so a fleet can register
 with the cron key alone, and giving someone the cron key lets them add

@@ -403,7 +403,10 @@ if ($action === 'monitors') {
                 // tell apart from the status alone in the public view.
                 'statusKey' => bk_status_label((string)($r['status'] ?? 'up'), bk_monitor_has_reported($r, $details))['key'],
                 'category' => $r['category'] ?? 'Monitory',
-                'assetId' => $r['asset_id'] ? (int)$r['asset_id'] : (int)$r['id'],
+                // null when the monitor has no asset. The monitor's own id stood
+                // in here, and the edit form posted it back as asset_id - onto
+                // whichever device owns that asset id, or into a foreign-key 500.
+                'assetId' => $r['asset_id'] !== null ? (int)$r['asset_id'] : null,
                 'assetName' => $r['name'],
                 'archivedAt' => !empty($r['archived_at']) ? date('c', strtotime((string)$r['archived_at'])) : null,
                 'lastCheck' => $r['last_checked'] ? date('c', strtotime($r['last_checked'])) : null,
@@ -455,6 +458,14 @@ if ($action === 'monitors') {
     // query and separate try/catch - a missing/incompatible column here may cost
     // the admin these extended fields, never the base list.
     if ($is_admin && !empty($monitors)) {
+        // Assets with an agent that could take a check over - the same test
+        // convert_to_agent_check applies (a live vps/openwrt monitor).
+        $agent_asset_ids = [];
+        foreach ($monitors as $am) {
+            if ($am['assetId'] !== null && in_array($am['type'], ['vps', 'openwrt'], true) && empty($am['archivedAt'])) {
+                $agent_asset_ids[$am['assetId']] = true;
+            }
+        }
         try {
             $stmt2 = $pdo->query("
                 SELECT id, timeout, email_notifications, sms_notifications, notes, maintenance, maintenance_description,
@@ -528,6 +539,7 @@ if ($action === 'monitors') {
                 $base_row = $monitors[$mid];
                 if (
                     ($base_row['assetId'] ?? null) !== null
+                    && isset($agent_asset_ids[$base_row['assetId']])
                     && in_array(strtolower((string)($base_row['type'] ?? '')), ['web', 'port', 'minecraft', 'teamspeak', 'discord', 'dns'], true)
                 ) {
                     if (bk_validate_import_target((string)($base_row['target'] ?? '')) !== null) {
@@ -609,6 +621,17 @@ if ($action === 'save_monitor') {
     $category = trim($input['category'] ?? ($type === 'web' ? 'Webové Portály & API' : ($type === 'teamspeak' || $type === 'minecraft' ? 'Komunikační & Herní Servery' : 'Síťová Infrastruktura & Routery')));
 
     $asset_id = !empty($input['asset_id']) ? (int)$input['asset_id'] : null;
+    // An asset that does not exist is refused here: the foreign key made it a
+    // 500, and a database without that key would store a dangling id.
+    if ($asset_id !== null) {
+        $stmt_asset = $pdo->prepare("SELECT COUNT(*) FROM assets WHERE id = ?");
+        $stmt_asset->execute([$asset_id]);
+        if ((int)$stmt_asset->fetchColumn() === 0) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Zařízení (asset) ' . $asset_id . ' neexistuje.'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+    }
     $new_asset_name = trim($input['new_asset_name'] ?? '');
     if ($new_asset_name !== '') {
         $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");

@@ -1295,6 +1295,90 @@ if ($logged_in) {
 }
 
 // =======================================================================
+// 7b. assetId is the monitor's asset, or null - never the monitor's own id
+// =======================================================================
+//
+// A monitor without an asset came back with its own id as assetId, and the
+// edit form posted that back as asset_id: onto whichever device owns that
+// asset id, or into a foreign-key 500. A self-registered agent was such a
+// monitor - registration gave it no asset.
+if (!empty($cookie_jar)) {
+    $pdo->exec("INSERT INTO monitors (name, type, target, status, category) VALUES ('Bez zařízení (test)', 'web', 'https://example.com/r142', 'up', 'Weby')");
+    $r142_id = (int)$pdo->lastInsertId();
+    $pdo->exec("INSERT INTO assets (name) VALUES ('Zařízení bez agenta (test)')");
+    $r142_asset = (int)$pdo->lastInsertId();
+    $pdo->prepare("INSERT INTO monitors (name, type, target, status, category, asset_id) VALUES ('Privátní web (test)', 'web', 'http://r142-test.internal', 'down', 'Weby', ?)")
+        ->execute([$r142_asset]);
+    $r142_priv = (int)$pdo->lastInsertId();
+    $r142_reg_id = 0;
+    $r142_reg_asset = null;
+    try {
+        $r142_row = function (int $id) use ($base, $cookie_jar): array {
+            [, $list] = api_get_auth($base, 'action=monitors', $cookie_jar);
+            foreach (($list['monitors'] ?? []) as $m) {
+                if ((int)$m['id'] === $id) {
+                    return $m;
+                }
+            }
+            return [];
+        };
+        $r142_mon = $r142_row($r142_id);
+        check_true('monitor bez zařízení má assetId null, ne vlastní id', array_key_exists('assetId', $r142_mon) && $r142_mon['assetId'] === null);
+
+        // The form posts back what it read; null keeps the monitor where it was.
+        [$code] = api_post($base, 'action=save_monitor', [
+            'id' => $r142_id, 'name' => 'Bez zařízení (test)', 'type' => 'web',
+            'target' => 'https://example.com/r142', 'asset_id' => $r142_mon['assetId'] ?? null,
+        ], $cookie_jar);
+        check('uložení monitoru bez zařízení projde', $code, 200);
+        check_true('a zařízení mu nepřibude', $pdo->query("SELECT asset_id FROM monitors WHERE id = {$r142_id}")->fetchColumn() === null);
+
+        [$code, $r142_bad] = api_post($base, 'action=save_monitor', [
+            'id' => $r142_id, 'name' => 'Bez zařízení (test)', 'type' => 'web',
+            'target' => 'https://example.com/r142', 'asset_id' => 987654,
+        ], $cookie_jar);
+        check('neexistující zařízení je 400, ne 500', $code, 400);
+        check_true('a hláška ho jmenuje', str_contains((string)($r142_bad['error'] ?? ''), '987654'));
+
+        // The convert offer needs an agent on the device; without one the
+        // conversion is refused, so it is not offered.
+        check_false('bez agenta se převod na kontrolu agentem nenabízí', !empty($r142_row($r142_priv)['unreachableTarget']));
+        $pdo->prepare("INSERT INTO monitors (name, type, target, status, category, asset_id) VALUES ('Agent zařízení (test)', 'vps', '', 'up', 'Servery', ?)")
+            ->execute([$r142_asset]);
+        check_true('s agentem na zařízení se nabídne', !empty($r142_row($r142_priv)['unreachableTarget']));
+
+        // Registration gives the agent its own asset, as save_monitor does.
+        $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('agent_registration_token', 'r142-test-token')
+                    ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+        [$code, , $r142_body] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode([
+            'action' => 'register', 'token' => 'r142-test-token', 'hostname' => 'r142-test.example.com', 'agent_type' => 'vps',
+        ]));
+        check('registrace agenta projde', $code, 200);
+        $r142_reg_id = (int)(json_decode($r142_body, true)['monitor_id'] ?? 0);
+        $r142_reg_asset = $pdo->query("SELECT asset_id FROM monitors WHERE id = {$r142_reg_id}")->fetchColumn();
+        check_true('registrovaný agent dostane vlastní zařízení', $r142_reg_id > 0 && $r142_reg_asset !== null && $r142_reg_asset !== false
+            && (int)$pdo->query('SELECT COUNT(*) FROM assets WHERE id = ' . (int)$r142_reg_asset)->fetchColumn() === 1);
+
+        // Asset and monitor are one transaction: a failed monitors INSERT
+        // left an empty device behind on every retry of --register.
+        $pdo->exec("CREATE TRIGGER r142_register_fail BEFORE INSERT ON monitors FOR EACH ROW
+                    BEGIN IF NEW.name = 'r142-fail.example.com' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'r142 test'; END IF; END");
+        [$code, , $r142_fail_body] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode([
+            'action' => 'register', 'token' => 'r142-test-token', 'hostname' => 'r142-fail.example.com', 'agent_type' => 'vps',
+        ]));
+        check('nezdařená registrace je 500', $code, 500);
+        check_true('a hlásí neúspěch', (json_decode($r142_fail_body, true)['success'] ?? null) === false);
+        check('a nenechá po sobě prázdné zařízení', (int)$pdo->query("SELECT COUNT(*) FROM assets WHERE name = 'r142-fail.example.com'")->fetchColumn(), 0);
+    } finally {
+        $pdo->exec("DROP TRIGGER IF EXISTS r142_register_fail");
+        $pdo->exec("DELETE FROM assets WHERE name = 'r142-fail.example.com'");
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'agent_registration_token'");
+        $pdo->prepare("DELETE FROM monitors WHERE id IN (?, ?, ?) OR asset_id = ?")->execute([$r142_id, $r142_priv, $r142_reg_id, $r142_asset]);
+        $pdo->prepare("DELETE FROM assets WHERE id IN (?, ?)")->execute([$r142_asset, (int)$r142_reg_asset]);
+    }
+}
+
+// =======================================================================
 // 8. Heartbeat - the whole flow from creation through the signal to evaluation
 // =======================================================================
 //
