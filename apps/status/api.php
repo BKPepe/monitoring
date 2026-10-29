@@ -2169,7 +2169,7 @@ if ($action === 'notification_health') {
                    {$nh_delivery} AS delivery_read, n.delivery AS delivery_stored
             FROM notification_log n
             WHERE n.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-              AND n.kind IN ('alert', 'daily_reminder', 'digest', 'admin_notice')
+              AND n.kind IN ('alert', 'daily_reminder', 'digest', 'admin_notice', 'escalation')
               AND {$nh_delivery} <> 'skipped'
             ORDER BY n.id DESC
             LIMIT " . ($nh_limit + 1));

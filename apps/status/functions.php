@@ -1919,10 +1919,17 @@ function bk_escalation_due(array $incident, int $after_mins, ?int $now = null): 
  * regular one: escalation only makes sense somewhere the first alert
  * did not just sink.
  *
- * @return array{checked: int, escalated: int, skipped_no_channel: int}
+ * `escalated` counts only what the channel accepted; `failed` is a refused
+ * or unreachable send, `error` its reason. `unknown` counts messages that
+ * left whole and got no answer: they are stamped, since the endpoint may
+ * have posted them and a retry would post them again every run.
+ * Either one ends the run, so each is at most 1: every incident goes to
+ * the same URL, and the rest wait for the next run.
+ *
+ * @return array{checked: int, escalated: int, skipped_no_channel: int, failed: int, unknown: int, error: ?string}
  */
 function bk_process_escalations(PDO $pdo, ?int $now = null): array {
-    $result = ['checked' => 0, 'escalated' => 0, 'skipped_no_channel' => 0];
+    $result = ['checked' => 0, 'escalated' => 0, 'skipped_no_channel' => 0, 'failed' => 0, 'unknown' => 0, 'error' => null];
 
     if (get_setting('escalation_enabled', '0') !== '1') {
         return $result;
@@ -1973,14 +1980,50 @@ function bk_process_escalations(PDO $pdo, ?int $now = null): array {
 
         // The payload carries both `content` and `text`: Discord reads the first,
         // Slack the second, and both ignore an unknown key. One channel covers both.
-        send_webhook_post($webhook, json_encode(['content' => $text, 'text' => $text], JSON_UNESCAPED_UNICODE));
+        $sent = send_webhook_post($webhook, json_encode(['content' => $text, 'text' => $text], JSON_UNESCAPED_UNICODE));
+        $delivery = $sent ? 'sent' : (($GLOBALS['last_webhook_delivery'] ?? null) === 'unknown' ? 'unknown' : 'failed');
+        $send_error = $sent ? null : ($GLOBALS['last_webhook_error'] ?? null);
+        bk_log_notification($pdo, $incident['monitor_id'] !== null ? (int)$incident['monitor_id'] : null,
+            'escalation', 'escalation_webhook', null, $delivery !== 'failed', $send_error, 'escalation',
+            (string)$incident['title'], delivery: $delivery);
+
+        // A refused send gets no stamp, for the same reason as a missing
+        // channel: the incident would look escalated while nobody heard of
+        // it, and it would never be tried again. The next cron run retries.
+        if ($delivery === 'failed') {
+            $result['failed']++;
+            $result['error'] = $send_error;
+            error_log('[escalation] Eskalační webhook zprávu nepřijal: ' . ($send_error ?? 'bez důvodu'));
+            // Every incident goes to the same URL: once it refused, the rest
+            // wait for the next run instead of each sitting out the 5 s
+            // timeout, or adding to a 429.
+            break;
+        }
+
+        // The whole message left and no answer came back (a timeout, a reset):
+        // the endpoint may have posted it. It is stamped all the same, because
+        // a retry would post it again every cron run; the log row says
+        // `unknown` and cron warns that nobody confirmed it.
+        if ($delivery === 'unknown') {
+            $result['unknown']++;
+            error_log('[escalation] Eskalační webhook po odeslání zprávy neodpověděl: ' . ($send_error ?? 'bez důvodu'));
+        }
 
         try {
             $stmt_mark = $pdo->prepare("UPDATE incidents SET escalated_at = ? WHERE id = ?");
             $stmt_mark->execute([date('Y-m-d H:i:s', $now ?? time()), (int)$incident['id']]);
-            $result['escalated']++;
+            if ($delivery === 'sent') {
+                $result['escalated']++;
+            }
         } catch (PDOException $e) {
             error_log('[escalation] Razítko eskalace se nepodařilo zapsat: ' . $e->getMessage());
+        }
+
+        // An endpoint that took the message and never answered may be
+        // stalled: the rest wait for the next run instead of each sitting
+        // out the 5 s timeout and being stamped without a confirmation.
+        if ($delivery === 'unknown') {
+            break;
         }
     }
 
@@ -7753,6 +7796,7 @@ function bk_notification_kinds(): array {
         'subscriber_confirm',
         'subscriber_broadcast',
         'admin_notice',
+        'escalation',
         'test',
         'other',
     ];
@@ -9397,16 +9441,33 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
 }
 
 /**
+ * What a webhook's answer proves: `sent` (a 2xx), `failed` (refused, or the
+ * endpoint never got the whole message) or `unknown` (the whole message left
+ * and then no answer came, e.g. a timeout: the endpoint may have posted it).
+ */
+function bk_webhook_delivery(bool $answered, int $code, bool $body_sent): string {
+    if (!$answered) {
+        return $body_sent ? 'unknown' : 'failed';
+    }
+    return $code >= 200 && $code < 300 ? 'sent' : 'failed';
+}
+
+/**
  * Helper for sending HTTP POST requests (webhooks)
  */
 /**
  * POSTs a JSON payload to a webhook. Returns whether the endpoint accepted it
- * (transport OK and a 2xx/3xx answer) - the settings page's test button
- * reports this verdict; the alert paths ignore it, as before.
+ * (transport OK and a 2xx answer) - the settings page's test button reports
+ * this verdict, the alert and escalation paths log it. The finer verdict of
+ * bk_webhook_delivery() is left in `last_webhook_delivery`.
  */
 function send_webhook_post($url, $payload_json): bool {
     $ch = curl_init($url);
-    if ($ch === false) return false;
+    if ($ch === false) {
+        $GLOBALS['last_webhook_error'] = 'curl_init failed';
+        $GLOBALS['last_webhook_delivery'] = 'failed';
+        return false;
+    }
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, $payload_json);
@@ -9417,9 +9478,15 @@ function send_webhook_post($url, $payload_json): bool {
     curl_setopt($ch, CURLOPT_TIMEOUT, 5);
     $res = curl_exec($ch);
     $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    // Whether the whole body left before any transport error. The _T constant
+    // needs libcurl 7.55+, which a PHP 8.2 build against an older one lacks.
+    $uploaded = curl_getinfo($ch, defined('CURLINFO_SIZE_UPLOAD_T') ? CURLINFO_SIZE_UPLOAD_T : CURLINFO_SIZE_UPLOAD);
+    $body_sent = (int)$uploaded >= max(1, strlen((string)$payload_json));
     // A redirect is not a delivery: curl does not follow it for this POST, so
     // the message never reached the endpoint. Only 2xx counts as accepted.
-    $ok = ($res !== false && $code >= 200 && $code < 300);
+    $delivery = bk_webhook_delivery($res !== false, $code, $body_sent);
+    $GLOBALS['last_webhook_delivery'] = $delivery;
+    $ok = $delivery === 'sent';
     $GLOBALS['last_webhook_error'] = ($res === false) ? curl_error($ch) : ($ok ? null : "HTTP {$code}");
     curl_close($ch);
     return $ok;

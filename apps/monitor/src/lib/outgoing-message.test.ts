@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deliveryLabel, deliveryOf, kindLabel } from './outgoing-message';
+import { channelLabel, deliveryLabel, deliveryOf, kindLabel } from './outgoing-message';
 
 /** Answers with the key, so a test sees which label was chosen, whatever the language. */
 const key = (k: string) => k;
@@ -37,6 +37,13 @@ describe('kindLabel', () => {
   it('tón nemění jiné druhy zpráv', () => {
     expect(kindLabel('digest', key, 'good', 'digest')).toBe('outgoing.kind_digest');
     expect(kindLabel('neznamy_druh', key, 'bad')).toBe('neznamy_druh');
+  });
+
+  it('eskalace má vlastní jméno i kanál', () => {
+    // Its webhook is not the regular Discord or Slack one, so the banner must
+    // not name it after either.
+    expect(kindLabel('escalation', key)).toBe('outgoing.kind_escalation');
+    expect(channelLabel('escalation_webhook', key)).toBe('outgoing.channel_escalation_webhook');
   });
 });
 

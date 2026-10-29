@@ -1059,6 +1059,12 @@ try {
     if ($esc['skipped_no_channel'] > 0) {
         echo "VAROVÁNÍ: {$esc['skipped_no_channel']} incidentů čeká na eskalaci, ale kanál není nastavený.\n";
     }
+    if ($esc['failed'] > 0) {
+        echo "VAROVÁNÍ: eskalační webhook zprávu nepřijal (" . ($esc['error'] ?? 'bez důvodu') . "), příští běh to zkusí znovu.\n";
+    }
+    if ($esc['unknown'] > 0) {
+        echo "VAROVÁNÍ: eskalační webhook po odeslání zprávy neodpověděl; možná odešla, znovu se posílat nebude a ostatní incidenty počkají na příští běh (důvod je v protokolu odchozích zpráv).\n";
+    }
 } catch (Throwable $e) {
     error_log('[cron] Eskalace selhala: ' . $e->getMessage());
 }

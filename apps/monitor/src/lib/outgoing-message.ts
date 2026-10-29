@@ -42,18 +42,20 @@ export function kindLabel(
     subscriber_confirm: t('outgoing.kind_subscriber_confirm', 'Potvrzení odběru'),
     subscriber_broadcast: t('outgoing.kind_subscriber_broadcast', 'Zpráva odběratelům'),
     admin_notice: t('outgoing.kind_admin_notice', 'Upozornění administrátorům'),
+    escalation: t('outgoing.kind_escalation', 'Eskalace nepřevzatého incidentu'),
     test: t('outgoing.kind_test', 'Testovací zpráva'),
     other: t('outgoing.kind_other', 'Ostatní'),
   };
   return byKind[kind] ?? kind;
 }
 
-/** Channel names are brand names; only these two read wrong in lower case. */
+/** Channel names are brand names; only the ones below read wrong as they are stored. */
 export function channelLabel(channel: string, t: (key: string, fallback?: string) => string): string {
   if (channel === 'email') return t('outgoing.channel_email', 'E-mail');
   if (channel === 'sms') return 'SMS';
   // 'none' is the daily reminder's quiet-day row: no channel carried it anywhere.
   if (channel === 'none') return t('outgoing.channel_none', 'žádný kanál');
+  if (channel === 'escalation_webhook') return t('outgoing.channel_escalation_webhook', 'Eskalační webhook');
   return channel;
 }
 

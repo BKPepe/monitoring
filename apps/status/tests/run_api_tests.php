@@ -1598,9 +1598,43 @@ check_true('bez kanálu se incident započítá jako čekající', $res['skipped
 check('bez kanálu se nic neodešle', $res['escalated'], 0);
 check_true('bez kanálu incident zůstává neorazítkovaný', $esc_state(910) === null);
 
+// --- A channel that refuses ---
+// A dead webhook used to get the stamp anyway: the incident never escalated
+// again, cron reported it escalated and no log showed the refusal. An unknown
+// action on our own test server answers 400, at once and every time.
+$esc_rows = fn(string $delivery) => (int)$pdo->query("SELECT COUNT(*) FROM notification_log
+    WHERE kind = 'escalation' AND channel = 'escalation_webhook' AND delivery = '{$delivery}'")->fetchColumn();
+$set_setting('escalation_webhook_url', $base . '/api.php?action=bk_eskalace_neexistuje');
+check_true('na eskalaci čekají aspoň dva incidenty', (int)$pdo->query("SELECT COUNT(*) FROM incidents
+    WHERE status != 'resolved' AND acknowledged_at IS NULL AND escalated_at IS NULL
+      AND created_at <= DATE_SUB(NOW(), INTERVAL 15 MINUTE)")->fetchColumn() >= 2);
+$res = bk_process_escalations($pdo);
+check('odmítnutá eskalace se nepočítá jako eskalovaná', $res['escalated'], 0);
+check('ale jako selhání, i s důvodem', [$res['failed'], $res['unknown'], $res['error']], [1, 0, 'HTTP 400']);
+// Incidents go by id, so the one refused is the RSS seed 902, not 910. The
+// log row names it, so a change of order fails here instead of making the
+// stamp check below look at an incident nobody tried.
+check('v protokolu je odmítnutý incident i důvod',
+    $pdo->query("SELECT subject, error_message FROM notification_log
+                 WHERE kind = 'escalation' AND delivery = 'failed'")->fetch(PDO::FETCH_NUM),
+    ['Výpadek: Router bez metrik', 'HTTP 400']);
+check_true('odmítnutý incident razítko nedostane', $esc_state(902) === null);
+// After the refusal the rest (910) wait for the next run instead of each
+// paying for the same dead URL.
+check('odmítnutí je v protokolu jednou za běh', $esc_rows('failed'), 1);
+check_true('zbylé incidenty počkají bez razítka na další běh', $esc_state(910) === null);
+// The log row is all that shows a dead escalation webhook in /app: the
+// delivery health reads its kind, otherwise only cron's output would say so.
+$esc_health = function () use ($base, $cookie_jar): array {
+    [$code, $nh] = api_get_auth($base, 'action=notification_health', $cookie_jar);
+    $p = array_values(array_filter($nh['problems'] ?? [], fn($p) => ($p['channel'] ?? '') === 'escalation_webhook'))[0] ?? [];
+    return [$code, $p['state'] ?? null, $p['lastReason'] ?? null];
+};
+check('odmítající eskalační webhook ukáže stav doručování i s důvodem', $esc_health(), [200, 'failed', 'HTTP 400']);
+
 // --- With a channel ---
 // The webhook targets our own test server: what is verified is the database
-// write, not delivery to Discord.
+// write, not delivery to Discord. It is also the retry of the refused run.
 $set_setting('escalation_webhook_url', $base . '/api.php?action=ui_config');
 $res = bk_process_escalations($pdo);
 // A specific incident is checked, not a sum: the database has more open
@@ -1608,13 +1642,54 @@ $res = bk_process_escalations($pdo);
 // test-data change.
 check_true('nepřevzatý incident eskaluje', $res['escalated'] >= 1);
 check_true('a dostane razítko', $esc_state(910) !== null);
+check_true('odmítnutý incident razítko dostane při dalším běhu', $esc_state(902) !== null);
 check_true('převzatý incident razítko nedostane', $esc_state(911) === null);
+check('bez selhání a bez nejistoty', [$res['failed'], $res['unknown']], [0, 0]);
+check_true('přijatá eskalace je v protokolu jako odeslaná', $esc_rows('sent') >= 1);
 
 // --- Repetition ---
 $res = bk_process_escalations($pdo);
 check('podruhé už se stejný incident neeskaluje', $res['escalated'], 0);
 
+// --- A channel that takes the message and never answers ---
+// The first one is stamped as `unknown`, since the endpoint may have posted
+// it. The run used to go on, so a stalled endpoint made every further due
+// incident sit out the timeout and get a stamp nobody confirmed. The fake
+// endpoint reads the request and hangs up without an answer: the same
+// verdict as a timeout after the body left, without the 5 s wait.
+$pdo->exec("INSERT INTO incidents (id, title, impact, status, monitor_id, created_at)
+            VALUES (912, 'Výpadek: bez odpovědi první', 'major', 'investigating', 1, DATE_SUB(NOW(), INTERVAL 30 MINUTE)),
+                   (913, 'Výpadek: bez odpovědi druhý', 'major', 'investigating', 1, DATE_SUB(NOW(), INTERVAL 30 MINUTE))");
+$esc_silent = proc_open([PHP_BINARY, __DIR__ . '/fixtures/webhook_no_answer_server.php'], [1 => ['pipe', 'w']], $esc_silent_pipes);
+$esc_silent_port = is_resource($esc_silent) ? (int)fgets($esc_silent_pipes[1]) : 0;
+check_true('webhook bez odpovědi naslouchá', $esc_silent_port > 0);
+try {
+    $set_setting('escalation_webhook_url', "http://127.0.0.1:{$esc_silent_port}/hook");
+    $res = bk_process_escalations($pdo);
+    check('bez odpovědi po odeslání se neví: ani eskalováno, ani selhání',
+        [$res['escalated'], $res['failed'], $res['unknown']], [0, 0, 1]);
+    check_true('nepotvrzený incident razítko dostane, aby neodcházel každou minutu', $esc_state(912) !== null);
+    check('nepotvrzené odeslání je v protokolu jednou za běh', $esc_rows('unknown'), 1);
+    check_true('zbylé incidenty na mlčící webhook nečekají a počkají na další běh', $esc_state(913) === null);
+    check('mlčící eskalační webhook ukáže stav doručování jako nepotvrzený', array_slice($esc_health(), 0, 2), [200, 'unknown']);
+} finally {
+    if (is_resource($esc_silent)) {
+        proc_terminate($esc_silent);
+        proc_close($esc_silent);
+    }
+}
+$set_setting('escalation_webhook_url', $base . '/api.php?action=ui_config');
+bk_process_escalations($pdo);
+check('počkaný incident odejde při dalším běhu, tentokrát potvrzeně',
+    $pdo->query("SELECT delivery FROM notification_log
+                 WHERE kind = 'escalation' AND subject = 'Výpadek: bez odpovědi druhý'")->fetchAll(PDO::FETCH_COLUMN),
+    ['sent']);
+check_true('a teprve pak dostane razítko', $esc_state(913) !== null);
+
 $set_setting('escalation_enabled', '0');
+$pdo->exec("DELETE FROM incidents WHERE id IN (912, 913)");
+// The section on the outgoing message log below counts the rows of monitor 1.
+$pdo->exec("DELETE FROM notification_log WHERE kind = 'escalation'");
 
 // =======================================================================
 // 11. Endpoints that were missing while calls to them silently fell through

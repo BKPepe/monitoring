@@ -22,6 +22,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_format_duration_secs',
     'bk_heartbeat_generate_token',
     'bk_escalation_due',
+    'bk_webhook_delivery',
     'bk_ip_in_cidr',
     'bk_agent_num',
     'bk_agent_int',
@@ -434,6 +435,15 @@ check('a je řečeno proč', $r['reason'], 'incident nemá použitelný čas vzn
 
 $r = bk_escalation_due(array_merge($inc_base, ['created_at' => $esc_at('-2 hours')]), 0, $now);
 check_false('nulová lhůta eskalaci vypíná', $r['escalate']);
+
+// What a webhook's answer proves decides the stamp: `failed` is retried next
+// run, `unknown` is not, because the endpoint may already have posted it and
+// a retry would post it again every minute.
+check('webhook: 2xx je převzetí', bk_webhook_delivery(true, 204, true), 'sent');
+check('webhook: odmítnutí i přesměrování jsou selhání',
+    [bk_webhook_delivery(true, 429, true), bk_webhook_delivery(true, 301, true)], ['failed', 'failed']);
+check('webhook: nedosažitelný je selhání', bk_webhook_delivery(false, 0, false), 'failed');
+check('webhook: bez odpovědi po odeslání celé zprávy se neví', bk_webhook_delivery(false, 0, true), 'unknown');
 
 // --- bk_period_minutes: the period window --------------------------------
 // Two periods returned a different window than their label claimed: `15m`

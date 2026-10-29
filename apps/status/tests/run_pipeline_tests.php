@@ -854,8 +854,8 @@ foreach (['functions.php', 'api.php', 'admin.php', 'cron.php', 'agent_api.php'] 
 // Hard-coded like the send_email() count above: a new call has to be noticed
 // here, where somebody decides what its row may claim. 14, then 12: the
 // reminder's four shared-channel calls became one in bk_send_shared_channels(),
-// and the admin notice added its WhatsApp row.
-check('kontrola našla všech 12 volání protokolu', $delivery_calls, 12);
+// and the admin notice added its WhatsApp row. 13 since the escalation logs.
+check('kontrola našla všech 13 volání protokolu', $delivery_calls, 13);
 check('každé volání protokolu uvádí výsledek doručení (delivery:)', $delivery_gaps, []);
 
 // SMS: a refusal says why. Only the paths that stop before any request are
