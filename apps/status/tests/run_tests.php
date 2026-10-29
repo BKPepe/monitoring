@@ -131,6 +131,18 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_aggregate_mean',
 ]);
 
+// --- The loader itself: a name it cannot find stops the run -----------------
+// It used to skip such a name without a sound, so a renamed function took its
+// tests with it and the suite stayed green.
+$loader_error = null;
+try {
+    bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_test_jmeno_ktere_neexistuje']);
+} catch (RuntimeException $e) {
+    $loader_error = $e->getMessage();
+}
+check_true('neznámé jméno v načítání funkcí shodí běh', $loader_error !== null
+    && str_contains($loader_error, 'bk_test_jmeno_ktere_neexistuje()'));
+
 
 // --- bk_validate_import_target: imported targets ----------------------------
 // Everything a hosting-side check can never reach is blocked. Exactly this
@@ -3719,8 +3731,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_router_rec_evaluate', 'bk_rec_rules_disk_health', 'bk_rec_rules_disk_week',
     'bk_rec_rules_filesystems', 'bk_rec_rules_wifi', 'bk_rec_rules_wan_week',
     'bk_rec_rules_wan_tests', 'bk_rec_rules_gap', 'bk_rec_daily_value', 'bk_disk_temp_limit',
-    'bk_disk_label', 'bk_disk_error_counters', 'bk_rec_disk_label', 'bk_rec_week_days_over',
-    'bk_router_rec_split',
+    'bk_disk_label', 'bk_disk_error_counters', 'bk_rec_disk_label', 'bk_router_rec_split',
 ]);
 
 if (function_exists('bk_router_rec_evaluate') && is_readable(__DIR__ . '/fixtures/omnia_router.php')) {

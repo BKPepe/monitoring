@@ -36,17 +36,22 @@ if (!function_exists('bk_test_report')) {
      * functions.php cannot be loaded whole (it needs a DB and sends headers), so
      * the tested functions are isolated from the source. __DIR__ is rewritten,
      * otherwise inside eval() it would point at the tests directory and requiring lang files would fail.
+     *
+     * A name that is not in the file throws, the same as bk_test_load_pinned():
+     * a renamed or moved function would otherwise turn its whole test block
+     * into zero checks while the suite stayed green.
      */
     function bk_test_load_functions(string $source_file, array $names): void {
-        $src = file_get_contents($source_file);
+        $src = (string)file_get_contents($source_file);
         $base = var_export(realpath(dirname($source_file)), true);
         foreach ($names as $fn) {
             if (function_exists($fn)) {
                 continue;
             }
-            if (preg_match('/\nfunction ' . preg_quote($fn, '/') . '\s*\(.*?\n\}/s', $src, $m)) {
-                eval(str_replace('__DIR__', $base, $m[0]));
+            if (!preg_match('/\nfunction ' . preg_quote($fn, '/') . '\s*\(.*?\n\}/s', $src, $m)) {
+                throw new RuntimeException("bk_test_load_functions: {$fn}() is not in {$source_file}");
             }
+            eval(str_replace('__DIR__', $base, $m[0]));
         }
     }
 

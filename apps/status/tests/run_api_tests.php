@@ -3051,8 +3051,6 @@ check('bez času vrací 400, ne prázdný seznam', $code, 400);
 // rest of it did not. A threshold breach is only meaningful with a duration
 // ("above 85 % for 18 minutes", not "at 91 % right now") and with the process
 // behind it, and both are computable from data we already store.
-bk_test_load_functions($root . '/functions.php', ['bk_metric_pressure', 'bk_top_process_in_window']);
-
 if (function_exists('bk_metric_pressure')) {
     $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
     $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
@@ -3088,10 +3086,6 @@ if (function_exists('bk_metric_pressure')) {
 // Tips had hardcoded thresholds (CPU 80/50) while the chart bands and the
 // Executive Summary follow monitors.cpu_threshold. Anyone who raised theirs
 // to 95 still got a critical tip at 81 % - three opinions on "too high".
-bk_test_load_functions($root . '/functions.php', [
-    'bk_get_knowledge_tips', 'bk_enrich_threshold_tip', 'bk_metric_duration_above',
-    'bk_format_duration', 'bk_get_enabled_metrics',
-]);
 require_once $root . '/lang.php';
 
 if (function_exists('bk_get_knowledge_tips')) {
@@ -3125,10 +3119,6 @@ if (function_exists('bk_get_knowledge_tips')) {
 // Tips had hardcoded thresholds (CPU 80/50) while the chart bands and the
 // Executive Summary follow monitors.cpu_threshold. Anyone who raised theirs
 // to 95 still got a critical tip at 81 % - three opinions on "too high".
-bk_test_load_functions($root . '/functions.php', [
-    'bk_get_knowledge_tips', 'bk_enrich_threshold_tip', 'bk_metric_duration_above',
-    'bk_format_duration', 'bk_get_enabled_metrics',
-]);
 require_once $root . '/lang.php';
 
 if (function_exists('bk_get_knowledge_tips')) {
@@ -3157,7 +3147,6 @@ if (function_exists('bk_get_knowledge_tips')) {
 // The first version said "No current problems detected." immediately followed
 // by "CPU has been at 91 % for 18 min." - the calm sentence was assembled
 // before the pressure was even computed. Caught on a demo with real data, not by reasoning.
-bk_test_load_functions($root . '/functions.php', ['bk_summary_pressure_line', 'bk_build_executive_summary']);
 // The summary composes sentences via t(), so without the dictionary it dies
 // on an undefined function - the same trap cron.php and agent_api.php already took.
 require_once $root . '/lang.php';
@@ -3207,8 +3196,6 @@ if (function_exists('bk_top_process_in_window')) {
 //
 // The React page /app/set-password posts here. The token is consumed on first
 // success, and an invalid token gets the same answer as an expired one.
-bk_test_load_functions($root . '/functions.php', ['bk_totp_calculate']);
-
 $invite_token = bin2hex(random_bytes(24));
 $pdo->prepare("UPDATE users SET password_reset_token_hash = ?, password_reset_expires = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE id = 1")
     ->execute([hash('sha256', $invite_token)]);
@@ -3519,8 +3506,6 @@ check('OAuth callback v admin.php přihlašuje přes bk_oauth_login',
 // tested against a real database rather than reasoned about. Timestamps are
 // built with MySQL DATE_SUB so they share a timezone with NOW() inside the
 // function - the same mismatch already produced one bug in this endpoint.
-bk_test_load_functions($root . '/functions.php', ['bk_prune_process_samples']);
-
 $seed_samples = function (PDO $pdo) {
     $pdo->exec("DELETE FROM process_samples");
     $rows = [
@@ -3605,10 +3590,9 @@ if (function_exists('bk_prune_process_samples')) {
 // the settings vanished without anyone making a mistake and without anything
 // being reported. This reproduces the whole cycle, not just a single save.
 if ($logged_in) {
-    // The key list is read from the same source as the server, not from a copy
-    // in the test - a copy would drift apart exactly like the original three.
-    bk_test_load_functions($root . '/db.php', ['bk_settings_keys']);
-
+    // The key list checked at the end is the server's own bk_settings_keys(),
+    // not a copy in the test - a copy would drift apart exactly like the
+    // original three.
     [$code, $res] = api_post($base, 'action=save_settings', [
         'settings' => [
             'escalation_enabled' => '1',
@@ -4017,7 +4001,6 @@ if ($logged_in) {
 // the rows of a fresh install, the read the form does, the save it sends.
 // =======================================================================
 if ($logged_in) {
-    bk_test_load_functions($root . '/db.php', ['bk_settings_keys', 'bk_settings_defaults', 'bk_settings_boolean_keys']);
     $fi_defaults = bk_settings_defaults();
     $fi_switches = bk_settings_boolean_keys();
     $fi_backup = $pdo->query("SELECT key_name, key_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
@@ -5093,19 +5076,6 @@ $set_setting('agent_notifications_enabled', $ra_switch === '' ? '1' : $ra_switch
 // the build itself. The snapshot is the dangerous one - it decides what counts
 // as "new this week", so a wrong write would either mail the whole list again
 // every Monday or never mail anything again.
-bk_test_load_functions($root . '/functions.php', [
-    'bk_router_rec_thresholds', 'bk_router_rec_window', 'bk_router_rec_inputs_batch', 'bk_router_rec_evaluate',
-    'bk_router_rec_split', 'bk_router_rec_render', 'bk_router_rec_state_save', 'bk_rec_week_stat',
-    'bk_rec_days_with_data', 'bk_rec_sort_items', 'bk_rec_item', 'bk_rec_num', 'bk_rec_band_label',
-    'bk_rec_daily_value', 'bk_rec_over', 'bk_rec_above', 'bk_rec_state_active', 'bk_rec_state_severity',
-    'bk_rec_disk_label', 'bk_rec_rules_disk_health', 'bk_rec_rules_disk_week', 'bk_rec_rules_filesystems',
-    'bk_digest_routers', 'bk_digest_router_facts', 'bk_digest_router_facts_lines', 'bk_digest_router_new_split',
-    'bk_disk_label', 'bk_disk_error_counters', 'bk_disk_temp_limit', 'bk_wifi_radio_profile',
-    'bk_version_is_older', 'bk_format_bytes_cz',
-    'bk_wan_down_ranges', 'bk_link_down_ranges', 'bk_pair_link_periods', 'bk_speedtest_attribute',
-    'bk_speedtest_attribute_rows',
-]);
-
 if (function_exists('bk_digest_routers')) {
     $dg_state = fn (): array => $pdo->query("SELECT rec_key, active, severity, first_digest_week, raised_digest_week, UNIX_TIMESTAMP(last_seen) AS seen FROM router_rec_state WHERE monitor_id = 2 ORDER BY rec_key")->fetchAll(PDO::FETCH_ASSOC);
     $dg_week = date('o-\WW');
@@ -5744,8 +5714,6 @@ if (function_exists('bk_digest_routers')) {
 // against a real database because every one of them is a day apart from a
 // deletion that cannot be undone, and because the mute exception ("a muted
 // item is never pruned") only exists in the WHERE clause.
-bk_test_load_functions($root . '/functions.php', ['bk_prune_router_health', 'bk_prune_wan_data']);
-
 $pr_count = fn (string $sql): int => (int)$pdo->query($sql)->fetchColumn();
 $pr_disks = "SELECT COUNT(*) FROM storage_disks WHERE monitor_id = 2";
 $pr_days = "SELECT COUNT(*) FROM storage_disk_daily d JOIN storage_disks s ON s.id = d.disk_id WHERE s.monitor_id = 2";
