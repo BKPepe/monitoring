@@ -63,8 +63,12 @@ define('DB_PASS', 'heslo_databaze');
 // There are no default admin credentials. schema.sql creates no account; the
 // installer at /app/setup creates the first administrator with a password of
 // your own (every installer step is refused once any account exists).
-// This zone is PHP's AND the database session's: db.php sends its current UTC
-// offset to MySQL after connecting, so SQL NOW() and PHP's date() mean the same
-// instant even when the database server itself runs in another zone.
+// This zone is PHP's AND the database session's, so SQL NOW() and PHP's date()
+// mean the same instant even when the database server runs in another zone.
+// After connecting, db.php (bk_db_clock_sync) keeps the server's own zone if it
+// agrees with this one in winter and summer, else sets this zone by name (needs
+// MySQL's time-zone tables), and only as a last resort today's UTC offset, which
+// reads times across a DST switch an hour off. health.php ("DB clock across
+// DST") says which one this server got.
 define('TIMEZONE', 'Europe/Prague');
 date_default_timezone_set(TIMEZONE);
