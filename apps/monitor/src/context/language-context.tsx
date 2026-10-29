@@ -3597,6 +3597,14 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Bez přihlášení k ServerQuery vrací server jen základní údaje. Doplňte jméno a heslo v nastavení monitoru pro detail kanálů a aktivity.',
     en: 'Without a ServerQuery login the server returns only basic data. Add the username and password in the monitor settings for channel and activity detail.',
   },
+  'ts3.login_rejected': {
+    cs: 'ServerQuery odmítl jméno a heslo z nastavení monitoru, server proto vrací jen základní údaje. Zkontrolujte je pro detail kanálů a aktivity.',
+    en: 'ServerQuery rejected the username and password from the monitor settings, so the server returns only basic data. Check them for channel and activity detail.',
+  },
+  'ts3.login_failed': {
+    cs: 'Přihlášení k ServerQuery se nezdařilo, server proto vrací jen základní údaje.',
+    en: 'The ServerQuery login did not succeed, so the server returns only basic data.',
+  },
   'pipeline.title': { cs: 'Rozpad kontroly', en: 'Check breakdown' },
   'pipeline.subtitle': {
     cs: 'Kolik času zabrala která fáze poslední kontroly.',

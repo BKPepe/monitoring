@@ -6369,7 +6369,9 @@ function bk_ts3_escape_encode($value) {
 
 /**
  * Sends a ServerQuery command and reads the response until the terminating
- * "error id=..." line appears (or the safety limits run out).
+ * "error id=..." line appears (or the safety limits run out). A response
+ * without that line was cut short and its rest is still in the socket, so
+ * the caller must not send anything more on it.
  */
 function bk_ts3_send_command($socket, $command, $max_bytes = 65536, $max_seconds = 5) {
     @fwrite($socket, $command . "\n");
@@ -6773,8 +6775,19 @@ function bk_get_enabled_metrics($monitor, $pdo = null) {
 
 /**
  * TeamSpeak server check via ServerQuery. The basic anonymous sequence
- * (use + serverinfo) is deliberately unchanged from the earlier version - it is
- * a production check running every 1-5 minutes, nothing new may bring it down.
+ * (use + serverinfo) decides the status - it is a production check running
+ * every 1-5 minutes, nothing new may bring it down. Every reply is read
+ * through its terminating "error id=" line: a reply read only up to its data
+ * line leaves that line in the socket, and each later command then reads the
+ * previous command's answer. A reply that ends without that line (stream
+ * timeout, or the 64 KB / 5 s cap of bk_ts3_send_command) ends the session:
+ * nothing more is asked, and the steps that did not complete are null.
+ * A use error leaves the status up with the answer as the detail; for 1024
+ * (invalid serverID) serverlist adds whether the voice port is listed and
+ * in what state. That port may only be the assumed 9987 (the /app form
+ * stores the bare host), so it does not make the check down. Another
+ * virtual server is never selected - its name and counts would pass for
+ * this one's.
  * The new things (login, channels, server groups, voice activity, ports) are
  * purely additive and their failure (missing permissions, missing
  * credentials) never changes the resulting 'status'.
@@ -6849,31 +6862,78 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
 
     $query_start = microtime(true);
 
-    // Select the virtual server on the voice port
-    @fwrite($socket, "use port=$voice_port\n");
-    $use_resp = @fgets($socket, 256);
-
-    if ($use_resp && strpos($use_resp, 'error id=0') === false) {
-        // If the given voice port does not exist or is invalid, auto-detect the port via serverlist
-        @fwrite($socket, "serverlist\n");
-        $s_list = @fgets($socket, 4096);
-        if ($s_list && preg_match('/virtualserver_port=(\d+)/', $s_list, $m_port)) {
-            $voice_port = (int)$m_port[1];
-            @fwrite($socket, "use port=$voice_port\n");
-            @fgets($socket, 256);
+    // Every later command goes through $ask, which returns [error id, reply].
+    // Once a reply has come without its "error id=" line, nothing more is sent
+    // and $ask answers [null, ''] - the step was not done.
+    $in_step = true;
+    $ask = function (string $command) use ($socket, &$in_step): array {
+        if (!$in_step) {
+            return [null, ''];
         }
+        $response = bk_ts3_send_command($socket, $command);
+        $error_id = bk_ts3_parse_error_id($response);
+        $in_step = ($error_id !== null);
+        return [$error_id, $response];
+    };
+
+    // Select the virtual server on the voice port. use answers with its error
+    // line only, so one line is the whole reply. A first answer that is not an
+    // "error id=" line comes from a peer that does not speak ServerQuery (a
+    // different service behind the port, or a dead connection): every further
+    // command would wait the full timeout for a terminator that never comes,
+    // so nothing more is sent and that answer becomes the detail.
+    @fwrite($socket, "use port=$voice_port\n");
+    $use_resp = (string)@fgets($socket, 256);
+    $use_error = bk_ts3_parse_error_id($use_resp);
+    $in_step = ($use_error !== null);
+
+    if ($use_error === 1024) {
+        // invalid serverID: ServerQuery has no virtual server it can select on
+        // this port. serverlist (it lists stopped servers too) only adds whether
+        // this very port is listed and in what state; another port from it is
+        // never used. Up, as after any other use error: a target without a
+        // voice port only assumed 9987.
+        [$list_error, $list_resp] = $ask('serverlist');
+        $listed = null;
+        foreach ($list_error === 0 ? bk_ts3_parse_list_response($list_resp) : [] as $vserver) {
+            if ((int)($vserver['virtualserver_port'] ?? 0) === $voice_port) {
+                $listed = $vserver;
+                break;
+            }
+        }
+        @fwrite($socket, "quit\n");
+        @fclose($socket);
+        $error_detail = "TS3 ServerQuery odpovídá, ale virtuální server na hlasovém portu $voice_port nejde vybrat";
+        if (isset($listed['virtualserver_status'])) {
+            $error_detail .= ' - serverlist u něj hlásí stav „' . $listed['virtualserver_status'] . '“';
+        } elseif ($listed === null && $list_error === 0) {
+            $error_detail .= ' - serverlist na tomto portu žádný virtuální server neuvádí';
+        }
+        return [
+            'status' => 'up',
+            'response_time' => $duration,
+            'error' => $error_detail . ' (Odpověď serveru: ' . preg_replace('/\s+/', ' ', trim($use_resp)) . ').',
+        ];
     }
 
-    // Query the server info (unchanged - this is the baseline up/down rests on)
-    @fwrite($socket, "serverinfo\n");
-    $info = @fgets($socket, 4096);
+    // Query the server info (this is the baseline up/down rests on). Its data
+    // line is what precedes the "error id=" line; a reply that did not end with
+    // error id=0 is not trusted, it was cut off or refused. After any other use
+    // error nothing is selected, so serverinfo is not asked.
+    $info_resp = '';
+    if ($use_error === 0) {
+        [, $info_resp] = $ask('serverinfo');
+    }
+    $info_err_pos = strrpos($info_resp, 'error id=');
+    $info = trim($info_err_pos !== false ? substr($info_resp, 0, $info_err_pos) : $info_resp);
 
-    if (!$info || strpos($info, 'virtualserver_clientsonline') === false) {
+    if (bk_ts3_parse_error_id($info_resp) !== 0 || strpos($info, 'virtualserver_clientsonline') === false) {
         @fwrite($socket, "quit\n");
         @fclose($socket);
         $error_detail = 'Spojení navázáno, ale nepodařilo se načíst detaily z Query portu';
-        if ($info) {
-            $error_detail .= ' (Odpověď serveru: ' . trim($info) . ')';
+        $last_resp = $use_error === 0 ? $info_resp : $use_resp;
+        if (trim($last_resp) !== '') {
+            $error_detail .= ' (Odpověď serveru: ' . preg_replace('/\s+/', ' ', trim($last_resp)) . ')';
         }
         $server_ip = $_SERVER['SERVER_ADDR'] ?? null;
         if (!$server_ip && function_exists('gethostname')) {
@@ -6904,26 +6964,30 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
 
     // --- From here on these are purely additive queries (check pipeline) - none
     // --- of this can bring down the status determined by serverinfo above. ---
+    // A step is true when answered with error id=0, false with another id, and
+    // null when it was not done (its reply was cut, or an earlier one was).
     $query_steps = ['serverinfo' => true];
+    $step = fn (?int $error_id): ?bool => $error_id === null ? null : $error_id === 0;
     $authenticated = false;
+    $login_error = null;
+    $login_tried = !empty($sq_username) && !empty($sq_password);
 
-    if (!empty($sq_username) && !empty($sq_password)) {
+    if ($login_tried) {
         $login_cmd = 'login client_login_name=' . bk_ts3_escape_encode($sq_username)
             . ' client_login_password=' . bk_ts3_escape_encode($sq_password);
-        $login_resp = bk_ts3_send_command($socket, $login_cmd);
-        $authenticated = (bk_ts3_parse_error_id($login_resp) === 0);
-        $query_steps['login'] = $authenticated;
+        [$login_error] = $ask($login_cmd);
+        $authenticated = ($login_error === 0);
+        $query_steps['login'] = $step($login_error);
         if ($authenticated) {
             // After login the virtual server must be selected again (ServerQuery requires it)
-            bk_ts3_send_command($socket, "use port=$voice_port");
+            $ask("use port=$voice_port");
         }
     }
 
     $channel_count = null;
-    $channellist_resp = bk_ts3_send_command($socket, 'channellist');
-    $channellist_ok = (bk_ts3_parse_error_id($channellist_resp) === 0);
-    $query_steps['channellist'] = $channellist_ok;
-    if ($channellist_ok) {
+    [$channellist_error, $channellist_resp] = $ask('channellist');
+    $query_steps['channellist'] = $step($channellist_error);
+    if ($channellist_error === 0) {
         $channel_count = count(bk_ts3_parse_list_response($channellist_resp));
     }
 
@@ -6931,10 +6995,9 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
     $active_channel_count = null;
     $voice_activity = null;
     $clientlist_cmd = $authenticated ? 'clientlist -voice -away' : 'clientlist';
-    $clientlist_resp = bk_ts3_send_command($socket, $clientlist_cmd);
-    $clientlist_ok = (bk_ts3_parse_error_id($clientlist_resp) === 0);
-    $query_steps['clientlist'] = $clientlist_ok;
-    if ($clientlist_ok) {
+    [$clientlist_error, $clientlist_resp] = $ask($clientlist_cmd);
+    $query_steps['clientlist'] = $step($clientlist_error);
+    if ($clientlist_error === 0) {
         $clients = bk_ts3_parse_list_response($clientlist_resp);
         $query_client_count = 0;
         $active_cids = [];
@@ -6963,26 +7026,31 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
 
     $server_group_count = null;
     if ($authenticated) {
-        $sg_resp = bk_ts3_send_command($socket, 'servergrouplist');
-        $sg_ok = (bk_ts3_parse_error_id($sg_resp) === 0);
-        $query_steps['servergrouplist'] = $sg_ok;
-        if ($sg_ok) {
+        [$sg_error, $sg_resp] = $ask('servergrouplist');
+        $query_steps['servergrouplist'] = $step($sg_error);
+        if ($sg_error === 0) {
             $server_group_count = count(bk_ts3_parse_list_response($sg_resp));
         }
-        bk_ts3_send_command($socket, 'logout');
-        $query_steps['logout'] = true;
+        [$logout_error] = $ask('logout');
+        $query_steps['logout'] = $step($logout_error);
     }
 
     @fwrite($socket, "quit\n");
     @fclose($socket);
 
+    $query_stage = [
+        'ok' => true,
+        'time_ms' => round((microtime(true) - $query_start) * 1000),
+        'authenticated' => $authenticated,
+        'steps' => $query_steps,
+    ];
+    if ($login_tried) {
+        // The id the login was answered with, null without an answer. Only 520
+        // (invalid loginname or password) says the credentials were wrong.
+        $query_stage['login_error'] = $login_error;
+    }
     $check_stages = [
-        'query' => [
-            'ok' => true,
-            'time_ms' => round((microtime(true) - $query_start) * 1000),
-            'authenticated' => $authenticated,
-            'steps' => $query_steps,
-        ],
+        'query' => $query_stage,
         'service' => [
             'clients_online' => $real_clients_online,
             'clients_max' => $clients_max,

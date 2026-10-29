@@ -7,7 +7,15 @@ import { cn } from '@/lib/utils';
 import { LoadingState } from '@/components/ui/states';
 
 interface Ts3Stages {
-  query?: { ok?: boolean; time_ms?: number | null; authenticated?: boolean; steps?: Record<string, boolean> };
+  query?: {
+    ok?: boolean;
+    time_ms?: number | null;
+    authenticated?: boolean;
+    // true = answered error id=0, false = another id, null = not done (no full answer)
+    steps?: Record<string, boolean | null>;
+    // The id the login was answered with (null without an answer); only with credentials.
+    login_error?: number | null;
+  };
   service?: {
     clients_online?: number | null;
     clients_max?: number | null;
@@ -77,6 +85,13 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
   const svc = stages.service ?? {};
   const ports = stages.ports ?? {};
   const authenticated = stages.query?.authenticated === true;
+  // The check records a login step only when credentials are configured, so a
+  // recorded step means they are set. Only error id 520 (invalid loginname or
+  // password) says they were wrong; any other id, or no answer, has a cause
+  // the card does not know.
+  const loginStep = stages.query?.steps?.login;
+  const loginRejected = loginStep === false && stages.query?.login_error === 520;
+  const loginFailed = (loginStep === false || loginStep === null) && !loginRejected;
 
   const portLabels: Record<string, string> = {
     voice: t('ts3.port_voice', 'Hlasový port'),
@@ -191,7 +206,20 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
         </div>
       )}
 
-      {!authenticated && (
+      {!authenticated && loginRejected && (
+        <p className="text-warning text-2xs leading-relaxed">
+          {t(
+            'ts3.login_rejected',
+            'ServerQuery odmítl jméno a heslo z nastavení monitoru, server proto vrací jen základní údaje. Zkontrolujte je pro detail kanálů a aktivity.'
+          )}
+        </p>
+      )}
+      {!authenticated && loginFailed && (
+        <p className="text-warning text-2xs leading-relaxed">
+          {t('ts3.login_failed', 'Přihlášení k ServerQuery se nezdařilo, server proto vrací jen základní údaje.')}
+        </p>
+      )}
+      {!authenticated && loginStep === undefined && (
         <p className="text-muted-foreground text-2xs leading-relaxed">
           {t(
             'ts3.no_auth',

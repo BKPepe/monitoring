@@ -1775,6 +1775,172 @@ check_false('razítko není podmíněné úspěchem odeslání',
 check_true('běží ve vlastním try/catch', str_contains($dr_block, '} catch (Throwable $e) {'));
 check_true('a selhání nezůstane potichu', str_contains($dr_block, 'Denní připomínka selhala'));
 
+// =======================================================================
+// TeamSpeak ServerQuery - every command reads its own answer
+//
+// check_teamspeak() read serverlist and serverinfo with one fgets each, so
+// their "error id=0" line stayed in the socket. Every later command then read
+// the previous command's answer: a wrong query password counted as a login,
+// the channel and client counts came from other replies, and the serverlist
+// fallback lost serverinfo altogether. The check opens its own socket, so the
+// fake ServerQuery runs as a child process on a free port.
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_response_ms']);
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'check_teamspeak', 'check_ts3_ports', 'bk_ts3_send_command', 'bk_ts3_parse_error_id',
+    'bk_ts3_parse_kv_line', 'bk_ts3_parse_list_response', 'bk_ts3_escape_decode', 'bk_ts3_escape_encode',
+]);
+if (function_exists('check_teamspeak')) {
+    $ts3_proc = proc_open([PHP_BINARY, __DIR__ . '/fixtures/ts3_query_server.php'], [1 => ['pipe', 'w']], $ts3_pipes);
+    $ts3_port = is_resource($ts3_proc) ? (int)fgets($ts3_pipes[1]) : 0;
+    check_true('falešný ServerQuery naslouchá', $ts3_port > 0);
+    if ($ts3_port > 0) {
+        // Filetransfer port 1: nothing listens there, check_ts3_ports() is refused at once.
+        // 'cmds' is what the fake server received on that connection.
+        $ts3_run = function (string $host, ?string $user = null, ?string $pass = null, int $timeout = 2) use ($ts3_port, $ts3_pipes): array {
+            $r = check_teamspeak($host, $ts3_port, $timeout, $user, $pass, 1);
+            $read = [$ts3_pipes[1]];
+            $none = null;
+            $r['cmds'] = stream_select($read, $none, $none, 5) ? trim((string)fgets($ts3_pipes[1])) : null;
+            return $r;
+        };
+        $ts3_view = fn (array $r): array => [
+            'status' => $r['status'], 'error' => $r['error'], 'clients' => [$r['clients_online'] ?? null, $r['clients_max'] ?? null],
+            'name' => $r['name'] ?? null, 'authenticated' => $r['check_stages']['query']['authenticated'] ?? null,
+            'steps' => $r['check_stages']['query']['steps'] ?? null,
+            'login_error' => array_key_exists('login_error', $r['check_stages']['query'] ?? [])
+                ? $r['check_stages']['query']['login_error'] : 'absent',
+            'channels' => [$r['check_stages']['service']['channel_count'] ?? null, $r['check_stages']['service']['active_channel_count'] ?? null],
+            'query_clients' => $r['check_stages']['service']['query_client_count'] ?? null,
+            'server_groups' => $r['check_stages']['service']['server_group_count'] ?? null,
+            'voice' => $r['check_stages']['service']['voice_activity'] ?? null,
+            'cmds' => $r['cmds'],
+        ];
+
+        $ts3_anon = $ts3_view($ts3_run('127.0.0.1:9987'));
+        check('anonymně: stav a klienti ze serverinfo', [$ts3_anon['status'], $ts3_anon['error'], $ts3_anon['clients'], $ts3_anon['name']],
+            ['up', null, [3, 32], 'Example Server']);
+        check('anonymně: kanály a query klienti z vlastních odpovědí', [$ts3_anon['channels'], $ts3_anon['query_clients']], [[3, 2], 1]);
+        check('anonymně: bez přihlášení, skupiny ani hlas se nevymyslí',
+            [$ts3_anon['authenticated'], $ts3_anon['steps'], $ts3_anon['server_groups'], $ts3_anon['voice'], $ts3_anon['login_error']],
+            [false, ['serverinfo' => true, 'channellist' => true, 'clientlist' => true], null, null, 'absent']);
+
+        // The server answers error id=520; the check used to read serverinfo's leftover error id=0 instead.
+        $ts3_bad = $ts3_view($ts3_run('127.0.0.1:9987', 'serveradmin', 'wrong-password'));
+        check('špatné heslo není přihlášení',
+            [$ts3_bad['authenticated'], $ts3_bad['steps'], $ts3_bad['server_groups'], $ts3_bad['voice']],
+            [false, ['serverinfo' => true, 'login' => false, 'channellist' => true, 'clientlist' => true], null, null]);
+        check('a kanály i klienti zůstanou správně', [$ts3_bad['channels'], $ts3_bad['query_clients']], [[3, 2], 1]);
+        // Only this id says the name or password is wrong; the card words its note by it.
+        check('špatné heslo: kód odmítnutí je v check_stages', $ts3_bad['login_error'], 520);
+
+        $ts3_auth = $ts3_view($ts3_run('127.0.0.1:9987', 'serveradmin', 'example-password'));
+        check('přihlášeně: všechny kroky prošly', [$ts3_auth['authenticated'], $ts3_auth['steps']], [true, [
+            'serverinfo' => true, 'login' => true, 'channellist' => true, 'clientlist' => true, 'servergrouplist' => true, 'logout' => true,
+        ]]);
+        check('přihlášeně: kanály, skupiny a hlasová aktivita z vlastních odpovědí',
+            [$ts3_auth['channels'], $ts3_auth['query_clients'], $ts3_auth['server_groups'], $ts3_auth['voice']],
+            [[3, 2], 1, 3, ['talking' => 1, 'away' => 1, 'muted' => 2, 'recording' => 1]]);
+        check('přihlášeně: kód přihlášení 0', $ts3_auth['login_error'], 0);
+
+        // The monitored vserver 9988 is stopped (use answers 1033) and 9987
+        // runs on the same instance. The fallback used to take the first port
+        // in serverlist and report 9987's name and counts as this monitor's.
+        // A use error leaves the status up with its answer as the detail.
+        $ts3_stopped = $ts3_view($ts3_run('127.0.0.1:9988'));
+        check('zastavený virtuální server nemá cizí data',
+            [$ts3_stopped['status'], $ts3_stopped['name'], $ts3_stopped['clients'], $ts3_stopped['steps']],
+            ['up', null, [null, null], null]);
+        check_true('zastavený virtuální server: detail cituje odpověď na use', str_contains((string)$ts3_stopped['error'],
+            '(Odpověď serveru: error id=1033 msg=server\\sis\\snot\\srunning)'));
+        check('zastavený virtuální server: jiný server se nevybírá', $ts3_stopped['cmds'], 'use port=9988,quit');
+
+        // No vserver at all on 9999 (1024). A target without a voice port
+        // gets here too: the /app form stores the bare host, so 9987 is only
+        // assumed. Not a down then, and no other vserver is picked; serverlist
+        // only adds whether the port is listed.
+        $ts3_none = $ts3_view($ts3_run('127.0.0.1:9999'));
+        check('port bez virtuálního serveru: stav beze změny a bez cizích dat',
+            [$ts3_none['status'], $ts3_none['name'], $ts3_none['clients'], $ts3_none['steps']], ['up', null, [null, null], null]);
+        check('port bez virtuálního serveru: chyba to říká', $ts3_none['error'],
+            'TS3 ServerQuery odpovídá, ale virtuální server na hlasovém portu 9999 nejde vybrat'
+            . ' - serverlist na tomto portu žádný virtuální server neuvádí (Odpověď serveru: error id=1024 msg=invalid\\sserverID).');
+        check('port bez virtuálního serveru: jiný server se nevybírá', $ts3_none['cmds'], 'use port=9999,serverlist,quit');
+
+        // 9991 is listed offline, but use answers 1024: the detail quotes its state.
+        $ts3_listed = $ts3_view($ts3_run('127.0.0.1:9991'));
+        check('port v serverlistu, který use nevybere: stav beze změny a bez cizích dat',
+            [$ts3_listed['status'], $ts3_listed['name'], $ts3_listed['clients']], ['up', null, [null, null]]);
+        check('port v serverlistu, který use nevybere: chyba cituje stav ze serverlistu', $ts3_listed['error'],
+            'TS3 ServerQuery odpovídá, ale virtuální server na hlasovém portu 9991 nejde vybrat'
+            . ' - serverlist u něj hlásí stav „offline“ (Odpověď serveru: error id=1024 msg=invalid\\sserverID).');
+        check('port v serverlistu, který use nevybere: jiný server se nevybírá', $ts3_listed['cmds'], 'use port=9991,serverlist,quit');
+
+        // Any other use error: the status stays up with the answer as the
+        // detail, and nothing else is asked - neither serverlist nor
+        // serverinfo of an unselected server.
+        $ts3_denied = $ts3_view($ts3_run('127.0.0.1:9990'));
+        check('jiná chyba use: stav beze změny, detail cituje odpověď na use',
+            [$ts3_denied['status'], $ts3_denied['name'], str_contains((string)$ts3_denied['error'],
+                '(Odpověď serveru: error id=2568 msg=insufficient\\sclient\\spermissions failed_permid=4)')],
+            ['up', null, true]);
+        check('jiná chyba use: jiný server se nevybírá', $ts3_denied['cmds'], 'use port=9990,quit');
+
+        // channellist of 9989 is longer than bk_ts3_send_command's 64 KB cap,
+        // so its error line stays in the socket. clientlist used to read that
+        // rest as its own answer and count channels as clients.
+        $ts3_cut = $ts3_view($ts3_run('127.0.0.1:9989'));
+        check('useknutá odpověď: stav a serverinfo zůstanou', [$ts3_cut['status'], $ts3_cut['error'], $ts3_cut['name']], ['up', null, 'Large Server']);
+        check('useknutá odpověď: nedokončené kroky jsou null, počty se nevymyslí',
+            [$ts3_cut['steps'], $ts3_cut['channels'], $ts3_cut['query_clients']],
+            [['serverinfo' => true, 'channellist' => null, 'clientlist' => null], [null, null], null]);
+        // The check closes with that rest unread, so the socket may be reset
+        // before quit reaches the fake server; only what came before it counts.
+        check('useknutá odpověď: po ní se už nic neposílá', preg_replace('/,quit$/', '', (string)$ts3_cut['cmds']),
+            'use port=9989,serverinfo,channellist');
+
+        // The login answer never comes: the stream timeout ends the read
+        // without its error line. Not a rejected login, and nothing more is sent.
+        $ts3_slow = $ts3_view($ts3_run('127.0.0.1:9987', 'serveradmin', 'slow-password', 1));
+        check('přihlášení bez odpovědi: kroky null, kód neznámý',
+            [$ts3_slow['status'], $ts3_slow['authenticated'], $ts3_slow['steps'], $ts3_slow['login_error'], $ts3_slow['channels']],
+            ['up', false, ['serverinfo' => true, 'login' => null, 'channellist' => null, 'clientlist' => null], null, [null, null]]);
+        check('přihlášení bez odpovědi: po něm se už nic neposílá', $ts3_slow['cmds'],
+            'use port=9987,serverinfo,login client_login_name=serveradmin client_login_password=slow-password,quit');
+    }
+    if (is_resource($ts3_proc)) {
+        proc_terminate($ts3_proc);
+        proc_close($ts3_proc);
+    }
+
+    // A different service behind the port passes the greeting check, but no
+    // answer of it ends with "error id=". Reading use, serverlist and serverinfo
+    // to that line waited the full timeout three times on every cron run; the
+    // first answer without it now ends the check, with that answer as detail.
+    $ts3_fproc = proc_open([PHP_BINARY, __DIR__ . '/fixtures/ts3_query_server.php', 'foreign'], [1 => ['pipe', 'w']], $ts3_fpipes);
+    $ts3_fport = is_resource($ts3_fproc) ? (int)fgets($ts3_fpipes[1]) : 0;
+    check_true('cizí služba naslouchá', $ts3_fport > 0);
+    if ($ts3_fport > 0) {
+        $ts3_t0 = microtime(true);
+        $ts3_foreign = check_teamspeak('127.0.0.1:9987', $ts3_fport, 2, null, null, 1);
+        $ts3_elapsed = microtime(true) - $ts3_t0;
+        $ts3_read = [$ts3_fpipes[1]];
+        $ts3_none = null;
+        $ts3_seen = stream_select($ts3_read, $ts3_none, $ts3_none, 5) ? trim((string)fgets($ts3_fpipes[1])) : null;
+        // Only whether the detail quotes the answer: the tip after it names this machine's address.
+        check('cizí služba: stav beze změny, detail cituje její odpověď',
+            [$ts3_foreign['status'], str_contains((string)$ts3_foreign['error'],
+                'z Query portu (Odpověď serveru: 220 You will be disconnected after 15 minutes of inactivity.)')],
+            ['up', true]);
+        check('cizí služba: po use se už nic neposílá', $ts3_seen, 'use port=9987,quit');
+        check_true('cizí služba: kontrola nečeká na timeout', $ts3_elapsed < 1.5);
+    }
+    if (is_resource($ts3_fproc)) {
+        proc_terminate($ts3_fproc);
+        proc_close($ts3_fproc);
+    }
+}
+
 // --- testovací brány: běh bez kontrol musí skončit červeně -----------------
 // Why here: run_api_tests.php used to exit 0 when MySQL was unreachable, so a
 // wrong password looked exactly like 980 passing checks. A gate that can be
