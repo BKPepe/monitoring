@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useSearchParams } from 'react-router';
-import { Activity, CheckCircle2, CloudOff, History, Siren, TriangleAlert, Wrench } from 'lucide-react';
+import { Activity, CheckCircle2, CircleHelp, CloudOff, History, Siren, TriangleAlert, Wrench } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { usePublicStatus } from '@/api/use-asset-charts';
 import { PublicMonitorCard, typeIcon, type PublicMonitor, type UptimeWindows } from '@/components/public/monitor-card';
@@ -138,6 +138,9 @@ export function PublicStatusPage() {
   // When the list last arrived intact - what a failed refresh names as the
   // time of the data still on screen.
   const [okAt, setOkAt] = React.useState<number | null>(null);
+  // Whether cron has run lately, from the same answer as the list; null = the
+  // answer did not say. The stored states outlive a stopped collector.
+  const [collectionFresh, setCollectionFresh] = React.useState<boolean | null>(null);
   // null = the strips' first answer has not come yet; the cards hold their row.
   const [uptime, setUptime] = React.useState<Record<string, UptimeDay[]> | null>(null);
   // The latest strips request failed. The last known strips stay; without
@@ -217,6 +220,7 @@ export function PublicStatusPage() {
           return;
         }
         setMonitors(d.monitors);
+        setCollectionFresh(typeof d.collectionFresh === 'boolean' ? d.collectionFresh : null);
         setMonitorsError(false);
         setOkAt(Date.now());
       })
@@ -352,10 +356,11 @@ export function PublicStatusPage() {
 
   // On a filtered page the verdict and counts must describe the SELECTION,
   // not the whole fleet - "all systems online" about services the page does
-  // not even show would be a lie told by an accurate number.
+  // not even show would be a lie told by an accurate number. A list that has
+  // not arrived is not an empty selection: null, so nothing is judged yet.
   const visibleMonitors = React.useMemo(() => {
-    if (!allowed) return monitors;
-    return (monitors ?? []).filter((m) => allowed.has(m.id));
+    if (!allowed || monitors === null) return monitors;
+    return monitors.filter((m) => allowed.has(m.id));
   }, [monitors, allowed]);
 
   const filtered = pageMeta !== null && pageMeta.monitorIds.length > 0;
@@ -479,7 +484,15 @@ export function PublicStatusPage() {
   // cannot vouch for the present. The fleet summary counts only on the
   // unfiltered page, where the down count comes from it.
   const failed = monitorsError || (!filtered && error !== null);
-  const verdict: 'error' | 'loading' | 'down' | 'partial' | 'maintenance' | 'ok' = failed
+  // Nothing is checking the stored states (cron stopped, or the server's own
+  // verdict is 'unknown'): they are the last known ones, not "online". The
+  // flag comes with the list, so a ?page= selection follows the same rule; a
+  // list without it vouches for nothing. Until the list arrives only the
+  // server's verdict can say so - no answer yet is not "unverified".
+  const unverified =
+    status?.status === 'unknown' || collectionFresh === false || (collectionFresh === null && monitors !== null);
+  // The order of bk_overall_verdict: down > degraded > unknown > maintenance.
+  const verdict: 'error' | 'loading' | 'down' | 'partial' | 'unverified' | 'maintenance' | 'ok' = failed
     ? 'error'
     : visibleMonitors === null || down === null
       ? 'loading'
@@ -487,9 +500,11 @@ export function PublicStatusPage() {
         ? 'down'
         : partial > 0
           ? 'partial'
-          : inMaintenance > 0
-            ? 'maintenance'
-            : 'ok';
+          : unverified
+            ? 'unverified'
+            : inMaintenance > 0
+              ? 'maintenance'
+              : 'ok';
 
   // The tab and search-result title: a running outage comes first, so a tab
   // left open says so without being looked at (W1-G4). Only a verdict built
@@ -584,9 +599,11 @@ export function PublicStatusPage() {
           ? downText
           : verdict === 'partial'
             ? t('public.partial', 'Provoz je částečně omezen')
-            : verdict === 'maintenance'
-              ? maintenanceText
-              : t('public.all_ok', 'Všechny systémy jsou online');
+            : verdict === 'unverified'
+              ? t('public.unverified', 'Stav služeb nelze ověřit')
+              : verdict === 'maintenance'
+                ? maintenanceText
+                : t('public.all_ok', 'Všechny systémy jsou online');
   const verdictLook: { icon: typeof Activity; tone: IconTileTone } =
     verdict === 'ok'
       ? { icon: CheckCircle2, tone: 'up' }
@@ -594,11 +611,13 @@ export function PublicStatusPage() {
         ? { icon: Activity, tone: 'down' }
         : verdict === 'partial'
           ? { icon: TriangleAlert, tone: 'warning' }
-          : verdict === 'maintenance'
-            ? { icon: Wrench, tone: 'info' }
-            : verdict === 'error'
-              ? { icon: CloudOff, tone: 'neutral' }
-              : { icon: Activity, tone: 'neutral' };
+          : verdict === 'unverified'
+            ? { icon: CircleHelp, tone: 'neutral' }
+            : verdict === 'maintenance'
+              ? { icon: Wrench, tone: 'info' }
+              : verdict === 'error'
+                ? { icon: CloudOff, tone: 'neutral' }
+                : { icon: Activity, tone: 'neutral' };
   const rssHref = pageSlug ? `/status/rss.php?page=${encodeURIComponent(pageSlug)}` : '/status/rss.php';
 
   return (
@@ -626,10 +645,11 @@ export function PublicStatusPage() {
         )}
 
         {/* The headline verdict, in strict precedence: a failed request, then an
-            outage, then a partial problem, then maintenance, and only then all
-            online. An unknown state must never read as a green light. The
-            panel itself stays untinted: the icon, the sentence and the
-            freshness pill carry the state (no tint on tint). */}
+            outage, then a partial problem, then states nobody checks any more,
+            then maintenance, and only then all online. An unknown state must
+            never read as a green light. The panel itself stays untinted: the
+            icon, the sentence and the freshness pill carry the state (no tint
+            on tint). */}
         <Panel padding="none" className="overflow-hidden">
           <div
             className={
@@ -650,6 +670,21 @@ export function PublicStatusPage() {
                     {verdictText}
                   </p>
                   {verdict === 'partial' && <p className="text-muted-foreground text-sm">{partialText}</p>}
+                  {/* The cause only when the server named it: cron known stale.
+                      A missing flag or a bare 'unknown' says no more than that. */}
+                  {verdict === 'unverified' && (
+                    <p className="text-muted-foreground text-sm">
+                      {collectionFresh === false
+                        ? t(
+                            'public.unverified_desc',
+                            'Pravidelné kontroly v poslední době neproběhly. Níže je poslední známý stav.'
+                          )
+                        : t(
+                            'public.unverified_desc_unknown',
+                            'Aktuální stav teď nelze ověřit. Níže je poslední známý stav.'
+                          )}
+                    </p>
+                  )}
                   {verdict === 'error' && (
                     <p className="text-muted-foreground text-sm">
                       {monitors !== null
@@ -665,8 +700,11 @@ export function PublicStatusPage() {
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 {/* How old the verdict is, from the newest check the server holds -
                     a wall display left open must not look live after cron or the
-                    API stopped. Cron writes every 1-5 minutes, hence 300 s. */}
-                <FreshnessPill at={updatedMs} intervalSecs={300} failed={failed} okAt={okAt} />
+                    API stopped. Cron writes every 1-5 minutes, hence 300 s. An
+                    agent report keeps that check recent with cron stopped, so an
+                    unverified collection is never live, whichever answer says
+                    so first. */}
+                <FreshnessPill at={updatedMs} intervalSecs={300} failed={failed} okAt={okAt} unverified={unverified} />
                 {updatedAt && (
                   <p className="text-muted-foreground text-xs">
                     {t('public.updated', { at: updatedAt }, `Aktualizováno ${updatedAt}`)}

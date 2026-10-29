@@ -718,6 +718,18 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Below is the last known status. The next attempt runs in a minute.',
   },
   'public.partial': { cs: 'Provoz je částečně omezen', en: 'Service is partially degraded' },
+  // R3: the stored states while nothing checks them (cron stopped) are not "online".
+  'public.unverified': { cs: 'Stav služeb nelze ověřit', en: 'Service status cannot be verified' },
+  'public.unverified_desc': {
+    cs: 'Pravidelné kontroly v poslední době neproběhly. Níže je poslední známý stav.',
+    en: 'The regular checks have not run lately. Below is the last known status.',
+  },
+  // The same headline when nobody says why (no freshness flag, or the server's
+  // verdict is 'unknown'): no cause the page does not know.
+  'public.unverified_desc_unknown': {
+    cs: 'Aktuální stav teď nelze ověřit. Níže je poslední známý stav.',
+    en: 'The current status cannot be verified right now. Below is the last known status.',
+  },
   'public.partial_desc': {
     cs: '{services} hlásí zhoršení nebo neznámý stav',
     en: '{services} degraded or in an unknown state',
@@ -3711,6 +3723,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'fresh.late': { cs: 'Zpožděno', en: 'Delayed' },
   'fresh.stale': { cs: 'Zastaralé', en: 'Stale' },
   'fresh.failed': { cs: 'Obnovení selhalo', en: 'Refresh failed' },
+  'fresh.unverified': { cs: 'Neověřeno', en: 'Unverified' },
   'layout.title': { cs: 'Rozložení dashboardu', en: 'Dashboard layout' },
   'layout.subtitle': {
     cs: 'Vyberte, co se má zobrazovat a v jakém pořadí. Nabízí se jen to, pro co se opravdu sbírají data.',

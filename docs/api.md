@@ -458,6 +458,12 @@ An administrator's list also carries `isPublic` (the effective answer: the
 owner's choice, or the type's default when never chosen) and `logLinesEnabled`
 (whether a router may send its masked log lines, see `agent_api.php`).
 
+Both views carry a top-level `collectionFresh` beside `monitors`: whether cron
+has finished a run within `collection_max_age_secs` (the rule `public_status`
+and the badge judge by). When it is `false` the states in the list are the last
+known ones, so the public page, a `?page=` selection included, says the status
+cannot be verified instead of "all systems online".
+
 The app view (not `scope=public`) also carries a top-level `sslAlertDays` beside
 `monitors`: the certificate limit cron alerts at (`ssl_alert_days`, at least 1),
 so the dashboard flags a certificate by the same rule as the alert.

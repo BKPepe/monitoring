@@ -57,9 +57,10 @@ const failure = (
 
 function answering(monitors: unknown[], events: unknown[], lastUpdated: string | null = null) {
   return (url: string): Response => {
-    if (url.includes('action=monitors')) return json({ monitors });
+    if (url.includes('action=monitors')) return json({ monitors, collectionFresh: true });
     if (url.includes('action=public_status'))
       return json({
+        status: (monitors as { status: string }[]).some((m) => m.status === 'down') ? 'down' : 'healthy',
         totalMonitors: monitors.length,
         downMonitors: (monitors as { status: string }[]).filter((m) => m.status === 'down').length,
         uptimePercent: 99.9,

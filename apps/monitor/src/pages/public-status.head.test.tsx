@@ -33,9 +33,10 @@ const monitor = (id: number, name: string, status: string) => ({
 function answering(monitors: { status: string }[], statusPage: Response | null = null) {
   return (url: string): Response => {
     if (url.includes('action=status_page')) return statusPage ?? json({ error: 'not_found' }, 404);
-    if (url.includes('action=monitors')) return json({ monitors });
+    if (url.includes('action=monitors')) return json({ monitors, collectionFresh: true });
     if (url.includes('action=public_status'))
       return json({
+        status: monitors.some((m) => m.status === 'down') ? 'down' : 'healthy',
         totalMonitors: monitors.length,
         downMonitors: monitors.filter((m) => m.status === 'down').length,
         uptimePercent: 99.9,

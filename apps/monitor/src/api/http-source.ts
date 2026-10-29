@@ -308,8 +308,12 @@ export const httpMetricsSource: MetricsSource = {
     if (typeof raw?.totalMonitors !== 'number') {
       throw new Error('Neplatná odpověď z /status API (chybí povinná pole).');
     }
+    // The verdict as the server gave it. Everything but 'degraded' used to
+    // become 'healthy', so a stopped collector's 'unknown' read as all clear;
+    // a value this client has no word for is not 'healthy' either.
+    const verdicts: PublicStatus['status'][] = ['healthy', 'degraded', 'down', 'maintenance', 'unknown'];
     return {
-      status: raw.status === 'degraded' ? 'degraded' : 'healthy',
+      status: verdicts.includes(raw.status) ? raw.status : 'unknown',
       uptimePercent: typeof raw.uptimePercent === 'number' ? raw.uptimePercent : null,
       totalMonitors: raw.totalMonitors,
       downMonitors: raw.downMonitors ?? 0,

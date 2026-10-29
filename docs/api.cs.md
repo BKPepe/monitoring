@@ -452,6 +452,12 @@ Seznam pro administrátora nese navíc `isPublic` (platná odpověď: volba
 vlastníka, nebo výchozí hodnota typu, když nikdy nezvolil) a `logLinesEnabled`
 (jestli router smí posílat své maskované řádky logu, viz `agent_api.php`).
 
+Oba pohledy nesou vedle `monitors` ještě `collectionFresh`: jestli cron dokončil
+běh v rámci `collection_max_age_secs` (pravidlo, podle kterého soudí
+`public_status` i odznak). Při `false` jsou stavy v seznamu jen poslední známé,
+takže veřejná stránka, i výběr `?page=`, místo „Všechny systémy jsou online“
+řekne, že stav nelze ověřit.
+
 Pohled aplikace (ne `scope=public`) nese vedle `monitors` ještě `sslAlertDays`:
 hranici certifikátu, u které cron upozorňuje (`ssl_alert_days`, nejméně 1), aby
 přehled označil certifikát podle stejného pravidla jako upozornění.

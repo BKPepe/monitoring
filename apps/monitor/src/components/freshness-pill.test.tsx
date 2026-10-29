@@ -39,6 +39,14 @@ describe('freshnessOf', () => {
     expect(freshnessOf(901, 300, false)).toBe('stale');
     expect(freshnessOf(5, 300, true)).toBe('failed');
   });
+
+  it('neověřený sběr: čerstvé měření není „živě“; zpoždění, zastarání i selhání zůstávají', () => {
+    expect(freshnessOf(34, 300, false, true)).toBe('unverified');
+    expect(freshnessOf(600, 300, false, true)).toBe('unverified');
+    expect(freshnessOf(601, 300, false, true)).toBe('late');
+    expect(freshnessOf(901, 300, false, true)).toBe('stale');
+    expect(freshnessOf(5, 300, true, true)).toBe('failed');
+  });
 });
 
 describe('ageText', () => {
@@ -81,6 +89,14 @@ describe('FreshnessPill', () => {
     expect(container.textContent).toContain('Obnovení selhalo');
     expect(container.textContent).toContain('12:04');
     expect(container.querySelector('.animate-pulse')).toBeNull();
+  });
+
+  it('neověřený sběr: „Neověřeno“ s věkem měření, bez pulzu a bez barvy „živě“', () => {
+    const { container } = pill({ at: NOW - 34_000, intervalSecs: 300, unverified: true });
+    expect(state(container)).toBe('unverified');
+    expect(container.textContent).toBe('Neověřeno· 34 s');
+    expect(container.querySelector('.animate-pulse')).toBeNull();
+    expect(container.querySelector('[data-tone="up"]')).toBeNull();
   });
 
   it('selhání bez jediné úspěšné odpovědi neuvádí žádný čas', () => {

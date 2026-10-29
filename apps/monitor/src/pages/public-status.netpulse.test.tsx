@@ -73,9 +73,16 @@ function answering(
   const api = (url: string): Response | Promise<Response> => {
     urls.push(url);
     if (url.includes('action=monitors'))
-      return json({ monitors: [monitor(1, 'E-shop', 'up'), monitor(2, 'Wiki', 'up')] });
+      return json({ monitors: [monitor(1, 'E-shop', 'up'), monitor(2, 'Wiki', 'up')], collectionFresh: true });
     if (url.includes('action=public_status'))
-      return json({ totalMonitors: 2, downMonitors: 0, uptimePercent: 99.9, lastUpdated: null, nodes: [] });
+      return json({
+        status: 'healthy',
+        totalMonitors: 2,
+        downMonitors: 0,
+        uptimePercent: 99.9,
+        lastUpdated: null,
+        nodes: [],
+      });
     if (url.includes('action=status_page')) return json({ title: 'Herní servery', monitorIds: [2] });
     if (url.includes('action=health')) return extra.health ?? json(HEALTH);
     if (url.includes('action=regions')) return json({ regions: extra.regions ?? [] });

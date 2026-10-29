@@ -575,6 +575,11 @@ if ($action === 'monitors') {
     }
 
     $mon_out = ['monitors' => array_values($monitors)];
+    // Whether cron has run lately (bk_collection_is_fresh, what public_status
+    // and the badge judge by). Without it the stored states are the last known
+    // ones, and the public page's verdict over this list would read a stopped
+    // collector as all online - a ?page= selection has no other way to know.
+    $mon_out['collectionFresh'] = bk_collection_is_fresh();
     if (!$public_view) {
         // The limit cron alerts at (ssl_alert_days), so the dashboard's attention
         // list flags a certificate by the same rule as the alert and the findings

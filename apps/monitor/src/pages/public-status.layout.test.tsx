@@ -44,9 +44,11 @@ function api(url: string): Response {
           hdd: null,
         },
       ],
+      collectionFresh: true,
     });
   if (url.includes('action=public_status'))
     return json({
+      status: 'down',
       totalMonitors: 1,
       downMonitors: 1,
       uptimePercent: 99,

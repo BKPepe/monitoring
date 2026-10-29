@@ -6194,6 +6194,10 @@ try {
     // "Všechny systémy jsou online" over a warning or a stopped collector.
     [, , $b4_idx_ok] = bk_raw_request($base . '/index.php');
     check_true('stará stránka: vše běží, říká online', str_contains($b4_idx_ok, 'Všechny systémy jsou online'));
+    // R3: /app/public judges the list action=monitors gives it, a ?page=
+    // selection included - the list has to say whether cron is running.
+    [, $b4_list_ok] = api_get($base, 'action=monitors&scope=public');
+    check('veřejný seznam při čerstvém sběru: collectionFresh true', $b4_list_ok['collectionFresh'] ?? 'chybí', true);
 
     $pdo->exec("UPDATE monitors SET status = 'warning' WHERE id = 1");
     [, $b4_warn] = api_get($base, 'action=public_status');
@@ -6210,6 +6214,8 @@ try {
     $b4_set_cron(7200);
     [, $b4_stale] = api_get($base, 'action=public_status');
     check('zastavený sběr: unknown, ne healthy', $b4_stale['status'] ?? null, 'unknown');
+    [, $b4_list_stale] = api_get($base, 'action=monitors&scope=public');
+    check('veřejný seznam při zastaveném sběru: collectionFresh false', $b4_list_stale['collectionFresh'] ?? 'chybí', false);
     check_true('odznak flotily: neznámý', str_contains($b4_badge(), 'neznámý'));
     [, , $b4_idx_stale] = bk_raw_request($base . '/index.php');
     check_true('stará stránka při zastaveném sběru: stav nezjištěn', str_contains($b4_idx_stale, 'Stav se nepodařilo zjistit')

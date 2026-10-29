@@ -362,7 +362,8 @@ export type PublicStatusScope = 'app' | 'public';
 
 /** Response of `api.php?action=public_status`. */
 export interface PublicStatus {
-  status: 'healthy' | 'degraded';
+  /** The server's one verdict (bk_overall_verdict); 'unknown' = collection stopped or nothing measured. */
+  status: 'healthy' | 'degraded' | 'down' | 'maintenance' | 'unknown';
   /** null = no check in the last 30 days yet (fresh install / dead cron), not 100 %. */
   uptimePercent: number | null;
   totalMonitors: number;
