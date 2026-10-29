@@ -17,7 +17,7 @@ require_once __DIR__ . '/assert_helpers.php';
 bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_get_collection_issues', 'bk_disk_label', 'bk_ranged_int', 'bk_get_network_insights', 'bk_lte_backup_state', 'bk_wan_link_state', 'bk_with_email_lang', 'bk_enrich_threshold_tip',
     'bk_relative_time_label', 'bk_format_duration', 'bk_compute_baseline_anomaly',
-    'bk_half_window_rate', 'bk_latency_score', 'bk_notification_kinds',
+    'bk_half_window_rate', 'bk_latency_score', 'bk_notification_kinds', 'bk_reports_24h_applies',
 ]);
 // Every check_* copy taken from functions.php below times its answer with
 // db.php's bk_response_ms(), which a functions.php extract does not carry.
@@ -105,28 +105,28 @@ if (function_exists('bk_get_collection_issues')) {
     // only reads it - a partial loss used to be invisible until the agent
     // went silent for the whole 3000 s.
     $ci_missing = bk_get_collection_issues($healthy_monitor,
-        ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time() - 600]]);
+        ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time() - 600]]);
     check('chybějící minutová hlášení se hlásí i s počty', $ci_missing[0]['message'] ?? null,
         sprintf(t('collection_issue_reports_missing'), 160, 1440));
     check('agentovy vlastní přeskoky se k tomu dopíšou',
-        bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+        bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
             'runs_skipped_lock' => 96, 'runs_skipped_post' => 4])[0]['message'] ?? null,
         sprintf(t('collection_issue_reports_missing'), 160, 1440) . ' ' . sprintf(t('collection_issue_reports_missing_skips'), 96, 4));
     // Agent 0.1.9: runs the lock takeover stopped are the third reason, in a
     // sentence of their own; an older agent's missing counter adds nothing.
     check('běh ukončený po 5 minutách visení se dopíše jako třetí důvod',
-        bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+        bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
             'runs_skipped_lock' => 96, 'runs_skipped_post' => 4, 'runs_skipped_killed' => 3])[0]['message'] ?? null,
         sprintf(t('collection_issue_reports_missing'), 160, 1440) . ' ' . sprintf(t('collection_issue_reports_missing_skips'), 96, 4)
             . ' ' . sprintf(t('collection_issue_reports_missing_killed'), 3));
     check('samotné ukončené běhy se dopíšou i bez ostatních přeskoků',
-        bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+        bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
             'runs_skipped_lock' => 0, 'runs_skipped_post' => 0, 'runs_skipped_killed' => 2])[0]['message'] ?? null,
         sprintf(t('collection_issue_reports_missing'), 160, 1440) . ' ' . sprintf(t('collection_issue_reports_missing_killed'), 2));
     check('nula ani chybějící počet ukončených běhů (agent do 0.1.8) nic nedopíše',
-        [bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+        [bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
             'runs_skipped_killed' => 0])[0]['message'] ?? null,
-         bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+         bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
             'runs_skipped_killed' => null])[0]['message'] ?? null],
         [sprintf(t('collection_issue_reports_missing'), 160, 1440), sprintf(t('collection_issue_reports_missing'), 160, 1440)]);
     $ci_killed_cs = (require __DIR__ . '/../lang/cs.php')['collection_issue_reports_missing_killed'] ?? '';
@@ -135,9 +135,20 @@ if (function_exists('bk_get_collection_issues')) {
         [sprintf($ci_killed_cs, 3), sprintf($ci_killed_en, 3)],
         ['Běh visel 5 minut a byl ukončen: 3×.', 'A run hung for 5 minutes and was stopped: 3×.']);
     check('ztráta pod deseti procenty se nehlásí',
-        count(bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 1300, 'checked_at' => time()]])), 0);
+        count(bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1300, 'checked_at' => time()]])), 0);
     check('krátké okno (router po restartu) se nesoudí',
-        count(bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 100, 'received' => 10, 'checked_at' => time()]])), 0);
+        count(bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 100, 'received' => 10, 'checked_at' => time()]])), 0);
+    // R140: agent.sh, agent.py and agent.ps1 run every 5 minutes as installed,
+    // 288 reports a day. A count stored when cron still held them to the
+    // minute said "1152 of 1440 missing" on every healthy server.
+    check('serverový agent na 5minutovém cronu se minutovými hlášeními nesoudí',
+        [count(bk_get_collection_issues($healthy_monitor, ['agent_type' => 'bash', 'reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => time()]])),
+         count(bk_get_collection_issues($healthy_monitor, ['agent_type' => 'powershell', 'reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => time()]])),
+         count(bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => time()]]))],
+        [0, 0, 0]);
+    check('router se stejnými počty dál hlásí chybějící minuty',
+        bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => time()]])[0]['type'] ?? null,
+        'reports_missing');
 
     $ci_ingest = bk_get_collection_issues($healthy_monitor, ['ingest_issues' => [
         ['type' => 'passthrough_too_large', 'key' => 'logread', 'bytes' => 12000],

@@ -13294,6 +13294,22 @@ function bk_wireguard_peer_count($raw): ?int {
 }
 
 /**
+ * G42: whether a monitor's reports can be held to the minute count at all.
+ *
+ * Only the OpenWrt agent has a minute contract of its own (the installer's
+ * `* * * * *`). agent.sh, agent.py and agent.ps1 run when their host's cron,
+ * scheduled task or Docker loop says - five minutes as shipped, any other
+ * interval the user chose - and they do not report which, so the server has
+ * no number to hold them to. Judged by the agent that really reports, not by
+ * the monitor's type.
+ *
+ * @param array<string, mixed> $details last_details of the monitor
+ */
+function bk_reports_24h_applies(array $details): bool {
+    return ($details['agent_type'] ?? null) === 'openwrt';
+}
+
+/**
  * G42: how many minute reports a router COULD have sent in the last 24 h.
  *
  * The window starts at the later of "24 h ago" and the router's boot time: a
@@ -13328,11 +13344,13 @@ function bk_reports_24h_expected(array $monitor_row, ?int $boot_time, int $now):
 /**
  * The hourly `reports_24h` pass of cron (G42).
  *
- * One indexed COUNT per agent monitor per hour, no more: the banner has to be
+ * One indexed COUNT per OpenWrt router per hour, no more: the banner has to be
  * able to say "142 of 1440 minutes are missing", and the pure
  * bk_get_collection_issues() has no $pdo to count with. The result goes into
  * last_details on a FRESH read, because an agent report lands in the same
- * column every minute and only this one key is this pass's to change.
+ * column every minute and only this one key is this pass's to change. A
+ * server agent is not counted, it has no minute cadence to be held to
+ * (bk_reports_24h_applies()); a count stored for it earlier is dropped.
  *
  * @return int how many monitors were recounted
  */
@@ -13355,9 +13373,28 @@ function bk_update_reports_24h(PDO $pdo, ?int $now = null): int {
         if (!is_array($details)) {
             $details = [];
         }
-        // Only routers and servers that really report: a monitor whose agent
-        // never sent anything has no agent_last_seen and nothing to compare.
+        // Only agents that really report: a monitor whose agent never sent
+        // anything has no agent_last_seen and nothing to compare. Of those,
+        // only a router is counted (below).
         if (empty($details['agent_last_seen'])) {
+            continue;
+        }
+        if (!bk_reports_24h_applies($details)) {
+            // A server agent: nothing to count against. A count stored
+            // before this check held it to 1440 minutes; it goes, on the
+            // same fresh read as below.
+            if (array_key_exists('reports_24h', $details)) {
+                try {
+                    $stmt_fresh->execute([(int)$row['id']]);
+                    $fresh = json_decode((string)($stmt_fresh->fetchColumn() ?: '{}'), true);
+                    if (is_array($fresh) && array_key_exists('reports_24h', $fresh)) {
+                        unset($fresh['reports_24h']);
+                        $stmt_save->execute([json_encode($fresh, JSON_UNESCAPED_UNICODE), (int)$row['id']]);
+                    }
+                } catch (PDOException $e) {
+                    error_log('[cron] reports_24h selhalo pro monitor ' . $row['id'] . ': ' . $e->getMessage());
+                }
+            }
             continue;
         }
         $last = $details['reports_24h']['checked_at'] ?? null;
@@ -19159,8 +19196,11 @@ function bk_get_collection_issues(array $monitor_row, array $details, int $agent
     // 7. G42: minute reports that never arrived. The counting is cron's (the
     //    pure function has no $pdo), this only reads what it stored. Below 120
     //    expected minutes nothing is claimed - a router that booted twenty
-    //    minutes ago has not missed anything yet.
-    $reports = is_array($details['reports_24h'] ?? null) ? $details['reports_24h'] : [];
+    //    minutes ago has not missed anything yet. Only a router is held to
+    //    the minute (bk_reports_24h_applies): a server agent on its 5-minute
+    //    cron sends 288 a day, and a count stored before cron knew that
+    //    called it "1152 of 1440 missing" on every healthy server.
+    $reports = is_array($details['reports_24h'] ?? null) && bk_reports_24h_applies($details) ? $details['reports_24h'] : [];
     $expected = bk_ranged_int($reports['expected'] ?? null, 0, 1440);
     $received = bk_ranged_int($reports['received'] ?? null, 0, 100000);
     if ($expected !== null && $received !== null && $expected >= 120 && $received < 0.9 * $expected) {

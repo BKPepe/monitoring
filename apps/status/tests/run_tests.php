@@ -3450,7 +3450,7 @@ if (function_exists('bk_rec_command')) {
 // must never, because a message that cries wolf daily is a message nobody reads.
 bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_daily_reminder_due', 'bk_daily_reminder_select', 'bk_daily_reminder_scoped',
-    'bk_get_collection_issues', 'bk_disk_label',
+    'bk_get_collection_issues', 'bk_disk_label', 'bk_reports_24h_applies',
 ]);
 
 // Each recipient reads only their own part: the report used to be rendered
@@ -3599,6 +3599,17 @@ if (function_exists('bk_daily_reminder_select')) {
     ]);
     check('dva mlčící monitory jsou dva problémy',
         [count($dr_two['silent']), $dr_two['problem_count']], [2, 2]);
+
+    // R140: missing minute reports reach the reminder for a router only. A
+    // server agent runs every 5 minutes as installed; a count cron stored for
+    // it earlier would say "1152 of 1440 missing" every morning.
+    $dr_rep = ['agent_last_seen' => $dr_now - 60, 'reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => $dr_now - 600]];
+    $dr_reports = $dr_select([
+        $dr_monitor(['id' => 1, 'name' => 'Router', 'type' => 'openwrt', 'details' => $dr_rep + ['agent_type' => 'openwrt']]),
+        $dr_monitor(['id' => 2, 'name' => 'VPS', 'type' => 'vps', 'details' => $dr_rep + ['agent_type' => 'bash']]),
+    ]);
+    check('chybějící minuty routeru jdou do připomínky, serverového agenta ne',
+        array_map(fn (array $s): array => [$s['name'], $s['issue']], $dr_reports['silent']), [['Router', 'reports_missing']]);
 
     // Unacknowledged incidents, oldest first.
     $dr_inc = $dr_select([$dr_monitor([])], [

@@ -1943,7 +1943,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                 <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">/root/agent_openwrt.sh</pre>
                             </li>
                             <li>Přidejte do crontabu (OpenWrt má <code>crond</code> ve výchozí instalaci):<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">echo '*/5 * * * * /root/agent_openwrt.sh > /dev/null 2>&1' >> /etc/crontabs/root
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">echo '* * * * * /root/agent_openwrt.sh > /dev/null 2>&1' >> /etc/crontabs/root
 /etc/init.d/cron restart</pre>
                             </li>
                         </ol>

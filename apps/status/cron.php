@@ -822,7 +822,8 @@ foreach ($monitors as $monitor) {
 }
 
 // How many of the last 24 h of minute reports really arrived (G42). Hourly,
-// one indexed COUNT per agent monitor: the banner must be able to say that
+// one indexed COUNT per OpenWrt router (a server agent's cron has no minute
+// cadence to hold it to, bk_reports_24h_applies): the banner must say that
 // 142 of 1440 minutes are missing, and until now a partial loss was invisible
 // (the agent goes quiet for a minute, the old check waits 3000 s of silence).
 try {

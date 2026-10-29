@@ -4601,7 +4601,14 @@ $pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface
 
 // G42: the hourly cron pass. Without it the banner could never say how many
 // minutes are missing - the pure function has no database to count with.
+// Only the router's agent runs every minute, so monitor 2 reports as one here.
+$ra_put = function (array $set) use ($pdo, $ra_details): void {
+    $st = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2");
+    $st->execute([json_encode(array_merge($ra_details(), $set), JSON_UNESCAPED_UNICODE)]);
+};
+$ra_agent_type = $ra_details()['agent_type'] ?? null;
 $ra_reset(['reports_24h', 'boot_time']);
+$ra_put(['agent_type' => 'openwrt']);
 check_true('Hlášení za 24 h: hodinový krok cronu monitor přepočítá', bk_update_reports_24h($pdo) >= 1);
 $ra_rep = $ra_details()['reports_24h'] ?? [];
 check('Hlášení za 24 h: uloží se očekávání, skutečnost i čas výpočtu',
@@ -4609,6 +4616,13 @@ check('Hlášení za 24 h: uloží se očekávání, skutečnost i čas výpočt
 check_true('Hlášení za 24 h: napočítá právě ta, která opravdu dorazila',
     ($ra_rep['received'] ?? 0) === (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = 2 AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn());
 check('Hlášení za 24 h: do hodiny se nepočítá znovu', bk_update_reports_24h($pdo), 0);
+// R140: agent.sh on its 5-minute cron sends 288 a day. Held to 1440 minutes,
+// every healthy server showed "1152 of 1440 missing"; that stored count goes.
+$ra_put(['agent_type' => 'bash', 'reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => time() - 7200]]);
+bk_update_reports_24h($pdo);
+check('Hlášení za 24 h: serverový agent se minutami nesoudí a starý počet zmizí',
+    array_key_exists('reports_24h', $ra_details()), false);
+$ra_put(['agent_type' => $ra_agent_type]);
 $set_setting('agent_notifications_enabled', $ra_switch === '' ? '1' : $ra_switch);
 
 // --- The Routers section of the weekly digest (CORE 3.8) ----------------------
