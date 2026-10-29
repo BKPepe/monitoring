@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { formatPercentValue } from './percent';
 
 /**
  * Composes classes and resolves Tailwind utility conflicts — a later `p-4`
@@ -23,22 +24,8 @@ export function formatPercent(value: number | null | undefined, digits = 0, lang
   return value == null ? '—' : `${formatPercentValue(value, digits, lang)} %`;
 }
 
-/**
- * The number alone, for a place that prints the unit apart ("99.99" next to
- * "%"). With `lang` it is written the way that language writes numbers - a
- * Czech page printed "97.7 %" (C-5); without it, the plain fixed-point form a
- * CSV or an attribute needs. The digits stay fixed either way: 99.90 keeps
- * saying it was measured to two places.
- */
-export function formatPercentValue(value: number, digits = 0, lang?: string): string {
-  const shown = value < 100 && Number(value.toFixed(digits)) >= 100 ? 100 - 10 ** -digits : value;
-  if (lang === undefined) return shown.toFixed(digits);
-  return new Intl.NumberFormat(lang === 'en' ? 'en-GB' : 'cs-CZ', {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits,
-    useGrouping: false,
-  }).format(Number(shown.toFixed(digits)));
-}
+/** The number alone; ./percent imports nothing, so the site shares it. */
+export { formatPercentValue };
 
 /**
  * Relative time. Deliberately coarse — with "3 s ago" nobody cares whether

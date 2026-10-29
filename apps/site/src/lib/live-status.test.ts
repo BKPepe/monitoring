@@ -103,4 +103,11 @@ describe('živý stav na webu', () => {
     const panel = readFileSync(new URL('../components/Dashboard.astro', import.meta.url), 'utf8');
     expect(panel).toContain("set('lp-uptime', formatPercent(d.uptimePercent, 2, locale))");
   });
+
+  it('pravidlo bere web z aplikace, vlastní kopii nemá', () => {
+    // A copy here once stayed behind when the app's rule was fixed (R5).
+    const source = readFileSync(new URL('./live-status.ts', import.meta.url), 'utf8');
+    expect(source).toContain("from '../../../monitor/src/lib/percent'");
+    expect(source).not.toContain('10 ** -digits');
+  });
 });
