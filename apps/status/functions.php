@@ -16266,8 +16266,18 @@ function bk_get_interface_traffic_stats($pdo, $monitor_id) {
  * are forever unreachable from the hosting - so the agent checks them right
  * on the machine and the server just honestly records the result: the status
  * transition, a log WITHOUT response_time (the agent measures no latency, a zero would be invented) and a notification on change.
+ *
+ * Returns whether the result was written: false while the monitor is in
+ * maintenance, when the result is dropped on purpose.
  */
-function bk_apply_agent_service_result($pdo, array $svc_monitor, bool $running, string $detail): void {
+function bk_apply_agent_service_result($pdo, array $svc_monitor, bool $running, string $detail): bool {
+    // During maintenance cron owns the status: it writes 'maintenance' and its
+    // log row every minute. Writing the agent's 'up'/'down' here made cron see
+    // a change on its next run and announce the maintenance again, every minute,
+    // with a DOWN alert in between whenever the service was stopped for it.
+    if (is_in_maintenance($svc_monitor)) {
+        return false;
+    }
     $new_status = $running ? 'up' : 'down';
     $old_status = $svc_monitor['status'] ?? 'unknown';
     $error_msg = $running ? null : ($detail !== '' ? $detail : 'Agent hlásí, že služba neběží.');
@@ -16278,8 +16288,13 @@ function bk_apply_agent_service_result($pdo, array $svc_monitor, bool $running, 
         $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, NULL, ?, 'Agent')");
         $stmt_log->execute([$svc_monitor['id'], $new_status, $error_msg]);
         // Notify only on real up/down transitions; the first result's
-        // 'unknown' -> 'up' need not wake anyone.
-        if (in_array($old_status, ['up', 'down'], true) || $new_status === 'down') {
+        // 'unknown' -> 'up' need not wake anyone. Up after a planned window
+        // follows cron's rule: quiet, unless an incident is still open - the
+        // outage started before the window, and notifying is what closes it.
+        $maint_to_up = ($old_status === 'maintenance' && $new_status === 'up');
+        if (in_array($old_status, ['up', 'down'], true) || $new_status === 'down'
+            || ($maint_to_up && bk_should_notify_status_change((string)$old_status, $new_status,
+                bk_has_open_incident($pdo, (int)$svc_monitor['id'])))) {
             trigger_notifications($pdo, $svc_monitor, $new_status, (string)$error_msg);
         }
     } else {
@@ -16288,6 +16303,7 @@ function bk_apply_agent_service_result($pdo, array $svc_monitor, bool $running, 
         $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, NULL, ?, 'Agent')");
         $stmt_log->execute([$svc_monitor['id'], $new_status, $error_msg]);
     }
+    return true;
 }
 
 /**

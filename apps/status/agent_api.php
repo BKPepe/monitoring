@@ -104,8 +104,10 @@ if (isset($data['service_check_results']) && is_array($data['service_check_resul
         if (!$svc_row) continue;
         $sc_running = !empty($res['running']);
         $sc_detail = mb_substr(trim((string)($res['detail'] ?? '')), 0, 255);
-        bk_apply_agent_service_result($pdo, $svc_row, $sc_running, $sc_detail);
-        $sc_applied++;
+        // A result dropped during maintenance is not counted as applied.
+        if (bk_apply_agent_service_result($pdo, $svc_row, $sc_running, $sc_detail)) {
+            $sc_applied++;
+        }
     }
     echo json_encode(['success' => true, 'applied' => $sc_applied]);
     exit;

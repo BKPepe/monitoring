@@ -2556,6 +2556,104 @@ $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 92");
 $pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
 $pdo->exec("DELETE FROM assets WHERE id = 92");
 
+// --- An agent-side service in maintenance keeps cron's status ------------
+//
+// R141: the agent's result overwrote 'maintenance' with up/down, cron set it
+// back on its next run and announced the maintenance again - every minute,
+// with a DOWN alert in between while the service was stopped for the window.
+// The windows are real ones around now, so is_in_maintenance() decides by
+// their start and end, not by the flag alone.
+$sm_at = fn (int $offset): string => date('Y-m-d H:i:s', time() + $offset);
+$sm_cleanup = function () use ($pdo): void {
+    $pdo->exec("DELETE FROM incident_updates WHERE incident_id IN (SELECT id FROM incidents WHERE monitor_id IN (142, 144))");
+    $pdo->exec("DELETE FROM incidents WHERE monitor_id IN (142, 144)");
+    foreach (['notification_log', 'monitor_logs', 'monitor_events', 'vps_metrics', 'process_samples', 'metrics_daily'] as $sm_table) {
+        $pdo->exec("DELETE FROM {$sm_table} WHERE monitor_id IN (141, 142, 143, 144)");
+    }
+    $pdo->exec("DELETE FROM monitors WHERE id IN (141, 142, 143, 144)");
+    $pdo->exec("DELETE FROM assets WHERE id IN (141, 143)");
+};
+$sm_cleanup();
+$pdo->exec("INSERT INTO assets (id, name) VALUES (141, 'Router s kontrolou služby'), (143, 'Server s kontrolou služby')");
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, asset_id, category, agent_key)
+            VALUES (141, 'R141 router', 'openwrt', 'router-r141', 'up', 141, 'Test', 'r141-agent-key'),
+                   (143, 'R141 server', 'vps', 'server-r141', 'up', 143, 'Test', 'r141-server-key')");
+$pdo->prepare("INSERT INTO monitors (id, name, type, target, port, status, asset_id, category, maintenance, maintenance_start, maintenance_end)
+               VALUES (142, 'R141 kresd', 'agent_service', 'kresd', 53, 'maintenance', 141, 'Test', 1, ?, ?)")
+    ->execute([$sm_at(-3600), $sm_at(3600)]);
+// The router's agent sends its results as service_check_results.
+$sm_post = function (bool $running) use ($base): array {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(['agent_key' => 'r141-agent-key', 'service_check_results' => [
+            ['monitor_id' => 142, 'running' => $running, 'detail' => $running ? '' : "Agent nehlásí proces 'kresd'."],
+        ]]),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    $body = (string)curl_exec($ch);
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), json_decode($body, true) ?: []];
+};
+// A server agent lists its processes and ports in the report itself.
+$sm_report = function (bool $running) use ($base): int {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(['agent_key' => 'r141-server-key', 'cpu' => 5.0, 'ram' => 30.0, 'hdd' => 40.0,
+            'processes' => $running ? ['sshd', 'nginx'] : ['sshd'], 'ports' => $running ? [22, 443] : [22]]),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    curl_exec($ch);
+    return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+};
+$sm_status = fn (int $id): ?string => ($v = $pdo->query("SELECT status FROM monitors WHERE id = {$id}")->fetchColumn()) === false ? null : (string)$v;
+$sm_agent_logs = fn (int $id): int => (int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE monitor_id = {$id} AND checked_from = 'Agent'")->fetchColumn();
+$sm_incidents = fn (int $id): array => $pdo->query("SELECT status FROM incidents WHERE monitor_id = {$id} ORDER BY id")->fetchAll(PDO::FETCH_COLUMN);
+try {
+    [$sm_code, $sm_body] = $sm_post(false);
+    check('údržba: agent_api výsledek přijme, ale nepočítá ho jako zapsaný', [$sm_code, $sm_body['applied'] ?? null], [200, 0]);
+    check('údržba: služba zastavená kvůli údržbě nepřepíše stav na down', $sm_status(142), 'maintenance');
+    check('údržba: a nevznikne z toho incident (DOWN alert se neposlal)', $sm_incidents(142), []);
+    $sm_post(true);
+    check('údržba: běžící služba stav taky nepřepíše, cron nemá co znovu ohlásit', $sm_status(142), 'maintenance');
+    check('údržba: výsledky z okna se do historie nezapíšou (okno zapisuje cron)', $sm_agent_logs(142), 0);
+    // The window has ended and the flag is still on, as until cron's next
+    // run clears it: the window decides, and the result is written again.
+    $pdo->prepare("UPDATE monitors SET maintenance_start = ?, maintenance_end = ? WHERE id = 142")->execute([$sm_at(-7200), $sm_at(-60)]);
+    [$sm_code, $sm_body] = $sm_post(true);
+    check('po skončeném okně se výsledek agenta zase zapíše', [$sm_code, $sm_body['applied'] ?? null, $sm_status(142), $sm_agent_logs(142)],
+        [200, 1, 'up', 1]);
+    check('konec údržby bez otevřeného incidentu je tichý', [$sm_incidents(142),
+        (int)$pdo->query("SELECT COUNT(*) FROM notification_log WHERE monitor_id = 142")->fetchColumn()], [[], 0]);
+
+    // The same through the report of a server agent. The service fails
+    // before its window starts: that outage is written and opens an incident.
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, port, status, asset_id, category, maintenance, maintenance_start, maintenance_end)
+                   VALUES (144, 'R141 nginx', 'agent_service', 'nginx', 443, 'up', 143, 'Test', 1, ?, ?)")
+        ->execute([$sm_at(3600), $sm_at(7200)]);
+    check('hlášení serverového agenta je přijato', $sm_report(false), 200);
+    check('výpadek před začátkem okna se zapíše a otevře incident', [$sm_status(144), $sm_agent_logs(144), $sm_incidents(144)],
+        ['down', 1, ['investigating']]);
+    // The window starts and cron writes 'maintenance' (done here by hand).
+    $pdo->prepare("UPDATE monitors SET status = 'maintenance', maintenance_start = ?, maintenance_end = ? WHERE id = 144")
+        ->execute([$sm_at(-3600), $sm_at(3600)]);
+    $sm_report(false);
+    $sm_report(true);
+    check('údržba: ani hlášení serverového agenta stav ani historii nepřepíše', [$sm_status(144), $sm_agent_logs(144)], ['maintenance', 1]);
+    // After the window the service runs: the incident opened before it is a
+    // real outage, and the recovery closes it, as cron does for its checks.
+    $pdo->prepare("UPDATE monitors SET maintenance_start = ?, maintenance_end = ? WHERE id = 144")->execute([$sm_at(-7200), $sm_at(-60)]);
+    $sm_report(true);
+    check('po okně se služba zapíše jako běžící', [$sm_status(144), $sm_agent_logs(144)], ['up', 2]);
+    check('a incident otevřený před oknem se uzavře', $sm_incidents(144), ['resolved']);
+} finally {
+    $sm_cleanup();
+}
+
 // --- last_details is a 64 KB TEXT column ----------------------------------
 //
 // Twelve pass-through lists of ~6.6 KB each (every one under the 8 KB
