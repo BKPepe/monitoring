@@ -152,3 +152,19 @@ export function onLiveStatus(listener: Listener): void {
 export function dash(value: number | null | undefined, suffix = ''): string {
   return typeof value === 'number' && Number.isFinite(value) ? `${value}${suffix}` : '—';
 }
+
+/**
+ * A percentage at `digits` decimals in the page's locale, "—" when unmeasured.
+ * A value below 100 never prints as 100: the server keeps 99.999 below 100 on
+ * purpose (bk_uptime_pct_round), and half-up rounding to two places turned
+ * that month with an outage in it into "100.00 %". It stops one step short
+ * ("99.99 %") instead, as the app's formatPercent does.
+ */
+export function formatPercent(value: number | null | undefined, digits: number, locale: string): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
+  const shown = value < 100 && Number(value.toFixed(digits)) >= 100 ? 100 - 10 ** -digits : value;
+  const text = new Intl.NumberFormat(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(
+    Number(shown.toFixed(digits))
+  );
+  return `${text} %`;
+}

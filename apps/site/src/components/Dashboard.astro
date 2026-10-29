@@ -85,7 +85,7 @@ const stats = [
 
 <script>
   import { API_ORIGIN } from '../config';
-  import { onLiveStatus, type Verdict } from '../lib/live-status';
+  import { formatPercent, onLiveStatus, type Verdict } from '../lib/live-status';
 
   const panel = document.getElementById('live-panel');
   const words: DOMStringMap = panel?.dataset ?? {};
@@ -140,7 +140,7 @@ const stats = [
     set('lp-monitors', num(d.totalMonitors));
     set('lp-agents', d.agentsTotal === null ? '—' : `${num(d.agentsOnline)} / ${num(d.agentsTotal)}`);
     set('lp-latency', d.avgLatencyMs === null ? '—' : `${num(d.avgLatencyMs)} ms`);
-    set('lp-uptime', d.uptimePercent === null ? '—' : `${num(d.uptimePercent, 2)} %`);
+    set('lp-uptime', formatPercent(d.uptimePercent, 2, locale));
     set('lp-updated', when(d.lastUpdated));
   });
 

@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { dash, normaliseStatus, STALE_AFTER_MS } from './live-status';
+import { dash, formatPercent, normaliseStatus, STALE_AFTER_MS } from './live-status';
 
 const NOW = Date.parse('2026-09-23T10:00:00Z');
 const FRESH = '2026-09-23T11:55:00+02:00'; // 5 minutes before NOW
@@ -85,5 +86,21 @@ describe('živý stav na webu', () => {
     expect(status?.agentsTotal).toBeNull();
     expect(dash(status?.avgLatencyMs, ' ms')).toBe('—');
     expect(dash(0, ' ms')).toBe('0 ms');
+  });
+
+  it('dostupnost pod 100 % se nikdy nezaokrouhlí na 100 %', () => {
+    // 26 s výpadku za měsíc: server pošle 99.999, ne 100.
+    expect(formatPercent(99.999, 2, 'en-GB')).toBe('99.99 %');
+    expect(formatPercent(99.995, 2, 'en-GB')).toBe('99.99 %');
+    expect(formatPercent(99.999, 2, 'cs-CZ')).toBe('99,99 %');
+    expect(formatPercent(99.994, 2, 'cs-CZ')).toBe('99,99 %');
+    expect(formatPercent(98.187, 2, 'en-GB')).toBe('98.19 %');
+    expect(formatPercent(100, 2, 'en-GB')).toBe('100.00 %');
+    expect(formatPercent(null, 2, 'en-GB')).toBe('—');
+  });
+
+  it('panel na webu vypisuje dostupnost přes formatPercent', () => {
+    const panel = readFileSync(new URL('../components/Dashboard.astro', import.meta.url), 'utf8');
+    expect(panel).toContain("set('lp-uptime', formatPercent(d.uptimePercent, 2, locale))");
   });
 });
