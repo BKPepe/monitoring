@@ -476,7 +476,7 @@ try {
     $pdo->beginTransaction();
 
     // Load past alert states to avoid spamming
-    $old_details = json_decode($monitor['last_details'] ?? '{}', true);
+    $old_details = bk_monitor_details($monitor);
     $cpu_alert_sent = $old_details['cpu_alert_sent'] ?? false;
     $ram_alert_sent = $old_details['ram_alert_sent'] ?? false;
     $hdd_alert_sent = $old_details['hdd_alert_sent'] ?? false;
@@ -604,10 +604,7 @@ try {
         }
     }
     
-    $old_details = json_decode($monitor['last_details'] ?? '{}', true);
-    if (!is_array($old_details)) {
-        $old_details = [];
-    }
+    $old_details = bk_monitor_details($monitor);
     
     // Step metrics of the WAN port and of conntrack: what the counters grew by
     // since the previous report. The state they are compared with lives in

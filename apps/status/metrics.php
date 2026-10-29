@@ -124,8 +124,7 @@ try {
     ];
     $vps_values = [];
     foreach ($monitors as $m) {
-        $details = json_decode((string)$m['last_details'], true);
-        if (!is_array($details)) continue;
+        $details = bk_monitor_details($m);
         foreach ($vps_metric_defs as $key => $def) {
             if (isset($details[$key]) && is_numeric($details[$key])) {
                 $vps_values[$key][] = [$m['name'], (float)$details[$key]];

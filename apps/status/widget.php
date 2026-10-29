@@ -30,7 +30,7 @@ $status = $monitor['status'];
 // Dřív se tu volala calculate_uptime(), která v kódu vůbec neexistovala -
 // widget proto vracel fatální chybu pro každý existující monitor.
 $uptime = bk_uptime_30d($pdo, $mid);
-$details = !empty($monitor['last_details']) ? json_decode($monitor['last_details'], true) : [];
+$details = bk_monitor_details($monitor);
 // Nezmerena odezva zustava null; sablona nize ukaze pomlcku.
 $resp = $details['response_time'] ?? null;
 

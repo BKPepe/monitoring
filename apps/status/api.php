@@ -361,7 +361,7 @@ if ($action === 'monitors') {
         $stmt->execute($mon_scope_params);
         $agent_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
         foreach ($stmt->fetchAll() as $r) {
-            $details = json_decode($r['last_details'] ?? '', true) ?: [];
+            $details = bk_monitor_details($r);
             $details_by_id[(int)$r['id']] = $details;
             if ($public_view) {
                 // An allowlist of what the public card renders. The denylist this
@@ -1016,8 +1016,8 @@ if ($action === 'discovered_services') {
         $stmt = $pdo->query("SELECT id, name, type, target, asset_id, last_details FROM monitors WHERE last_details IS NOT NULL AND archived_at IS NULL");
         $services = [];
         while ($row = $stmt->fetch()) {
-            $details = json_decode($row['last_details'] ?? '', true);
-            if (!is_array($details) || empty($details['discovered_services']) || !is_array($details['discovered_services'])) {
+            $details = bk_monitor_details($row);
+            if (empty($details['discovered_services']) || !is_array($details['discovered_services'])) {
                 continue;
             }
             foreach ($details['discovered_services'] as $svc) {
@@ -1171,7 +1171,7 @@ if ($action === 'import_discovered_service') {
                 // and not the monitor name. Without a usable target, take the source
                 // monitor's target, or the hostname from its last report.
                 if ($s_target === '' || $s_target === '127.0.0.1' || $s_target === 'localhost') {
-                    $src_details = json_decode($src_row['last_details'] ?? '{}', true) ?: [];
+                    $src_details = bk_monitor_details($src_row);
                     $fallback_target = trim((string)($src_row['target'] ?? ''));
                     if ($fallback_target === '') {
                         $fallback_target = trim((string)($src_details['hostname'] ?? ''));
@@ -2558,8 +2558,7 @@ if ($action === 'monitor_insights') {
             exit;
         }
 
-        $details = json_decode($monitor['last_details'] ?? '', true);
-        if (!is_array($details)) $details = [];
+        $details = bk_monitor_details($monitor);
         bk_enrich_monitor_details($pdo, $monitor, $details);
 
         $stmt_last_log = $pdo->prepare("SELECT status, check_stages FROM monitor_logs WHERE monitor_id = ? ORDER BY id DESC LIMIT 1");
@@ -2784,8 +2783,7 @@ if ($action === 'findings') {
 
         foreach ($fd_rows as $fd_row) {
             $fd_mid = (int)$fd_row['id'];
-            $fd_details = json_decode((string)($fd_row['last_details'] ?? ''), true);
-            $fd_details = is_array($fd_details) ? $fd_details : [];
+            $fd_details = bk_monitor_details($fd_row);
             $fd_reasons = [];
             $fd_last_log->execute([$fd_mid]);
             $fd_log = $fd_last_log->fetch() ?: null;
@@ -2880,10 +2878,9 @@ if ($action === 'findings') {
             foreach ($fd_batch === null ? [] : $fd_routers as $fd_row) {
                 $fd_mid = (int)$fd_row['id'];
                 try {
-                    $fd_details = json_decode((string)($fd_row['last_details'] ?? ''), true);
                     $fd_in = $fd_batch[$fd_mid] ?? ['window' => bk_router_rec_window(date('Y-m-d')), 'disks' => [], 'state' => []];
                     $fd_in['monitor'] = $fd_row;
-                    $fd_in['details'] = is_array($fd_details) ? $fd_details : [];
+                    $fd_in['details'] = bk_monitor_details($fd_row);
                     $fd_in['now'] = time();
                     $fd_res = bk_router_rec_evaluate($fd_in);
                     if (!$fd_res['applicable']) {
@@ -5572,10 +5569,7 @@ if ($action === 'link_traffic') {
             echo json_encode(['error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
             exit;
         }
-        $details = json_decode((string)($mon_row['last_details'] ?? ''), true);
-        if (!is_array($details)) {
-            $details = [];
-        }
+        $details = bk_monitor_details($mon_row);
         $out = bk_get_link_traffic($pdo, (int)$mon_row['id'], $details, $days);
         $out['monitor'] = ['id' => (int)$mon_row['id'], 'type' => (string)$mon_row['type']];
         echo json_encode($out, JSON_UNESCAPED_UNICODE);
@@ -6750,10 +6744,7 @@ if ($action === 'router_recommendations') {
             echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
             exit;
         }
-        $rr_details = json_decode((string)($rr_monitor['last_details'] ?? ''), true);
-        if (!is_array($rr_details)) {
-            $rr_details = [];
-        }
+        $rr_details = bk_monitor_details($rr_monitor);
         $rr_in = bk_router_rec_inputs($pdo, $rr_monitor, $rr_details, date('Y-m-d'));
         $rr_res = bk_router_rec_evaluate($rr_in);
         $rr_state = is_array($rr_in['state'] ?? null) ? $rr_in['state'] : [];
@@ -6865,8 +6856,7 @@ if ($action === 'router_recommendation_mute') {
         }
         $rm_mute = null;
         if ($rm_on) {
-            $rm_details = json_decode((string)($rm_monitor['last_details'] ?? ''), true);
-            $rm_in = bk_router_rec_inputs($pdo, $rm_monitor, is_array($rm_details) ? $rm_details : [], date('Y-m-d'));
+            $rm_in = bk_router_rec_inputs($pdo, $rm_monitor, bk_monitor_details($rm_monitor), date('Y-m-d'));
             $rm_res = bk_router_rec_evaluate($rm_in);
             // Not firing right now = `info` (CORE 3.9): the mute then hides
             // nothing worse than the mildest degree, and anything above it
@@ -7041,10 +7031,7 @@ if ($action === 'wan_bottleneck') {
             echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
             exit;
         }
-        $wb_details = json_decode((string)($wb_monitor['last_details'] ?? ''), true);
-        if (!is_array($wb_details)) {
-            $wb_details = [];
-        }
+        $wb_details = bk_monitor_details($wb_monitor);
         $wb_path = is_array($wb_details['wan_path'] ?? null) ? $wb_details['wan_path'] : null;
         $wb_tools = is_array($wb_details['agent_tools'] ?? null) ? $wb_details['agent_tools'] : [];
         $wb_int = fn ($v): ?int => $v === null ? null : (int)$v;
@@ -7820,7 +7807,7 @@ try {
     if ($ts) {
         $response['teamspeak']['online'] = ($ts['status'] === 'up');
         $response['teamspeak']['name'] = $ts['name'];
-        $details = json_decode($ts['last_details'] ?? '', true);
+        $details = bk_monitor_details($ts);
         if ($details && isset($details['clients_online'])) {
             $response['teamspeak']['clients_online'] = (int)$details['clients_online'];
             // Unknown capacity stays null - no "X / 100" with an invented limit.
@@ -7833,7 +7820,7 @@ try {
     $mc = $stmt->fetch();
     if ($mc) {
         $response['minecraft']['online'] = ($mc['status'] === 'up');
-        $details = json_decode($mc['last_details'] ?? '', true);
+        $details = bk_monitor_details($mc);
         if ($details && isset($details['players_online'])) {
             $response['minecraft']['players_online'] = (int)$details['players_online'];
             $response['minecraft']['players_max'] = (int)($details['players_max'] ?? 20);

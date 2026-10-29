@@ -1218,7 +1218,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_render_daily_reminder', 'render_email_wrapper', 'bk_log_notification', 'bk_send_shared_channels',
     'bk_heartbeat_evaluate', 'bk_alert_color_class', 'bk_format_duration_secs',
 ]);
-bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defaults']);
+bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defaults', 'bk_monitor_details']);
 
 // The mail stub: nothing leaves the machine, and every attempt is kept so the
 // tests can ask what the reminder said. send_email() writes the log row

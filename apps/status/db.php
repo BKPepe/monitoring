@@ -262,6 +262,26 @@ function bk_response_ms(mixed $ms, bool $answered = false): ?int {
 }
 
 /**
+ * A monitor row's last_details as an array: [] when the column is missing,
+ * NULL, empty, not JSON, or JSON that is not an object or a list.
+ *
+ * Every reader decoded it inline, in idioms that disagreed on exactly those
+ * cases: `?? '{}'` gave [] for a missing or NULL column but NULL for '' and
+ * broken JSON; `?? ''` and `(string)` gave NULL for all four; the ternary on
+ * the raw value gave NULL; `?: []` gave [] for all four. Each reader then
+ * read NULL and [] alike (`??`, isset, empty, is_array), so one answer
+ * serves them all. index.php keeps its own decode, see there.
+ */
+function bk_monitor_details(array $row): array {
+    $raw = $row['last_details'] ?? null;
+    if (!is_string($raw) || $raw === '') {
+        return [];
+    }
+    $details = json_decode($raw, true);
+    return is_array($details) ? $details : [];
+}
+
+/**
  * The installer's address, next to this directory: /status/x.php -> /app/setup.
  *
  * Built from SCRIPT_NAME (the server's own path, never request input), so an

@@ -1393,7 +1393,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
             $bk_adm_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
             $bk_adm_stmt = $pdo->query("SELECT id, name, status, last_checked, last_details FROM monitors WHERE archived_at IS NULL");
             foreach ($bk_adm_stmt->fetchAll() as $bk_adm_mon) {
-                $bk_adm_details = json_decode($bk_adm_mon['last_details'] ?? '', true) ?: [];
+                $bk_adm_details = bk_monitor_details($bk_adm_mon);
                 foreach (bk_get_collection_issues($bk_adm_mon, $bk_adm_details, $bk_adm_offline_secs) as $bk_adm_ci) {
                     $bk_adm_collection_rows[] = ['name' => $bk_adm_mon['name'], 'issue' => $bk_adm_ci];
                 }
@@ -1553,7 +1553,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                             <td>
                                                 <strong><?php echo htmlspecialchars($mon['name']); ?></strong>
                                                 <?php 
-                                                $det = json_decode($mon['last_details'] ?? '', true);
+                                                $det = bk_monitor_details($mon);
                                                 if (!empty($mon['agent_key'])): 
                                                     $version = $det['version'] ?? null;
                                                     $agent_last_seen = $det['agent_last_seen'] ?? null;
@@ -1677,7 +1677,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                 <?php 
                 $problem_monitors = [];
                 foreach ($all_monitors as $m) {
-                    $det = json_decode($m['last_details'] ?? '', true);
+                    $det = bk_monitor_details($m);
                     $has_fallback = isset($det['api_fallback']) && $det['api_fallback'] === true;
                     if ($m['status'] === 'down' || $has_fallback) {
                         $original_error = $det['last_error'] ?? null;
@@ -2690,8 +2690,8 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         // objevující monitor (viz action_import_service výše).
                         $discovered_services = [];
                         if ($edit_monitor) {
-                            $ed_details = json_decode($edit_monitor['last_details'] ?? '', true);
-                            if (is_array($ed_details) && !empty($ed_details['discovered_services']) && is_array($ed_details['discovered_services'])) {
+                            $ed_details = bk_monitor_details($edit_monitor);
+                            if (!empty($ed_details['discovered_services']) && is_array($ed_details['discovered_services'])) {
                                 $discovered_services = $ed_details['discovered_services'];
                             }
                         }
@@ -2750,7 +2750,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         <?php
                         // Discovered services - zobrazení služeb objevených agentem + tlačítko pro vytvoření monitoru
                         if ($edit_monitor && !empty($edit_monitor['last_details'])):
-                            $ds_details = json_decode($edit_monitor['last_details'], true);
+                            $ds_details = bk_monitor_details($edit_monitor);
                             $ds_services = $ds_details['discovered_services'] ?? [];
                             if (!empty($ds_services) && is_array($ds_services)):
                                 // Najdi existující monitory se stejným target+port pro párování

@@ -1573,10 +1573,7 @@ function bk_insight_severity(array $insight): string {
 function bk_collect_insights(PDO $pdo, array $monitors): array {
     $items = [];
     foreach ($monitors as $monitor) {
-        $details = json_decode((string)($monitor['last_details'] ?? ''), true);
-        if (!is_array($details)) {
-            $details = [];
-        }
+        $details = bk_monitor_details($monitor);
         $found = array_merge(
             bk_get_forecast_insights($pdo, $monitor),
             bk_get_anomaly_insights($pdo, $monitor),
@@ -2639,8 +2636,8 @@ function bk_uptime_segments_for(PDO $pdo, int $from, int $to, ?array $monitor_id
         $is_agent = in_array($type, ['vps', 'openwrt'], true);
         $reported_before = false;
         if ($is_agent && $prev === null) {
-            $details = json_decode((string)($m['last_details'] ?? ''), true);
-            $seen = is_array($details) ? ($details['agent_last_seen'] ?? null) : null;
+            $details = bk_monitor_details($m);
+            $seen = $details['agent_last_seen'] ?? null;
             $reported_before = is_numeric($seen) && (int)$seen > 0 && (int)$seen < $m_from;
         }
 
@@ -4279,8 +4276,8 @@ function bk_get_anomaly_insights($pdo, $monitor) {
     // the measurement itself as an anomaly, so only the CURRENT-sample half
     // is skipped - the baseline query is untouched (two minutes a week cannot
     // move a mean) and the chart still shows what happened.
-    $anom_details = json_decode((string)($monitor['last_details'] ?? '{}'), true);
-    if (is_array($anom_details) && ($anom_details['speedtest_active'] ?? null) === true) {
+    $anom_details = bk_monitor_details($monitor);
+    if (($anom_details['speedtest_active'] ?? null) === true) {
         $latest = false;
     }
 
@@ -8296,8 +8293,7 @@ function bk_daily_reminder_collect(PDO $pdo, ?int $now = null): array {
     ");
     $monitors = [];
     foreach ($rows as $row) {
-        $decoded = json_decode((string)($row['last_details'] ?? ''), true);
-        $row['details'] = is_array($decoded) ? $decoded : [];
+        $row['details'] = bk_monitor_details($row);
         $row['last_error'] = null;
         $status = strtolower(trim((string)($row['status'] ?? '')));
         if (!in_array($status, ['up', 'maintenance', 'paused', 'unknown', ''], true) && empty($row['maintenance'])) {
@@ -10232,7 +10228,7 @@ function bk_health_for_monitors(PDO $pdo, array $monitors, bool $public, ?array 
     $out = [];
     foreach ($monitors as $m) {
         $mid = (int)$m['id'];
-        $details = $details_by_id[$mid] ?? json_decode((string)($m['last_details'] ?? ''), true);
+        $details = $details_by_id[$mid] ?? bk_monitor_details($m);
         $details = is_array($details) ? $details : [];
         if (($m['status'] ?? '') === 'paused') {
             $out[$mid] = bk_health_score(['public' => $public]) + ['paused' => true];
@@ -13409,10 +13405,7 @@ function bk_update_reports_24h(PDO $pdo, ?int $now = null): int {
     $stmt_fresh = $pdo->prepare("SELECT last_details FROM monitors WHERE id = ?");
     $stmt_save = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?");
     foreach ($rows as $row) {
-        $details = json_decode((string)($row['last_details'] ?? '{}'), true);
-        if (!is_array($details)) {
-            $details = [];
-        }
+        $details = bk_monitor_details($row);
         // Only agents that really report: a monitor whose agent never sent
         // anything has no agent_last_seen and nothing to compare. Of those,
         // only a router is counted (below).
@@ -13669,10 +13662,9 @@ function bk_digest_routers(PDO $pdo, bool $save_snapshot = true): array {
             if ($row === null) {
                 continue;
             }
-            $details = json_decode((string)($row['last_details'] ?? ''), true);
             $in = $rt_inputs[$rid] ?? ['window' => bk_router_rec_window($end_day), 'disks' => [], 'state' => []];
             $in['monitor'] = $row;
-            $in['details'] = is_array($details) ? $details : [];
+            $in['details'] = bk_monitor_details($row);
             $in['now'] = time();
             $res = bk_router_rec_evaluate($in);
             $state = $in['state'];
@@ -13761,8 +13753,7 @@ function bk_digest_router_facts(PDO $pdo, array $routers): array {
     $stmt->execute($ids);
     $details = [];
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-        $d = json_decode((string)$row['last_details'], true);
-        $details[(int)$row['id']] = is_array($d) ? $d : [];
+        $details[(int)$row['id']] = bk_monitor_details($row);
     }
     $inputs = bk_router_rec_inputs_batch($pdo, $ids, date('Y-m-d'));
     $band_key = ['2.4GHz' => '24g', '5GHz' => '5g', '6GHz' => '6g'];
@@ -13885,7 +13876,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $agent_count = 0;
     $stmt_agents = $pdo->query("SELECT last_details FROM monitors WHERE agent_key IS NOT NULL AND agent_key != '' AND archived_at IS NULL");
     while ($row = $stmt_agents->fetch()) {
-        $det = json_decode($row['last_details'] ?? '', true);
+        $det = bk_monitor_details($row);
         if (($det['agent_last_seen'] ?? 0) > 0) {
             $agent_count++;
         }
@@ -14222,8 +14213,8 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     // Monitors without IPv6 (current last_details, 'web' type only)
     $stmt_ipv6 = $pdo->query("SELECT name, last_details FROM monitors WHERE type = 'web' AND archived_at IS NULL");
     foreach ($stmt_ipv6->fetchAll() as $m) {
-        $ld = json_decode($m['last_details'] ?? '', true);
-        if (is_array($ld) && ($ld['has_ipv4'] ?? false) && empty($ld['has_ipv6'])) {
+        $ld = bk_monitor_details($m);
+        if (($ld['has_ipv4'] ?? false) && empty($ld['has_ipv6'])) {
             $recommendations[] = sprintf(t('digest_no_ipv6'), $m['name']);
         }
     }
@@ -19680,8 +19671,7 @@ function bk_agent_report_unreadable(PDO $pdo, string $raw, string $reason, ?int 
     if (!is_array($row)) {
         return null;
     }
-    $details = json_decode((string)($row['last_details'] ?? ''), true);
-    $details = is_array($details) ? $details : [];
+    $details = bk_monitor_details($row);
     $prev = is_array($details['report_unreadable'] ?? null) ? $details['report_unreadable'] : [];
     // One streak until a report gets through: agent_api.php drops this key
     // from an accepted report's details and moves agent_last_seen past it.

@@ -100,7 +100,7 @@ foreach ($monitors as $monitor) {
     // Timeout 0 = agent inactivity detection is fully disabled
     $offline_timeout_mins = intval(get_setting('agent_offline_timeout', '50'));
     if (!empty($monitor['agent_key']) && $offline_timeout_mins > 0) {
-        $details_arr = json_decode($monitor['last_details'] ?? '{}', true);
+        $details_arr = bk_monitor_details($monitor);
         $agent_last_seen = $details_arr['agent_last_seen'] ?? 0;
 
         if ($agent_last_seen > 0) {
@@ -208,10 +208,7 @@ foreach ($monitors as $monitor) {
         $hb = bk_heartbeat_evaluate($monitor);
         $new_status = $hb['status'];
 
-        $hb_details = json_decode($monitor['last_details'] ?? '{}', true);
-        if (!is_array($hb_details)) {
-            $hb_details = [];
-        }
+        $hb_details = bk_monitor_details($monitor);
         // Heartbeats measure no response time - at best one could measure signal
         // delay, which is something else. So response_time gets nothing (NULL),
         // definitely not a zero that would look like a lightning-fast server in charts.
@@ -268,7 +265,7 @@ foreach ($monitors as $monitor) {
         if ($offline_timeout_mins === 0) {
             echo "OK (Detekce neaktivity vypnuta)\n";
         } elseif ($old_status !== 'down') {
-            $details_arr = json_decode($monitor['last_details'] ?? '{}', true);
+            $details_arr = bk_monitor_details($monitor);
             // If the agent has never reported, the timeout counts from the
             // monitor's creation (not from the 1970 epoch) - a new monitor gets
             // the same grace period (offline_timeout_mins) before its first
@@ -425,10 +422,7 @@ foreach ($monitors as $monitor) {
     // bk_agent_backup_says_up(): never for web, only a report a few minutes
     // old, and only the service's own port or process.
     if ($new_status === 'down') {
-        $details_decoded = json_decode($monitor['last_details'] ?? '{}', true);
-        if (!is_array($details_decoded)) {
-            $details_decoded = [];
-        }
+        $details_decoded = bk_monitor_details($monitor);
 
         if (bk_agent_backup_says_up((string)$type, $details_decoded, $monitor, time())) {
             $new_status = 'up';
@@ -494,8 +488,7 @@ foreach ($monitors as $monitor) {
                 'api_fallback' => false
             ], JSON_UNESCAPED_UNICODE);
 
-            $ts3_agent_details = json_decode($monitor['last_details'] ?? '', true);
-            if (!is_array($ts3_agent_details)) $ts3_agent_details = [];
+            $ts3_agent_details = bk_monitor_details($monitor);
             // Cron has no session and reads every monitor.
             bk_enrich_monitor_details($pdo, $monitor, $ts3_agent_details, true);
             $ts3_process_cpu = null;
@@ -571,8 +564,8 @@ foreach ($monitors as $monitor) {
                 // and would otherwise always read 0, spamming this alert hourly).
                 // $details_decoded is only populated on the down-path above, so
                 // decode last_details fresh here rather than relying on it.
-                $prev_details = json_decode($monitor['last_details'] ?? '{}', true);
-                $last_ssl_warn = (int)(is_array($prev_details) ? ($prev_details['last_ssl_warn'] ?? 0) : 0);
+                $prev_details = bk_monitor_details($monitor);
+                $last_ssl_warn = (int)($prev_details['last_ssl_warn'] ?? 0);
                 // The threshold is the ssl_alert_days setting (it used to be a
                 // hardcoded 14 here, so a 30-day setting did nothing).
                 $ssl_threshold = (int)get_setting('ssl_alert_days', '14');
@@ -627,8 +620,8 @@ foreach ($monitors as $monitor) {
                     } else {
                         $cp_hint = null;
                     }
-                    $prev_cp_details = json_decode($monitor['last_details'] ?? '{}', true);
-                    $prev_cp_since = is_array($prev_cp_details) ? ($prev_cp_details['cpanel_stats_error']['since'] ?? null) : null;
+                    $prev_cp_details = bk_monitor_details($monitor);
+                    $prev_cp_since = $prev_cp_details['cpanel_stats_error']['since'] ?? null;
                     $details_arr['cpanel_stats_error'] = [
                         'error' => $cp_res['error'] ?? 'Neznámá chyba',
                         'hint' => $cp_hint,
@@ -670,10 +663,7 @@ foreach ($monitors as $monitor) {
 
     // Merge old details (e.g. from the VPS agent) with the fresh active-check ones
     if ($details !== null) {
-        $old_details = json_decode($monitor['last_details'] ?? '{}', true);
-        if (!is_array($old_details)) {
-            $old_details = [];
-        }
+        $old_details = bk_monitor_details($monitor);
         $new_details_arr = json_decode($details, true);
         if (is_array($new_details_arr)) {
             $merged_details_arr = array_merge($old_details, $new_details_arr);

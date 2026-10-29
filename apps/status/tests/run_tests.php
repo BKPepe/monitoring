@@ -958,6 +958,62 @@ check('vzdálený uzel: záporná nebo nekonečná doba kontroly je neměřená,
 check('vzdálený uzel nezaokrouhluje dobu kontroly jinde než v elapsed_ms',
     preg_match_all('/(?<!\(int\))round\(\(microtime\(true\) - \$start\) \* 1000\)/', (string)file_get_contents(__DIR__ . '/../node_client.php')), 0);
 
+// --- monitors.last_details as an array (bk_monitor_details) ----------------
+// 44 readers decoded the column inline in idioms that disagreed on a missing
+// column, NULL, '' and broken JSON ($md_idioms below). The helper answers []
+// for all four, and each reader (??, isset, empty, truthiness or an is_array
+// guard) reads that [] as it read what the old idiom gave.
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_monitor_details']);
+$md_cases = [
+    'chybí sloupec' => [],
+    'NULL' => ['last_details' => null],
+    'prázdný řetězec' => ['last_details' => ''],
+    'rozbitý JSON' => ['last_details' => '{"cpu": 12'],
+];
+$md_object = ['last_details' => '{"cpu":12.5,"agent_last_seen":1767225600,"wan_up":true}'];
+check('bez sloupce, NULL, prázdný i rozbitý JSON je prázdné pole',
+    array_map('bk_monitor_details', array_values($md_cases)), [[], [], [], []]);
+check('objekt i seznam se dekódují celé, prázdný objekt je prázdné pole',
+    [bk_monitor_details($md_object), bk_monitor_details(['last_details' => '[1,2]']), bk_monitor_details(['last_details' => '{}'])],
+    [['cpu' => 12.5, 'agent_last_seen' => 1767225600, 'wan_up' => true], [1, 2], []]);
+// JSON that is no object or list was never written (every writer encodes an
+// array); a reader that indexed it would have read nothing anyway.
+check('JSON skalár nebo nula není detail',
+    [bk_monitor_details(['last_details' => '"text"']), bk_monitor_details(['last_details' => '0']),
+     bk_monitor_details(['last_details' => 'null']), bk_monitor_details(['id' => 1, 'last_details' => 42])],
+    [[], [], [], []]);
+$md_idioms = [
+    "?? '{}'" => fn (array $r) => json_decode($r['last_details'] ?? '{}', true),
+    "?? ''" => fn (array $r) => json_decode($r['last_details'] ?? '', true),
+    '(string)' => fn (array $r) => json_decode((string)($r['last_details'] ?? ''), true),
+    'ternár' => fn (array $r) => ($r['last_details'] ?? null) ? json_decode($r['last_details'], true) : null,
+    '!empty' => fn (array $r) => !empty($r['last_details']) ? json_decode($r['last_details'], true) : [],
+    '?: []' => fn (array $r) => json_decode($r['last_details'] ?? '', true) ?: [],
+];
+$md_read = fn ($d) => [$d['cpu'] ?? null, isset($d['agent_last_seen']), empty($d['wan_up']), (bool)$d, is_array($d) ? $d : []];
+$md_differs = [];
+foreach ($md_idioms as $md_name => $md_decode) {
+    foreach ($md_cases + ['prázdný objekt' => ['last_details' => '{}'], 'objekt' => $md_object] as $md_case => $md_row) {
+        if ($md_read($md_decode($md_row)) !== $md_read(bk_monitor_details($md_row))) {
+            $md_differs[] = $md_name . ' / ' . $md_case;
+        }
+    }
+}
+check('čtenáři (??, isset, empty, pravdivost, is_array) vidí totéž co dřív', $md_differs, []);
+// index.php keeps its own decode: bk_get_network_insights() skips a NULL and
+// reads an [] as a monitor whose outages count as WAN reconnects. This guards
+// decodes of a monitor row; a reader that fetches the bare column with
+// fetchColumn() decodes that string where it reads it.
+$md_inline = [];
+foreach (glob(__DIR__ . '/../*.php') ?: [] as $md_file) {
+    foreach (file($md_file) ?: [] as $md_line) {
+        if (preg_match('/json_decode\([^;]*last_details/', $md_line)) {
+            $md_inline[] = basename($md_file);
+        }
+    }
+}
+check('řádek monitoru dekóduje last_details jen přes bk_monitor_details(), mimo něj jen index.php kvůli NULL', $md_inline, ['index.php']);
+
 // --- Agent backup verdict (bk_agent_backup_says_up) ------------------------
 // The fallback turned real outages green: a web with the agent listing 443,
 // agent data 50 minutes old, and any monitored process vouching for TeamSpeak.

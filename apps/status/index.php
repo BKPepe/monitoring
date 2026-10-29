@@ -148,7 +148,7 @@ $online_agents_count = 0;
 $total_agents_count = 0;
 foreach ($monitors as $m) {
     if (empty($m['agent_key'])) continue;
-    $det = json_decode($m['last_details'] ?? '', true);
+    $det = bk_monitor_details($m);
     $last_seen = $det['agent_last_seen'] ?? 0;
     if ($last_seen <= 0) continue;
     $total_agents_count++;
@@ -531,7 +531,7 @@ $portal_url = trim(get_setting('portal_url'));
         if ($is_admin) {
             $bk_agent_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
             foreach ($monitors as $bk_ci_mon) {
-                $bk_ci_details = json_decode($bk_ci_mon['last_details'] ?? '', true) ?: [];
+                $bk_ci_details = bk_monitor_details($bk_ci_mon);
                 foreach (bk_get_collection_issues($bk_ci_mon, $bk_ci_details, $bk_agent_offline_secs) as $bk_ci) {
                     $bk_collection_rows[] = ['name' => $bk_ci_mon['name'], 'issue' => $bk_ci];
                 }
@@ -735,6 +735,9 @@ $portal_url = trim(get_setting('portal_url'));
                             // earned. Track whether we actually have data instead.
                             $uptime_known = isset($uptime_pct[$mid]);
                             $uptime = $uptime_pct[$mid] ?? 0.0;
+                            // Not bk_monitor_details(): NULL here, not [], when nothing decodes.
+                            // bk_get_network_insights() below skips a NULL and would count the
+                            // monitor's outages as WAN reconnects for an [].
                             $details = $monitor['last_details'] ? json_decode($monitor['last_details'], true) : null;
                             // A visitor who may not see this monitor gets its public status only:
                             // no processes, ports, interfaces, addresses, or tips naming them.
@@ -1981,7 +1984,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                           
                                                           <?php 
                                                           if ($monitor['type'] === 'web'): 
-                                                              $web_det = json_decode($monitor['last_details'] ?? '', true);
+                                                              $web_det = bk_monitor_details($monitor);
                                                               if (!empty($web_det)):
                                                           ?>
                                                               <div class="detail-section-title" style="margin-top: 1.25rem;"><i class="fas fa-network-wired"></i> <?php echo htmlspecialchars(t('web_network_params_heading')); ?></div>

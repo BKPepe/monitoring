@@ -50,8 +50,7 @@ if (!$monitor) {
     exit;
 }
 
-$details = $monitor['last_details'] ? json_decode($monitor['last_details'], true) : null;
-if (!is_array($details)) $details = [];
+$details = bk_monitor_details($monitor);
 
 // Cross-link: Automaticky propojí detaily z VPS/OpenWrt agenta (ts3_process, discovered_services, top_cpu atd.)
 bk_enrich_monitor_details($pdo, $monitor, $details);
