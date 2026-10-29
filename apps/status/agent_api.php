@@ -1512,10 +1512,10 @@ try {
         // transaction, with the monitors row locked for the ping's full
         // timeout - and most routers drop ICMP anyway, so after a second or
         // two of waiting the answer was NULL. Without a measurement: NULL.
-        $ping_ms = null;
-        if (isset($data['wan_latency_ms']) && is_numeric($data['wan_latency_ms'])) {
-            $ping_ms = (float)$data['wan_latency_ms'];
-        }
+        // The column holds whole ms: a gateway one hop away answers in 0.3 ms,
+        // which went in as 0 and read as unmeasured, so it is 1 ms now
+        // (bk_response_ms). vps_metrics.wan_latency_ms keeps the exact value.
+        $ping_ms = bk_response_ms($data['wan_latency_ms'] ?? null);
 
         // Write the regular check log
         $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (?, ?, ?, ?)");

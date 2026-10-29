@@ -147,6 +147,38 @@ foreach ($targets as $file) {
         ];
     }
 
+    // --- A literal zero response time -----------------------------------
+    // The match above sees only coercions. Every failed check returned a
+    // literal 'response_time' => 0 and cron logged maintenance rows with a
+    // literal 0, so each outage became a 0 ms point in the latency charts.
+    // 0.0 is the same zero, and so is an assignment to the key.
+    foreach ($lines as $no => $line) {
+        if (preg_match('/[\'"]response_time[\'"]\]?\s*(?:=>|=(?![=>]))\s*0+(?:\.0*)?(?![\w.])/', $line)) {
+            $violations[] = [
+                'file' => str_replace(dirname(__DIR__, 3) . '/', '', $file),
+                'line' => $no + 1,
+                'code' => trim($line),
+                'kind' => 'nula',
+            ];
+        }
+    }
+    // The only number an INSERT into monitor_logs can carry is response_time.
+    // The statement is read whole: a prepare() often puts VALUES on a line of
+    // its own, which a line-by-line match never saw.
+    $src = implode("\n", $lines);
+    if (preg_match_all('/INSERT\s+INTO\s+monitor_logs\b[^;]*?\bVALUES\s*\(([^)]*)\)/i', $src, $inserts, PREG_SET_ORDER | PREG_OFFSET_CAPTURE)) {
+        foreach ($inserts as $ins) {
+            if (preg_match('/(?<![\w.\'])0+(?:\.0*)?(?![\w.])/', $ins[1][0])) {
+                $violations[] = [
+                    'file' => str_replace(dirname(__DIR__, 3) . '/', '', $file),
+                    'line' => substr_count($src, "\n", 0, $ins[0][1]) + 1,
+                    'code' => trim((string)preg_replace('/\s+/', ' ', $ins[0][0])),
+                    'kind' => 'nula',
+                ];
+            }
+        }
+    }
+
     // --- Invented strings on data fields --------------------------------
     // The literal must bind DIRECTLY to the field (field ?? 'value'), not just
     // sit on the same line - the lint used to report `m.category ?? 'Monitory'`

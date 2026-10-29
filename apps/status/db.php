@@ -238,6 +238,30 @@ function bk_cf_fix_location_history(PDO $pdo): int {
 }
 
 /**
+ * A response time as monitor_logs.response_time stores it: whole
+ * milliseconds, or NULL when nothing was measured.
+ *
+ * The column is an INT, so a measured 0.3 ms (a router's WAN gateway one hop
+ * away, a port on the same machine) went in as 0 - and 0 is how older failed
+ * checks were logged, so every reader skips it as unmeasured and the
+ * measurement was gone. A positive value is therefore at least 1 ms. NULL, a
+ * non-number or a negative value measured nothing: NULL. A bare 0 is NULL too
+ * (node_client.php sent 0 for a failed check), unless the caller knows that
+ * an answer arrived ($answered: a probe's 'up' result, timed only after the
+ * answer came) - then it is an answer under 1 ms the sender truncated: 1 ms.
+ */
+function bk_response_ms(mixed $ms, bool $answered = false): ?int {
+    if (!is_numeric($ms)) {
+        return null;
+    }
+    $ms = (float)$ms;
+    if (!is_finite($ms) || $ms < 0 || ($ms === 0.0 && !$answered)) {
+        return null;
+    }
+    return max(1, (int)round($ms));
+}
+
+/**
  * The installer's address, next to this directory: /status/x.php -> /app/setup.
  *
  * Built from SCRIPT_NAME (the server's own path, never request input), so an

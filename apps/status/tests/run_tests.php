@@ -44,6 +44,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_smart_is_missing',
     'bk_agent_bool',
     'bk_http_verdict',
+    'check_socket',
     'bk_agent_backup_says_up',
     'bk_viewer',
     'bk_monitor_scope_sql',
@@ -769,6 +770,56 @@ if (function_exists('bk_http_verdict')) {
     check('503 hlásí HTTP kód, ne chybějící text', $v['error'], 'HTTP status kód: 503');
     check('žádná odpověď je výpadek', bk_http_verdict(0, '', null)['status'], 'down');
 }
+
+// --- A failed check measured no response time (check_socket) ---------------
+// Every failed check returned response_time 0 and cron logged it: each outage
+// was a 0 ms point in the latency charts, the fastest answer on screen. The
+// port is bound and released first, so nothing listens on it.
+// The other way round, a measured answer is never 0 either: the column is
+// whole ms, and a port on the same machine answers in a fraction of one,
+// which round() made 0 - the value every reader skips as unmeasured.
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_response_ms']);
+if (function_exists('check_socket')) {
+    $rt_srv = stream_socket_server('tcp://127.0.0.1:0', $rt_errno, $rt_errstr);
+    $rt_port = $rt_srv ? (int)substr(strrchr((string)stream_socket_get_name($rt_srv, false), ':'), 1) : 0;
+    check_true('volný port pro test se našel', $rt_port > 0);
+    $rt_up = check_socket('127.0.0.1', $rt_port, 1);
+    check('otevřený port na tomtéž stroji má naměřenou odezvu aspoň 1 ms, ne 0',
+        [$rt_up['status'], is_int($rt_up['response_time']) && $rt_up['response_time'] >= 1], ['up', true]);
+    if ($rt_srv) {
+        fclose($rt_srv);
+    }
+    $rt_down = check_socket('127.0.0.1', $rt_port, 1);
+    check('zavřený port je výpadek bez naměřené odezvy, ne 0 ms',
+        [$rt_down['status'], array_key_exists('response_time', $rt_down) ? $rt_down['response_time'] : 'chybí'], ['down', null]);
+}
+check('odezva do monitor_logs: kladná pod 1 ms je 1 ms, jinak celé ms',
+    [bk_response_ms(0.3), bk_response_ms('0.3'), bk_response_ms(0.5), bk_response_ms(1.4), bk_response_ms('18.6'), bk_response_ms(212)],
+    [1, 1, 1, 1, 19, 212]);
+check('nic, nula, záporná nebo nečíselná hodnota je NULL, ne 0 ms',
+    [bk_response_ms(null), bk_response_ms(0), bk_response_ms('0.0'), bk_response_ms(-2), bk_response_ms('null'),
+     bk_response_ms(''), bk_response_ms(true), bk_response_ms([5]), bk_response_ms(INF), bk_response_ms(NAN)],
+    array_fill(0, 10, null));
+// A probe times an 'up' result after the answer arrived, so its 0 is an
+// answer under 1 ms that the probe truncated, not a failed check's 0.
+check('nula u odpovědi, která přišla, je 1 ms; záporná ani nečíselná pořád NULL',
+    [bk_response_ms(0, true), bk_response_ms('0', true), bk_response_ms(0.4, true), bk_response_ms(150, true),
+     bk_response_ms(null, true), bk_response_ms(-2, true), bk_response_ms('null', true)],
+    [1, 1, 1, 150, null, null, null]);
+// node_client.php runs on other hosts with its own copies of the checks (the
+// names clash with these, so only its helper is loaded), and node_api reads a
+// 0 on a failed check as unmeasured: no copy may round a duration to 0 either.
+bk_test_load_functions(__DIR__ . '/../node_client.php', ['elapsed_ms']);
+check_true('vzdálený uzel: odpověď za 0,3 ms je aspoň 1 ms, ne 0',
+    function_exists('elapsed_ms') && elapsed_ms(microtime(true) - 0.0003) >= 1);
+// The floor is for an answer that arrived, not for a clock that stepped back
+// during the check (NTP): that came out as 1 ms, the fastest point on the
+// chart for a check nobody timed. bk_response_ms() stores such a value as NULL.
+check('vzdálený uzel: záporná nebo nekonečná doba kontroly je neměřená, ne 1 ms',
+    function_exists('elapsed_ms') ? [elapsed_ms(microtime(true) + 0.5), elapsed_ms(INF), elapsed_ms(-INF), elapsed_ms(NAN)] : 'chybí',
+    [null, null, null, null]);
+check('vzdálený uzel nezaokrouhluje dobu kontroly jinde než v elapsed_ms',
+    preg_match_all('/(?<!\(int\))round\(\(microtime\(true\) - \$start\) \* 1000\)/', (string)file_get_contents(__DIR__ . '/../node_client.php')), 0);
 
 // --- Agent backup verdict (bk_agent_backup_says_up) ------------------------
 // The fallback turned real outages green: a web with the agent listing 443,

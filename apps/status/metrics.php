@@ -106,7 +106,9 @@ try {
     $lines[] = '# HELP bloodkings_monitor_response_time_ms Posledni namerena odezva v milisekundach.';
     $lines[] = '# TYPE bloodkings_monitor_response_time_ms gauge';
     foreach ($monitors as $m) {
-        if (!isset($response_times[$m['id']]) || $response_times[$m['id']] === null) continue;
+        // NULL or 0 is a check that measured nothing (a failure, a maintenance
+        // row) - no sample, rather than a 0 ms one.
+        if (!isset($response_times[$m['id']]) || (int)$response_times[$m['id']] <= 0) continue;
         $labels = prom_labels(['name' => $m['name'], 'type' => $m['type']]);
         $lines[] = 'bloodkings_monitor_response_time_ms' . $labels . ' ' . (int)$response_times[$m['id']];
     }

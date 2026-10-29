@@ -164,7 +164,9 @@ foreach ($monitors as $monitor) {
         $m_end = $monitor['maintenance_end'] ? ' (do ' . date('d.m.Y H:i', strtotime($monitor['maintenance_end'])) . ')' : '';
         $log_msg = $m_desc . $m_end;
         
-        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, 'maintenance', 0, ?, ?)");
+        // Nothing was checked, so nothing was measured: NULL, not a 0 ms point
+        // in every latency chart for the length of the window.
+        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, 'maintenance', NULL, ?, ?)");
         $stmt_log->execute([$id, $log_msg, $loc]);
         
         if ($old_status !== 'maintenance') {
@@ -250,9 +252,12 @@ foreach ($monitors as $monitor) {
         continue;
     }
 
+    // A failed check measured no response time either: the check_* functions
+    // return null then, and the agent fallback below keeps that null when it
+    // turns the result up.
     $check_result = [
         'status' => 'unknown',
-        'response_time' => 0,
+        'response_time' => null,
         'error' => null
     ];
     
@@ -408,7 +413,9 @@ foreach ($monitors as $monitor) {
     }
 
     $new_status = $check_result['status'];
-    $response_time = $check_result['response_time'];
+    // The value monitor_logs gets: whole ms, at least 1 when something was
+    // measured, NULL when not (bk_response_ms).
+    $response_time = bk_response_ms($check_result['response_time']);
     $error_msg = $check_result['error'];
     $details = null;
     
@@ -734,6 +741,8 @@ foreach ($monitors as $monitor) {
         }
     }
     
+    $rt_text = $response_time === null ? 'neměřeno' : "{$response_time}ms";
+
     // Detect a status change
     if ($old_status !== $new_status) {
         // Store the new status and the change time
@@ -748,15 +757,15 @@ foreach ($monitors as $monitor) {
         if (bk_should_notify_status_change((string)$old_status, $new_status,
                 $maint_to_up ? bk_has_open_incident($pdo, (int)$id) : false)) {
             trigger_notifications($pdo, $monitor, $new_status, $error_msg);
-            echo "ZMĚNA STAVU -> " . strtoupper($new_status) . " (Odezva: {$response_time}ms)\n";
+            echo "ZMĚNA STAVU -> " . strtoupper($new_status) . " (Odezva: {$rt_text})\n";
         } else {
-            echo "ÚDRŽBA UKONČENA -> UP (bez notifikace, Odezva: {$response_time}ms)\n";
+            echo "ÚDRŽBA UKONČENA -> UP (bez notifikace, Odezva: {$rt_text})\n";
         }
     } else {
         // Only update the last-check time
         $stmt_up = $pdo->prepare("UPDATE monitors SET last_checked = NOW(), last_details = ? WHERE id = ?");
         $stmt_up->execute([$details, $id]);
-        echo strtoupper($new_status) . " (Odezva: {$response_time}ms)\n";
+        echo strtoupper($new_status) . " (Odezva: {$rt_text})\n";
     }
 
     // --- Persistently degraded latency -----------------------------------

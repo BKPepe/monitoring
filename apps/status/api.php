@@ -2502,7 +2502,8 @@ if ($action === 'events') {
                 'statusLabel' => $ev_label['label'],
                 'statusTone' => $ev_label['tone'],
                 'errorMsg' => ($ev_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: bk_event_fallback_text($ev_label['key']),
-                'responseTime' => $r['response_time'] !== null ? (int)$r['response_time'] : null,
+                // A stored 0 is an older failed check or maintenance row: unmeasured.
+                'responseTime' => (int)$r['response_time'] > 0 ? (int)$r['response_time'] : null,
                 'isDown' => $r['status'] === 'down',
                 // true = this OK check ended an outage. false on rows whose
                 // neighbour is unknown - never a guess.
@@ -2569,7 +2570,7 @@ if ($action === 'events') {
                                 ? (string)$change_row['error_message']
                                 : null,
                             'location' => $change_row['checked_from'] ?: null,
-                            'responseTime' => $change_row['response_time'] !== null ? (int)$change_row['response_time'] : null,
+                            'responseTime' => (int)$change_row['response_time'] > 0 ? (int)$change_row['response_time'] : null,
                         ];
                     }
                 }
@@ -3970,7 +3971,7 @@ if ($action === 'check_stages') {
         echo json_encode([
             'stages' => is_array($stages) ? $stages : null,
             'checkedAt' => $row['checked_at'],
-            'responseMs' => $row['response_time'] !== null ? (int)$row['response_time'] : null,
+            'responseMs' => (int)$row['response_time'] > 0 ? (int)$row['response_time'] : null,
             'status' => $row['status'],
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -5093,7 +5094,7 @@ if ($action === 'audit_logs') {
             $al_label = bk_status_label((string)($r['status'] ?? ''), true);
             $mName = $r['monitor_name'] ?: "Monitor #{$r['monitor_id']}";
             $mType = strtoupper($r['monitor_type'] ?: 'HTTP');
-            $al_rt = $r['response_time'] !== null ? sprintf(t('audit_check_rt'), (int)$r['response_time']) : '';
+            $al_rt = (int)$r['response_time'] > 0 ? sprintf(t('audit_check_rt'), (int)$r['response_time']) : '';
 
             $logs[] = [
                 'id' => (int)$r['id'],
@@ -5188,10 +5189,13 @@ if ($action === 'metric_series') {
         } elseif ($metric === 'response_time' || $metric === 'latency') {
             $unit = 'ms';
             $label = bk_metric_label('response_time', 'Doba odezvy (HTTP/Ping)');
+            // > 0, not just IS NOT NULL: failed checks and maintenance rows used
+            // to be logged as 0, and those rows stay for the 30-day retention.
+            // An outage drawn as a 0 ms dip is the fastest point on the chart.
             $stmt = $pdo->prepare("
                 SELECT UNIX_TIMESTAMP(checked_at) as ts, response_time as val
                 FROM monitor_logs
-                WHERE monitor_id = ? AND {$window_sql} AND response_time IS NOT NULL
+                WHERE monitor_id = ? AND {$window_sql} AND response_time > 0
                 ORDER BY checked_at ASC
             ");
             $stmt->execute(array_merge([$real_id], $window_params));
@@ -5346,7 +5350,7 @@ if ($action === 'metric_heatmap') {
                 SELECT DATE(checked_at) AS d, HOUR(checked_at) AS h,
                        AVG(response_time) AS cell_val, COUNT(*) AS samples
                 FROM monitor_logs
-                WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND response_time IS NOT NULL
+                WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND response_time > 0
                 GROUP BY d, h
             ");
             $stmt->execute([$real_id, $hm_days]);
@@ -5894,7 +5898,7 @@ if ($action === 'metric_series_batch') {
         $stmt_lat = $pdo->prepare("
             SELECT UNIX_TIMESTAMP(checked_at) as ts, response_time as val
             FROM monitor_logs
-            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE) AND response_time IS NOT NULL
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE) AND response_time > 0
             ORDER BY checked_at ASC
         ");
         $stmt_lat->execute([$real_id, $minutes]);
@@ -5912,7 +5916,7 @@ if ($action === 'metric_series_batch') {
         // whose previous window lies past the 30-day raw retention).
         $prev_window = 'checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE) AND checked_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)';
         $prev_params = [$real_id, $minutes * 2, $minutes];
-        $stmt_lat_prev = $pdo->prepare("SELECT COUNT(response_time) AS n, AVG(response_time) AS a FROM monitor_logs WHERE monitor_id = ? AND {$prev_window}");
+        $stmt_lat_prev = $pdo->prepare("SELECT COUNT(response_time) AS n, AVG(response_time) AS a FROM monitor_logs WHERE monitor_id = ? AND {$prev_window} AND response_time > 0");
         $stmt_lat_prev->execute($prev_params);
         $lat_prev = $stmt_lat_prev->fetch() ?: ['n' => 0, 'a' => null];
         $series['response_time']['previousAvg'] = bk_aggregate_mean($lat_prev['n'], $lat_prev['a']);
@@ -6538,10 +6542,23 @@ if ($action === 'public_status') {
         // response_time is not a monitors column - the latest value comes from
         // monitor_logs. No name/outage fallback: with no real nodes an empty
         // list is returned, not a hardcoded "Donald"/"Router - Praha".
+        // The value is the newest one measured in the node's current state:
+        // an online node whose checks since an outage measured nothing
+        // (TeamSpeak up through the agent fallback, a router whose ping got no
+        // answer) showed the latency it had before the outage. The rows start
+        // 10 s before last_status_change: cron and agent_api log the check
+        // before they stamp the change, so the row that set the state can be a
+        // second older than the stamp. Not the 120 s the findings use: those
+        // rows are filtered by status, these are not, and checks come a minute
+        // apart, so 120 s reached back past a short outage. A node with no
+        // recorded change (NULL) is not bounded.
         $nodes = [];
         $stmt_nodes = $pdo->prepare("
             SELECT m.name, m.status, m.maintenance,
-                   (SELECT l.response_time FROM monitor_logs l WHERE l.monitor_id = m.id AND l.response_time IS NOT NULL ORDER BY l.id DESC LIMIT 1) AS response_time
+                   (SELECT l.response_time FROM monitor_logs l
+                    WHERE l.monitor_id = m.id AND l.response_time > 0
+                      AND (m.last_status_change IS NULL OR l.checked_at >= m.last_status_change - INTERVAL 10 SECOND)
+                    ORDER BY l.id DESC LIMIT 1) AS response_time
             FROM monitors m
             WHERE LOWER(m.type) IN ('agent', 'vps', 'openwrt', 'teamspeak', 'node', 'router')
               AND {$ps_m_scope}
@@ -6555,7 +6572,10 @@ if ($action === 'public_status') {
                 // Unknown and maintenance keep their own words: both used to
                 // become "offline", a red dot for a server nobody had checked yet.
                 'status' => $ps_node_states[$nd_status] ?? 'unknown',
-                'latencyMs' => $nd['response_time'] !== null ? (int)$nd['response_time'] : null,
+                // Only for a node that answers now: the site map prints it next
+                // to the state word as the latency the node has, and a down,
+                // maintenance or unknown node has none.
+                'latencyMs' => in_array($nd_status, ['up', 'warning'], true) && $nd['response_time'] !== null ? (int)$nd['response_time'] : null,
             ];
         }
 
@@ -7606,8 +7626,8 @@ if ($action === 'export_csv') {
                 $log['checked_at'],
                 $log['status'],
                 // An unmeasured response stays empty, not zero - a zero would read
-                // as a lightning-fast answer in the table.
-                $log['response_time'] !== null ? (int)$log['response_time'] : '',
+                // as a lightning-fast answer in the table. Older rows store 0 for it.
+                (int)$log['response_time'] > 0 ? (int)$log['response_time'] : '',
                 $log['checked_from'] ?? '',
             ];
             if ($csv_is_admin) {

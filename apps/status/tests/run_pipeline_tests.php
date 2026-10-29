@@ -19,6 +19,9 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_relative_time_label', 'bk_format_duration', 'bk_compute_baseline_anomaly',
     'bk_half_window_rate', 'bk_latency_score', 'bk_notification_kinds',
 ]);
+// Every check_* copy taken from functions.php below times its answer with
+// db.php's bk_response_ms(), which a functions.php extract does not carry.
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_response_ms']);
 
 
 // =======================================================================
@@ -493,6 +496,14 @@ check_true('druhé čtení je po záloze přes agenta a před sloučením detail
 check_true('třetí čtení je po alertu latence a před jeho zápisem',
     isset($fresh_positions[2]) && $cron_after('trigger_notifications($pdo, $monitor, \'latency_\'', $fresh_positions[2])
     && $cron_before('$stmt_lat->execute(', $fresh_positions[2]));
+
+// The response time a check measured reaches monitor_logs as whole ms, at
+// least 1: a sub-millisecond answer went in as 0, which every reader skips as
+// unmeasured. Nothing runs cron.php here, so the assignment is checked.
+preg_match_all('/\$response_time = ([^;]+);/', $cron_src, $rt_assign);
+check('cron bere odezvu pro monitor_logs jen přes bk_response_ms', $rt_assign[1], ["bk_response_ms(\$check_result['response_time'])"]);
+check_true('a právě ji zapíše do historie',
+    str_contains($cron_src, '$stmt_log->execute([$id, $new_status, $response_time, $error_msg, $loc, $check_stages_json]);'));
 
 // The call itself is matched - the helper's name also appears in comments.
 check_true('záloha přes agenta rozhoduje voláním bk_agent_backup_says_up',
@@ -1820,6 +1831,39 @@ foreach (['run_query_lint.php', 'run_honesty_lint.php'] as $gate_lint) {
 }
 @rmdir($gate_tmp);
 @rmdir(dirname($gate_tmp));
+
+// The honesty lint's zero response time, over a planted file. It caught only
+// the forms the old code used, while 0.0, an assignment to the key and an
+// INSERT with its VALUES on the next line each bring back the 0 ms outage
+// point - which the readers' > 0 filter would then hide from anyone looking.
+$hl_tmp = sys_get_temp_dir() . '/bk_hl_' . getmypid() . '/tests';
+@mkdir($hl_tmp, 0777, true);
+copy(__DIR__ . '/run_honesty_lint.php', $hl_tmp . '/run_honesty_lint.php');
+file_put_contents(dirname($hl_tmp) . '/planted.php', implode("\n", [
+    '<?php',
+    "\$a = ['response_time' => 0];",
+    "\$b = ['response_time' => 0.0, 'error' => 'x'];",
+    "\$b['response_time'] = 0;",
+    "\$c = ['response_time' => 0.00];",
+    "\$d = \$pdo->prepare(\"INSERT INTO monitor_logs (monitor_id, status, response_time, error_message)",
+    "    VALUES (?, 'maintenance', 0, ?)\");",
+    "\$e = \$pdo->prepare(\"INSERT INTO monitor_logs (monitor_id, status, response_time) VALUES (?, 'down', 0.0)\");",
+    // Not zeros, or not written: a measured value, comparisons, a placeholder.
+    "\$f = ['response_time' => 0.5];",
+    "\$g = \$b['response_time'] == 0 || \$b['response_time'] >= 0;",
+    "\$h = \$pdo->prepare(\"INSERT INTO monitor_logs (monitor_id, status, response_time)",
+    "    VALUES (?, 'up', ?)\");",
+]) . "\n");
+$hl_res = $gate_run([], $hl_tmp . '/run_honesty_lint.php');
+preg_match_all('/planted\.php:(\d+)/', $hl_res['out'], $hl_lines);
+$hl_found = array_map('intval', $hl_lines[1]);
+sort($hl_found);
+check('honesty lint najde nulovou odezvu i jako 0.0, přiřazení a INSERT s VALUES na dalším řádku',
+    [$hl_res['code'], $hl_found], [1, [2, 3, 4, 5, 6, 8]]);
+@unlink(dirname($hl_tmp) . '/planted.php');
+@unlink($hl_tmp . '/run_honesty_lint.php');
+@rmdir($hl_tmp);
+@rmdir(dirname($hl_tmp));
 
 $failed = bk_test_report('sběr, e-maily, notifikace');
 // Under the coverage runner the process does not exit - the report would never generate.

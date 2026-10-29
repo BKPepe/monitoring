@@ -69,7 +69,7 @@ foreach ($monitors as $m) {
     $check_result = [
         'id' => $mid,
         'status' => 'down',
-        'response_time' => 0,
+        'response_time' => null,
         'error' => null,
         'details' => null
     ];
@@ -143,7 +143,7 @@ foreach ($monitors as $m) {
             continue 2;
     }
     
-    echo "Stav: " . strtoupper($check_result['status']) . " (" . $check_result['response_time'] . " ms)\n";
+    echo "Stav: " . strtoupper($check_result['status']) . " (" . ($check_result['response_time'] === null ? 'neměřeno' : $check_result['response_time'] . " ms") . ")\n";
     if ($check_result['error']) {
         echo "   Chyba: " . $check_result['error'] . "\n";
     }
@@ -218,6 +218,20 @@ function http_request($url, $method = 'GET', $post_data = null) {
     }
 }
 
+// Milliseconds since $start, whole and at least 1. round() made an answer
+// under half a millisecond 0, and the server reads a 0 on a failed check (an
+// HTTP 500 is one, with a real duration) as "nothing measured", since older
+// nodes sent 0 for a failed check: that measurement was dropped. The wall
+// clock can step back during a check (NTP): a negative or non-finite time
+// measured nothing and is null, as bk_response_ms() stores it, not 1 ms.
+function elapsed_ms($start) {
+    $ms = (microtime(true) - $start) * 1000;
+    if (!is_finite($ms) || $ms < 0) {
+        return null;
+    }
+    return max(1, (int)round($ms));
+}
+
 function check_http($url, $timeout) {
     $start = microtime(true);
     if (function_exists('curl_init')) {
@@ -234,9 +248,9 @@ function check_http($url, $timeout) {
         $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $error = curl_error($ch);
         curl_close($ch);
-        $duration = round((microtime(true) - $start) * 1000);
+        $duration = elapsed_ms($start);
         if ($response === false) {
-            return ['status' => 'down', 'response_time' => 0, 'error' => "cURL chyba: " . $error];
+            return ['status' => 'down', 'response_time' => null, 'error' => "cURL chyba: " . $error];
         }
         if ($http_code >= 200 && $http_code < 400) {
             return ['status' => 'up', 'response_time' => $duration, 'error' => null];
@@ -246,9 +260,9 @@ function check_http($url, $timeout) {
     } else {
         $context = stream_context_create(['http' => ['timeout' => $timeout, 'ignore_errors' => true]]);
         $response = @file_get_contents($url, false, $context);
-        $duration = round((microtime(true) - $start) * 1000);
+        $duration = elapsed_ms($start);
         if ($response === false) {
-            return ['status' => 'down', 'response_time' => 0, 'error' => "Nelze načíst URL"];
+            return ['status' => 'down', 'response_time' => null, 'error' => "Nelze načíst URL"];
         }
         $http_code = 200;
         if (isset($http_response_header) && isset($http_response_header[0])) {
@@ -267,12 +281,12 @@ function check_socket($host, $port, $timeout) {
     $start = microtime(true);
     $host = preg_replace('~^https?://~', '', $host);
     $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
-    $duration = round((microtime(true) - $start) * 1000);
+    $duration = elapsed_ms($start);
     if ($socket) {
         @fclose($socket);
         return ['status' => 'up', 'response_time' => $duration, 'error' => null];
     } else {
-        return ['status' => 'down', 'response_time' => 0, 'error' => "Zavřeno: $errstr ($errno)"];
+        return ['status' => 'down', 'response_time' => null, 'error' => "Zavřeno: $errstr ($errno)"];
     }
 }
 
@@ -281,7 +295,7 @@ function check_minecraft($host, $port, $timeout) {
     $host = preg_replace('~^https?://~', '', $host);
     $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
     if (!$socket) {
-        return ['status' => 'down', 'response_time' => 0, 'error' => $errstr, 'players_online' => 0, 'players_max' => 0];
+        return ['status' => 'down', 'response_time' => null, 'error' => $errstr, 'players_online' => 0, 'players_max' => 0];
     }
     stream_set_timeout($socket, $timeout);
     $packVarInt = function($value) {
@@ -310,10 +324,10 @@ function check_minecraft($host, $port, $timeout) {
         return $value;
     };
     $packetLength = $readVarInt($socket);
-    if ($packetLength === false) { @fclose($socket); return ['status' => 'down', 'response_time' => 0, 'error' => 'No response', 'players_online' => 0, 'players_max' => 0]; }
+    if ($packetLength === false) { @fclose($socket); return ['status' => 'down', 'response_time' => null, 'error' => 'No response', 'players_online' => 0, 'players_max' => 0]; }
     $packetId = $readVarInt($socket);
     $stringLength = $readVarInt($socket);
-    if ($stringLength === false || $stringLength <= 0) { @fclose($socket); return ['status' => 'down', 'response_time' => 0, 'error' => 'Invalid response', 'players_online' => 0, 'players_max' => 0]; }
+    if ($stringLength === false || $stringLength <= 0) { @fclose($socket); return ['status' => 'down', 'response_time' => null, 'error' => 'Invalid response', 'players_online' => 0, 'players_max' => 0]; }
     $jsonData = '';
     $bytesRemaining = $stringLength;
     while ($bytesRemaining > 0 && !feof($socket)) {
@@ -324,7 +338,7 @@ function check_minecraft($host, $port, $timeout) {
     }
     @fclose($socket);
     $data = json_decode($jsonData, true);
-    $duration = round((microtime(true) - $start) * 1000);
+    $duration = elapsed_ms($start);
     if (!$data) return ['status' => 'up', 'response_time' => $duration, 'error' => 'JSON error', 'players_online' => 0, 'players_max' => 0];
     $playersOnline = isset($data['players']['online']) ? (int)$data['players']['online'] : 0;
     $playersMax = isset($data['players']['max']) ? (int)$data['players']['max'] : 0;
@@ -359,7 +373,7 @@ function check_teamspeak($host, $port, $timeout) {
     $start = microtime(true);
     $host = preg_replace('~^https?://~', '', $host);
     $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
-    if (!$socket) return ['status' => 'down', 'response_time' => 0, 'error' => "Port $port closed"];
+    if (!$socket) return ['status' => 'down', 'response_time' => null, 'error' => "Port $port closed"];
     stream_set_timeout($socket, $timeout);
     $greeting = '';
     for ($i = 0; $i < 4; $i++) {
@@ -368,12 +382,12 @@ function check_teamspeak($host, $port, $timeout) {
         if (strpos($line, 'TS3') !== false || strpos($line, 'Welcome') !== false) break;
     }
     if (strpos($greeting, 'TS3') === false && strpos($greeting, 'Welcome') === false) {
-        @fclose($socket); return ['status' => 'up', 'response_time' => round((microtime(true) - $start) * 1000), 'error' => 'No TS3 greeting'];
+        @fclose($socket); return ['status' => 'up', 'response_time' => elapsed_ms($start), 'error' => 'No TS3 greeting'];
     }
     @fwrite($socket, "use port=$voice_port\n"); @fgets($socket, 256);
     @fwrite($socket, "serverinfo\n"); $info = @fgets($socket, 4096);
     @fwrite($socket, "quit\n"); @fclose($socket);
-    $duration = round((microtime(true) - $start) * 1000);
+    $duration = elapsed_ms($start);
     if ($info && strpos($info, 'virtualserver_clientsonline') !== false) {
         $parts = explode(' ', $info); $details = [];
         foreach ($parts as $part) {
@@ -410,7 +424,7 @@ function check_discord($guild_id, $timeout) {
             if (isset($matches[1])) $http_code = (int)$matches[1];
         }
     }
-    $duration = round((microtime(true) - $start) * 1000);
+    $duration = elapsed_ms($start);
     // Selhany dotaz nema zadny pocet online ani zmerenou odezvu.
     if ($http_code !== 200 || !$response) return ['status' => 'down', 'response_time' => null, 'error' => 'API error', 'presence_count' => null];
     $data = json_decode($response, true);

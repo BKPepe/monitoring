@@ -3561,7 +3561,7 @@ function bk_get_forecast_insights($pdo, $monitor) {
         $stmt2_raw = $pdo->prepare("
             SELECT checked_at, response_time
             FROM monitor_logs
-            WHERE monitor_id = ? AND status = 'up' AND response_time IS NOT NULL
+            WHERE monitor_id = ? AND status = 'up' AND response_time > 0
               AND checked_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
             ORDER BY checked_at ASC
         ");
@@ -4294,7 +4294,7 @@ function bk_get_anomaly_insights($pdo, $monitor) {
     $stmt2 = $pdo->prepare("
         SELECT COUNT(response_time) AS lat_n, AVG(response_time) AS lat_mean, STDDEV_POP(response_time) AS lat_sd
         FROM monitor_logs
-        WHERE monitor_id = ? AND status = 'up' AND response_time IS NOT NULL
+        WHERE monitor_id = ? AND status = 'up' AND response_time > 0
           AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
           AND checked_at < DATE_SUB(NOW(), INTERVAL 3 DAY)
     ");
@@ -4304,7 +4304,7 @@ function bk_get_anomaly_insights($pdo, $monitor) {
     $stmt_last_lat = $pdo->prepare("
         SELECT response_time
         FROM monitor_logs
-        WHERE monitor_id = ? AND status = 'up' AND response_time IS NOT NULL
+        WHERE monitor_id = ? AND status = 'up' AND response_time > 0
           AND checked_at >= DATE_SUB(NOW(), INTERVAL 3 DAY)
         ORDER BY id DESC
         LIMIT 1
@@ -5573,7 +5573,9 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
             $response = substr($raw_response, $header_size);
         }
 
-        $duration = round((microtime(true) - $start) * 1000);
+        // Whole ms, at least 1: round() made a sub-millisecond answer 0, the
+        // value every reader skips as unmeasured (here and in every check below).
+        $duration = bk_response_ms((microtime(true) - $start) * 1000);
 
         $http_version = 'HTTP/1.1';
         if ($http_version_raw === 3) {
@@ -5641,7 +5643,7 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
         if ($response === false) {
             return array_merge([
                 'status' => 'down',
-                'response_time' => 0,
+                'response_time' => null,
                 'error' => "cURL chyba: " . $error,
                 'check_stages' => $check_stages
             ], $conn_details);
@@ -5669,7 +5671,7 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
         ]);
         
         $response = @file_get_contents($url, false, $context);
-        $duration = round((microtime(true) - $start) * 1000);
+        $duration = bk_response_ms((microtime(true) - $start) * 1000);
         
         $conn_details = [
             'has_ipv4' => $has_ipv4,
@@ -5682,7 +5684,7 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
         if ($response === false) {
             return array_merge([
                 'status' => 'down',
-                'response_time' => 0,
+                'response_time' => null,
                 'error' => "Spojení selhalo"
             ], $conn_details);
         }
@@ -5887,7 +5889,7 @@ function check_socket($host, $port, $timeout = 5) {
     $host = preg_replace('~^https?://~', '', $host);
     
     $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
-    $duration = round((microtime(true) - $start) * 1000);
+    $duration = bk_response_ms((microtime(true) - $start) * 1000);
     
     if ($socket) {
         @fclose($socket);
@@ -5899,7 +5901,7 @@ function check_socket($host, $port, $timeout = 5) {
     } else {
         return [
             'status' => 'down',
-            'response_time' => 0,
+            'response_time' => null,
             'error' => "Port $port je zavřený nebo nedostupný: $errstr ($errno)"
         ];
     }
@@ -6049,7 +6051,7 @@ function check_minecraft_api_fallback($host, $start, $timeout = 3) {
                 }
                 return [
                     'status' => 'up',
-                    'response_time' => round((microtime(true) - $start) * 1000),
+                    'response_time' => bk_response_ms((microtime(true) - $start) * 1000),
                     'error' => null,
                     'players_online' => $players_online,
                     'players_max' => $players_max,
@@ -6061,7 +6063,7 @@ function check_minecraft_api_fallback($host, $start, $timeout = 3) {
             } else {
                 return [
                     'status' => 'down',
-                    'response_time' => 0,
+                    'response_time' => null,
                     'error' => 'Minecraft server je podle API vypnutý.',
                     'players_online' => 0,
                     'players_max' => 0
@@ -6115,7 +6117,7 @@ function check_minecraft($host, $port = 25565, $timeout = 3, $rcon_port = null, 
 
     return [
         'status' => 'down',
-        'response_time' => 0,
+        'response_time' => null,
         'error' => 'Prázdná odpověď od MC serveru (timeout nebo nepodporovaný protokol), i po opakovaném pokusu.',
         'players_online' => 0,
         'players_max' => 0
@@ -6198,7 +6200,7 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
 
         return [
             'status' => 'down',
-            'response_time' => 0,
+            'response_time' => null,
             'error' => 'Neočekávané ID paketu od MC serveru',
             'players_online' => 0,
             'players_max' => 0
@@ -6222,7 +6224,7 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
     @fclose($socket);
 
     $data = json_decode($jsonData, true);
-    $duration = round((microtime(true) - $start) * 1000);
+    $duration = bk_response_ms((microtime(true) - $start) * 1000);
 
     if (!$data) {
         $fb = check_minecraft_api_fallback($host, $start, $timeout);
@@ -6751,7 +6753,7 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
     $host = preg_replace('~^https?://~', '', $host);
 
     $socket = @fsockopen($host, $port, $errno, $errstr, $timeout);
-    $duration = round((microtime(true) - $start) * 1000);
+    $duration = bk_response_ms((microtime(true) - $start) * 1000);
 
     $connected_ip = '';
     $ip_version = 'IPv4';
@@ -6778,7 +6780,7 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
         }
         return [
             'status' => 'down',
-            'response_time' => 0,
+            'response_time' => null,
             'error' => "TS3 Query port ($port) nedostupný: $errstr ($errno). Tip: Ujistěte se, že váš VPS neblokuje IP adresu webhostingu ($server_ip) ve svém firewallu nebo v souboru query_ip_whitelist.txt."
         ];
     }
@@ -7003,12 +7005,12 @@ function check_discord($guild_id, $timeout = 3) {
         }
     }
     
-    $duration = round((microtime(true) - $start) * 1000);
+    $duration = bk_response_ms((microtime(true) - $start) * 1000);
     
     if ($http_code !== 200 || !$response) {
         return [
             'status' => 'down',
-            'response_time' => 0,
+            'response_time' => null,
             'error' => "Discord API neodpovídá nebo server neexistuje (kód $http_code). Ujistěte se, že máte v nastavení Discord serveru zapnutý Widget.",
             'presence_count' => 0
         ];
@@ -7018,7 +7020,7 @@ function check_discord($guild_id, $timeout = 3) {
     if (!$data || isset($data['code'])) {
         return [
             'status' => 'down',
-            'response_time' => 0,
+            'response_time' => null,
             'error' => isset($data['message']) ? $data['message'] : 'Chyba parsování Discord API',
             'presence_count' => 0
         ];
@@ -14876,12 +14878,12 @@ function check_cpanel($url, $timeout = 5) {
         $error = curl_error($ch);
         curl_close($ch);
         
-        $duration = round((microtime(true) - $start) * 1000);
+        $duration = bk_response_ms((microtime(true) - $start) * 1000);
         
         if ($response === false) {
             return [
                 'status' => 'down',
-                'response_time' => 0,
+                'response_time' => null,
                 'http_code' => 0,
                 'error' => "cURL chyba: " . $error
             ];
@@ -14934,12 +14936,12 @@ function check_cpanel($url, $timeout = 5) {
             ]
         ]);
         $response = @file_get_contents($url, false, $context);
-        $duration = round((microtime(true) - $start) * 1000);
+        $duration = bk_response_ms((microtime(true) - $start) * 1000);
         
         if ($response === false) {
             return [
                 'status' => 'down',
-                'response_time' => 0,
+                'response_time' => null,
                 'error' => 'Chyba při stahování dat přes stream.'
             ];
         }

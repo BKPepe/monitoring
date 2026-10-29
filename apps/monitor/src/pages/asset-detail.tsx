@@ -365,15 +365,18 @@ export function AssetDetailPage() {
         setEvents(
           rows.map((e: any) => ({
             id: e.id,
+            // A row skipped for maintenance checked nothing, so it is not titled as a pass.
             title: e.isDown
               ? t('asset.event_outage', 'Výpadek služby')
               : e.rawStatus === 'warning'
                 ? t('asset.event_degraded', 'Zhoršená odezva')
                 : e.rawStatus === 'unknown'
                   ? t('asset.event_unknown', 'Stav neznámý (agent nehlásí)')
-                  : e.isRecovery
-                    ? t('asset.event_recovered', 'Služba obnovena')
-                    : t('asset.event_ok', 'Kontrola proběhla v pořádku'),
+                  : e.rawStatus === 'maintenance'
+                    ? t('common.maintenance', 'Údržba')
+                    : e.isRecovery
+                      ? t('asset.event_recovered', 'Služba obnovena')
+                      : t('asset.event_ok', 'Kontrola proběhla v pořádku'),
             detail:
               e.errorMsg +
               (e.outageDurationSec

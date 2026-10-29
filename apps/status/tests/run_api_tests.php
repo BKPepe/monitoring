@@ -7461,6 +7461,202 @@ try {
 }
 
 // =======================================================================
+// A check that measured nothing is not 0 ms (R2).
+//
+// Failed checks and maintenance rows were logged with response_time 0, and
+// the raw latency readers filtered only IS NOT NULL: every outage was a 0 ms
+// dip in the charts, averaged into the heatmap and previousAvg, exported to
+// Prometheus and printed on the public map, while the daily rollup (NULLIF)
+// left it out. Writers store NULL now; older rows stay for the 30-day
+// retention, so the readers skip 0 too. The 0 rows below are those older rows.
+// Own monitors, removed at the end.
+// =======================================================================
+$rt_settings = $pdo->query("SELECT key_name, key_value FROM settings WHERE key_name IN ('cron_key', 'metrics_token')")->fetchAll(PDO::FETCH_KEY_PAIR);
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+                (261, 'R2 web', 'web', 'https://r2.example.com', 'up', 'Test'),
+                (262, 'R2 TeamSpeak', 'teamspeak', 'ts-r2.example.com', 'down', 'Test')");
+    $rt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, check_stages, checked_at)
+                             VALUES (?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+    foreach ([
+        // The 24 hours before the window, for previousAvg: three measured, three
+        // outages. Inserted first - metrics.php reads the newest row by id.
+        [261, 'down', 0, 'Timeout', null, 35 * 60], [261, 'down', 0, 'Timeout', null, 34 * 60], [261, 'down', 0, 'Timeout', null, 33 * 60],
+        [261, 'up', 300, null, null, 32 * 60], [261, 'up', 300, null, null, 31 * 60], [261, 'up', 300, null, null, 30 * 60],
+        // The last 24 hours: two measured checks, an outage and a maintenance tick.
+        [261, 'up', 100, null, null, 50],
+        [261, 'down', 0, 'cURL chyba: Connection refused', '{"dns":{"ok":true}}', 40],
+        [261, 'maintenance', 0, 'Plánovaná údržba', null, 30],
+        [261, 'up', 200, null, null, 20],
+        // A TeamSpeak node that answered in 40 ms and then went down.
+        [262, 'up', 40, null, null, 60],
+        [262, 'down', 0, 'TS3 Query port nedostupný', null, 10],
+    ] as $rt_row) {
+        $rt_log->execute($rt_row);
+    }
+    $pdo->exec("UPDATE monitors SET last_status_change = DATE_SUB(NOW(), INTERVAL 10 MINUTE) WHERE id = 262");
+
+    [, $rt_series] = api_get_auth($base, 'action=metric_series&monitor_id=261&metric=response_time&period=24h', $cookie_jar);
+    check('R2: graf odezvy kreslí jen naměřené kontroly, výpadek ani údržba nejsou 0 ms',
+        array_map(fn ($pt) => (float)$pt[1], $rt_series['points'] ?? []), [100.0, 200.0]);
+
+    [, $rt_batch] = api_get_auth($base, 'action=metric_series_batch&monitor_id=261&period=24h', $cookie_jar);
+    check('R2: dávka grafů detailu taky',
+        array_map(fn ($pt) => (float)$pt[1], $rt_batch['series']['response_time']['points'] ?? []), [100.0, 200.0]);
+    $rt_prev = $rt_batch['series']['response_time']['previousAvg'] ?? null;
+    check('R2: průměr předchozího období nestahují výpadky k nule', $rt_prev === null ? null : (float)$rt_prev, 300.0);
+
+    [, $rt_hm] = api_get_auth($base, 'action=metric_heatmap&monitor_id=261&metric=response_time&days=3', $cookie_jar);
+    $rt_hm_samples = 0;
+    $rt_hm_low = [];
+    foreach ($rt_hm['days'] ?? [] as $rt_day) {
+        $rt_hm_samples += array_sum($rt_day['samples'] ?? []);
+        foreach ($rt_day['hours'] ?? [] as $rt_val) {
+            if ($rt_val !== null && $rt_val < 100) {
+                $rt_hm_low[] = $rt_val;
+            }
+        }
+    }
+    check('R2: heatmapa počítá jen naměřené vzorky a žádná hodina neklesne pod nejrychlejší kontrolu',
+        [$rt_hm_samples, $rt_hm_low], [5, []]);
+
+    [, $rt_ev] = api_get_auth($base, 'action=events&monitor_id=261&limit=50', $cookie_jar);
+    $rt_ev_by = [];
+    foreach ($rt_ev['events'] ?? [] as $rt_e) {
+        $rt_ev_by[$rt_e['rawStatus'] . ':' . ($rt_e['responseTime'] ?? 'null')] = true;
+    }
+    check_true('R2: v událostech má výpadek i údržba odezvu null, naměřená kontrola svoje ms',
+        isset($rt_ev_by['down:null'], $rt_ev_by['maintenance:null'], $rt_ev_by['up:200'])
+        && !isset($rt_ev_by['down:0']) && !isset($rt_ev_by['maintenance:0']));
+    [, $rt_ev_ts] = api_get_auth($base, 'action=events&monitor_id=262&limit=50', $cookie_jar);
+    check('R2: řádek změny stavu taky',
+        [$rt_ev_ts['statusChange']['status'] ?? 'chybí', array_key_exists('responseTime', $rt_ev_ts['statusChange'] ?? []) ? $rt_ev_ts['statusChange']['responseTime'] : 'chybí'],
+        ['down', null]);
+
+    [, $rt_stages] = api_get_auth($base, 'action=check_stages&monitor_id=261', $cookie_jar);
+    check('R2: rozpad kontroly u výpadku neukazuje 0 ms',
+        [$rt_stages['status'] ?? 'chybí', array_key_exists('responseMs', $rt_stages ?? []) ? $rt_stages['responseMs'] : 'chybí'], ['down', null]);
+
+    [, , $rt_csv] = api_get_auth($base, 'action=export_csv&monitor_id=261&days=1', $cookie_jar);
+    $rt_csv_rt = [];
+    // Data rows only: they start with the check time (a PHP notice printed by
+    // the test server would be a line of its own).
+    foreach (preg_split('/\r?\n/', (string)$rt_csv) as $rt_line) {
+        if (preg_match('/^"?\d{4}-\d{2}-\d{2} /', $rt_line)) {
+            $rt_cells = str_getcsv($rt_line, ',', '"', '');
+            $rt_csv_rt[] = ($rt_cells[1] ?? '?') . '=' . ($rt_cells[2] ?? '?');
+        }
+    }
+    check('R2: CSV nechá nezměřenou odezvu prázdnou', $rt_csv_rt, ['up=200', 'maintenance=', 'down=', 'up=100']);
+
+    [, $rt_ps] = api_get_auth($base, 'action=public_status', $cookie_jar);
+    $rt_node = array_values(array_filter($rt_ps['nodes'] ?? [], fn ($n) => ($n['name'] ?? '') === 'R2 TeamSpeak'))[0] ?? null;
+    // Not the 40 ms from before the outage either: the map prints the value
+    // next to the state word, as the latency the node has now.
+    check('R2: uzel mimo provoz nemá na mapě webu odezvu, ani 0 ms z výpadku, ani starou',
+        [$rt_node['status'] ?? 'chybí', array_key_exists('latencyMs', $rt_node ?? []) ? $rt_node['latencyMs'] : 'chybí'], ['offline', null]);
+
+    $rt_token = 'r2-' . bin2hex(random_bytes(8));
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('metrics_token', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")->execute([$rt_token]);
+    [$rt_prom_code, , $rt_prom] = bk_raw_request($base . '/metrics.php?token=' . $rt_token);
+    check('R2: Prometheus exportuje odezvu webu z naměřené kontroly',
+        [$rt_prom_code, (bool)preg_match('/^bloodkings_monitor_response_time_ms\{name="R2 web",type="web"\} 200$/m', $rt_prom)], [200, true]);
+    check_false('R2: a TeamSpeak po výpadku žádnou 0 ms nemá',
+        str_contains($rt_prom, 'bloodkings_monitor_response_time_ms{name="R2 TeamSpeak"'));
+
+    // node_client.php sent 0 for a failed check; a result that sends nothing
+    // used to be stored as 0 too. An 'up' result is timed after the answer
+    // arrived (the Worker, the GitHub Actions runner, node_client), so its 0
+    // is an answer under 1 ms.
+    $rt_key = 'r2-' . bin2hex(random_bytes(8));
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('cron_key', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")->execute([$rt_key]);
+    [$rt_node_code] = bk_raw_request($base . '/node_api.php?action=post_results&key=' . $rt_key, ['Content-Type: application/json'], json_encode([
+        'location' => 'R2 sonda',
+        'results' => [
+            ['id' => 261, 'status' => 'down', 'response_time' => 0, 'error' => 'Zavřeno'],
+            ['id' => 261, 'status' => 'down', 'error' => 'cURL chyba'],
+            ['id' => 261, 'status' => 'up', 'response_time' => 150],
+            // A measured answer under 1 ms was truncated to 0, then NULL.
+            ['id' => 261, 'status' => 'up', 'response_time' => 0.4],
+            ['id' => 261, 'status' => 'up', 'response_time' => 0],
+        ],
+    ]));
+    $rt_probe = $pdo->query("SELECT response_time FROM monitor_logs WHERE monitor_id = 261 AND checked_from = 'R2 sonda' ORDER BY id")->fetchAll(PDO::FETCH_COLUMN);
+    check('R2: vzdálená sonda uloží nezměřenou odezvu jako NULL a odezvu pod 1 ms jako 1 ms',
+        [$rt_node_code, array_map(fn ($v) => $v === null ? null : (int)$v, $rt_probe)], [200, [null, null, 150, 1, 1]]);
+
+    // A measured answer is never 0 either. monitor_logs keeps whole ms, and a
+    // router whose WAN sits on another router's LAN reaches its gateway in
+    // 0.3 ms: that went in as 0, which every reader above skips as unmeasured.
+    $rt_wan_key = 'r2-wan-' . bin2hex(random_bytes(8));
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, agent_key) VALUES (263, 'R2 router', 'openwrt', 'r2-router.example.com', 'up', 'Test', ?)")
+        ->execute([$rt_wan_key]);
+    $rt_wan_codes = [];
+    foreach ([0.3, 18.4, 0, -2, null] as $rt_wan) {
+        [$rt_wan_codes[]] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'],
+            (string)json_encode(['agent_key' => $rt_wan_key, 'cpu' => 10.0, 'ram' => 20.0, 'hdd' => 30.0, 'wan_latency_ms' => $rt_wan]));
+    }
+    $rt_wan_rows = $pdo->query("SELECT response_time FROM monitor_logs WHERE monitor_id = 263 ORDER BY id")->fetchAll(PDO::FETCH_COLUMN);
+    check('R2: latence WAN pod 1 ms je v historii 1 ms, ne 0; nula, záporná a chybějící jsou NULL',
+        [$rt_wan_codes, array_map(fn ($v) => $v === null ? null : (int)$v, $rt_wan_rows)],
+        [[200, 200, 200, 200, 200], [1, 18, null, null, null]]);
+    [, $rt_wan_series] = api_get_auth($base, 'action=metric_series&monitor_id=263&metric=response_time&period=24h', $cookie_jar);
+    $rt_wan_points = array_map(fn ($pt) => (float)$pt[1], $rt_wan_series['points'] ?? []);
+    sort($rt_wan_points);
+    check('R2: a graf odezvy routeru tu 1 ms nakreslí', $rt_wan_points, [1.0, 18.0]);
+    // A node in service keeps its newest measured latency on the map, past
+    // the reports whose ping got no answer.
+    [, $rt_ps_up] = api_get_auth($base, 'action=public_status', $cookie_jar);
+    $rt_router = array_values(array_filter($rt_ps_up['nodes'] ?? [], fn ($n) => ($n['name'] ?? '') === 'R2 router'))[0] ?? null;
+    check('R2: router v provozu má na mapě webu poslední naměřenou odezvu',
+        [$rt_router['status'] ?? 'chybí', $rt_router['latencyMs'] ?? 'chybí'], ['online', 18]);
+
+    // That look-back stays inside the node's current state. 264 answered in
+    // 40 ms, went down a minute later and is up again through checks that
+    // measured nothing (the agent fallback): its 40 ms predates the outage.
+    // 265 shows why the bound starts a few seconds early: the check that
+    // brought it up is logged before the change is stamped.
+    // One clock for the stamp and the rows, so the second between them is exact.
+    $rt_now = (string)$pdo->query("SELECT NOW()")->fetchColumn();
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_status_change) VALUES
+                (264, 'R2 TeamSpeak po výpadku', 'teamspeak', 'ts-r2b.example.com', 'up', 'Test', DATE_SUB(?, INTERVAL 300 SECOND)),
+                (265, 'R2 TeamSpeak po návratu', 'teamspeak', 'ts-r2c.example.com', 'up', 'Test', DATE_SUB(?, INTERVAL 300 SECOND))")
+        ->execute([$rt_now, $rt_now]);
+    $rt_spell = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (?, ?, ?, DATE_SUB(?, INTERVAL ? SECOND))");
+    foreach ([
+        [264, 'up', 40, 360], [264, 'down', null, 330], [264, 'up', null, 300], [264, 'up', null, 240],
+        [265, 'down', null, 330], [265, 'up', 25, 301], [265, 'up', null, 240],
+    ] as [$rt_mid, $rt_st, $rt_ms, $rt_ago]) {
+        $rt_spell->execute([$rt_mid, $rt_st, $rt_ms, $rt_now, $rt_ago]);
+    }
+    [, $rt_ps_spell] = api_get_auth($base, 'action=public_status', $cookie_jar);
+    $rt_spell_lat = [];
+    foreach ($rt_ps_spell['nodes'] ?? [] as $rt_n) {
+        if (in_array($rt_n['name'] ?? '', ['R2 TeamSpeak po výpadku', 'R2 TeamSpeak po návratu'], true)) {
+            $rt_spell_lat[$rt_n['name']] = [$rt_n['status'] ?? 'chybí', array_key_exists('latencyMs', $rt_n) ? $rt_n['latencyMs'] : 'chybí'];
+        }
+    }
+    ksort($rt_spell_lat);
+    check('R2: uzel po výpadku nemá na mapě odezvu z doby před ním, jen naměřenou od změny stavu',
+        $rt_spell_lat, ['R2 TeamSpeak po návratu' => ['online', 25], 'R2 TeamSpeak po výpadku' => ['online', null]]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (261, 262, 264, 265)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (261, 262, 264, 265)");
+    // The router's reports reach more tables than the log.
+    foreach ($pdo->query("SELECT DISTINCT TABLE_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'monitor_id'")->fetchAll(PDO::FETCH_COLUMN) as $rt_table) {
+        $pdo->exec("DELETE FROM `{$rt_table}` WHERE monitor_id = 263");
+    }
+    $pdo->exec("DELETE FROM monitors WHERE id = 263");
+    foreach (['cron_key', 'metrics_token'] as $rt_name) {
+        if (array_key_exists($rt_name, $rt_settings)) {
+            $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = ?")->execute([$rt_settings[$rt_name], $rt_name]);
+        } else {
+            $pdo->prepare("DELETE FROM settings WHERE key_name = ?")->execute([$rt_name]);
+        }
+    }
+}
+
+// =======================================================================
 // First run: the installer (site W1-5).
 //
 // db.php used to copy config.sample.php over a missing config.php, so a fresh

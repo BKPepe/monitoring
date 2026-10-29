@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -191,6 +191,53 @@ describe('asset detail per monitor type', () => {
     }
     // A web check DOES store a latency history, so an empty answer is news.
     expect(await screen.findByText('Data pro tento monitor nejsou v databázi k dispozici')).toBeTruthy();
+  });
+
+  it('titles a check skipped for maintenance as maintenance, with no latency', async () => {
+    // cron logs a row every minute of a maintenance window. It fell through to
+    // "Kontrola proběhla v pořádku" and, with response_time stored as 0, read
+    // "0 ms" - a passed, lightning-fast check that never ran.
+    const events = [
+      {
+        id: 2,
+        time: '29.10.2026 10:01',
+        rawStatus: 'maintenance',
+        isDown: false,
+        isRecovery: false,
+        errorMsg: 'Plánovaná údržba',
+        responseTime: null,
+        location: null,
+        type: 'WEB',
+      },
+      {
+        id: 1,
+        time: '29.10.2026 10:00',
+        rawStatus: 'up',
+        isDown: false,
+        isRecovery: false,
+        errorMsg: '',
+        responseTime: 212,
+        location: null,
+        type: 'WEB',
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        return Promise.resolve(
+          url.includes('action=events') ? jsonResponse({ events, statusChange: null }) : api(url, [web])
+        );
+      })
+    );
+    renderDetail();
+    const panel = await screen.findByRole('region', { name: 'Posledních 5 měření' });
+    const rows = await within(panel).findAllByRole('listitem');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('Údržba');
+    expect(rows[0].textContent).toContain('—');
+    expect(rows[0].textContent).not.toContain('Kontrola proběhla v pořádku');
+    expect(rows[1].textContent).toContain('Kontrola proběhla v pořádku');
   });
 
   it('leaves a heartbeat without a single measurement tile or an empty chart frame', async () => {
