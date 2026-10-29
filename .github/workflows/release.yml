@@ -8,8 +8,9 @@ name: Release
 # The package is ONE asset under a fixed name, bloodkings-monitoring.zip, so
 # the site links releases/latest/download/bloodkings-monitoring.zip for every
 # version. It holds exactly what the hosting serves: status/ (the PHP app plus
-# the agents, assembled as deploy-status.yml does it) and app/ (the built app
-# with its .htaccess). config.php is never in it: it holds the DB password.
+# the agents, assembled by the deploy's scripts/assemble-agents.sh) and app/
+# (the built app with its .htaccess). config.php is never in it: it holds the
+# DB password.
 #
 # Never marked as a pre-release, not even for an -alpha tag: GitHub's "latest
 # release" skips pre-releases, and both the fixed download URL and the site's
@@ -77,13 +78,11 @@ jobs:
           # (LGPL-2.1) for its own; THIRD_PARTY_NOTICES.md names it.
           cp LICENSE THIRD_PARTY_NOTICES.md "$PKG/"
 
-          # The same five files and the same check as deploy-status.yml: an
-          # installed server serves them to its agents for install and
-          # self-update, so a package without them is broken on day one.
-          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh docker-compose.agent.yml; do
-            cp "agents/vps-agent/$f" "$PKG/status/$f"
-            test -s "$PKG/status/$f" || { echo "::error::agent file missing or empty: $f"; exit 1; }
-          done
+          # The same files and the same checks as deploy-status.yml (non-empty,
+          # last line "# bk-agent-end <AGENT_VERSION>"): an installed server
+          # serves them to its agents for install and self-update, so a
+          # package without them, or with one they refuse, is broken on day one.
+          bash scripts/assemble-agents.sh "$PKG/status"
 
           # What never ships: secrets and machine state, the test suites (on a
           # server they ran for anyone who opened them), git bookkeeping.
@@ -117,6 +116,7 @@ jobs:
           for need in LICENSE THIRD_PARTY_NOTICES.md status/api.php status/cron.php status/schema.sql \
             status/config.sample.php status/installer.php status/lib/PHPMailer.php status/version.php \
             status/agent.sh status/agent_openwrt.sh status/agent.py status/agent.ps1 \
+            status/docker-compose.agent.yml \
             app/index.html app/public.html app/.htaccess; do
             grep -qxF "$need" <<< "$listing" || { echo "::error::missing from the package: $need"; exit 1; }
           done
@@ -127,9 +127,7 @@ jobs:
           fi
 
           # The agent scripts stay attached on their own, as before.
-          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh docker-compose.agent.yml; do
-            cp "agents/vps-agent/$f" "$OUT/$f"
-          done
+          bash scripts/assemble-agents.sh "$OUT"
           (cd "$OUT" && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
 
       - name: Hand the checked assets to the publish job

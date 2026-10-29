@@ -11,8 +11,9 @@ apps/status/.ftp-deploy-sync-state.json
 __pycache__/
 
 # Agenti bydli v submodulu `agents`; do apps/status je pri nasazeni
-# kopiruje CI (deploy-status.yml), aby je routery nasly na stejne URL.
+# kopiruje CI (scripts/assemble-agents.sh), aby je routery nasly na stejne URL.
 apps/status/agent.sh
 apps/status/agent.py
 apps/status/agent.ps1
 apps/status/agent_openwrt.sh
+apps/status/docker-compose.agent.yml

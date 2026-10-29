@@ -32,6 +32,9 @@ on:
       - 'apps/status/**'
       # A new agent version = the submodule pointer moved.
       - 'agents'
+      # The script that copies and checks the agents for deploy-status.yml;
+      # the `decide status` regex below names it too.
+      - 'scripts/assemble-agents.sh'
       - 'apps/server/**'
       - 'apps/monitor/**'
       - 'root/**'
@@ -127,7 +130,7 @@ jobs:
             echo "$1=$on" >> "$GITHUB_OUTPUT"
             echo "$1: $on"
           }
-          decide status '^(apps/status/|agents$|\.github/workflows/deploy-status\.yml$)'
+          decide status '^(apps/status/|agents$|scripts/assemble-agents\.sh$|\.github/workflows/deploy-status\.yml$)'
           decide app '^(apps/server/|apps/monitor/|\.github/workflows/deploy-go\.yml$)'
           decide root '^(root/|\.github/workflows/deploy-root\.yml$)'
 

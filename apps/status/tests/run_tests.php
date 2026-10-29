@@ -219,6 +219,79 @@ if (function_exists('bk_version_is_older')) {
     check_false('bez referenční verze se nehlásí nic', bk_version_is_older('1.0.0', null));
 }
 
+// --- scripts/assemble-agents.sh: what goes up is what every agent takes -----
+// The deploy and the release copy the agents through this one script. It reads
+// AGENT_VERSION with a copy of the server's regex, so the copy has to stay the
+// server's: a file the script passes would otherwise be offered under another
+// version than its last line names, and the whole fleet would refuse it.
+$aa_regex = static function (string $src): ?string {
+    $re = <<<'RE'
+        ~preg_match\('(/\\\$\?AGENT_VERSION[^\n]*?/)', ~
+        RE;
+    return preg_match($re, $src, $m) ? $m[1] : null;
+};
+$aa_script = realpath(__DIR__ . '/../../..') . '/scripts/assemble-agents.sh';
+$aa_server = $aa_regex((string)file_get_contents(__DIR__ . '/../functions.php'));
+$aa_copy = $aa_regex((string)@file_get_contents($aa_script));
+check('assemble-agents.sh čte AGENT_VERSION přesně regexem serveru', [$aa_copy !== null, $aa_copy], [true, $aa_server]);
+
+// The script itself, on a tree of its own: the real path, not a test hook.
+$aa_tmp = sys_get_temp_dir() . '/bk_assemble_' . bin2hex(random_bytes(4));
+@mkdir($aa_tmp . '/scripts', 0777, true);
+@mkdir($aa_tmp . '/agents/vps-agent', 0777, true);
+@mkdir($aa_tmp . '/dest');
+copy($aa_script, $aa_tmp . '/scripts/assemble-agents.sh');
+$aa_good = [
+    'agent.sh' => "#!/bin/bash\nAGENT_VERSION=\"1.2.3\"\n# bk-agent-end 1.2.3\n",
+    'agent.py' => "AGENT_VERSION = \"1.2.3\"\n# bk-agent-end 1.2.3\n",
+    'agent.ps1' => "\$AGENT_VERSION = \"1.2.3\"\n# bk-agent-end 1.2.3\n",
+    'agent_openwrt.sh' => "#!/bin/sh\nAGENT_VERSION=\"1.2.3\"\n# bk-agent-end 1.2.3\n",
+    'docker-compose.agent.yml' => "services: {}\n",
+];
+$aa_run = static function (array $files) use ($aa_tmp): array {
+    foreach ($files as $name => $body) {
+        file_put_contents($aa_tmp . '/agents/vps-agent/' . $name, $body);
+        @unlink($aa_tmp . '/dest/' . $name);
+    }
+    $path = 'PATH=' . escapeshellarg(dirname(PHP_BINARY) . PATH_SEPARATOR . (string)getenv('PATH'));
+    exec($path . ' bash ' . escapeshellarg($aa_tmp . '/scripts/assemble-agents.sh') . ' ' . escapeshellarg($aa_tmp . '/dest') . ' 2>&1', $out, $rc);
+    $copied = [];
+    foreach (array_keys($files) as $name) {
+        $copied[$name] = @file_get_contents($aa_tmp . '/dest/' . $name);
+    }
+    return ['code' => $rc, 'out' => implode("\n", $out), 'copied' => $copied];
+};
+$aa_ok = $aa_run($aa_good);
+check('assemble-agents.sh zkopíruje všech pět souborů beze změny', [$aa_ok['code'], $aa_ok['copied']], [0, $aa_good]);
+$aa_cr = $aa_run(['agent.py' => "AGENT_VERSION = \"1.2.3\"\n# bk-agent-end 1.2.3\r\n"] + $aa_good);
+check_true('assemble-agents.sh odmítne CR na posledním řádku', $aa_cr['code'] === 1 && str_contains($aa_cr['out'], 'agent.py') && str_contains($aa_cr['out'], '1.2.3\\r'));
+$aa_ver = $aa_run(['agent.ps1' => "\$AGENT_VERSION = \"1.2.4\"\n# bk-agent-end 1.2.3\n"] + $aa_good);
+check_true('assemble-agents.sh odmítne konec s jinou verzí, než nabídne server', $aa_ver['code'] === 1 && str_contains($aa_ver['out'], "'# bk-agent-end 1.2.4'"));
+$aa_empty = $aa_run(['docker-compose.agent.yml' => ''] + $aa_good);
+check_true('assemble-agents.sh odmítne prázdný soubor', $aa_empty['code'] === 1 && str_contains($aa_empty['out'], 'missing or empty'));
+foreach (array_keys($aa_good) as $aa_name) {
+    @unlink($aa_tmp . '/agents/vps-agent/' . $aa_name);
+    @unlink($aa_tmp . '/dest/' . $aa_name);
+}
+@unlink($aa_tmp . '/scripts/assemble-agents.sh');
+foreach (['/agents/vps-agent', '/agents', '/scripts', '/dest', ''] as $aa_dir) {
+    @rmdir($aa_tmp . $aa_dir);
+}
+// deploy-hosting.yml starts the status deploy only when one of its paths
+// changed, so every script that deploy runs has to be one of them: otherwise
+// a change to what goes up waits for some unrelated apps/status push.
+$aa_wf = __DIR__ . '/../../../.github/workflows/';
+$aa_hosting = (string)@file_get_contents($aa_wf . 'deploy-hosting.yml');
+preg_match_all('~(?<![\w./-])scripts/[\w./-]+~', (string)@file_get_contents($aa_wf . 'deploy-status.yml'), $aa_used);
+$aa_used = array_values(array_unique(array_map(fn($s) => rtrim($s, '.'), $aa_used[0])));
+$aa_paths = preg_match('~^  push:\n(?:.*\n)*?    paths:\n((?:      [-#].*\n)+)~m', $aa_hosting, $aa_pm)
+    && preg_match_all("~^      - '([^']+)'$~m", $aa_pm[1], $aa_pp) ? $aa_pp[1] : [];
+$aa_decide = preg_match("~^\s*decide status '([^']+)'$~m", $aa_hosting, $aa_dm) ? $aa_dm[1] : null;
+$aa_unwatched = array_values(array_filter($aa_used, fn($s) => !array_filter($aa_paths, fn($g) => fnmatch($g, $s))
+    || $aa_decide === null || !preg_match('~' . $aa_decide . '~', $s)));
+check('změna skriptu, který deploy statusu spouští, deploy statusu spustí',
+    [$aa_used !== [], $aa_paths !== [], $aa_decide !== null, $aa_unwatched], [true, true, true, []]);
+
 // --- bk_format_duration --------------------------------------------------
 if (function_exists('bk_format_duration')) {
     check_true('trvání je neprázdný text', is_string(bk_format_duration(1800)) && bk_format_duration(1800) !== '');

@@ -125,50 +125,15 @@ jobs:
             sleep 60
           done
 
-      - name: Zkopirovat agenty ze submodulu do nasazovane slozky
-        run: |
-          set -e
-          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh docker-compose.agent.yml; do
-            cp "agents/vps-agent/$f" "apps/status/$f"
-          done
-          # Kontrola, ze soubory opravdu dorazily: prazdny nebo chybejici agent
-          # by se jinak nahral az na produkci a projevil se rozbitym
-          # self-updatem, ne chybou v CI.
-          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh docker-compose.agent.yml; do
-            test -s "apps/status/$f" || { echo "CHYBI nebo je prazdny: $f"; exit 1; }
-          done
-          echo "Agenti zkopirovani ze submodulu:"
-          grep -H -m1 'AGENT_VERSION' apps/status/agent.sh apps/status/agent_openwrt.sh
-
-      # Every agent refuses an update whose last line is not
-      # "# bk-agent-end <offered version>", and the server offers what
+      # Every self-updating agent takes what lands in public_html/status/. A
+      # missing or empty file would show only as a broken self-update in the
+      # field, and every agent refuses an update whose last line is not
+      # "# bk-agent-end <offered version>", where the server offers what
       # bk_get_agent_latest_version() in functions.php reads from the served
-      # file. A file whose two disagree would be refused by the whole fleet.
-      # Checked on the copies that go up, by the shell agents' own rule:
-      # `tail -n 1`, where a CR or a blank last line fails.
-      - name: Every agent ends with its own version
-        run: |
-          set -euo pipefail
-          cat > "$RUNNER_TEMP/bk_agent_version.php" << 'PHPEOF'
-          <?php
-          // The regex of bk_get_agent_latest_version() in functions.php.
-          if (preg_match('/\$?AGENT_VERSION\s*=\s*["\']([0-9][0-9A-Za-z.\-]*)["\']/', (string)file_get_contents($argv[1]), $m)) {
-              echo $m[1];
-          }
-          PHPEOF
-          fail=0
-          for f in agent.sh agent.py agent.ps1 agent_openwrt.sh; do
-            v=$(php "$RUNNER_TEMP/bk_agent_version.php" "apps/status/$f")
-            last=$(tail -n 1 "apps/status/$f")
-            if [ -n "$v" ] && [ "$last" = "# bk-agent-end $v" ]; then
-              echo "$f: $v"
-            else
-              echo "::error file=agents/vps-agent/$f::the last line must be '# bk-agent-end ${v:-<no AGENT_VERSION>}', it is '${last//$'\r'/\\r}'. Every agent would refuse this file. Nothing was uploaded."
-              fail=1
-            fi
-          done
-          rm -f "$RUNNER_TEMP/bk_agent_version.php"
-          exit "$fail"
+      # file. The script checks both on the copies that go up (release.yml
+      # runs the same one), before anything is uploaded.
+      - name: Copy the agents from the submodule and check every one
+        run: bash scripts/assemble-agents.sh apps/status
 
       - name: Run PHP unit tests (pure functions)
         run: php apps/status/tests/run_tests.php

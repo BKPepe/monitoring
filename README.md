@@ -135,7 +135,10 @@ After the history squash (2026-08) both the app and the agents restarted at
   version *difference* (not ordering), so a bump - or even a reset - reaches
   the fleet on its next report cycle.
 - **Releases** (`.github/workflows/release.yml`): pushing a `v*` tag builds the
-  app, copies the agents into `status/`, and publishes
+  app, copies the agents into `status/` with the deploy's copy checks
+  (`scripts/assemble-agents.sh`: no file empty, each agent ending in
+  `# bk-agent-end <its AGENT_VERSION>`; the gate on the agents repo's tests
+  runs only in the status deploy), and publishes
   `bloodkings-monitoring.zip` + `SHA256SUMS` (plus the agent scripts) as the
   latest release - never as a pre-release, because `releases/latest` (and so
   the site's download button and "latest release" line) skips those. Tags are
