@@ -6917,6 +6917,98 @@ try {
 }
 
 // =======================================================================
+// A remote probe only adds a row to the measurement history (R144).
+//
+// node_api's post_results wrote the probe's status straight into monitors,
+// past maintenance, alert_confirm_failures and every notification, and set
+// last_details to NULL for a result without details - every web result of
+// the Cloudflare Worker. That wiped cron's last_ssl_warn, so the SSL warning
+// went out every five minutes; a monitor in maintenance turned 'up' and cron
+// announced the maintenance again; a 'down' written first was never alerted.
+// A monitor in maintenance gets no row at all: cron logs the window, and a
+// probe's 503 in it was an outage in availability and the SLA report.
+// =======================================================================
+$np_key = 'test-node-key-' . str_repeat('x', 24);
+$np_prev_key = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'cron_key'")->fetchColumn();
+$np_details = json_encode(['last_ssl_warn' => 1767225600, 'latency_alert_sent' => true, 'ssl_days_remaining' => 10]);
+$np_row = fn (): array => $pdo->query("SELECT id, status, last_checked, last_status_change, last_details
+                                        FROM monitors WHERE id IN (176, 177, 179) ORDER BY id")->fetchAll();
+try {
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('cron_key', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+        ->execute([$np_key]);
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_checked, last_status_change, last_details) VALUES
+                   (176, 'Web se sondou', 'web', 'https://example.com/sonda', 'up', 'Test', '2026-10-01 12:00:00', '2026-09-30 08:00:00', ?),
+                   (177, 'Web v údržbě se sondou', 'web', 'https://example.com/udrzba-sonda', 'maintenance', 'Test', '2026-10-01 12:00:00', '2026-10-01 11:00:00', NULL),
+                   (179, 'Web po skončené údržbě se sondou', 'web', 'https://example.com/po-okne-sonda', 'maintenance', 'Test', '2026-10-01 12:00:00', '2026-10-01 11:00:00', NULL)")
+        ->execute([$np_details]);
+    // 177's window runs now; 179's ended two days ago and cron has not yet
+    // switched the flag off. Days, not minutes, so no time-zone difference
+    // between PHP and this connection moves either window across now.
+    $pdo->exec("UPDATE monitors SET maintenance = 1, maintenance_start = DATE_SUB(NOW(), INTERVAL 1 DAY),
+                maintenance_end = DATE_ADD(NOW(), INTERVAL 1 DAY) WHERE id = 177");
+    $pdo->exec("UPDATE monitors SET maintenance = 1, maintenance_start = DATE_SUB(NOW(), INTERVAL 3 DAY),
+                maintenance_end = DATE_SUB(NOW(), INTERVAL 2 DAY) WHERE id = 179");
+    $np_before = $np_row();
+    [$np_code, , $np_body] = bk_raw_request($base . '/node_api.php?action=post_results&key=' . rawurlencode($np_key),
+        ['Content-Type: application/json'], json_encode(['location' => 'Testovací uzel', 'results' => [
+            ['id' => 176, 'status' => 'down', 'response_time' => 8000, 'error' => 'Timeout after 8000ms'],
+            ['id' => 177, 'status' => 'up'],
+            ['id' => 177, 'status' => 'down', 'error' => 'HTTP 503'],
+            ['id' => 176],
+            ['id' => 999999, 'status' => 'up', 'response_time' => 50],
+            ['id' => 179, 'status' => 'up'],
+        ]]));
+    $np_resp = json_decode($np_body, true);
+    check('sonda: výsledky přijaté', [$np_code, $np_resp['status'] ?? null, $np_resp['location'] ?? null], [200, 'success', 'Testovací uzel']);
+    check('sonda: uložená jsou jen dvě měření (bez stavu, neznámý monitor a monitor v údržbě ne)', $np_resp['message'] ?? null, 'Úspěšně zpracováno 2 z 6 výsledků.');
+    check('sonda nepřepíše stav, čas kontroly ani last_details monitoru', $np_row(), $np_before);
+    $np_logs = $pdo->query("SELECT monitor_id, status, response_time, error_message, checked_from
+                            FROM monitor_logs WHERE monitor_id IN (176, 177, 179) ORDER BY id")->fetchAll();
+    check('sonda zapíše měření do historie i s místem; bez času je odezva NULL, ne 0 ms; do běžící údržby nic, po jejím konci ano',
+        array_map(fn ($r) => [(int)$r['monitor_id'], $r['status'], $r['response_time'] === null ? null : (int)$r['response_time'], $r['error_message'], $r['checked_from']], $np_logs),
+        [[176, 'down', 8000, 'Timeout after 8000ms', 'Testovací uzel'], [179, 'up', null, null, 'Testovací uzel']]);
+
+    // Cron confirmed the outage, then a probe's 'up' became the newest row:
+    // the finding still gives the reason of the check that found it down.
+    // The rows get their own minutes: admin.php orders them by checked_at.
+    $pdo->exec("UPDATE monitors SET status = 'down' WHERE id = 176");
+    $pdo->exec("UPDATE monitor_logs SET checked_at = DATE_SUB(NOW(), INTERVAL 2 MINUTE) WHERE monitor_id = 176");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, checked_at) VALUES (176, 'down', 0, 'HTTP 503', 'Main Server', DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
+    bk_raw_request($base . '/node_api.php?action=post_results&key=' . rawurlencode($np_key),
+        ['Content-Type: application/json'], json_encode(['location' => 'Testovací uzel', 'results' => [['id' => 176, 'status' => 'up', 'response_time' => 90]]]));
+    [$np_f_code, $np_f] = api_get_auth($base, 'action=findings&monitor_id=176&lang=cs', $cookie_jar);
+    $np_down = array_column($np_f['findings'] ?? [], null, 'key')['status:176:status_down'] ?? [];
+    check('nález výpadku nese důvod kontroly, která výpadek našla, ne novější OK sondy',
+        [$np_f_code, array_key_exists('detail', $np_down) ? $np_down['detail'] : 'chybí'], [200, 'HTTP 503']);
+    // The same reason in the administration's outage diagnostics.
+    $np_admin = $fs_page('/admin.php', $cookie_jar);
+    check('diagnostika v administraci: důvod kontroly, která výpadek našla, ne „Neznámá chyba“ z OK sondy',
+        preg_match('~<i class="fas fa-server"></i> Web se sondou</strong>.*?Zjištěný problém:</strong> <code>([^<]*)</code>~su', $np_admin, $np_m) ? $np_m[1] : 'chybí', 'HTTP 503');
+
+    // Switching maintenance off sets 'unknown' and logs no row. The reason is
+    // looked for in the current state only: an 'unknown' row two weeks old
+    // belongs to an earlier silence, not to this one.
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, last_checked, last_status_change) VALUES
+                (178, 'Web po údržbě', 'web', 'https://example.com/po-udrzbe', 'unknown', 'Test', NOW(), DATE_SUB(NOW(), INTERVAL 1 HOUR))");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, checked_at) VALUES
+                (178, 'unknown', NULL, 'Testovací agent přestal posílat výsledky', 'Agent', DATE_SUB(NOW(), INTERVAL 14 DAY)),
+                (178, 'up', 120, NULL, 'Main Server', DATE_SUB(NOW(), INTERVAL 7 DAY)),
+                (178, 'maintenance', 0, 'Plánovaná údržba', 'Main Server', DATE_SUB(NOW(), INTERVAL 2 HOUR))");
+    [$np_u_code, $np_u] = api_get_auth($base, 'action=findings&monitor_id=178&lang=cs', $cookie_jar);
+    $np_stale = array_column($np_u['findings'] ?? [], null, 'key')['status:178:status_unknown_stale'] ?? null;
+    check('nález o neznámém stavu nevezme důvod ze starší epizody téhož stavu',
+        [$np_u_code, is_array($np_stale) && array_key_exists('detail', $np_stale) ? $np_stale['detail'] : 'chybí'], [200, null]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (176, 177, 178, 179)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (176, 177, 178, 179)");
+    if ($np_prev_key === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'cron_key'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'cron_key'")->execute([$np_prev_key]);
+    }
+}
+
+// =======================================================================
 // The database is down (W1-A6): 503 for everyone, JSON for programs, the
 // branded page for people, and not one word about why.
 //

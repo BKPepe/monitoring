@@ -2189,6 +2189,10 @@ function bk_format_duration_secs(int $secs): string {
  * resolver, random packet loss) is noise, not an incident - and an alert
  * that cries at noise teaches everyone to ignore it within a week.
  *
+ * The window holds every 'up' row with a response time from the last
+ * latency_threshold_mins minutes, a remote probe's too: monitor_logs does
+ * not record who wrote a row.
+ *
  * @return array{state: string, avg_ms: ?float, checks: int}
  *         state: 'degraded' | 'recovered' | 'ok'
  */
@@ -8302,12 +8306,14 @@ function bk_daily_reminder_collect(PDO $pdo, ?int $now = null): array {
     ");
     $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
 
-    // The reason of the last check. Read per monitor through the (monitor_id,
-    // id) index and only for the ones that are not fine - on a healthy system
-    // this loop does not run at all.
+    // The reason of the newest check that found the monitor in its current
+    // state: the newest row of all can be a remote probe's, which node_api
+    // only logs, and its 'up' says nothing about why the monitor is down.
+    // Read per monitor and only for the ones that are not fine - on a healthy
+    // system this loop does not run at all.
     $reason_stmt = $pdo->prepare("
         SELECT error_message FROM monitor_logs
-        WHERE monitor_id = ? ORDER BY id DESC LIMIT 1
+        WHERE monitor_id = ? AND status = ? ORDER BY id DESC LIMIT 1
     ");
     $monitors = [];
     foreach ($rows as $row) {
@@ -8316,7 +8322,7 @@ function bk_daily_reminder_collect(PDO $pdo, ?int $now = null): array {
         $row['last_error'] = null;
         $status = strtolower(trim((string)($row['status'] ?? '')));
         if (!in_array($status, ['up', 'maintenance', 'paused', 'unknown', ''], true) && empty($row['maintenance'])) {
-            $reason_stmt->execute([(int)$row['id']]);
+            $reason_stmt->execute([(int)$row['id'], (string)$row['status']]);
             $reason = $reason_stmt->fetchColumn();
             $row['last_error'] = ($reason !== false && $reason !== null && $reason !== '') ? (string)$reason : null;
         }

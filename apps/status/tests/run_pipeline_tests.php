@@ -1231,7 +1231,7 @@ if (function_exists('bk_send_daily_reminder') && in_array('sqlite', PDO::getAvai
         last_checked TEXT, last_status_change TEXT, last_details TEXT, maintenance INTEGER DEFAULT 0,
         archived_at TEXT, email_notifications INTEGER DEFAULT 1, heartbeat_interval INTEGER,
         heartbeat_grace INTEGER, last_heartbeat TEXT, heartbeat_last_result TEXT, heartbeat_last_message TEXT)");
-    $dr_pdo->exec("CREATE TABLE monitor_logs (id INTEGER PRIMARY KEY, monitor_id INTEGER, error_message TEXT)");
+    $dr_pdo->exec("CREATE TABLE monitor_logs (id INTEGER PRIMARY KEY, monitor_id INTEGER, status TEXT, error_message TEXT)");
     $dr_pdo->exec("CREATE TABLE incidents (id INTEGER PRIMARY KEY, title TEXT, impact TEXT, status TEXT,
         created_at TEXT, acknowledged_at TEXT, monitor_id INTEGER)");
     // Every column bk_log_notification() writes: it swallows a failed INSERT,
@@ -1309,7 +1309,7 @@ if ($dr_pdo instanceof PDO) {
     $dr_add(['id' => 2, 'name' => 'Router', 'type' => 'vps', 'status' => 'up', 'last_checked' => $dr_at(60),
         'last_status_change' => $dr_at(86400),
         'last_details' => json_encode(['agent_last_seen' => $dr_now - 7200])]);
-    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, error_message) VALUES (1, 'HTTP 502 Bad Gateway')");
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message) VALUES (1, 'down', 'HTTP 502 Bad Gateway')");
     $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
     check('rozbitý systém posílá', [$dr_res['sent'], $dr_res['emails'], $dr_res['problems']], [true, 1, 2]);
     $dr_mail = $GLOBALS['bk_test_mails'][0] ?? ['to' => null, 'subject' => '', 'body' => '', 'context' => []];
@@ -1328,6 +1328,16 @@ if ($dr_pdo instanceof PDO) {
     // behind a report that happens to be short.
     check_true('zpráva končí otiskem posledního běhu sběru',
         str_contains($dr_mail['body'], 'Poslední dokončený běh sběru'));
+
+    // A remote probe only logs its result (node_api.php), so its 'up' can be
+    // the newest row of a monitor cron found down. The reason is still the
+    // one of the check that found the outage.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(3600)]);
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message) VALUES (1, 'down', 'HTTP 503'), (1, 'up', NULL)");
+    check('důvod výpadku je z kontroly, která ho našla, ne z novějšího OK sondy',
+        array_column(bk_daily_reminder_collect($dr_pdo, $dr_now)['outages'], 'reason', 'name'), ['Web' => 'HTTP 503']);
 
     // The e2e case behind the fix: "Záloha NAS" was in the silent section
     // twice - once from the heartbeat rule, once from the stalled checks -
@@ -1510,7 +1520,7 @@ if ($dr_pdo instanceof PDO) {
         'last_status_change' => $dr_at(86400)]);
     $dr_add(['id' => 2, 'name' => 'Tajný server', 'status' => 'down', 'last_checked' => $dr_at(60),
         'last_status_change' => $dr_at(86400)]);
-    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, error_message) VALUES (2, 'connect to db.internal:5432 refused')");
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message) VALUES (2, 'down', 'connect to db.internal:5432 refused')");
     $dr_pdo->exec("INSERT INTO incidents (id, title, impact, status, created_at, acknowledged_at, monitor_id)
                    VALUES (3, 'Únik na serveru', 'major', 'investigating', '2026-09-20 08:00:00', NULL, 2)");
     $dr_pdo->exec("INSERT INTO users (id, email, email_lang, role, phone, whatsapp_apikey, whatsapp_notifications)

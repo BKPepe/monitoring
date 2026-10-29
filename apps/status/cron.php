@@ -719,6 +719,8 @@ foreach ($monitors as $monitor) {
     // only after N consecutive failures. One failed check is one failed check -
     // a retried connection, a slow DNS answer, a dropped packet - and alerting
     // on the first one is how a monitoring system teaches people to ignore it.
+    // The streak is read from monitor_logs, which does not record who wrote a
+    // row: a remote probe's result (node_api.php) counts in it like cron's own.
     $confirm_required = max(1, (int)get_setting('alert_confirm_failures', '1'));
     if ($new_status === 'down' && $old_status !== 'down' && $confirm_required > 1) {
         $stmt_recent = $pdo->prepare("

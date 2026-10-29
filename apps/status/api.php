@@ -2587,7 +2587,10 @@ if ($action === 'events') {
                     if (is_array($change_row)) {
                         // The state it came FROM. Absent (the first check ever,
                         // or older rows already pruned) stays null - "it was up
-                        // before" is not a safe default.
+                        // before" is not a safe default. The row before can be
+                        // a remote probe's, which node_api only logs (and
+                        // monitor_logs does not record the writer): a probe's
+                        // 'up' just before cron's recovery reads as from 'up'.
                         $stmt_prev = $pdo->prepare("
                             SELECT status FROM monitor_logs
                             WHERE monitor_id = ? AND id < ? ORDER BY id DESC LIMIT 1
@@ -2846,7 +2849,17 @@ if ($action === 'findings') {
         $fd_muted = [];
         $fd_errors = [];
         $fd_ssl_days_limit = max(1, (int)get_setting('ssl_alert_days', '14'));
-        $fd_last_log = $pdo->prepare("SELECT status, check_stages, error_message FROM monitor_logs WHERE monitor_id = ? ORDER BY id DESC LIMIT 1");
+        $fd_last_log = $pdo->prepare("SELECT status, check_stages FROM monitor_logs WHERE monitor_id = ? ORDER BY id DESC LIMIT 1");
+        // A status finding's reason is the newest check that found the monitor
+        // in its current state since it entered it. The newest row of all can
+        // be a remote probe's, which node_api only logs: its 'up' after an
+        // outage cron confirmed says nothing about why the monitor is down.
+        // A state set without a row (maintenance switched off, a restore from
+        // the archive) must not take the words of an earlier spell of it, so
+        // the rows start at last_status_change - 120 s: the log INSERT and the
+        // monitors UPDATE are two statements of the same run, so the row that
+        // set the state can be a second older than the stamp.
+        $fd_state_log = $pdo->prepare("SELECT error_message FROM monitor_logs WHERE monitor_id = ? AND status = ? AND (? IS NULL OR checked_at >= ?) ORDER BY id DESC LIMIT 1");
         $fd_base = fn (array $row, string $source, string $kind, string $severity): array => [
             'key' => $source . ':' . (int)$row['id'] . ':' . $kind,
             'source' => $source,
@@ -2896,9 +2909,13 @@ if ($action === 'findings') {
                     $fd_f['action'] = null;
                     $fd_f['since'] = null;
                     if (str_starts_with($fd_r['kind'], 'status_')) {
-                        // Since when, and the last check's own words for why.
-                        $fd_f['since'] = !empty($fd_row['last_status_change']) ? date('c', strtotime((string)$fd_row['last_status_change'])) : null;
-                        $fd_err = $fd_log['error_message'] ?? null;
+                        // Since when, and in the words of the newest check
+                        // that found this state.
+                        $fd_changed = !empty($fd_row['last_status_change']) ? strtotime((string)$fd_row['last_status_change']) : false;
+                        $fd_f['since'] = $fd_changed !== false ? date('c', $fd_changed) : null;
+                        $fd_from = $fd_changed !== false ? date('Y-m-d H:i:s', $fd_changed - 120) : null;
+                        $fd_state_log->execute([$fd_mid, (string)$fd_row['status'], $fd_from, $fd_from]);
+                        $fd_err = $fd_state_log->fetchColumn();
                         $fd_f['detail'] = is_string($fd_err) && $fd_err !== '' ? $fd_err : null;
                     }
                     $fd_findings[] = $fd_f;

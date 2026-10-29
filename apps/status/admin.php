@@ -1190,8 +1190,11 @@ if ($user_role === 'admin' && isset($_GET['action']) && $_GET['action'] === 'edi
 
 // Načtení všech monitorů k zobrazení
 // A regular account sees only the monitors assigned to it; an admin sees all.
+// error_message is the newest check that found the monitor in its current
+// state: the newest row of all can be a remote probe's, which node_api only
+// logs, and its 'up' says nothing about why the monitor is down.
 [$all_scope, $all_scope_params] = bk_monitor_scope_sql($user_role === 'admin' ? null : bk_visible_monitor_ids($pdo), 'm.id');
-$stmt_all = $pdo->prepare("SELECT m.*, (SELECT error_message FROM monitor_logs WHERE monitor_id = m.id ORDER BY checked_at DESC LIMIT 1) as error_message FROM monitors m WHERE {$all_scope} AND m.archived_at IS NULL ORDER BY m.category, m.name");
+$stmt_all = $pdo->prepare("SELECT m.*, (SELECT error_message FROM monitor_logs WHERE monitor_id = m.id AND status = m.status ORDER BY checked_at DESC LIMIT 1) as error_message FROM monitors m WHERE {$all_scope} AND m.archived_at IS NULL ORDER BY m.category, m.name");
 $stmt_all->execute($all_scope_params);
 $all_monitors = $stmt_all->fetchAll();
 

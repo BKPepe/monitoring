@@ -16,6 +16,8 @@ header('Content-Type: application/json; charset=utf-8');
 // Requiring config.php first let its session start before them, and the
 // admin cookie went out without HttpOnly and SameSite.
 require_once __DIR__ . '/db.php';
+// is_in_maintenance(), as cron applies it.
+require_once __DIR__ . '/functions.php';
 
 // 1. Ensure the checked_from column exists in monitor_logs
 try {
@@ -113,7 +115,7 @@ if ($action === 'post_results') {
     
     foreach ($results as $res) {
         $mid = isset($res['id']) ? (int)$res['id'] : 0;
-        $status = isset($res['status']) ? $res['status'] : 'unknown';
+        $status = isset($res['status']) && is_string($res['status']) ? $res['status'] : '';
         // No value is NULL, not 0 ms, and so is a 0 on a failed check (what
         // node_client.php sent there). The live senders, the Cloudflare Worker
         // and the GitHub Actions runners, time an 'up' result only after the
@@ -123,35 +125,51 @@ if ($action === 'post_results') {
         // Store NULL (not empty string) so incidents query works correctly
         $raw_error = isset($res['error']) ? trim((string)$res['error']) : '';
         $error_message = !empty($raw_error) ? $raw_error : null;
-        $details = isset($res['details']) ? json_encode($res['details'], JSON_UNESCAPED_UNICODE) : null;
-        
-        if ($mid <= 0) continue;
-        
+
+        // A result without a status is not a measurement.
+        if ($mid <= 0 || $status === '') continue;
+
         try {
-            // Find the monitor's previous state
-            $stmt_old = $pdo->prepare("SELECT status, archived_at FROM monitors WHERE id = ?");
+            $stmt_old = $pdo->prepare("SELECT archived_at, maintenance, maintenance_start, maintenance_end FROM monitors WHERE id = ?");
             $stmt_old->execute([$mid]);
             $old_row = $stmt_old->fetch();
             // An unknown or archived monitor gets no measurement from a probe.
             if (!$old_row || !empty($old_row['archived_at'])) {
                 continue;
             }
-            $old_status = $old_row['status'];
-            
-            // Write the measurement log including the node's location
+            // Nor does one in maintenance: cron logs the window as
+            // 'maintenance' rows and checks nothing. A probe's 'down' there
+            // (the planned work's 503) was an outage in availability and in
+            // sla_report that no alert or incident ever had.
+            if (is_in_maintenance($old_row)) {
+                continue;
+            }
+
+            // Write the measurement log including the node's location. That
+            // is all a probe writes: the monitor's status, last_checked and
+            // last_details stay with cron.php, which applies maintenance,
+            // alert_confirm_failures, notifications and the incident
+            // lifecycle. A probe writing them skipped all of that - a 'down'
+            // nobody was alerted about, maintenance-start re-sent after every
+            // post - and its NULL details wiped cron's latches (last_ssl_warn,
+            // latency_alert_sent), so the SSL warning went out every 5 min.
+            //
+            // The row still counts wherever cron reads monitor_logs, which
+            // does not record who wrote a row: a probe's 'down' adds to the
+            // alert_confirm_failures streak and its 'up' ends one, and its
+            // 'up' response times enter the latency alert's window. Like any
+            // measurement it counts in availability, the history and regions.
+            // It bounds sla_report's last outage too: a probe's 'up' ends or
+            // splits it while cron keeps the monitor down and the incident
+            // open, and its 'down' starts one. action=events takes the row
+            // before a status change as the state it came from (fromStatus),
+            // and that can be a probe's 'up' just before cron's recovery.
+            // A status's reason (findings, the admin diagnostics, the daily
+            // reminder) is the newest row in the monitor's current state, so
+            // a probe's 'up' never stands in for an outage's reason.
             $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, ?, ?, ?)");
             $stmt_log->execute([$mid, $status, $response_time, $error_message, $node_location]);
-            
-            // When the state changed, or this is the first measurement
-            if ($old_status !== $status || empty($old_status)) {
-                $stmt_up = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW(), last_details = ? WHERE id = ?");
-                $stmt_up->execute([$status, $details, $mid]);
-            } else {
-                // State unchanged - only update the last-check time and any details
-                $stmt_up = $pdo->prepare("UPDATE monitors SET last_checked = NOW(), last_details = ? WHERE id = ?");
-                $stmt_up->execute([$details, $mid]);
-            }
-            
+
             $success_count++;
         } catch (PDOException $e) {
             // Log per-monitor errors and continue
