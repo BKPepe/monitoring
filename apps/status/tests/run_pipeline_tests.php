@@ -1409,6 +1409,73 @@ if ($dr_pdo instanceof PDO) {
     check('a nikam nic neodešlo', count($GLOBALS['bk_test_callmebot_urls']), 0);
     $dr_pdo->exec("UPDATE users SET phone = NULL, whatsapp_apikey = NULL, whatsapp_notifications = 0 WHERE id = 1");
     $GLOBALS['bk_test_callmebot_answer'] = null;
+
+    // --- 6. Public subscribers hear only about the public page --------------
+    // A router, a VPS and an agent service are private unless the owner made
+    // them public, and their outages went to every anonymous subscriber by
+    // name. The monitor is passed without type and is_public on purpose: the
+    // decision must come from the public page's own list, not from whatever
+    // row the caller read.
+    bk_test_load_functions(__DIR__ . '/../functions.php', [
+        'bk_public_sub_notify', 'bk_public_monitor_ids', 'bk_monitor_is_public',
+        'bk_public_base_origin', 'bk_site_origin', 'bk_trusted_link_host',
+    ]);
+    if (!defined('BK_PRIVATE_BY_DEFAULT_TYPES')
+        && preg_match('/\nconst BK_PRIVATE_BY_DEFAULT_TYPES = [^;]+;/', (string)file_get_contents(__DIR__ . '/../functions.php'), $ps_const)) {
+        eval(trim($ps_const[0]));
+    }
+    $dr_reset();
+    $dr_pdo->exec("ALTER TABLE monitors ADD COLUMN is_public INTEGER");
+    $dr_pdo->exec("CREATE TABLE public_subscribers (id INTEGER PRIMARY KEY, email TEXT, lang TEXT,
+        unsubscribe_token TEXT, confirmed_at TEXT)");
+    $dr_pdo->exec("INSERT INTO public_subscribers VALUES (1, 'odberatel@example.com', 'cs', 'tok', '2026-10-01 10:00:00')");
+    $dr_add(['id' => 1, 'name' => 'Web', 'type' => 'web']);
+    $dr_add(['id' => 2, 'name' => 'Domácí router', 'type' => 'openwrt']);
+    $dr_add(['id' => 3, 'name' => 'Skrytý web', 'type' => 'web']);
+    $dr_add(['id' => 4, 'name' => 'Router na stránce', 'type' => 'openwrt']);
+    $dr_pdo->exec("UPDATE monitors SET is_public = 0 WHERE id = 3");
+    $dr_pdo->exec("UPDATE monitors SET is_public = 1 WHERE id = 4");
+    bk_public_monitor_ids($dr_pdo, true);
+    $ps_sent = [];
+    foreach ([1, 2, 3, 4] as $ps_id) {
+        $GLOBALS['bk_test_mails'] = [];
+        bk_public_sub_notify($dr_pdo, ['id' => $ps_id, 'name' => 'Monitor ' . $ps_id], 'down');
+        $ps_sent[$ps_id] = count($GLOBALS['bk_test_mails']);
+    }
+    check('veřejní odběratelé: jen web a router, které veřejná stránka ukazuje',
+        $ps_sent, [1 => 1, 2 => 0, 3 => 0, 4 => 1]);
+    // Read fresh for every message: the owner hides the web while a long cron
+    // run is still going.
+    $dr_pdo->exec("UPDATE monitors SET is_public = 0 WHERE id = 1");
+    $GLOBALS['bk_test_mails'] = [];
+    bk_public_sub_notify($dr_pdo, ['id' => 1, 'name' => 'Monitor 1'], 'up');
+    check('web skrytý během běhu cronu: odběratelům už nic', count($GLOBALS['bk_test_mails']), 0);
+    // A database without the column (before the migration) follows the type.
+    // Any other error is no answer: the web is hidden, and a guess by type
+    // would mail its name anyway.
+    $ps_legacy = new PDO('sqlite::memory:');
+    $ps_legacy->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $ps_legacy->exec("CREATE TABLE monitors (id INTEGER PRIMARY KEY, type TEXT)");
+    $ps_legacy->exec("INSERT INTO monitors VALUES (1, 'web'), (2, 'openwrt')");
+    check('databáze bez sloupce is_public: podle typu', bk_public_monitor_ids($ps_legacy, true), [1]);
+    $ps_flaky = new class ('sqlite::memory:') extends PDO {
+        public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): PDOStatement|false {
+            if (str_contains($query, 'is_public') && !str_contains($query, 'NULL AS is_public')) {
+                throw new PDOException('SQLSTATE[HY000]: General error: 3024 Query execution was interrupted');
+            }
+            return parent::query($query, $fetchMode, ...$fetchModeArgs);
+        }
+    };
+    $ps_flaky->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $ps_flaky->exec("CREATE TABLE monitors (id INTEGER PRIMARY KEY, type TEXT, is_public INTEGER)");
+    $ps_flaky->exec("INSERT INTO monitors VALUES (1, 'web', 0)");
+    $ps_flaky->exec("CREATE TABLE public_subscribers (id INTEGER PRIMARY KEY, email TEXT, lang TEXT,
+        unsubscribe_token TEXT, confirmed_at TEXT)");
+    $ps_flaky->exec("INSERT INTO public_subscribers VALUES (1, 'odberatel@example.com', 'cs', 'tok', '2026-10-01 10:00:00')");
+    $GLOBALS['bk_test_mails'] = [];
+    bk_public_sub_notify($ps_flaky, ['id' => 1, 'name' => 'Skrytý web'], 'down');
+    check('chyba databáze: odběratelům nic, žádný odhad podle typu', count($GLOBALS['bk_test_mails']), 0);
+    bk_public_monitor_ids($dr_pdo, true);
 } elseif (function_exists('bk_send_daily_reminder')) {
     // Reported, never skipped in silence: a suite that quietly tests nothing
     // is the same lie as a chart with invented values.

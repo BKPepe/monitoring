@@ -15081,10 +15081,25 @@ function bk_public_sub_send_confirm(string $email, string $lang, string $confirm
  * Deliberately carries no error details - the mail says WHICH service and
  * WHAT happened, the status page says the rest. Rendered once per language,
  * sent per subscriber because every mail carries a personal unsubscribe link.
+ *
+ * Only for a monitor the public page shows. A router, a VPS and an agent
+ * service are private unless the owner made them public, yet every outage and
+ * recovery of theirs - a new router's first report included - went out to all
+ * anonymous subscribers by name.
  */
 function bk_public_sub_notify(PDO $pdo, array $monitor, string $new_status): void {
     if (!in_array($new_status, ['down', 'up'], true)) {
         return;
+    }
+    // The public page's own list, not the row the caller happened to read:
+    // a row without is_public would follow the type default by accident.
+    // Read fresh: a cron run is long, and the owner may hide a monitor in it.
+    try {
+        if (!in_array((int)($monitor['id'] ?? 0), bk_public_monitor_ids($pdo, true), true)) {
+            return;
+        }
+    } catch (Throwable $e) {
+        return; // Cannot tell: a private name must not go out on a guess.
     }
     try {
         $subs = $pdo->query("SELECT id, email, lang, unsubscribe_token FROM public_subscribers WHERE confirmed_at IS NOT NULL")->fetchAll();
@@ -19415,6 +19430,12 @@ function bk_public_monitor_ids(PDO $pdo, bool $refresh = false): array {
     try {
         $rows = $pdo->query("SELECT id, type, is_public FROM monitors")->fetchAll();
     } catch (PDOException $e) {
+        // Only a database without the column yet follows the type default. Any
+        // other error is no answer: a guess by type would put a hidden monitor
+        // on the public page and its name into the subscriber mails.
+        if ($e->getCode() !== '42S22' && stripos($e->getMessage(), 'no such column') === false) {
+            throw $e;
+        }
         $rows = $pdo->query("SELECT id, type, NULL AS is_public FROM monitors")->fetchAll();
     }
     $ids = [];
