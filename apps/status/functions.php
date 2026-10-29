@@ -9074,6 +9074,62 @@ function bk_self_check_run(PDO $pdo, ?string $url, int $now, ?array $config_outp
     return $state + ['ran' => true];
 }
 
+/**
+ * The channels an alert about this monitor really uses for one account - the
+ * COALESCE of the recipient query in trigger_notifications(). Pure. $row is
+ * the account's user_subscriptions row, null when it has none: then an
+ * administrator (always a recipient) follows the monitor's and the profile's
+ * switches and a user gets nothing. The subscription form showed 0 for a
+ * missing row, and saving it wrote that 0 over e-mail alerts an
+ * administrator was in fact receiving.
+ *
+ * @return array{email: int, sms: int, whatsapp: int}
+ */
+function bk_subscription_effective(bool $is_admin, ?array $row, array $monitor, array $user): array {
+    if ($row === null && !$is_admin) {
+        return ['email' => 0, 'sms' => 0, 'whatsapp' => 0];
+    }
+    return [
+        'email' => (int)($row['email_notifications'] ?? $monitor['email_notifications'] ?? 0),
+        'sms' => (int)($row['sms_notifications'] ?? $monitor['sms_notifications'] ?? $user['sms_notifications'] ?? 0),
+        'whatsapp' => (int)($row['whatsapp_notifications'] ?? $user['whatsapp_notifications'] ?? 0),
+    ];
+}
+
+/**
+ * The user_subscriptions row a save stores for one monitor, null for none.
+ * Pure. $shown is what the form showed when it loaded, $chosen what it posts:
+ * only a channel that differs between them was changed. Comparing the whole
+ * row with the no-row values at save time pinned every monitor again once the
+ * profile's WhatsApp switch changed under an open form. An untouched channel
+ * keeps what $stored has; a changed one takes the chosen value. For an
+ * administrator NULL follows the monitor's and the profile's switches like a
+ * missing row, so an untouched channel without a row and a choice equal to
+ * that fallback stay NULL. A user's NULL e-mail would switch e-mail on through
+ * the monitor, so a user's new columns are always explicit.
+ *
+ * @param array{email: int, sms: int, whatsapp: int} $chosen
+ * @param array{email: int, sms: int, whatsapp: int} $shown
+ * @return array{email_notifications: ?int, sms_notifications: ?int, whatsapp_notifications: ?int}|null
+ */
+function bk_subscription_row_to_store(bool $is_admin, ?array $stored, array $chosen, array $shown, array $monitor, array $user): ?array {
+    $fallback = bk_subscription_effective($is_admin, null, $monitor, $user);
+    $none = $is_admin ? null : 0;
+    $row = [];
+    foreach (['email', 'sms', 'whatsapp'] as $ch) {
+        $col = $ch . '_notifications';
+        if ($chosen[$ch] !== $shown[$ch]) {
+            $row[$col] = $is_admin && $chosen[$ch] === $fallback[$ch] ? null : $chosen[$ch];
+        } elseif ($stored !== null) {
+            $row[$col] = isset($stored[$col]) ? (int)$stored[$col] : null;
+        } else {
+            $row[$col] = $none;
+        }
+    }
+    // A row that means the same as none is not kept.
+    return $row === array_fill_keys(array_keys($row), $none) ? null : $row;
+}
+
 function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     // An archived monitor is out of service for good: nobody is told anything about it.
     if (!empty($monitor['archived_at']) || ($pdo instanceof PDO && !empty($monitor['id']) && bk_monitor_is_archived($pdo, (int)$monitor['id']))) {
@@ -9201,6 +9257,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     // A subscribed user gets the alert only while the monitor is assigned to
     // them: an alert carries the monitor's name and outage reason, and a stale
     // subscription must not keep mailing them to an account that lost access.
+    // bk_subscription_effective() repeats these fallbacks for the subscription form.
     $recipients_sql = "
         SELECT u.id, u.email, u.phone, u.role, u.whatsapp_apikey, u.email_lang,
                COALESCE(s.email_notifications, m.email_notifications) as email_notifications,

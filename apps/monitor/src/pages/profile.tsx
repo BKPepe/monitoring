@@ -110,7 +110,10 @@ export function ProfilePage() {
             }}
           />
           <OauthCard profile={profile} onChanged={load} />
-          <SubscriptionsCard />
+          {/* A monitor without a stored choice follows these two switches. */}
+          <SubscriptionsCard
+            profileSwitches={`sms:${Number(profile.smsNotifications)} whatsapp:${Number(profile.whatsappNotifications)}`}
+          />
         </>
       ) : null}
     </div>

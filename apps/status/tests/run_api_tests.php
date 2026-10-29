@@ -2034,6 +2034,71 @@ check('a přiznaný počet vzorků je nula', $corr_empty['samples'] ?? -1, 0);
 $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 90");
 $pdo->exec("DELETE FROM monitors WHERE id = 90");
 
+// --- Alert subscriptions of the account ----------------------------------
+//
+// An administrator is always an alert recipient: without a user_subscriptions
+// row the monitor's own switch decides. The form showed that as 0, and saving
+// it after ticking one SMS box wrote email=0 for every listed monitor - outage
+// e-mails stopped without a word.
+$pdo->exec("DELETE FROM user_subscriptions WHERE user_id = 1");
+$gsub_wa_before = $pdo->query("SELECT whatsapp_notifications FROM users WHERE id = 1")->fetchColumn();
+$pdo->exec("UPDATE users SET whatsapp_notifications = 1 WHERE id = 1");
+[$gsub_code, $gsub] = api_get_auth($base, 'action=get_subscriptions', $cookie_jar);
+check('get_subscriptions vrací 200', $gsub_code, 200);
+$gsub_rows = $gsub['subscriptions'] ?? [];
+$gsub_by_id = array_column($gsub_rows, null, 'id');
+check('admin bez odběru vidí e-mail, který mu opravdu chodí', $gsub_by_id[1]['email'] ?? null, 1);
+check('a u druhého monitoru také', $gsub_by_id[2]['email'] ?? null, 1);
+check('SMS ukazuje přepínač monitoru', $gsub_by_id[1]['sms'] ?? null, 0);
+check('WhatsApp ukazuje přepínač profilu', $gsub_by_id[1]['whatsapp'] ?? null, 1);
+// The card posts every row back with what it showed; only monitor 1 changes.
+$gsub_save = function (int $sms, int $shown_sms) use ($base, $cookie_jar, $gsub_rows): int {
+    $rows = array_map(fn (array $r): array => [
+        'shown' => ['email' => $r['email'], 'sms' => $r['id'] === 1 ? $shown_sms : $r['sms'], 'whatsapp' => $r['whatsapp']],
+    ] + ($r['id'] === 1 ? ['sms' => $sms] + $r : $r), $gsub_rows);
+    [$code] = api_post($base, 'action=save_subscriptions', ['subscriptions' => $rows], $cookie_jar);
+    return $code;
+};
+$gsub_stored = fn (): array => array_map(
+    fn (array $r): array => array_map(fn ($v) => $v === null ? null : (int)$v, $r),
+    $pdo->query("SELECT monitor_id, email_notifications, sms_notifications, whatsapp_notifications FROM user_subscriptions WHERE user_id = 1 ORDER BY monitor_id")->fetchAll(PDO::FETCH_NUM)
+);
+$gsub_wa_now = fn (): int => (int)$pdo->query("SELECT COALESCE(s.whatsapp_notifications, u.whatsapp_notifications) FROM users u
+                                               LEFT JOIN user_subscriptions s ON s.user_id = u.id AND s.monitor_id = 2 WHERE u.id = 1")->fetchColumn();
+// The profile form on the same page switches WhatsApp off while the card
+// stays loaded. Comparing with the no-row values at save time pinned
+// whatsapp=1 for every monitor.
+$pdo->exec("UPDATE users SET whatsapp_notifications = 0 WHERE id = 1");
+check('save_subscriptions vrací 200', $gsub_save(1, 0), 200);
+check('řádek vznikne jen u změněného monitoru a nese jen SMS', $gsub_stored(), [[1, null, 1, null]]);
+check('e-mail o výpadku druhého monitoru adminovi chodí dál',
+    (int)$pdo->query("SELECT COALESCE(s.email_notifications, m.email_notifications) FROM monitors m
+                      LEFT JOIN user_subscriptions s ON s.user_id = 1 AND s.monitor_id = m.id WHERE m.id = 2")->fetchColumn(), 1);
+check('WhatsApp vypnutý v profilu po načtení formuláře se nepřipne', $gsub_wa_now(), 0);
+$pdo->exec("UPDATE users SET whatsapp_notifications = 1 WHERE id = 1");
+check('a zapnutý zase chodí', $gsub_wa_now(), 1);
+$gsub_save(0, 1);
+check('návrat k výchozím hodnotám řádek zase zruší', $gsub_stored(), []);
+// A bundle from before "shown" posts none. A tab opened before the deploy
+// showed the stored row and 0 for a monitor without one, so its unticked
+// e-mail was not a choice. Taking the alerts of now as what it showed pinned
+// email=0 and whatsapp=0 for every monitor at its first save.
+$gsub_old_tab = array_map(fn (array $r): array => [
+    'id' => $r['id'], 'name' => $r['name'], 'email' => 0, 'sms' => $r['id'] === 1 ? 1 : 0, 'whatsapp' => 0,
+], $gsub_rows);
+api_post($base, 'action=save_subscriptions', ['subscriptions' => $gsub_old_tab], $cookie_jar);
+check('starý formulář bez „shown“ uloží jen zaškrtnutou SMS', $gsub_stored(), [[1, null, 1, null]]);
+check('a e-mail druhého monitoru po uložení starým formulářem chodí dál',
+    (int)$pdo->query("SELECT COALESCE(s.email_notifications, m.email_notifications) FROM monitors m
+                      LEFT JOIN user_subscriptions s ON s.user_id = 1 AND s.monitor_id = m.id WHERE m.id = 2")->fetchColumn(), 1);
+$pdo->exec("DELETE FROM user_subscriptions WHERE user_id = 1");
+// The same old bundle whose card loaded after the deploy shows the values of
+// now; posted back unchanged they still pin nothing.
+api_post($base, 'action=save_subscriptions', ['subscriptions' => $gsub_rows], $cookie_jar);
+check('nezměněný formulář bez „shown“ nic nepřipne', $gsub_stored(), []);
+$pdo->exec("DELETE FROM user_subscriptions WHERE user_id = 1");
+$pdo->prepare("UPDATE users SET whatsapp_notifications = ? WHERE id = 1")->execute([$gsub_wa_before]);
+
 // --- Public e-mail subscriptions -----------------------------------------
 //
 // Double opt-in end-to-end: sign-up stores a row (nothing confirmed), the

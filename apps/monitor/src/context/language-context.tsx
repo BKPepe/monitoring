@@ -3226,6 +3226,14 @@ const translations: Record<string, { cs: string; en: string }> = {
   'settings.subs_col_monitor': { cs: 'Monitor', en: 'Monitor' },
   'settings.subs_saved': { cs: 'Uloženo!', en: 'Saved!' },
   'settings.subs_save': { cs: 'Uložit odběry', en: 'Save Subscriptions' },
+  'settings.subs_profile_changed': {
+    cs: 'Profil změnil přepínač SMS nebo WhatsApp. Zaškrtnutí mohou ukazovat stav před touto změnou; po uložení odběrů se načtou znovu.',
+    en: 'The profile changed the SMS or WhatsApp switch. The boxes may show the state before that change; they reload after you save the subscriptions.',
+  },
+  'settings.subs_reload_error': {
+    cs: 'Odběry se po změně profilu nepodařilo znovu načíst; zaškrtnutí mohou ukazovat stav před ní.',
+    en: 'The subscriptions could not be reloaded after the profile change; the boxes may show the state before it.',
+  },
   'settings.metrics_token_label': {
     cs: 'Přístupový token pro /status/metrics.php',
     en: 'Access Token for /status/metrics.php',

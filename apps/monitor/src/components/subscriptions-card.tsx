@@ -12,33 +12,68 @@ interface SubEntry {
   whatsapp: number;
 }
 
+type Shown = Pick<SubEntry, 'email' | 'sms' | 'whatsapp'>;
+
+const shownOf = (list: SubEntry[]) =>
+  new Map<number, Shown>(list.map((s) => [s.id, { email: s.email, sms: s.sms, whatsapp: s.whatsapp }]));
+
 /**
  * Per-monitor notification subscriptions for the logged-in account.
  *
  * Lived on the admin settings page first, but it configures MY notifications,
  * not the system - so it moved to the profile page with the rest of the
  * user-level settings.
+ *
+ * `profileSwitches` stands for the profile's SMS and WhatsApp switches. A
+ * monitor without a stored choice follows them, so after a profile save that
+ * flips one of them the card loads again; with boxes changed and not saved yet
+ * it says so instead and loads again after its own save.
  */
-export function SubscriptionsCard() {
+export function SubscriptionsCard({ profileSwitches = '' }: { profileSwitches?: string }) {
   const { t } = useLanguage();
   const [subs, setSubs] = React.useState<SubEntry[] | null>(null);
   const [saved, setSaved] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // The last reload after a profile change failed; cleared by one that succeeds.
+  const [reloadFailed, setReloadFailed] = React.useState(false);
+  // What each box showed when the card loaded (or last saved). The save posts
+  // it so the server stores only the boxes changed here: a profile or monitor
+  // switch flipped while the card stays open must not be pinned for every
+  // monitor with the value the card still shows.
+  const [shown, setShown] = React.useState(new Map<number, Shown>());
+  // The profile switches the boxes were last loaded under.
+  const [loadedFor, setLoadedFor] = React.useState<string | null>(null);
+  // A load the profile change left waiting (or that failed) runs after a save.
+  const [saves, setSaves] = React.useState(0);
+  const unsaved = (subs ?? []).some((s) => {
+    const was = shown.get(s.id);
+    return !was || was.email !== s.email || was.sms !== s.sms || was.whatsapp !== s.whatsapp;
+  });
 
   React.useEffect(() => {
+    // Loaded under these switches already, or boxes changed here and not
+    // saved yet, which a load would overwrite.
+    if (loadedFor === profileSwitches || unsaved) return;
     let active = true;
     fetch('/status/api.php?action=get_subscriptions', { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        if (active) setSubs(Array.isArray(d.subscriptions) ? d.subscriptions : []);
+        if (!active) return;
+        const list: SubEntry[] = Array.isArray(d.subscriptions) ? d.subscriptions : [];
+        setShown(shownOf(list));
+        setSubs(list);
+        setLoadedFor(profileSwitches);
+        setReloadFailed(false);
       })
       .catch(() => {
-        if (active) setSubs([]);
+        if (!active) return;
+        if (loadedFor === null) setSubs([]);
+        else setReloadFailed(true);
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [loadedFor, profileSwitches, unsaved, saves]);
 
   const toggle = (id: number, field: 'email' | 'sms' | 'whatsapp') => {
     setSubs((prev) => (prev ?? []).map((s) => (s.id === id ? { ...s, [field]: s[field] ? 0 : 1 } : s)));
@@ -46,15 +81,19 @@ export function SubscriptionsCard() {
 
   const save = async () => {
     setError(null);
+    const posted = subs ?? [];
     try {
       const res = await fetch('/status/api.php?action=save_subscriptions', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscriptions: subs ?? [] }),
+        body: JSON.stringify({ subscriptions: posted.map((s) => ({ ...s, shown: shown.get(s.id) })) }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      // A box changed again after this save is a new change.
+      setShown(shownOf(posted));
+      setSaves((n) => n + 1);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (e) {
@@ -74,6 +113,25 @@ export function SubscriptionsCard() {
       bodyClassName="space-y-5"
     >
       {error && <ErrorState size="inline" message={error} />}
+      {reloadFailed && (
+        <ErrorState
+          size="inline"
+          message={t(
+            'settings.subs_reload_error',
+            'Odběry se po změně profilu nepodařilo znovu načíst; zaškrtnutí mohou ukazovat stav před ní.'
+          )}
+        />
+      )}
+      {loadedFor !== null && loadedFor !== profileSwitches && unsaved && (
+        <ErrorState
+          size="inline"
+          tone="warning"
+          message={t(
+            'settings.subs_profile_changed',
+            'Profil změnil přepínač SMS nebo WhatsApp. Zaškrtnutí mohou ukazovat stav před touto změnou; po uložení odběrů se načtou znovu.'
+          )}
+        />
+      )}
 
       {subs === null ? (
         <LoadingState label={t('settings.subs_loading', 'Načítám odběry…')} size="inline" />

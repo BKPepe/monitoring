@@ -49,6 +49,8 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_agent_backup_says_up',
     'bk_viewer',
     'bk_monitor_scope_sql',
+    'bk_subscription_effective',
+    'bk_subscription_row_to_store',
     'bk_public_monitor_details',
     'bk_public_reason',
     'bk_public_incident_update',
@@ -890,6 +892,46 @@ if (function_exists('bk_monitor_scope_sql')) {
         $threw = true;
     }
     check_true('podvržený název sloupce se odmítne', $threw);
+}
+
+// The subscription form shows what the alert's COALESCE really uses: a monitor
+// without a row was shown as 0 to an administrator who got its e-mails.
+if (function_exists('bk_subscription_effective')) {
+    $se_mon = ['email_notifications' => 1, 'sms_notifications' => null];
+    $se_user = ['sms_notifications' => 1, 'whatsapp_notifications' => 1];
+    check('admin bez řádku dostává podle monitoru a profilu', bk_subscription_effective(true, null, $se_mon, $se_user), ['email' => 1, 'sms' => 1, 'whatsapp' => 1]);
+    check('uživatel bez řádku nedostává nic', bk_subscription_effective(false, null, $se_mon, $se_user), ['email' => 0, 'sms' => 0, 'whatsapp' => 0]);
+    check('řádek má přednost, jeho NULL padá na výchozí', bk_subscription_effective(false, ['email_notifications' => 0, 'sms_notifications' => null, 'whatsapp_notifications' => '0'], $se_mon, $se_user), ['email' => 0, 'sms' => 1, 'whatsapp' => 0]);
+}
+
+// A save stores only the boxes the account changed against what the form
+// showed. Comparing with the no-row values at save time pinned every monitor
+// once the profile's WhatsApp switch changed under the open form.
+if (function_exists('bk_subscription_row_to_store')) {
+    $sr_mon = ['email_notifications' => 1, 'sms_notifications' => 0];
+    $sr_off = ['sms_notifications' => 0, 'whatsapp_notifications' => 0];
+    $sr_on = ['sms_notifications' => 0, 'whatsapp_notifications' => 1];
+    $sr_shown = ['email' => 1, 'sms' => 0, 'whatsapp' => 1];
+    check('admin s nedotčeným řádkem nic neuloží, i když mezitím vypnul WhatsApp v profilu',
+        bk_subscription_row_to_store(true, null, $sr_shown, $sr_shown, $sr_mon, $sr_off), null);
+    check('zaškrtnutá SMS se uloží sama, nedotčené kanály zůstanou NULL',
+        bk_subscription_row_to_store(true, null, ['sms' => 1] + $sr_shown, $sr_shown, $sr_mon, $sr_off),
+        ['email_notifications' => null, 'sms_notifications' => 1, 'whatsapp_notifications' => null]);
+    check('a WhatsApp zapnutý v profilu po načtení formuláře opravdu chodí',
+        bk_subscription_effective(true, bk_subscription_row_to_store(true, null, ['sms' => 1, 'whatsapp' => 0] + $sr_shown, ['whatsapp' => 0] + $sr_shown, $sr_mon, $sr_on), $sr_mon, $sr_on),
+        ['email' => 1, 'sms' => 1, 'whatsapp' => 1]);
+    $sr_pinned = ['email_notifications' => 0, 'sms_notifications' => null, 'whatsapp_notifications' => 1];
+    check('nedotčený kanál si drží, co bylo uloženo',
+        bk_subscription_row_to_store(true, $sr_pinned, ['email' => 0, 'sms' => 1] + $sr_shown, ['email' => 0] + $sr_shown, $sr_mon, $sr_off),
+        ['email_notifications' => 0, 'sms_notifications' => 1, 'whatsapp_notifications' => 1]);
+    check('návrat na výchozí hodnotu kanál uvolní a prázdný řádek zmizí',
+        bk_subscription_row_to_store(true, ['email_notifications' => null, 'sms_notifications' => 1, 'whatsapp_notifications' => null], $sr_shown, ['sms' => 1] + $sr_shown, $sr_mon, $sr_on), null);
+    $sr_user_none = ['email' => 0, 'sms' => 0, 'whatsapp' => 0];
+    check('uživateli se nedotčený kanál zapíše jako 0, NULL by e-mail zapnul přes monitor',
+        bk_subscription_row_to_store(false, null, ['sms' => 1] + $sr_user_none, $sr_user_none, $sr_mon, $sr_on),
+        ['email_notifications' => 0, 'sms_notifications' => 1, 'whatsapp_notifications' => 0]);
+    check('uživatel, který vše odškrtne, řádek nemá',
+        bk_subscription_row_to_store(false, ['email_notifications' => 1, 'sms_notifications' => 0, 'whatsapp_notifications' => 0], $sr_user_none, ['email' => 1] + $sr_user_none, $sr_mon, $sr_on), null);
 }
 
 if (function_exists('bk_public_monitor_details')) {

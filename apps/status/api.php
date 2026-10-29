@@ -6146,21 +6146,22 @@ if ($action === 'get_subscriptions') {
     try {
         // Alerts only about monitors this account may see.
         [$gs_scope, $gs_scope_params] = bk_list_scope_sql($pdo, bk_visible_monitor_ids($pdo), 'id');
-        $stmt_mon = $pdo->prepare("SELECT id, name, type FROM monitors WHERE {$gs_scope} ORDER BY id ASC");
+        $stmt_mon = $pdo->prepare("SELECT id, name, type, email_notifications, sms_notifications FROM monitors WHERE {$gs_scope} ORDER BY id ASC");
         $stmt_mon->execute($gs_scope_params);
         $monitors = $stmt_mon->fetchAll();
+        $stmt_me = $pdo->prepare("SELECT sms_notifications, whatsapp_notifications FROM users WHERE id = ?");
+        $stmt_me->execute([$user_id]);
+        $gs_me = $stmt_me->fetch() ?: [];
         $stmt_sub = $pdo->prepare("SELECT monitor_id, email_notifications, sms_notifications, whatsapp_notifications FROM user_subscriptions WHERE user_id = ?");
         $stmt_sub->execute([$user_id]);
-        $subs_raw = $stmt_sub->fetchAll();
         $subs = [];
-        foreach ($subs_raw as $s) {
-            $subs[(int)$s['monitor_id']] = [
-                'email' => (int)$s['email_notifications'],
-                'sms' => (int)$s['sms_notifications'],
-                'whatsapp' => (int)$s['whatsapp_notifications'],
-            ];
+        foreach ($stmt_sub->fetchAll() as $s) {
+            $subs[(int)$s['monitor_id']] = $s;
         }
 
+        // What the alert really uses, not 0 for a monitor without a row: an
+        // administrator gets that monitor's alerts by its own switches.
+        $gs_admin = bk_viewer()['is_admin'];
         $result = [];
         foreach ($monitors as $m) {
             $mid = (int)$m['id'];
@@ -6168,10 +6169,7 @@ if ($action === 'get_subscriptions') {
                 'id' => $mid,
                 'name' => $m['name'],
                 'type' => $m['type'],
-                'email' => $subs[$mid]['email'] ?? 0,
-                'sms' => $subs[$mid]['sms'] ?? 0,
-                'whatsapp' => $subs[$mid]['whatsapp'] ?? 0,
-            ];
+            ] + bk_subscription_effective($gs_admin, $subs[$mid] ?? null, $m, $gs_me);
         }
         echo json_encode(['subscriptions' => $result], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -6197,15 +6195,48 @@ if ($action === 'save_subscriptions') {
     }
     try {
         $pdo->beginTransaction();
+        $stmt_old = $pdo->prepare("SELECT monitor_id, email_notifications, sms_notifications, whatsapp_notifications FROM user_subscriptions WHERE user_id = ?");
+        $stmt_old->execute([$user_id]);
+        $ss_old = [];
+        foreach ($stmt_old->fetchAll() as $o) {
+            $ss_old[(int)$o['monitor_id']] = $o;
+        }
         $stmt_del = $pdo->prepare("DELETE FROM user_subscriptions WHERE user_id = ?");
         $stmt_del->execute([$user_id]);
         $stmt_ins = $pdo->prepare("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications, sms_notifications, whatsapp_notifications) VALUES (?, ?, ?, ?, ?)");
+        $stmt_me = $pdo->prepare("SELECT sms_notifications, whatsapp_notifications FROM users WHERE id = ?");
+        $stmt_me->execute([$user_id]);
+        $ss_me = $stmt_me->fetch() ?: [];
+        $stmt_mon = $pdo->prepare("SELECT email_notifications, sms_notifications FROM monitors WHERE id = ?");
+        $ss_admin = bk_viewer()['is_admin'];
         foreach ($input['subscriptions'] as $s) {
             $mid = (int)($s['id'] ?? 0);
             // A subscription to someone else's monitor would mail its name and
             // outage reasons to an account that may not see it.
             if ($mid <= 0 || !bk_can_view_monitor($pdo, $mid)) continue;
-            $stmt_ins->execute([$user_id, $mid, (int)($s['email'] ?? 0), (int)($s['sms'] ?? 0), (int)($s['whatsapp'] ?? 0)]);
+            $stmt_mon->execute([$mid]);
+            $ss_mon = $stmt_mon->fetch();
+            // A monitor deleted since the form loaded has nothing to alert about.
+            if ($ss_mon === false) continue;
+            $ss_chosen = ['email' => (int)($s['email'] ?? 0), 'sms' => (int)($s['sms'] ?? 0), 'whatsapp' => (int)($s['whatsapp'] ?? 0)];
+            // What the form showed when it loaded tells which boxes the account
+            // changed, and only those are stored. A client that does not send
+            // it is a bundle from before "shown", which showed the stored row
+            // with 0 for NULL or no row; its untouched boxes are those values.
+            // Taking the alerts of now as its baseline pinned an old tab's
+            // unticked e-mail for every monitor at its first save.
+            $ss_shown = [];
+            foreach (['email', 'sms', 'whatsapp'] as $ch) {
+                $ss_shown[$ch] = (int)($ss_old[$mid][$ch . '_notifications'] ?? 0);
+            }
+            if (isset($s['shown']) && is_array($s['shown'])) {
+                foreach ($ss_shown as $ch => $v) {
+                    $ss_shown[$ch] = (int)($s['shown'][$ch] ?? $v);
+                }
+            }
+            $ss_row = bk_subscription_row_to_store($ss_admin, $ss_old[$mid] ?? null, $ss_chosen, $ss_shown, $ss_mon, $ss_me);
+            if ($ss_row === null) continue;
+            $stmt_ins->execute([$user_id, $mid, $ss_row['email_notifications'], $ss_row['sms_notifications'], $ss_row['whatsapp_notifications']]);
         }
         $pdo->commit();
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
