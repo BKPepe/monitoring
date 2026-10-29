@@ -13,11 +13,11 @@ import type {
 } from './types';
 
 /**
- * Client of the authenticated API (`apps/status/app_api.php`).
+ * Client of the authenticated API (`apps/status/api.php`).
  *
  * Deliberately separate from `http-source.ts`: this is data behind a login,
- * while `api.php` is public. Mixing them would invite exposing protected
- * content through a public endpoint.
+ * while `api.php` also answers anonymous callers. Mixing them would invite
+ * exposing protected content through a public endpoint.
  */
 
 export interface SessionInfo {
@@ -173,12 +173,7 @@ export function setCsrfToken(token: string | null): void {
 }
 
 async function request<T>(action: string, init?: RequestInit): Promise<T> {
-  let url = `${STATUS_API}/api.php?action=${action}`;
-  // Signing in and out lives in the PHP session the legacy admin page shares,
-  // whatever backend serves the data.
-  if (action === 'session' || action === 'logout') {
-    url = `/status/api.php?action=${action}`;
-  }
+  const url = `${STATUS_API}/api.php?action=${action}`;
 
   const res = await fetch(url, {
     credentials: 'include',
@@ -188,12 +183,6 @@ async function request<T>(action: string, init?: RequestInit): Promise<T> {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    // Fallback: try the old PHP URL if the Go API failed
-    if (url.startsWith('/api/v1/')) {
-      const fallbackUrl = `${STATUS_API}/app_api.php?action=${action}`;
-      const fallbackRes = await fetch(fallbackUrl, { credentials: 'include', ...init });
-      if (fallbackRes.ok) return (await fallbackRes.json()) as T;
-    }
     throw new ApiError(
       (data as { error?: string; message?: string }).message ??
         (data as { error?: string }).error ??

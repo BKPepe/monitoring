@@ -98,29 +98,7 @@ interface MetricSeriesBatchResponse {
 }
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const isGoBackend = STATUS_API.includes('/api/v1');
-  let url = `${STATUS_API}/${path}`;
-  if (isGoBackend) {
-    if (path.includes('action=metric_series')) {
-      url = `${STATUS_API}/metrics/series?${path.replace('api.php?action=metric_series&', '')}`;
-    } else if (path.includes('action=public_status')) {
-      url = `${STATUS_API}/public_status`;
-    }
-  }
-
-  try {
-    return await readOk<T>(await fetch(url, { signal }), path);
-  } catch (err) {
-    // Only the single-series call has a Go twin. The batch path used to fall
-    // in here too, build a nonsense URL and, when anything answered it, return
-    // that answer unchecked - an error body then became an empty chart.
-    if (!isGoBackend && path.includes('action=metric_series&')) {
-      const fallbackUrl = `/api/v1/metrics/series?${path.replace('api.php?action=metric_series&', '')}`;
-      const res = await fetch(fallbackUrl, { signal }).catch(() => null);
-      if (res && res.ok) return readOk<T>(res, path);
-    }
-    throw err;
-  }
+  return readOk<T>(await fetch(`${STATUS_API}/${path}`, { signal }), path);
 }
 
 /**
