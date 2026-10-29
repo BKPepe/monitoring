@@ -56,6 +56,13 @@ The response sets a session cookie. Every further call has to send it
 
 Session state: `GET /status/api.php?action=session`.
 
+An account with two-factor gets the same second step after the password and
+after an OAuth provider. `action=login` answers `requires2fa` and wants
+`totp_code` (the TOTP code or a recovery code) with the password again; an
+OAuth sign-in (`admin.php?login_oauth=`) stops at the code form of admin.php.
+Until a code is accepted the session holds only the pending account, never a
+sign-in.
+
 ### Who sees which monitor
 
 A monitor belongs to the accounts assigned to it, and one monitor can have

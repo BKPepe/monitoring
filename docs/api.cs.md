@@ -57,6 +57,12 @@ Odpověď nastaví session cookie. Všechna další volání ji musí posílat
 
 Stav relace: `GET /status/api.php?action=session`.
 
+Účet s dvoufázovým ověřením dostane stejný druhý krok po hesle i po OAuth
+poskytovateli. `action=login` odpoví `requires2fa` a chce `totp_code` (TOTP
+kód nebo záložní kód) spolu s heslem znovu; přihlášení přes OAuth
+(`admin.php?login_oauth=`) se zastaví na formuláři s kódem v admin.php. Dokud
+kód neprojde, session drží jen čekající účet, nikdy přihlášení.
+
 ### Kdo vidí který monitor
 
 Monitor patří účtům, které jsou k němu přiřazené, a jeden monitor jich může mít

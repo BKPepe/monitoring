@@ -113,23 +113,15 @@ if (isset($_GET['code']) && isset($_GET['state'])) {
                 exit;
             } else {
                 // Login - hledá se výhradně podle (provider, oauth_id).
-                $stmt = $pdo->prepare("SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ? LIMIT 1");
-                $stmt->execute([$oauth_provider_key, $identity['id']]);
-                $user = $stmt->fetch();
-
-                if ($user) {
-                    session_regenerate_id(true);
-                    $_SESSION['admin_logged_in'] = true;
-                    $_SESSION['admin_username'] = $user['username'];
-                    $_SESSION['admin_id'] = $user['id'];
-                    $_SESSION['admin_role'] = $user['role'];
-                    bk_audit_log($pdo, 'login_success', 'Přes ' . $provider_label . ' OAuth', 'user', $user['id'], $user['id'], $user['username']);
+                // An account with 2FA is not signed in here: it waits for its
+                // code on the form below, the same step as after the password.
+                if (bk_oauth_login($pdo, $oauth_provider_key, $identity['id']) !== 'no_account') {
+                    // Signed in, or the code form - either way on a clean URL,
+                    // so a reload does not replay the spent code and state.
                     header('Location: admin.php');
                     exit;
-                } else {
-                    bk_audit_log($pdo, 'login_failed', $provider_label . ' OAuth - žádný účet nemá tenhle účet propojený');
-                    $login_error = 'Tenhle ' . htmlspecialchars($provider_label) . ' účet není propojený s žádným uživatelem. Přihlaste se heslem a propojte ho v Profilu.';
                 }
+                $login_error = 'Tenhle ' . htmlspecialchars($provider_label) . ' účet není propojený s žádným uživatelem. Přihlaste se heslem a propojte ho v Profilu.';
             }
         }
     }
@@ -155,18 +147,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
     $user = $stmt->fetch();
 
     if ($user && password_verify($password, $user['password_hash'])) {
-        if (!empty($user['totp_enabled'])) {
-            // Heslo sedí, ale účet má 2FA - do session jde jen ID (důkaz, že
-            // tahle session už prošla heslem), samotné heslo se nikam neukládá.
-            // Krok 2 (kód) zpracovává samostatný handler níže.
-            $_SESSION['pending_2fa_user_id'] = $user['id'];
-        } else {
-            session_regenerate_id(true);
-            $_SESSION['admin_logged_in'] = true;
-            $_SESSION['admin_username'] = $user['username'];
-            $_SESSION['admin_id'] = $user['id'];
-            $_SESSION['admin_role'] = $user['role'];
-            bk_audit_log($pdo, 'login_success', 'Jméno a heslo', 'user', $user['id'], $user['id'], $user['username']);
+        // The password checked out. An account without 2FA is signed in and
+        // redirected here. One with 2FA is not: the session keeps only its id
+        // (proof this session passed the password, never the password itself)
+        // and the page shows the code form, whose POST the handler below takes.
+        if (bk_login_first_factor_passed($pdo, $user, 'Jméno a heslo')) {
             header('Location: admin.php');
             exit;
         }
@@ -181,6 +166,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
 // Krok 2 přihlášení s 2FA - ověření 6místného kódu proti účtu, co už prošel
 // heslem v kroku výše (pending_2fa_user_id). Samostatný POST handler, protože
 // přihlašovací formulář teď v tomhle kroku posílá jen kód, ne username/password.
+// The OAuth callback above ends here too, and a recovery code works in place
+// of the TOTP code, as at api.php's action=login.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_login_code'])) {
     bk_csrf_check();
     $pending_user_id = $_SESSION['pending_2fa_user_id'] ?? 0;
@@ -197,19 +184,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_login_code'])) {
             $lockout_secs = bk_login_lockout_seconds($pdo, $user['username']);
             if ($lockout_secs > 0) {
                 $login_error = 'Příliš mnoho neúspěšných pokusů. Zkuste to znovu za ' . ceil($lockout_secs / 60) . ' min.';
-            } else if (bk_totp_verify_code($user['totp_secret'], $totp_input)) {
-                session_regenerate_id(true);
-                $_SESSION['admin_logged_in'] = true;
-                $_SESSION['admin_username'] = $user['username'];
-                $_SESSION['admin_id'] = $user['id'];
-                $_SESSION['admin_role'] = $user['role'];
-                unset($_SESSION['pending_2fa_user_id']);
-                bk_audit_log($pdo, 'login_success', 'Jméno a heslo + 2FA', 'user', $user['id'], $user['id'], $user['username']);
+            } else if (bk_login_second_factor($pdo, $user, $totp_input)['ok']) {
+                // The first step the session passed: the password, or an OAuth
+                // provider. A session left pending before that was recorded
+                // could only have come through the password.
+                bk_login_start_session($pdo, $user, ($_SESSION['pending_2fa_via'] ?? 'Jméno a heslo') . ' + 2FA');
                 header('Location: admin.php');
                 exit;
             } else {
                 bk_audit_log($pdo, 'login_failed', 'Neplatný 2FA kód', null, null, $pending_user_id, $user['username'] ?? null);
-                $login_error = 'Neplatný 2FA kód z autentikační aplikace.';
+                $login_error = 'Neplatný 2FA kód z autentikační aplikace ani záložní kód.';
             }
         } else {
             $login_error = 'Uživatel nenalezen.';
@@ -260,8 +244,8 @@ if (!$is_logged_in) {
                     <?php echo bk_csrf_field(); ?>
                     <input type="hidden" name="username" value="<?php echo htmlspecialchars($pending_username); ?>" autocomplete="username">
                     <div class="form-group">
-                        <label for="totp_code">6místný kód z autentikační aplikace</label>
-                        <input type="text" name="totp_code" id="totp_code" class="form-control" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autofocus autocomplete="one-time-code">
+                        <label for="totp_code">6místný kód z autentikační aplikace nebo záložní kód</label>
+                        <input type="text" name="totp_code" id="totp_code" class="form-control" maxlength="11" required autofocus autocomplete="one-time-code">
                     </div>
                     <button type="submit" name="totp_login_code" class="btn" style="width: 100%; margin-top: 1rem;"><i class="fas fa-shield-halved"></i> Potvrdit</button>
                 </form>

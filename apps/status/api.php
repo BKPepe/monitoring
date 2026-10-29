@@ -265,37 +265,26 @@ if ($action === 'login') {
         exit;
     }
 
-    if (!empty($user['totp_enabled'])) {
-        if ($totp_code === '') {
-            // Password checked out, but the account has 2FA - session only
-            // stores the pending user id (proof this session passed the
-            // password step), never the password itself.
-            $_SESSION['pending_2fa_user_id'] = $user['id'];
-            echo json_encode(['success' => true, 'requires2fa' => true]);
+    $login_recovery_left = null;
+    if (!empty($user['totp_enabled']) && $totp_code !== '') {
+        // The code came with the password, both steps in one request. A
+        // one-time recovery code works in place of the TOTP code.
+        $login_second = bk_login_second_factor($pdo, $user, $totp_code);
+        if (!$login_second['ok']) {
+            bk_audit_log($pdo, 'login_failed', 'Invalid 2FA code', null, null, $user['id'], $user['username']);
+            http_response_code(401);
+            echo json_encode(['success' => false, 'message' => 'Invalid 2FA code.']);
             exit;
         }
-        $login_recovery_left = null;
-        if (!bk_totp_verify_code($user['totp_secret'], $totp_code)) {
-            // Lost phone: a one-time recovery code works in place of the TOTP
-            // code. Consumed on success - the audit records how many remain.
-            $login_recovery_left = bk_totp_try_recovery_code($pdo, (int)$user['id'], $totp_code);
-            if ($login_recovery_left === null) {
-                bk_audit_log($pdo, 'login_failed', 'Invalid 2FA code', null, null, $user['id'], $user['username']);
-                http_response_code(401);
-                echo json_encode(['success' => false, 'message' => 'Invalid 2FA code.']);
-                exit;
-            }
-            bk_audit_log($pdo, 'totp_recovery_used', "Zbývá {$login_recovery_left} záložních kódů", 'user', $user['id'], $user['id'], $user['username']);
-        }
+        $login_recovery_left = $login_second['recovery_left'];
+        bk_login_start_session($pdo, $user, 'Password + 2FA');
+    } elseif (!bk_login_first_factor_passed($pdo, $user, 'Password')) {
+        // Password checked out, but the account has 2FA - the session only
+        // holds the pending user id, the same step admin.php's password and
+        // OAuth sign-ins stop at.
+        echo json_encode(['success' => true, 'requires2fa' => true]);
+        exit;
     }
-
-    session_regenerate_id(true);
-    $_SESSION['admin_logged_in'] = true;
-    $_SESSION['admin_username'] = $user['username'];
-    $_SESSION['admin_id'] = $user['id'];
-    $_SESSION['admin_role'] = $user['role'];
-    unset($_SESSION['pending_2fa_user_id']);
-    bk_audit_log($pdo, 'login_success', !empty($user['totp_enabled']) ? 'Password + 2FA' : 'Password', 'user', $user['id'], $user['id'], $user['username']);
 
     echo json_encode([
         'success' => true,
@@ -304,7 +293,7 @@ if ($action === 'login') {
         'csrfToken' => bk_csrf_token(),
         // Present only when a recovery code signed this login in - the client
         // should tell the user how many one-time codes are left.
-        'recoveryCodesRemaining' => $login_recovery_left ?? null,
+        'recoveryCodesRemaining' => $login_recovery_left,
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }

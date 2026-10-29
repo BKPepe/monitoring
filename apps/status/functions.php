@@ -139,6 +139,27 @@ function bk_oauth_fetch_identity($provider_key, $code, $redirect_uri) {
 }
 
 /**
+ * Sign-in with an identity the provider has just confirmed (the OAuth callback
+ * in admin.php, after bk_oauth_fetch_identity). The account is looked up by
+ * (provider, oauth_id) alone, never by e-mail. The provider stands in for the
+ * password only: an account with 2FA still has to give its code, so it goes
+ * through bk_login_first_factor_passed() like a password sign-in does.
+ * Returns 'signed_in', 'pending_2fa' (the session holds only the account id
+ * until the code step accepts a code) or 'no_account'.
+ */
+function bk_oauth_login(PDO $pdo, string $provider_key, string $oauth_id): string {
+    $provider_label = bk_oauth_providers()[$provider_key]['label'] ?? $provider_key;
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ? LIMIT 1");
+    $stmt->execute([$provider_key, $oauth_id]);
+    $user = $stmt->fetch();
+    if (!$user) {
+        bk_audit_log($pdo, 'login_failed', $provider_label . ' OAuth - žádný účet nemá tenhle účet propojený');
+        return 'no_account';
+    }
+    return bk_login_first_factor_passed($pdo, $user, 'Přes ' . $provider_label . ' OAuth') ? 'signed_in' : 'pending_2fa';
+}
+
+/**
  * Returns the HTML icon for a monitor type (+ the target for 'web', for the favicon).
  * Shared between index.php (public dashboard) and admin.php (monitor list),
  * so both places always show the same icon for the same type.
@@ -15685,6 +15706,64 @@ function bk_login_lockout_seconds($pdo, $username) {
     } catch (PDOException $e) {
         return 0; // best-effort: při DB chybě nezamykat
     }
+}
+
+/**
+ * The step after the first factor (the password, or an identity an OAuth
+ * provider confirmed) checked out. An account without 2FA is signed in. An
+ * account with 2FA is not: the session gets only its id - proof that this
+ * session passed the first step, never the password - until the code step
+ * accepts a code (bk_login_second_factor). $via says what that first step was,
+ * for the audit log once the sign-in completes. Returns true when signed in.
+ */
+function bk_login_first_factor_passed(PDO $pdo, array $user, string $via): bool {
+    if (!empty($user['totp_enabled'])) {
+        $_SESSION['pending_2fa_user_id'] = $user['id'];
+        $_SESSION['pending_2fa_via'] = $via;
+        return false;
+    }
+    bk_login_start_session($pdo, $user, $via);
+    return true;
+}
+
+/**
+ * Checks the second factor of an account with 2FA: the current TOTP code, or
+ * one of its recovery codes in its place when the phone is gone. A recovery
+ * code is consumed on match and the audit records how many remain. A failed
+ * code is not logged here: each caller writes its own login_failed row, which
+ * is what the lockout counts. Returns ['ok' => bool, 'recovery_left' => int
+ * when a recovery code was used, otherwise null].
+ */
+function bk_login_second_factor(PDO $pdo, array $user, string $code): array {
+    if (bk_totp_verify_code($user['totp_secret'], $code)) {
+        return ['ok' => true, 'recovery_left' => null];
+    }
+    $recovery_left = bk_totp_try_recovery_code($pdo, (int)$user['id'], $code);
+    if ($recovery_left === null) {
+        return ['ok' => false, 'recovery_left' => null];
+    }
+    bk_audit_log($pdo, 'totp_recovery_used', "Zbývá {$recovery_left} záložních kódů", 'user', $user['id'], $user['id'], $user['username']);
+    return ['ok' => true, 'recovery_left' => $recovery_left];
+}
+
+/**
+ * Signs the session in as $user. Every sign-in of an existing account ends
+ * here (password, OAuth, either of them plus 2FA, in admin.php and in api.php),
+ * so none of them can set admin_logged_in without the steps before it. The
+ * one other place that sets it is api.php action=setup, for the first account
+ * the install has just created; the API suite checks both in the source. A
+ * new session id first, so an id planted before the sign-in is not the
+ * account's; a pending 2FA step is over. $via goes to the audit log as the way
+ * the account signed in.
+ */
+function bk_login_start_session(PDO $pdo, array $user, string $via): void {
+    session_regenerate_id(true);
+    $_SESSION['admin_logged_in'] = true;
+    $_SESSION['admin_username'] = $user['username'];
+    $_SESSION['admin_id'] = $user['id'];
+    $_SESSION['admin_role'] = $user['role'];
+    unset($_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_via']);
+    bk_audit_log($pdo, 'login_success', $via, 'user', $user['id'], $user['id'], $user['username']);
 }
 
 /**
