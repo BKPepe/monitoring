@@ -109,88 +109,19 @@ jobs:
           coverage: xdebug
           extensions: mbstring, curl, pdo
 
-      - name: Syntaktická kontrola všech PHP souborů
-        run: |
-          set -e
-          for f in apps/status/*.php apps/status/lang/*.php apps/status/tests/*.php; do
-            php -l "$f" > /dev/null
-          done
-          echo "Všechny PHP soubory se parsují."
-
-      - name: Unit testy
-        run: php apps/status/tests/run_tests.php
-
-      - name: Testy sběru, e-mailů a notifikací
-        run: php apps/status/tests/run_pipeline_tests.php
-
-      - name: SQL lint (rizikové dotazy)
-        run: php apps/status/tests/run_query_lint.php
-
-      # Schema se udrzuje na dvou mistech (schema.sql pro cerstvou instalaci,
-      # migrace v db.php pro uz bezici). Nic je nedrzelo pohromade a rozesly
-      # se o sedm sloupcu a tri tabulky - cerstva instalace fungovala jen
-      # proto, ze po importu dobehnou migrace.
-      - name: Schema lint (schema.sql vs. migrace)
-        run: php apps/status/tests/run_schema_lint.php
-
-      # Neznama akce vracela 200 s vychozim prehledem, takze preklep v nazvu
-      # vypadal jako uspech. Diky tomu roky nikdo nezjistil, ze chybi pet
-      # endpointu, na ktere se z UI volalo - vcetne exportu CSV, grafu odezvy
-      # a "zapomenuteho hesla", ktere vzdy tvrdilo, ze e-mail odesel.
-      - name: API action lint (volané akce vs. api.php)
-        run: php apps/status/tests/run_api_action_lint.php
-
-      # The settings key list existed three times (admin.php, the read path in
-      # api.php, the write path in api.php) and drifted: whatsapp_* could be
-      # saved but was never read back, so the form showed an empty field and the
-      # next save overwrote the real value with an empty one. No error anywhere.
-      - name: Settings parity lint (UI vs. server)
-        run: php apps/status/tests/run_settings_parity_lint.php
-
-      # api.php releases the session lock so parallel requests stop queuing
-      # behind each other. After session_write_close() a write to $_SESSION is
-      # discarded without any error, so an action that starts writing and is
-      # not on the allowlist would break login in a way that looks random.
-      - name: Session lock lint (kdo smí zapisovat do session)
-        run: php apps/status/tests/run_session_lock_lint.php
-
-      # Dokumentace je ve dvou jazycich a dve kopie cehokoli se v tomhle
-      # projektu rozesly pokazde. U dokumentace to nic neshodi - jen jedna
-      # verze zacne popisovat neco, co uz neplati.
-      - name: Docs parity lint (api.md vs. api.cs.md)
-        run: php apps/status/tests/run_docs_parity_lint.php
-
-      # Agenti posilali kazdou minutu 35 cisel, ze kterych se ukladal jen
-      # posledni snimek - slo videt aktualni hodnotu, ale ne jestli je to
-      # spicka nebo normal. Nastradalo se to postupne, protoze na rozdil mezi
-      # "poslano" a "ulozeno" nic neupozornovalo.
-      - name: Agent metric lint (posílané hodnoty vs. metriky)
-        run: php apps/status/tests/run_agent_metric_lint.php
-
-      # Jadro pravidel projektu: nezmerena hodnota je NULL a v UI pomlcka.
-      # Dva rucni audity to nepodchytily (poprve chybely coercions, podruhe
-      # legacy PHP stranky), takze to hlida skript.
-      - name: Honesty lint (žádné vymyšlené nuly)
-        run: php apps/status/tests/run_honesty_lint.php
-
+      # The whole PHP gate in one command, the same one the deploy and
+      # `npm run test:php` run: php -l, both suites, every run_*_lint.php it
+      # finds (each says in its header why it exists) and dead code. Each
+      # check is a log group, a failed one an error annotation, and the run
+      # goes on to the end. The API suite runs in the api job below against
+      # MySQL; here it is skipped, and the summary says so.
+      #
       # The agents' own checks (syntax, ShellCheck, Worker units, Docker e2e)
       # run in the agents repo's test.yml on the very commit the gitlink pins,
       # and deploy-status.yml uploads nothing unless they passed there. Only
-      # the two lints below are this repo's rules about the agents.
-      #
-      # Vymyslene nuly nevznikaji jen v PHP/TS: awk 'END{print sum+0}' hlasil
-      # "0 zahozenych paketu" na routeru, kde se firewall vubec nemeri.
-      - name: Honesty lint agentů (žádné vymyšlené nuly)
-        run: php apps/status/tests/run_agent_honesty_lint.php
-
-      # Busybox se staví per cíl a OpenWrt kompiluje mensi sadu appletu nez
-      # obraz busybox:1.36, ve kterem bezi e2e harness. `stat -c %s` a
-      # `sort -t -k` proto prosly kazdym testem a na routeru tise nedelaly nic.
-      - name: Busybox lint (OpenWrt agent nepoužívá, co router nemá)
-        run: php apps/status/tests/run_openwrt_busybox_lint.php
-
-      - name: Detekce mrtvého kódu
-        run: php apps/status/tests/find_dead_code.php
+      # the agent lints here are this repo's rules about the agents.
+      - name: PHP brána (run_all.php)
+        run: php apps/status/tests/run_all.php
 
       # BK_COVERAGE_MIN je rohatka: az bude zmerena skutecna hodnota z CI,
       # doplni se sem a pokryti uz nesmi klesnout niz.

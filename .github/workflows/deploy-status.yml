@@ -125,6 +125,16 @@ jobs:
             sleep 60
           done
 
+      # Every PHP step below, the gate and the smoke test included, runs on the
+      # production version (cPanel ea-php84), not on the runner image's own
+      # PHP: find_dead_code.php judges a call by the functions the running PHP
+      # knows, and a test on another version does not test what users run.
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, curl, pdo
+
       # Every self-updating agent takes what lands in public_html/status/. A
       # missing or empty file would show only as a broken self-update in the
       # field, and every agent refuses an update whose last line is not
@@ -135,19 +145,10 @@ jobs:
       - name: Copy the agents from the submodule and check every one
         run: bash scripts/assemble-agents.sh apps/status
 
-      - name: Run PHP unit tests (pure functions)
-        run: php apps/status/tests/run_tests.php
-
-      - name: Run pipeline tests (collection, e-mail, notifications)
-        run: php apps/status/tests/run_pipeline_tests.php
-
-      - name: PHP syntax check
-        run: |
-          set -e
-          for f in apps/status/*.php apps/status/lang/*.php; do
-            php -l "$f" > /dev/null
-          done
-          echo "All PHP files parse cleanly."
+      # The PHP gate of quality.yml, the same command: php -l, both suites,
+      # every lint and dead code (the API suite needs MySQL and is skipped).
+      - name: PHP gate (run_all.php)
+        run: php apps/status/tests/run_all.php
 
       - name: Agent script syntax check
         run: |
@@ -287,12 +288,6 @@ jobs:
       # widget.php a badge.php takhle mesice vracely 500 (volaly funkci,
       # ktera v kodu nebyla) a nikdo si toho nevsiml - php -l chybu za
       # behu nevidi a nikdo ty stranky neotviral.
-      - name: Setup PHP pro smoke test
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.4'
-          extensions: curl, mbstring
-
       - name: Smoke test nasazených stránek
         run: |
           sleep 5

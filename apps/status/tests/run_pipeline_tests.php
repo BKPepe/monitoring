@@ -2030,6 +2030,44 @@ foreach (['run_query_lint.php', 'run_honesty_lint.php'] as $gate_lint) {
     check_true("a {$gate_lint} řekne, že neověřil nic", str_contains($gate_res['out'], 'neověřil nic'));
     @unlink($gate_tmp . '/' . $gate_lint);
 }
+
+// The gate runner (run_all.php) that CI, the deploy and `npm run test:php`
+// call. It finds the lints itself, so a new one cannot be left out of a list,
+// and it runs the API suite only when BK_TEST_DB_NAME names its database: that
+// suite drops the database it is given, and without a name it takes bk_test.
+// The plan is read with --list, never by running the gate from inside one of
+// its own suites. The environment is built here, so a BK_TEST_DB_* of the
+// caller cannot leak into the "not set" case.
+$gate_all = function (array $env, string $script, array $args = []): array {
+    $env = $env + array_filter(getenv(), fn($k) => !str_starts_with($k, 'BK_TEST_DB_'), ARRAY_FILTER_USE_KEY);
+    $proc = proc_open(array_merge([PHP_BINARY, $script], $args), [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, null, $env);
+    $out = stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    return ['code' => proc_close($proc), 'out' => (string)$out];
+};
+$gate_lints = array_values(array_filter(scandir(__DIR__) ?: [], fn($f) => (bool)preg_match('/^run_.+_lint\.php$/', $f)));
+$gate_plan = $gate_all([], __DIR__ . '/run_all.php', ['--list']);
+preg_match_all('/^spustí se: (run_.+_lint\.php)$/m', $gate_plan['out'], $gate_planned);
+check('run_all.php spustí každý run_*_lint.php ze složky testů', [$gate_plan['code'], count($gate_lints) >= 10, $gate_planned[1]], [0, true, $gate_lints]);
+check_true('a syntaxi, obě sady a mrtvý kód',
+    str_contains($gate_plan['out'], 'spustí se: php -l (') && str_contains($gate_plan['out'], "spustí se: run_tests.php\n")
+    && str_contains($gate_plan['out'], "spustí se: run_pipeline_tests.php\n") && str_contains($gate_plan['out'], "spustí se: find_dead_code.php --strict\n"));
+$gate_skip = 'přeskočí se: run_api_tests.php (není nastavené BK_TEST_DB_NAME, bez něj by sada smazala databázi bk_test)';
+check_true('bez BK_TEST_DB_NAME API sadu přeskočí a řekne to', str_contains($gate_plan['out'], $gate_skip));
+// A port alone (the local container's, say) names no database: the suite
+// would drop its default bk_test, which another run may be using.
+$gate_plan_port = $gate_all(['BK_TEST_DB_PORT' => '13306'], __DIR__ . '/run_all.php', ['--list']);
+check_true('jen s BK_TEST_DB_PORT API sadu přeskočí, výchozí bk_test nesmaže',
+    str_contains($gate_plan_port['out'], $gate_skip) && !str_contains($gate_plan_port['out'], 'spustí se: run_api_tests.php'));
+$gate_plan_db = $gate_all(['BK_TEST_DB_NAME' => 'bk_gate_nikdy'], __DIR__ . '/run_all.php', ['--list']);
+check_true('s BK_TEST_DB_NAME API sadu spustí', str_contains($gate_plan_db['out'], "spustí se: run_api_tests.php\n"));
+// Copied into an empty tree it finds no lint and no suite: red, not green.
+copy(__DIR__ . '/run_all.php', $gate_tmp . '/run_all.php');
+$gate_res = $gate_all([], $gate_tmp . '/run_all.php');
+check('run_all.php bez lintů a sad končí červeně', $gate_res['code'], 1);
+check_true('a řekne, že brána lintů neověřila nic', str_contains($gate_res['out'], 'neověřila nic')
+    && str_contains($gate_res['out'], 'SELHALO') && str_contains($gate_res['out'], 'Chybí '));
+@unlink($gate_tmp . '/run_all.php');
 @rmdir($gate_tmp);
 @rmdir(dirname($gate_tmp));
 
