@@ -244,7 +244,7 @@ jobs:
           # The hosting's certificate is valid for FTP_SERVER (the curl steps
           # below verify it on every deploy), so nothing justifies skipping it.
           security: strict
-          # Stejny duvod jako v deploy-go.yml: `timeout` je necinnost ridiciho
+          # Stejny duvod jako v deploy-app.yml: `timeout` je necinnost ridiciho
           # socketu. Po predchozim deployi jeste nejsou uvolnena FTP sezeni a
           # server odpovi az za desitky sekund - v 60 s se to nestihlo.
           timeout: 300000

@@ -2,7 +2,7 @@
 <!--
   Taint analysis of the PHP backend.
 
-  Why: CodeQL scans only javascript-typescript and go, and has no PHP support
+  Why: CodeQL scans only javascript-typescript, and has no PHP support
   at all, so nothing was ever checking the backend for untrusted input reaching
   a dangerous sink. Psalm's taint mode does exactly that, and on its first run
   (2026-08-23) it found a real one: request input reaching an unescaped echo in

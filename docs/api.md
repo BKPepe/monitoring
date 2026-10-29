@@ -1011,6 +1011,30 @@ with the cron key alone, and giving someone the cron key lets them add
 monitors. The installer gives every fresh install its own `cron_key`; with both
 empty, registration is refused (403). A wrong token is 403.
 
+**The answer is the way back to the agent, not only a receipt.**
+
+- With a Remote Action waiting (Remote Actions on for the monitor and the
+  action among its allowed ones) the answer carries `pending_action`:
+  `action_id`, `action`, `timestamp`, `nonce` and `signature`, the
+  HMAC-SHA256 of `action=…|ts=…|nonce=…` keyed with the monitor's
+  `agent_key`. The agent acts only on a valid signature. `service_name`
+  travels outside the signed string, because deployed agents sign exactly
+  those three fields. One action per answer, marked `sent` as it goes out,
+  so it is never signed and sent twice.
+- A report with `speedtests[]` (agent 0.1.7, at most 50 taken per report)
+  gets `speedtests_acked`: the timestamp of the newest stored item (a
+  re-sent one counts) older than every item whose store failed. The agent
+  deletes its result files only up to it and never on a bare 200; `null` =
+  none, so everything comes again (the unique key makes that a no-op). A
+  failed store is `speedtest_store_failed` in `last_details.ingest_issues`;
+  an item without a measurement time is `speedtest_rejected` and does not
+  hold the receipt back. An item whose rate and byte counter disagree
+  (`Mbit/s × 15 s × 125000` more than 10 % off the bytes, a unit or parser
+  bug) is stored and acked as `unit_mismatch`, in `ingest_issues` and in the
+  row's `diagnostics`, and `wan_bottleneck` never counts it. A `diagnostics`
+  object with no allowed key or over 2048 bytes is left off the row as
+  `speedtest_diagnostics_dropped`.
+
 **Agent 0.1.7 (OpenWrt) adds** `wifi_radios[]` (one object per wireless netdev,
 at most 16: band derived from the frequency, generation and width, client
 counts by capability and encryption, noise and channel busy), `storage_disks[]`
@@ -1125,8 +1149,9 @@ Out of range, negative, fractional or not a number is `null`, never a bound.
 
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 
-Interface for remote measurement nodes. Authorised by a shared `cron_key`
-(`hash_equals`, so without a timing side channel).
+Interface for remote measurement nodes. Authorised by a shared `cron_key`,
+sent as `?key=` or in the `X-Node-Key` header (`hash_equals`, so without a
+timing side channel); with `cron_key` empty every call is 403.
 
 A node downloads the list of monitors to check and posts results back, including
 `checked_from`. That value is what fills `action=regions`.

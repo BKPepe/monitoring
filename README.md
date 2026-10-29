@@ -13,8 +13,7 @@ not another hosted uptime-checker SaaS.
 This is an NPM workspaces monorepo (`apps/site`, `apps/worker`, `apps/monitor`).
 `apps/status` is a standalone PHP application outside the NPM workspaces — the
 reference self-hosted implementation of the monitoring dashboard, i.e. what you
-deploy on your own hosting. `apps/server` is a Go rewrite of that backend, not
-yet deployed:
+deploy on your own hosting:
 
 ```
 /
@@ -22,8 +21,7 @@ yet deployed:
 │   ├── site/                      # Astro v5 - static landing page (SSG), EN + CS
 │   ├── worker/                    # Cloudflare Worker + Hono - backend API for the landing page
 │   ├── monitor/                   # React SPA - monitoring app, served at bloodkings.eu/app/
-│   ├── status/                    # PHP - self-hosted monitoring dashboard (live backend)
-│   └── server/                    # Go + Postgres - future backend replacing apps/status (not deployed)
+│   └── status/                    # PHP - self-hosted monitoring dashboard (live backend)
 ├── agents/                        # git submodule -> BKPepe/monitoring-agent
 ├── .github/
 │   └── workflows/                 # deploy.yml (site+worker), deploy-hosting.yml (FTP:
@@ -146,7 +144,7 @@ After the history squash (2026-08) both the app and the agents restarted at
 
 ## 🔍 Static analysis
 
-CodeQL scans **only `javascript-typescript` and `go`** — GitHub CodeQL has no
+CodeQL scans **only `javascript-typescript`** — GitHub CodeQL has no
 PHP support at all. Its green tick therefore says nothing about the PHP backend,
 where every authorisation, CSRF and token check lives. A security audit on
 2026-08-23 found two PHP-side issues that CodeQL was structurally incapable of

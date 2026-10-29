@@ -1,4 +1,4 @@
-name: Deploy Go Backend & Monitor SPA to cPanel
+name: Deploy the Monitor SPA (/app) to cPanel
 
 # Runs only from deploy-hosting.yml, which decides what changed and keeps the
 # FTP deploys in one queue (see there). Its own push trigger and concurrency
@@ -9,28 +9,12 @@ on:
 
 jobs:
   build-and-deploy:
-    name: Build Go Server & React SPA, Deploy via FTP
+    name: Build React SPA, Deploy via FTP
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v7
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: '1.26.x'
-          cache-dependency-path: 'apps/server/go.sum'
-
-      - name: Build Go Server & CLI Binaries (Linux amd64)
-        run: |
-          mkdir -p bin
-          cd apps/server
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../../bin/server ./cmd/server
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ../../bin/bkctl ./cmd/bkctl
-          cp ../../bin/server ../../server
-          cp ../../bin/bkctl ../../bkctl
-          echo "Go server and bkctl CLI binaries built successfully into bin/ directory."
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -40,61 +24,20 @@ jobs:
           cache: 'npm'
           cache-dependency-path: 'package-lock.json'
 
-      - name: Build React Monitor Frontend & Astro Main Portal
+      # Only the SPA goes to /app. apps/site is published to Pages by
+      # deploy.yml and quality.yml builds every workspace, so building it here
+      # only let a broken site hold back an /app deploy.
+      - name: Build React Monitor SPA
         run: |
           npm ci
           npm run build --workspace=apps/monitor
-          npm run build --workspace=apps/site
-          echo "Frontends built successfully."
-
-      - name: Generate .env Configuration File
-        env:
-          BK_DB_URL: ${{ secrets.BK_DATABASE_URL || secrets.POSTGRES_DB_URL }}
-          BK_SEC_KEY: ${{ secrets.BK_SECRET_KEY }}
-        run: |
-          if [ -n "$BK_DB_URL" ]; then
-            echo "Generating .env file from GitHub Secrets..."
-            echo "BK_DATABASE_URL=$BK_DB_URL" > .env
-            if [ -n "$BK_SEC_KEY" ]; then
-              echo "BK_SECRET_KEY=$BK_SEC_KEY" >> .env
-            else
-              echo "BK_SECRET_KEY=$(openssl rand -hex 32)" >> .env
-            fi
-            echo "BK_ENV=production" >> .env
-            echo "BK_ADDR=:8090" >> .env
-            cp .env bin/.env
-          else
-            echo "No BK_DATABASE_URL secret set in GitHub. Skipping .env generation."
-          fi
+          echo "SPA built successfully."
 
       # `timeout` je necinnost ridiciho socketu, ne celkovy limit. Pri 60 s
       # padal deploy na "Timeout (control socket)" pokazde, kdyz hosting pod
       # zatezi zaseknul prenos vetsiho souboru - server pritom odpovida
       # normalne, jen pomalu. 300 s ceka, misto aby to shodilo cely deploy.
-      - name: FTP Deploy Go Backend Subdirectory (bin/) for cPanel Application Manager
-        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
-        with:
-          server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
-          username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
-          password: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
-          local-dir: ./bin/
-          server-dir: bin/
-          protocol: ftps
-          timeout: 300000
-          # Verify the certificate (the action's default is "loose"); the
-          # hosting's certificate is valid for FTP_SERVER.
-          security: strict
-
-
-
-
-
-      # Frontend se nasazuje i kdyz upload Go backendu selhal: jsou to dve
-      # nezavisle veci na jednom serveru a nekolikrat uz kvuli backendu
-      # zustaly zmeny v SPA nenasazene ("skipped"). Job je pritom porad
-      # cerveny, kdyz selze kterykoli krok - nic se neschovava.
       - name: FTP Deploy React Dashboard to public_html/app/
-        if: ${{ !cancelled() }}
         uses: SamKirkland/FTP-Deploy-Action@v4.4.0
         with:
           server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
@@ -114,18 +57,19 @@ jobs:
       # FTP-Deploy-Action umí dotfiles v kořeni local-dir tiše přeskočit
       # (stavový diff) - a bez .htaccess vrací F5 na /app/<route> 404.
       # Soubor se proto nahrává ještě explicitně přes curl, ať tam JE.
+      # Only after the SPA upload went through: a new .htaccess over the old
+      # SPA can rewrite to a file that is not on the server yet.
       - name: Upload SPA .htaccess explicitly
-        if: ${{ !cancelled() }}
         env:
           FTP_HOST: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
           FTP_USER: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
           FTP_PASS: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
         run: |
           set -eu
-          # Ucet ma na hostingu jen par soucasnych FTP sezeni a hned po dvou
-          # velkych uploadech jeste nejsou uvolnena - prvni pokus proto konci
-          # na "server response timeout". Tri pokusy s odstupem, teprve pak je
-          # to chyba.
+          # The hosting allows only a few concurrent FTP sessions and right
+          # after the big SPA upload they are not free yet, so the first try
+          # can end in "server response timeout". Three spaced tries, only
+          # then is it an error.
           for attempt in 1 2 3; do
             if curl --silent --show-error --ssl-reqd --ftp-pasv \
               --connect-timeout 20 --max-time 180 \
@@ -147,6 +91,8 @@ jobs:
       # ma spadnout deploy, ne az uzivatel. Historicky to shodila registrace
       # aplikace na URL /app v cPanelu (Passenger context ignoroval
       # .htaccess) - prvni misto, kam se pri selhani podivat.
+      # It only reads what is live, so it runs after a failed step too: a
+      # half-finished upload is what it has to catch.
       - name: Verify SPA deep-link refresh works
         if: ${{ !cancelled() }}
         env:

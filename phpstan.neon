@@ -1,6 +1,6 @@
 # Static analysis of the PHP backend.
 #
-# Why this exists: CodeQL scans only javascript-typescript and go (see
+# Why this exists: CodeQL scans only javascript-typescript (see
 # .github/workflows/codeql.yml), and GitHub CodeQL has no PHP support at all -
 # so the entire backend, where every authorisation, CSRF and token check lives,
 # had no static analysis whatsoever. A security audit on 2026-08-23 found two

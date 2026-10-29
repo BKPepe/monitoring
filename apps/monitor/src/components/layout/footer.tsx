@@ -102,7 +102,7 @@ export function Footer({ version }: { version: string }) {
                 {t('footer.docs_section3_title', '3. Veřejné API & Prometheus Exportér')}
               </h4>
               <p className="bg-muted rounded border border-border p-2 font-mono text-2xs leading-relaxed">
-                GET https://bloodkings.eu/api/v1/public_status
+                GET https://bloodkings.eu/status/api.php?action=public_status
                 <br />
                 GET https://bloodkings.eu/status/metrics.php (Prometheus format)
               </p>

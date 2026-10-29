@@ -990,6 +990,29 @@ i jen s klíčem cronu a kdo má klíč cronu, může přidávat monitory. Insta
 dá každé čerstvé instalaci vlastní `cron_key`; když jsou prázdné oba,
 registrace se odmítne (403). Špatný token je 403.
 
+**Odpověď je cesta zpět k agentovi, ne jen potvrzení.**
+
+- Čeká-li na monitor Remote Action (Remote Actions zapnuté a akce mezi
+  povolenými), nese odpověď `pending_action`: `action_id`, `action`,
+  `timestamp`, `nonce` a `signature`, tedy HMAC-SHA256 řetězce
+  `action=…|ts=…|nonce=…` s klíčem `agent_key` monitoru. Agent jedná jen
+  podle platného podpisu. `service_name` jde mimo podepsaný řetězec, protože
+  nasazení agenti podepisují právě ta tři pole. Jedna akce na odpověď, při
+  odeslání označená `sent`, takže se nikdy nepodepíše a nepošle dvakrát.
+- Hlášení se `speedtests[]` (agent 0.1.7, z jednoho hlášení nejvýš 50)
+  dostane `speedtests_acked`: časovou značku nejnovější uložené položky
+  (i znovu poslané) starší než každá položka, jejíž uložení selhalo. Agent
+  smaže soubory s výsledky jen po ni a nikdy na holou 200; `null` = žádná,
+  takže přijde všechno znovu (unikátní klíč z toho dělá no-op). Selhané
+  uložení je `speedtest_store_failed` v `last_details.ingest_issues`;
+  položka bez času měření je `speedtest_rejected` a potvrzení nezdrží.
+  Položka, jejíž rychlost nesedí s počítadlem bajtů (`Mbit/s × 15 s ×
+  125000` se od bajtů liší o víc než 10 %, chyba jednotky nebo parseru), se
+  uloží a potvrdí jako `unit_mismatch`, v `ingest_issues` i v `diagnostics`
+  řádku, a `wan_bottleneck` ji nikdy nezapočítá. Objekt `diagnostics` bez
+  povoleného klíče nebo nad 2048 bajtů se k řádku neuloží a hlásí se jako
+  `speedtest_diagnostics_dropped`.
+
 **Agent 0.1.7 (OpenWrt) přidává** `wifi_radios[]` (jeden objekt na bezdrátové
 síťové zařízení, nejvýš 16: pásmo odvozené z frekvence, generace a šířka, počty
 klientů podle schopností a šifrování, šum a vytížení kanálu), `storage_disks[]`
@@ -1105,7 +1128,8 @@ Hodnota mimo rozsah, záporná, desetinná nebo nečíselná je `null`, nikdy me
 ### `GET|POST node_api.php?action=get_monitors|post_results`
 
 Rozhraní pro vzdálené měřicí uzly. Autorizace sdíleným `cron_key`
-(`hash_equals`, tedy bez časového postranního kanálu).
+v `?key=` nebo v hlavičce `X-Node-Key` (`hash_equals`, tedy bez časového
+postranního kanálu); s prázdným `cron_key` je každé volání 403.
 
 Uzel si stáhne seznam monitorů ke kontrole a pošle zpátky výsledky včetně
 `checked_from`. Právě tahle hodnota plní `action=regions`.

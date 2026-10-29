@@ -2,7 +2,7 @@ name: Deploy to the hosting (FTP)
 
 # The ONE entry point for everything that goes to the hosting over FTP:
 #   status - apps/status + the agents   (deploy-status.yml)
-#   app    - the app at /app + Go bin/   (deploy-go.yml)
+#   app    - the app at /app            (deploy-app.yml)
 #   root   - the portal's named files   (deploy-root.yml)
 # Those three are reusable workflows and run only from here, one after another.
 #
@@ -35,12 +35,11 @@ on:
       # The script that copies and checks the agents for deploy-status.yml;
       # the `decide status` regex below names it too.
       - 'scripts/assemble-agents.sh'
-      - 'apps/server/**'
       - 'apps/monitor/**'
       - 'root/**'
       - '.github/workflows/deploy-hosting.yml'
       - '.github/workflows/deploy-status.yml'
-      - '.github/workflows/deploy-go.yml'
+      - '.github/workflows/deploy-app.yml'
       - '.github/workflows/deploy-root.yml'
 
   # Manual run: redeploy without a code change (Actions missed a push, or
@@ -131,7 +130,7 @@ jobs:
             echo "$1: $on"
           }
           decide status '^(apps/status/|agents$|scripts/assemble-agents\.sh$|\.github/workflows/deploy-status\.yml$)'
-          decide app '^(apps/server/|apps/monitor/|\.github/workflows/deploy-go\.yml$)'
+          decide app '^(apps/monitor/|\.github/workflows/deploy-app\.yml$)'
           decide root '^(root/|\.github/workflows/deploy-root\.yml$)'
 
   # One part after another. `!cancelled()`: a failed part does not hold back
@@ -148,7 +147,7 @@ jobs:
     name: app
     needs: [plan, status]
     if: ${{ !cancelled() && needs.plan.outputs.app == 'true' }}
-    uses: ./.github/workflows/deploy-go.yml
+    uses: ./.github/workflows/deploy-app.yml
     secrets: inherit
 
   root:

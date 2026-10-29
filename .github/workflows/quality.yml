@@ -169,7 +169,7 @@ jobs:
   phpstatic:
     name: PHP statická analýza (PHPStan, Psalm taint)
     runs-on: ubuntu-latest
-    # Proc tenhle job existuje: CodeQL skenuje jen javascript-typescript a go
+    # Proc tenhle job existuje: CodeQL skenuje jen javascript-typescript
     # (viz codeql.yml) a PHP neumi vubec - cely backend, kde zije autorizace,
     # CSRF i prace s tokeny, tedy nemel zadnou statickou analyzu. Audit
     # 2026-08-23 nasel v PHP dve zranitelnosti, ktere CodeQL videt nemohl,
@@ -209,31 +209,6 @@ jobs:
       # a build shodi.
       - name: Psalm taint analýza
         run: psalm --taint-analysis --no-cache --no-progress
-
-  go:
-    name: Go backend (vet, testy)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          # Verze se čte z go.mod - natvrdo zapsaná '1.23' rozbila job,
-          # protože go.mod vyžaduje novější toolchain.
-          go-version-file: apps/server/go.mod
-          cache-dependency-path: apps/server/go.sum
-      - name: go vet
-        working-directory: apps/server
-        run: go vet ./...
-      - name: Testy s coverage
-        working-directory: apps/server
-        run: go test ./... -coverprofile=coverage.out -covermode=atomic
-      - name: Upload Go coverage
-        uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: go-coverage
-          path: apps/server/coverage.out
-          if-no-files-found: ignore
 
   perf:
     name: Výkon produkčních endpointů

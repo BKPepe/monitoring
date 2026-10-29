@@ -19,7 +19,6 @@ export default tseslint.config(
       '**/.astro/**',
       '**/.wrangler/**',
       'apps/status/**',
-      'apps/server/**',
       'agents/**',
     ],
   },

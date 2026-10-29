@@ -7,7 +7,7 @@
  * invented data - via `isMock` the UI only reports the API was unreachable).
  *
  * The types match what `apps/status/api.php` really returns —
- * viz `apps/server/API-CONTRACT.md`.
+ * see `docs/api.md`.
  */
 
 /**
