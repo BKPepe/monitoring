@@ -407,10 +407,10 @@ function bk_install_write_config(string $dir, string $text): string {
 /**
  * Runs schema.sql statement by statement and stops at the first real error.
  *
- * "Already exists" errors are skipped: they are what re-running a partly
- * imported file produces (1050 table, 1060 column, 1061 index, 1062 row,
- * 1826 foreign key). The statement number goes back to the app; the MySQL
- * text goes to the server log only.
+ * "Already exists" errors are skipped, a seed row included: they are what
+ * re-running a partly imported file produces (bk_db_already_applied in
+ * db.php, the rule the migrations follow too, rows aside). The statement
+ * number goes back to the app; the MySQL text goes to the server log only.
  *
  * @return array{ok: bool, executed: int, total: int, statement?: int, driverCode?: ?int}
  */
@@ -421,8 +421,8 @@ function bk_install_import_schema(PDO $pdo, string $sql): array {
         try {
             $pdo->exec($statement);
         } catch (PDOException $e) {
-            $driver = isset($e->errorInfo[1]) ? (int)$e->errorInfo[1] : null;
-            if (!in_array($driver, [1050, 1060, 1061, 1062, 1826], true)) {
+            if (!bk_db_already_applied($e, rows: true)) {
+                $driver = isset($e->errorInfo[1]) ? (int)$e->errorInfo[1] : null;
                 error_log('[installer] schema.sql statement ' . ($i + 1) . ' failed: ' . $e->getMessage());
                 return ['ok' => false, 'executed' => $executed, 'total' => count($statements), 'statement' => $i + 1, 'driverCode' => $driver];
             }

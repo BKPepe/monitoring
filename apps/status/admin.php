@@ -394,7 +394,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
             $agent_key = bin2hex(random_bytes(16));
             // Monitor nikdy nezůstává bez assetu - bez výběru/nového jména dostane
             // vlastní 1:1 asset pojmenovaný po sobě (stejný fallback jako zpětná
-            // migrace v db.php pro monitory, co existovaly před Phase 4).
+            // migrace v migrations.php pro monitory, co existovaly před Phase 4).
             if ($asset_id === null) {
                 $stmt_auto_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
                 $stmt_auto_asset->execute([$name]);
@@ -443,7 +443,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['rename_asset']) && $u
 }
 
 // 2c. Smazání assetu (Phase 4) - jen pokud je prázdný, aby nikdy tiše
-// neosiřely monitory (viz FOREIGN KEY ... ON DELETE SET NULL v db.php, což by
+// neosiřely monitory (viz FOREIGN KEY ... ON DELETE SET NULL v migrations.php, což by
 // se stalo, kdyby šlo smazat i neprázdný asset - raději to admin udělá vědomě
 // přeřazením monitorů jinam, ne omylem kliknutím na "smazat").
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_asset']) && isset($_POST['id']) && $user_role === 'admin') {

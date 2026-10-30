@@ -152,13 +152,19 @@ file_put_contents($config_path, "<?php\n"
 
 // --- 4. The built-in PHP server -------------------------------------------
 // Its stderr is the error log of every request (error_log() writes there), so
-// a check can read what one request logged: from the size before it.
+// a check can read what one request logged: from the size before it. The
+// migration checks read what db.php and migrations.php logged.
 $server_log = (string)tempnam(sys_get_temp_dir(), 'bk_test_log');
 $server = proc_open(
     sprintf('php -S 127.0.0.1:%d -t %s', $port, escapeshellarg($root)),
     [1 => ['file', '/dev/null', 'w'], 2 => ['file', $server_log, 'a']],
     $pipes
 );
+
+/** The migration lines the server has logged so far ("[db] migration ..." and the version). */
+$migration_log = function () use ($server_log): array {
+    return array_values(preg_grep('/\[db\] (migration|schema_version)/', file($server_log, FILE_IGNORE_NEW_LINES) ?: []) ?: []);
+};
 
 $cleanup = function () use ($server, $config_path, $config_backup, $server_log) {
     if (is_resource($server)) {
@@ -262,6 +268,13 @@ function api_get_auth(string $base, string $query, string $jar): array {
 check('schema.sql nezakládá žádný účet (žádné výchozí heslo)', (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn(), 0);
 [, $fresh_session] = api_get($base, 'action=session');
 check('čerstvá instalace hlásí installed=false', $fresh_session['installed'] ?? 'chybí', false);
+// schema.sql stores an older schema_version, so that first request ran every
+// migration over a fresh schema: each one found its change already there,
+// none failed for real, and the version was stored.
+$schema_version_src = preg_match("/BK_SCHEMA_VERSION',\s*'([0-9a-z]+)'/", (string)file_get_contents($root . '/db.php'), $sv_m) ? $sv_m[1] : null;
+check('čerstvá instalace: migrace doběhnou bez chyby a uloží verzi schématu',
+    [$pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn(), $migration_log()],
+    [$schema_version_src, []]);
 // W2-12: the login page draws a button only for a provider with a client ID.
 check('bez OAuth klienta session nenabízí žádného poskytovatele', $fresh_session['oauthProviders'] ?? 'chybí', []);
 $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('oauth_github_client_id', 'Iv1.example') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
@@ -6402,7 +6415,7 @@ check('zóna, která s PHP už souhlasí, zůstane', bk_db_clock_sync($tzc, 'Bk/
 $tzc = null;
 
 // --- Router release migration (schema 20260920) ---------------------------
-// The schema lint compares db.php with schema.sql as TEXT. Only a real run on
+// The schema lint compares migrations.php with schema.sql as TEXT. Only a real run on
 // an older database shows that the block at the end of the migrations works:
 // that the speedtest columns arrive although their table is created late, and
 // that the repair UPDATEs run after the column they filter on exists.
@@ -7630,6 +7643,173 @@ try {
 }
 
 // =======================================================================
+// A migration that fails for real keeps the old schema_version.
+//
+// Every migration error used to be swallowed and the version stored anyway,
+// so a failed statement was not tried again until the next bump. A check row
+// with no status makes the migration that sets monitor_logs.status NOT NULL
+// fail with 1138 in MySQL's strict mode (not an "already there" code): the
+// version stays, the failed run is kept, and the list runs again 10 minutes
+// later - not on every request in between, which reran every step while the
+// cause lasted. health.php says so meanwhile. Once the row is gone, the next
+// run after the 10 minutes succeeds, stores the version and drops the record.
+// =======================================================================
+$schema_stored = fn () => $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn();
+$schema_failed_run = fn (): ?array => json_decode((string)$pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_migrations_failed'")->fetchColumn(), true);
+// The 10 minutes are over: the kept run moves 11 minutes back.
+$schema_wait_over = function () use ($pdo, $schema_failed_run): void {
+    $run = $schema_failed_run();
+    if (!is_array($run)) {
+        return;
+    }
+    $run['at'] -= 660;
+    $run['retry'] -= 660;
+    $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'schema_migrations_failed'")->execute([json_encode($run)]);
+};
+$schema_health = function () use ($page_get, $cookie_jar): array {
+    [, $b] = $page_get('/health.php?format=json', $cookie_jar);
+    return array_values(array_filter(json_decode($b, true)['checks'] ?? [], fn ($x) => ($x['name'] ?? '') === 'schema_version'))[0] ?? [];
+};
+check_true('testovací MySQL běží ve striktním režimu (bez něj NOT NULL nad NULL neselže)',
+    str_contains((string)$pdo->query('SELECT @@GLOBAL.sql_mode')->fetchColumn(), 'STRICT_TRANS_TABLES'));
+$me_log_before = count($migration_log());
+$pdo->exec("ALTER TABLE monitor_logs MODIFY COLUMN status VARCHAR(20) NULL");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, checked_from) VALUES (1, NULL, 'Test migrace')");
+try {
+    $force_schema_bump();
+    [$me_code] = api_get($base, 'action=public_status');
+    check('migrace se skutečnou chybou: request sám projde', $me_code, 200);
+    check('migrace se skutečnou chybou: verze schématu zůstane stará', $schema_stored(), 'test-old');
+    $me_lines = array_slice($migration_log(), $me_log_before);
+    check('a do logu jde ten jeden krok s chybou MySQL a verze, která zůstala, i s časem dalšího pokusu', [
+        count($me_lines),
+        preg_match('/\[db\] migration \d+ of \d+ failed \(ALTER TABLE monitor_logs MODIFY COLUMN status VARCHAR\(20\) NOT NULL\): SQLSTATE\[22004\]: .*1138/', $me_lines[0] ?? ''),
+        preg_match("/\\[db\\] schema_version stays 'test-old': 1 migrations failed \\(\\d+\\), the list runs again after \\d\\d:\\d\\d:\\d\\d$/", $me_lines[1] ?? ''),
+    ], [2, 1, 1]);
+    $me_run = $schema_failed_run();
+    check('neúspěšný běh se uloží s verzí, krokem a dalším pokusem za 10 minut', [
+        $me_run['version'] ?? null, count($me_run['steps'] ?? []), abs((int)($me_run['at'] ?? 0) - time()) <= 60,
+        (int)($me_run['retry'] ?? 0) - (int)($me_run['at'] ?? 0),
+    ], [$schema_version_src, 1, true, 600]);
+    [$me_code] = api_get($base, 'action=public_status');
+    check('další request do 10 minut seznam znovu nespustí, projde a verze zůstane',
+        [$me_code, $schema_stored(), count(array_slice($migration_log(), $me_log_before))], [200, 'test-old', 2]);
+    $me_check = $schema_health();
+    check('health.php místo OK hlásí krok, který selhal, a kdy se zkusí znovu', [
+        $me_check['ok'] ?? null,
+        preg_match("/^test-old, not {$schema_version_src}: migration step \\d+ failed at [0-9: -]{19}, next try after \\d\\d:\\d\\d:\\d\\d; the error log has the cause$/", (string)($me_check['detail'] ?? '')),
+    ], [false, 1]);
+    // After the 10 minutes the list runs again; the row is still there.
+    $schema_wait_over();
+    api_get($base, 'action=public_status');
+    check('po 10 minutách seznam běží znovu, krok zase selže a čeká se dalších 10 minut', [
+        $schema_stored(), count(array_slice($migration_log(), $me_log_before)), abs((int)($schema_failed_run()['at'] ?? 0) - time()) <= 60,
+    ], ['test-old', 4, true]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE checked_from = 'Test migrace'");
+}
+api_get($base, 'action=public_status');
+check('opravená data: do konce 10 minut seznam neběží a verze je pořád stará',
+    [$schema_stored(), count(array_slice($migration_log(), $me_log_before))], ['test-old', 4]);
+$schema_wait_over();
+api_get($base, 'action=public_status');
+check('bez vadného řádku migrace doběhne, uloží verzi, záznam o selhání smaže a status je zase NOT NULL', [
+    $schema_stored(),
+    $schema_failed_run(),
+    $pdo->query("SELECT IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'monitor_logs' AND COLUMN_NAME = 'status'")->fetchColumn(),
+    count(array_slice($migration_log(), $me_log_before)),
+], [$schema_version_src, null, 'NO', 4]);
+$me_check = $schema_health();
+check('a health.php verzi zase pustí', [$me_check['ok'] ?? null, $me_check['detail'] ?? null], [true, $schema_version_src]);
+
+// A duplicate row (1062) is "already there" only for the installer's seed
+// INSERTs. In the migrations only CREATE UNIQUE INDEX raises it, over rows
+// that break the index: two monitors with one heartbeat token leave the
+// index unbuilt, and the version stays until the data is fixed.
+$hb_tokens = $pdo->query("SELECT id, heartbeat_token FROM monitors WHERE id IN (1, 2)")->fetchAll(PDO::FETCH_KEY_PAIR);
+$hb_index = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'monitors' AND INDEX_NAME = 'idx_monitors_heartbeat_token'")->fetchColumn();
+check('unikátní index tokenů heartbeatu po migracích existuje', $hb_index(), 1);
+$hb_log_before = count($migration_log());
+$pdo->exec("DROP INDEX idx_monitors_heartbeat_token ON monitors");
+$pdo->exec("UPDATE monitors SET heartbeat_token = 'test-dup-token' WHERE id IN (1, 2)");
+try {
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    $hb_lines = array_slice($migration_log(), $hb_log_before);
+    check('dva monitory s jedním tokenem: index nevznikne, verze zůstane a log jmenuje krok s 1062', [
+        $hb_index(),
+        $schema_stored(),
+        count($hb_lines),
+        preg_match('/\[db\] migration \d+ of \d+ failed \(CREATE UNIQUE INDEX idx_monitors_heartbeat_token ON monitors \(heartbeat_token\)\): SQLSTATE\[23000\]: .*1062/', $hb_lines[0] ?? ''),
+        count($schema_failed_run()['steps'] ?? []),
+    ], [0, 'test-old', 2, 1, 1]);
+} finally {
+    $hb_restore = $pdo->prepare("UPDATE monitors SET heartbeat_token = ? WHERE id = ?");
+    foreach ([1, 2] as $hb_id) {
+        $hb_restore->execute([$hb_tokens[$hb_id] ?? null, $hb_id]);
+    }
+}
+$schema_wait_over();
+api_get($base, 'action=public_status');
+check('po opravě dat a 10 minutách migrace index postaví, uloží verzi a záznam smaže', [
+    $hb_index(),
+    $schema_stored(),
+    $schema_failed_run(),
+    count(array_slice($migration_log(), $hb_log_before)),
+], [1, $schema_version_src, null, 2]);
+
+// =======================================================================
+// db.php runs only the list migrations.php holds for its own version, and
+// only when the file is there.
+//
+// FTP replaces files in name order, so a deploy puts a new db.php next to
+// the old migrations.php for a moment: that list finds its steps applied,
+// and running it would store the new version without the new steps. A file
+// that is gone (a malware scanner's quarantine took agent.sh before, and the
+// sync state never uploads a file it thinks is there) was a fatal error on
+// every request. Both are a logged skip: the request goes on and the version
+// stays. A copy of db.php in a folder of its own runs both cases without
+// touching the files the test server serves.
+// =======================================================================
+$hu_dir = sys_get_temp_dir() . '/bk_half_upload_' . bin2hex(random_bytes(4));
+$hu_log = $hu_dir . '/error.log';
+$hu_run = function () use ($hu_dir, $hu_log): array {
+    @unlink($hu_log);
+    $out = [];
+    exec(escapeshellarg(PHP_BINARY) . ' -d log_errors=1 -d error_log=' . escapeshellarg($hu_log) . ' -r '
+        . escapeshellarg('require ' . var_export($hu_dir . '/db.php', true) . '; echo "request done";') . ' 2>&1', $out, $rc);
+    return [$rc, implode("\n", $out), array_values(preg_grep('/\[db\] (migration|schema_version)/', file($hu_log, FILE_IGNORE_NEW_LINES) ?: []) ?: [])];
+};
+$hu_other = str_replace("return '{$schema_version_src}';", "return 'test-other';",
+    (string)file_get_contents($root . '/migrations.php'), $hu_replaced);
+mkdir($hu_dir, 0700);
+try {
+    // cloudflare_colos.php only for a list that should not have run.
+    foreach (['db.php', 'config.php', 'cloudflare_colos.php'] as $hu_file) {
+        copy($root . '/' . $hu_file, $hu_dir . '/' . $hu_file);
+    }
+    $force_schema_bump();
+    [$hu_rc, $hu_out, $hu_lines] = $hu_run();
+    check('bez migrations.php request doběhne, verze zůstane a log řekne proč', [
+        $hu_rc, $hu_out, $schema_stored(), count($hu_lines),
+        str_contains($hu_lines[0] ?? '', "[db] schema_version stays 'test-old': migrations.php is missing, the list did not run"),
+    ], [0, 'request done', 'test-old', 1, true]);
+    check('kopie migrations.php nese jinou verzi', $hu_replaced, 1);
+    file_put_contents($hu_dir . '/migrations.php', $hu_other);
+    [$hu_rc, $hu_out, $hu_lines] = $hu_run();
+    check('migrations.php pro jinou verzi: seznam neběží, verze zůstane a log řekne proč', [
+        $hu_rc, $hu_out, $schema_stored(), count($hu_lines),
+        str_contains($hu_lines[0] ?? '', "[db] schema_version stays 'test-old': migrations.php is for test-other, db.php for {$schema_version_src}, the list did not run"),
+    ], [0, 'request done', 'test-old', 1, true]);
+} finally {
+    foreach (['db.php', 'config.php', 'cloudflare_colos.php', 'migrations.php', 'error.log'] as $hu_file) {
+        @unlink($hu_dir . '/' . $hu_file);
+    }
+    @rmdir($hu_dir);
+    $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'schema_version'")->execute([$schema_version_src]);
+}
+
+// =======================================================================
 // A remote probe only adds a row to the measurement history (R144).
 //
 // node_api's post_results wrote the probe's status straight into monitors,
@@ -7680,12 +7860,12 @@ try {
     check('sonda zapíše měření do historie i s místem; bez času je odezva NULL, ne 0 ms; do běžící údržby nic, po jejím konci ano',
         array_map(fn ($r) => [(int)$r['monitor_id'], $r['status'], $r['response_time'] === null ? null : (int)$r['response_time'], $r['error_message'], $r['checked_from']], $np_logs),
         [[176, 'down', 8000, 'Timeout after 8000ms', 'Testovací uzel'], [179, 'up', null, null, 'Testovací uzel']]);
-    // The column above comes from schema.sql (db.php's migration adds it to
-    // an older database). node_api.php ran the same ALTER TABLE on every
+    // The column above comes from schema.sql (a migration adds it to an
+    // older database). node_api.php ran the same ALTER TABLE on every
     // request and swallowed the duplicate-column error.
-    check('sloupec místa měření je ve schema.sql i v migraci db.php, node_api.php schéma nemění', [
+    check('sloupec místa měření je ve schema.sql i v migracích, node_api.php schéma nemění', [
         preg_match('/`checked_from` VARCHAR\(50\)/', (string)file_get_contents($root . '/schema.sql')),
-        preg_match('/ALTER TABLE monitor_logs ADD COLUMN checked_from\b/', (string)file_get_contents($root . '/db.php')),
+        preg_match('/ALTER TABLE monitor_logs ADD COLUMN checked_from\b/', (string)file_get_contents($root . '/migrations.php')),
         preg_match_all('/\b(?:ALTER|CREATE|DROP)\s+TABLE\b/i', (string)file_get_contents($root . '/node_api.php')),
     ], [1, 1, 0]);
 

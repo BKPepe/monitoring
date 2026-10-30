@@ -17,7 +17,8 @@ An open-source, ultra-fast server and service status monitoring application buil
 * `badge.php` - Dynamic vector SVG badge generator (`badge.php?id=12&type=status|uptime`).
 * `widget.php` - Compact iFrame status card for embedding on external websites.
 * `report.php` - SLA report generator (HTML/CSV format).
-* `db.php` - PDO database connection initializer with auto-migrations.
+* `db.php` - PDO database connection initializer; runs the migrations when the schema version changes.
+* `migrations.php` - The schema migrations: one ordered list and the runner that applies it.
 * `functions.php` - Core measurement library, alert routing (Pushover, PagerDuty, Telegram, Discord, Slack), and TOTP engine. It only defines functions; the tests require it without a database.
 * `bootstrap.php` - What every page and endpoint that uses `functions.php` loads first: `db.php`, the library, and the check of a signed-in account's role.
 * `schema.sql` - Complete MySQL database structure.

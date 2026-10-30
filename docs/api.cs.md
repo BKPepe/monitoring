@@ -1210,7 +1210,7 @@ výpadku, který potvrdil cron; `down` sondy ho dát může.
 | `metrics.php?token=…` | Prometheus text 0.0.4 | token | Scrapování externím Prometheem; bez nastaveného tokenu je vypnutý. Token lze poslat i hlavičkou `Authorization: Bearer` |
 | `badge.php?id=&type=` | 302 | veřejné | Zastaralý alias - přesměruje na `action=badge` (staré README embedy fungují dál) |
 | `widget.php?id=` | HTML | veřejné | Kompaktní vložení přes iframe |
-| `health.php` | JSON | admin nebo CLI | Kontrola úplnosti schématu databáze a toho, že config.php nic nevypisuje |
+| `health.php` | JSON | admin nebo CLI | Kontrola úplnosti schématu databáze a toho, že config.php nic nevypisuje. `schema_version` neprojde, dokud uložená verze není ta, kterou čeká db.php: krok migrace skutečně selhal (kontrola ho jmenuje a db.php seznam spustí znovu 10 minut po každém neúspěšném běhu), chybí migrations.php, nebo je nahrání v půlce |
 | `cron.php[?key=…]` | text | CLI nebo `cron_key` | Sběr dat; z webu jen s klíčem |
 
 ---

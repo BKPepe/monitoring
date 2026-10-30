@@ -109,12 +109,29 @@ try {
     add_check($checks, $all_ok, 'monitors columns', false, $e->getMessage());
 }
 
-// 5. schema_version
+// 5. schema_version: the one this db.php stores after its migrations. Any
+// other value means they did not finish, though every request still works:
+// a step failed for real (db.php tries again 10 minutes later, the error log
+// names the cause), migrations.php is missing, or an upload is half done.
 try {
-    $stmt = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = 'schema_version'");
-    $stmt->execute();
-    $ver = $stmt->fetchColumn();
-    add_check($checks, $all_ok, 'schema_version', !empty($ver), $ver ?: 'NOT SET - import schema.sql');
+    $stmt = $pdo->query("SELECT key_name, key_value FROM settings WHERE key_name IN ('schema_version', 'schema_migrations_failed')");
+    $schema_rows = $stmt->fetchAll(PDO::FETCH_KEY_PAIR);
+    $ver = (string)($schema_rows['schema_version'] ?? '');
+    $schema_failure = bk_schema_failure($schema_rows['schema_migrations_failed'] ?? null, BK_SCHEMA_VERSION);
+    if ($ver === BK_SCHEMA_VERSION) {
+        $schema_detail = $ver;
+    } elseif ($ver === '') {
+        $schema_detail = 'NOT SET - import schema.sql';
+    } elseif ($schema_failure !== null) {
+        $schema_detail = sprintf('%s, not %s: migration %s %s failed at %s, next try after %s; the error log has the cause',
+            $ver, BK_SCHEMA_VERSION, count($schema_failure['steps']) === 1 ? 'step' : 'steps', implode(', ', $schema_failure['steps']),
+            date('Y-m-d H:i:s', $schema_failure['at']), date('H:i:s', $schema_failure['retry']));
+    } elseif (!is_file(__DIR__ . '/migrations.php')) {
+        $schema_detail = $ver . ', not ' . BK_SCHEMA_VERSION . ': migrations.php is missing, upload it';
+    } else {
+        $schema_detail = $ver . ', not ' . BK_SCHEMA_VERSION . ': the migrations did not finish; the error log says why';
+    }
+    add_check($checks, $all_ok, 'schema_version', $ver === BK_SCHEMA_VERSION, $schema_detail);
 } catch (PDOException $e) {
     add_check($checks, $all_ok, 'schema_version', false, $e->getMessage());
 }

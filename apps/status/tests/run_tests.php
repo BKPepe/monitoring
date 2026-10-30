@@ -4572,7 +4572,7 @@ $_POST = ['host' => 'db.example.com', 'port' => '3307'];
 check('vstup bez JSON těla = pole formuláře', bk_install_input(), ['host' => 'db.example.com', 'port' => '3307']);
 
 // A connection test against a closed port fails fast and names no password.
-bk_test_load_functions(__DIR__ . '/../db.php', ['bk_db_dsn']);
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_db_dsn', 'bk_db_already_applied']);
 $in_pw = 'Pw-' . bin2hex(random_bytes(6));
 $in_conn = ['error' => 'connected'];
 $in_conn_msg = '';
@@ -4703,6 +4703,92 @@ check('import: jiná chyba zastaví import na čísle příkazu', [$in_res, (int
     [['ok' => false, 'executed' => 1, 'total' => 3, 'statement' => 2, 'driverCode' => 1146], 0]);
 check_true('a text chyby MySQL jde jen do logu serveru', str_contains((string)file_get_contents($in_log), '[installer] schema.sql statement 2 failed'));
 @unlink($in_log);
+
+// The migrations (migrations.php) count the same errors as done, except a
+// duplicate row: 1062 there is a UNIQUE index the data breaks. Any other
+// error is logged with its step and reported, and the steps after it still
+// run; db.php stores schema_version only when nothing is reported.
+bk_test_load_functions(__DIR__ . '/../migrations.php', ['bk_schema_migrations', 'bk_schema_migrate']);
+$mg_pdo = new BkInstallFakePdo();
+$mg_pdo->fail = $in_imp->fail;
+$mg_rows = fn (): int => (int)$mg_pdo->query('SELECT COUNT(*) FROM m')->fetchColumn();
+$mg_log = (string)tempnam(sys_get_temp_dir(), 'bk_migr_log');
+$mg_log_prev = ini_set('error_log', $mg_log);
+$mg_done = bk_schema_migrate($mg_pdo, [
+    'CREATE TABLE m (x INT)', "SELECT 'dup_1050'", "SELECT 'dup_1060'", "SELECT 'dup_1061'", "SELECT 'dup_1826'",
+    'zápis' => static function (PDO $pdo): void { $pdo->exec('INSERT INTO m VALUES (1)'); },
+    'hotový krok PHP' => static function (PDO $pdo): void { $pdo->exec("SELECT 'dup_1061'"); },
+]);
+$mg_done_rows = $mg_rows();
+$mg_failed = bk_schema_migrate($mg_pdo, [
+    "SELECT 'gone_1146'",
+    'INSERT INTO m VALUES (2)',
+    'krok PHP' => static function (PDO $pdo): void { $pdo->exec("SELECT 'gone_1146'"); },
+    'INSERT INTO m VALUES (3)',
+]);
+// What MySQL answers a unique index over two equal rows.
+$mg_pdo->fail['CREATE UNIQUE INDEX u'] = ['23000', 1062];
+$mg_dup_row = bk_schema_migrate($mg_pdo, ['CREATE UNIQUE INDEX u ON m (x)']);
+ini_set('error_log', (string)$mg_log_prev);
+$mg_logged = (string)file_get_contents($mg_log);
+@unlink($mg_log);
+check('migrace: "už existuje" (1050/1060/1061/1826) je hotové, kroky SQL i PHP proběhnou a nic se nenahlásí',
+    [$mg_done, $mg_done_rows], [[], 1]);
+check('migrace: duplicitní řádek (1062) hotový není, unikátní index nad porušenými daty chybí doopravdy', [
+    $mg_dup_row, str_contains($mg_logged, '[db] migration 1 of 1 failed (CREATE UNIQUE INDEX u ON m (x)): SQLSTATE[23000]'),
+], [[1], true]);
+check('migrace: skutečná chyba se nahlásí číslem kroku a kroky za ní přesto proběhnou', [$mg_failed, $mg_rows()], [[1, 3], 3]);
+check_true('migrace: chyba jde do logu s krokem, jeho příkazem nebo jménem a textem MySQL',
+    str_contains($mg_logged, "[db] migration 1 of 4 failed (SELECT 'gone_1146'): SQLSTATE[42S02]")
+    && str_contains($mg_logged, '[db] migration 3 of 4 failed (krok PHP): SQLSTATE[42S02]'));
+check_false('migrace: hotové kroky v logu nejsou', str_contains($mg_logged, 'dup_'));
+$mg_thrown = null;
+try {
+    bk_schema_migrate($mg_pdo, ['chyba kódu' => static function (PDO $pdo): void { throw new RuntimeException('bug'); }]);
+} catch (RuntimeException $e) {
+    $mg_thrown = $e->getMessage();
+}
+check('migrace: jinou výjimku než PDOException runner nespolkne', $mg_thrown, 'bug');
+$mg_steps = bk_schema_migrations();
+$mg_sql = array_values(array_filter($mg_steps, 'is_string'));
+check('seznam migrací: krok je příkaz SQL, nebo funkce se jménem do logu',
+    count(array_filter($mg_steps, fn ($step, $key) => is_string($step) || ($step instanceof Closure && is_string($key)), ARRAY_FILTER_USE_BOTH)),
+    count($mg_steps));
+check('seznam migrací: žádný příkaz se neopakuje (dvojí MODIFY status je pryč)', count(array_unique($mg_sql)), count($mg_sql));
+
+// The Cloudflare relabel only rewrites data. Like the named foreign key, its
+// error is logged and holds no version back: counted as a failed step, a
+// checked_from that is not utf8mb4 (1253 on the COLLATE) kept the version
+// behind for good, although every schema step was done.
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_cf_fix_location_history']);
+$mg_cf = new BkInstallFakePdo();
+$mg_cf->fail = ['COLLATE utf8mb4_bin' => ['42000', 1253]];
+$mg_log = (string)tempnam(sys_get_temp_dir(), 'bk_migr_log');
+$mg_log_prev = ini_set('error_log', $mg_log);
+$mg_cf_failed = bk_schema_migrate($mg_cf, ['Cloudflare location history' => $mg_steps['Cloudflare location history']]);
+ini_set('error_log', (string)$mg_log_prev);
+$mg_logged = (string)file_get_contents($mg_log);
+@unlink($mg_log);
+check('migrace: chyba přepisu míst Cloudflare jde do logu a verzi nedrží', [
+    $mg_cf_failed, str_contains($mg_logged, '[db] migration: the Cloudflare location history was not rewritten: SQLSTATE[42000]'),
+], [[], true]);
+
+// A failed run is kept with its version and time (schema_migrations_failed),
+// and for 10 minutes no request runs the list again. A record for another
+// version, or one that does not read, holds nothing back.
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_schema_failure', 'bk_schema_migrations_due']);
+$mg_record = (string)json_encode(['version' => 'v2', 'at' => 1000, 'retry' => 1600, 'steps' => [3, 7]]);
+$mg_failure = bk_schema_failure($mg_record, 'v2');
+check('migrace: neúspěšný běh se přečte s časem, dalším pokusem a kroky', $mg_failure, ['at' => 1000, 'retry' => 1600, 'steps' => [3, 7]]);
+check('migrace: do dalšího pokusu seznam neběží, od něj ano', [
+    bk_schema_migrations_due($mg_failure, 1000), bk_schema_migrations_due($mg_failure, 1599), bk_schema_migrations_due($mg_failure, 1600),
+], [false, false, true]);
+check_true('migrace: hodiny vrácené před selhání nečekají', bk_schema_migrations_due($mg_failure, 999));
+check('migrace: záznam pro jinou verzi, nečitelný, s časem jako text nebo žádný nic nedrží', [
+    bk_schema_failure($mg_record, 'v3'), bk_schema_failure('{', 'v2'), bk_schema_failure(null, 'v2'),
+    bk_schema_failure((string)json_encode(['version' => 'v2', 'at' => '1000', 'retry' => 1600]), 'v2'),
+    bk_schema_migrations_due(null, 1000),
+], [null, null, null, null, true]);
 
 check('cron: pod CLI je PHP binárka ta, která běží', bk_install_php_cli(), ['path' => PHP_BINARY, 'found' => true]);
 $in_req = bk_install_requirements();

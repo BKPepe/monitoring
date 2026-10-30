@@ -139,7 +139,7 @@ foreach ($monitors as $m) {
 }
 
 // Počet aktivně hlásících VPS/host agentů (stejná logika jako detekce v cron.php).
-// agent_key se automaticky generuje pro VŠECHNY monitory (viz migrace v db.php),
+// agent_key se automaticky generuje pro VŠECHNY monitory (viz migrations.php),
 // i ty bez jakéhokoli nainstalovaného agenta - takže "má agent_key" neznamená
 // "má nasazeného agenta". Počítáme proto jen monitory, u kterých se agent někdy
 // reálně ozval (agent_last_seen je vyplněné), ne jen ty s (nevyužitým) klíčem.

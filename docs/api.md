@@ -1236,7 +1236,7 @@ a probe's `down` can give it.
 | `metrics.php?token=…` | Prometheus text 0.0.4 | token | Scraping by an external Prometheus; disabled when no token is set. The token may also be sent as an `Authorization: Bearer` header |
 | `badge.php?id=&type=` | 302 | public | Deprecated alias - redirects to `action=badge` (old README embeds keep working) |
 | `widget.php?id=` | HTML | public | Compact embed via iframe |
-| `health.php` | JSON | admin or CLI | Database schema completeness check, and that config.php prints nothing |
+| `health.php` | JSON | admin or CLI | Database schema completeness check, and that config.php prints nothing. `schema_version` fails while the stored version is not the one db.php expects: a migration step failed for real (the check names it, and db.php runs the list again 10 minutes after each failed run), migrations.php is missing, or an upload is half done |
 | `cron.php[?key=…]` | text | CLI or `cron_key` | Data collection; from the web only with the key |
 
 ---

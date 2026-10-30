@@ -65,12 +65,12 @@ foreach ($files as $file) {
 }
 
 // Check that the "latest row by id" indexes exist in the migrations.
-$db_src = file_get_contents(__DIR__ . '/../db.php');
+$migrations_src = (string)file_get_contents(__DIR__ . '/../migrations.php');
 foreach (['monitor_logs (monitor_id, id)', 'vps_metrics (monitor_id, id)'] as $needed) {
     $normalized = str_replace(' ', '\s*', preg_quote($needed, '/'));
-    if (!preg_match('/' . $normalized . '/i', $db_src)) {
+    if (!preg_match('/' . $normalized . '/i', $migrations_src)) {
         $violations[] = [
-            'file' => 'db.php',
+            'file' => 'migrations.php',
             'rule' => "chybí index pro {$needed}",
             'snippet' => '-',
             'hint' => 'Dotazy typu ORDER BY id DESC LIMIT 1 potřebují složený index (monitor_id, id).',
