@@ -1005,7 +1005,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test_email']) && $use
         $sent_at = date('d.m.Y H:i:s');
         // Testovací e-mail jde na adresu přihlášeného admina - použije se
         // tedy JEHO jazyk (fallback globální), stejně jako u ostrých alertů.
-        $test_lang = in_array($me['email_lang'] ?? '', ['cs', 'en'], true) ? $me['email_lang'] : get_setting('email_lang', 'cs');
+        $test_lang = bk_recipient_lang($me ?: []);
         [$subject, $body] = bk_with_email_lang($test_lang, function () use ($sent_at) {
             $subject = t('test_email_subject');
             $body = '<h1>' . htmlspecialchars(t('test_email_heading')) . '</h1>
@@ -1070,7 +1070,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_monthly_digest']
 if (isset($_GET['action']) && in_array($_GET['action'], ['preview_weekly_digest', 'preview_monthly_digest'], true) && $user_role === 'admin') {
     $preview_period = $_GET['action'] === 'preview_monthly_digest' ? 'monthly' : 'weekly';
     // Náhled v jazyce, ve kterém by digest dorazil prohlížejícímu adminovi
-    $preview_lang = in_array($me['email_lang'] ?? '', ['cs', 'en'], true) ? $me['email_lang'] : get_setting('email_lang', 'cs');
+    $preview_lang = bk_recipient_lang($me ?: []);
     echo bk_with_email_lang($preview_lang, function () use ($pdo, $preview_period) {
         $preview_data = build_digest_data($pdo, $preview_period, false);
         return render_digest_html($preview_data);

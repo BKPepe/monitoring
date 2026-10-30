@@ -2247,6 +2247,25 @@ check('admin bez odběru vidí e-mail, který mu opravdu chodí', $gsub_by_id[1]
 check('a u druhého monitoru také', $gsub_by_id[2]['email'] ?? null, 1);
 check('SMS ukazuje přepínač monitoru', $gsub_by_id[1]['sms'] ?? null, 0);
 check('WhatsApp ukazuje přepínač profilu', $gsub_by_id[1]['whatsapp'] ?? null, 1);
+// The alert reads the rule the form shows, here on MySQL: bk_alert_audience()
+// gives the administrator exactly these channels for both monitors.
+$gsub_channels = fn (int $mid): array => array_intersect_key($gsub_by_id[$mid] ?? [], ['email' => 1, 'sms' => 1, 'whatsapp' => 1]);
+$gsub_aud = array_column(bk_alert_audience($pdo, [1, 2]), 'monitors', 'id')[1] ?? [];
+check('výstraha čte stejné kanály, jaké formulář ukazuje', [$gsub_aud[1] ?? null, $gsub_aud[2] ?? null],
+    [$gsub_channels(1), $gsub_channels(2)]);
+// A user hears about a monitor only with a subscription AND access to it.
+$pdo->prepare("INSERT INTO users (username, email, password_hash, role) VALUES ('aud_tester', 'aud@example.com', ?, 'user')")
+    ->execute([password_hash('PrijemciTest123!', PASSWORD_BCRYPT)]);
+$aud_uid = (int)$pdo->lastInsertId();
+$aud_hears = fn (): bool => in_array($aud_uid, array_column(bk_alert_audience($pdo, [1]), 'id'), true);
+$pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications) VALUES ({$aud_uid}, 1, 1)");
+check_false('odběr bez přístupu k monitoru: o výpadku nic', $aud_hears());
+$pdo->exec("INSERT INTO monitor_users (monitor_id, user_id) VALUES (1, {$aud_uid})");
+check_true('s přístupem ano', $aud_hears());
+$pdo->exec("DELETE FROM user_subscriptions WHERE user_id = {$aud_uid}");
+check_false('přístup bez odběru: nic', $aud_hears());
+$pdo->exec("DELETE FROM monitor_users WHERE user_id = {$aud_uid}");
+$pdo->exec("DELETE FROM users WHERE id = {$aud_uid}");
 // The card posts every row back with what it showed; only monitor 1 changes.
 $gsub_save = function (int $sms, int $shown_sms) use ($base, $cookie_jar, $gsub_rows): int {
     $rows = array_map(fn (array $r): array => [

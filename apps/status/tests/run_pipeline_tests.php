@@ -220,6 +220,32 @@ if (function_exists('bk_with_email_lang')) {
         // expected
     }
     check('výjimka v šabloně nenechá přepnutý jazyk', $GLOBALS['BK_LANG'], 'cs');
+
+    // Whom the e-mail speaks to: the account's own language, the global
+    // setting while it has none. Alerts, the reminder, the digest and the
+    // admin notices all ask the one helper instead of a copy each.
+    bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defaults']);
+    bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_recipient_lang', 'bk_render_per_lang']);
+    $rl_saved = $GLOBALS['system_settings'] ?? null;
+    $GLOBALS['system_settings'] = ['email_lang' => 'en'];
+    check('vlastní jazyk příjemce má přednost',
+        [bk_recipient_lang(['email_lang' => 'cs']), bk_recipient_lang(['email_lang' => 'en'])], ['cs', 'en']);
+    check('bez vlastního jazyka platí globální nastavení',
+        [bk_recipient_lang(['email_lang' => null]), bk_recipient_lang([]), bk_recipient_lang(['email_lang' => 'de'])],
+        ['en', 'en', 'en']);
+    $GLOBALS['system_settings'] = $rl_saved;
+
+    // Fifty recipients in two languages are two renders, each in its own
+    // language, and the request's language stays where it was.
+    $rl_calls = 0;
+    $rl_render = bk_render_per_lang(function () use (&$rl_calls): string {
+        $rl_calls++;
+        return t('day_no_data');
+    });
+    check('zpráva se vykreslí v jazyce příjemce',
+        [$rl_render('en'), $rl_render('cs'), $rl_render('en'), $rl_render('cs')], [$en_text, $cs_text, $en_text, $cs_text]);
+    check('a každý jazyk jen jednou', $rl_calls, 2);
+    check('jazyk požadavku zůstane', $GLOBALS['BK_LANG'], 'cs');
 }
 
 // =======================================================================
@@ -768,7 +794,7 @@ check_true('doručovací funkce sama nic neprotokoluje (jinak by řádky byly dv
 // The e-mail branch of trigger_notifications(): send_email() logs the attempt,
 // so the explicit call that used to stand right after it would double every row.
 $alert_mail_branch = (function () use ($mail_src): string {
-    $start = strpos($mail_src, "\$alert_email_by_lang[\$rec_lang];");
+    $start = strpos($mail_src, '$render_alert_email(bk_recipient_lang($rec));');
     $end = strpos($mail_src, '// SMS notifications', $start === false ? 0 : $start);
     return $start !== false && $end !== false ? substr($mail_src, $start, $end - $start) : '';
 })();
@@ -1213,9 +1239,10 @@ if (function_exists('bk_notification_problems')) {
 // =======================================================================
 bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_send_daily_reminder', 'bk_daily_reminder_collect', 'bk_daily_reminder_select',
-    'bk_daily_reminder_recipients', 'bk_daily_reminder_scope', 'bk_daily_reminder_scoped',
+    'bk_daily_reminder_recipients', 'bk_daily_reminder_scoped', 'bk_alert_audience', 'bk_subscription_effective',
     'bk_daily_reminder_due', 'bk_daily_reminder_text',
     'bk_render_daily_reminder', 'render_email_wrapper', 'bk_log_notification', 'bk_send_shared_channels',
+    'bk_recipient_lang', 'bk_render_per_lang',
     'bk_heartbeat_evaluate', 'bk_alert_color_class', 'bk_format_duration_secs',
 ]);
 bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defaults', 'bk_monitor_details']);
@@ -1243,8 +1270,9 @@ if (function_exists('bk_send_daily_reminder') && in_array('sqlite', PDO::getAvai
     $dr_pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
     $dr_pdo->exec("CREATE TABLE monitors (id INTEGER PRIMARY KEY, name TEXT, type TEXT, status TEXT,
         last_checked TEXT, last_status_change TEXT, last_details TEXT, maintenance INTEGER DEFAULT 0,
-        archived_at TEXT, email_notifications INTEGER DEFAULT 1, heartbeat_interval INTEGER,
-        heartbeat_grace INTEGER, last_heartbeat TEXT, heartbeat_last_result TEXT, heartbeat_last_message TEXT)");
+        archived_at TEXT, email_notifications INTEGER DEFAULT 1, sms_notifications INTEGER DEFAULT 0,
+        heartbeat_interval INTEGER, heartbeat_grace INTEGER, last_heartbeat TEXT, heartbeat_last_result TEXT,
+        heartbeat_last_message TEXT)");
     $dr_pdo->exec("CREATE TABLE monitor_logs (id INTEGER PRIMARY KEY, monitor_id INTEGER, status TEXT, error_message TEXT)");
     $dr_pdo->exec("CREATE TABLE incidents (id INTEGER PRIMARY KEY, title TEXT, impact TEXT, status TEXT,
         created_at TEXT, acknowledged_at TEXT, monitor_id INTEGER)");
@@ -1253,9 +1281,12 @@ if (function_exists('bk_send_daily_reminder') && in_array('sqlite', PDO::getAvai
     $dr_pdo->exec("CREATE TABLE notification_log (id INTEGER PRIMARY KEY, monitor_id INTEGER, status TEXT,
         channel TEXT, recipient TEXT, ok INTEGER, error_message TEXT, kind TEXT, subject TEXT, method TEXT,
         delivery TEXT, provider_reply TEXT)");
+    // The channel columns of all three tables, as in schema.sql: the reminder
+    // reads the alert's recipient rule, and that rule reads every channel.
     $dr_pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, email_lang TEXT, role TEXT,
-        phone TEXT, whatsapp_apikey TEXT, whatsapp_notifications INTEGER DEFAULT 0)");
-    $dr_pdo->exec("CREATE TABLE user_subscriptions (user_id INTEGER, monitor_id INTEGER, email_notifications INTEGER)");
+        phone TEXT, whatsapp_apikey TEXT, sms_notifications INTEGER DEFAULT 0, whatsapp_notifications INTEGER DEFAULT 0)");
+    $dr_pdo->exec("CREATE TABLE user_subscriptions (user_id INTEGER, monitor_id INTEGER, email_notifications INTEGER,
+        sms_notifications INTEGER DEFAULT 0, whatsapp_notifications INTEGER DEFAULT 0)");
     $dr_pdo->exec("CREATE TABLE monitor_users (user_id INTEGER, monitor_id INTEGER)");
     $dr_pdo->exec("INSERT INTO users (id, email, email_lang, role) VALUES (1, 'admin@example.com', 'cs', 'admin')");
 }
@@ -1587,9 +1618,99 @@ if ($dr_pdo instanceof PDO) {
         str_contains($dr_by['jana@example.com'] ?? '', 'Web') && !str_contains($dr_by['jana@example.com'] ?? '', 'Router')
         && !str_contains($dr_by['jana@example.com'] ?? '', 'Tichý sběr dat'));
     check_true('administrátor ji čte', str_contains($dr_by['admin@example.com'] ?? '', 'Router'));
+
+    // The outage of her Web brings her the reminder, and in it she reads
+    // every monitor that would mail her - the open incident on her NAS too,
+    // although the NAS itself is fine. Not the one on a monitor she
+    // subscribes to with e-mail off.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400)]);
+    $dr_add(['id' => 4, 'name' => 'NAS', 'last_checked' => $dr_at(60), 'last_status_change' => $dr_at(86400)]);
+    $dr_add(['id' => 5, 'name' => 'Tiskárna', 'last_checked' => $dr_at(60), 'last_status_change' => $dr_at(86400)]);
+    $dr_pdo->exec("INSERT INTO incidents (id, title, impact, status, created_at, acknowledged_at, monitor_id)
+                   VALUES (4, 'Pomalý NAS', 'minor', 'investigating', '2026-09-20 08:00:00', NULL, 4),
+                          (5, 'Tiskárna netiskne', 'minor', 'investigating', '2026-09-20 08:00:00', NULL, 5)");
+    $dr_pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications) VALUES (2, 4, 1), (2, 5, 0)");
+    $dr_pdo->exec("INSERT INTO monitor_users (user_id, monitor_id) VALUES (2, 4), (2, 5)");
+    bk_send_daily_reminder($dr_pdo, $dr_now);
+    $dr_jana = array_column($GLOBALS['bk_test_mails'], 'body', 'to')['jana@example.com'] ?? '';
+    check_true('Jana čte i incident svého NAS bez výpadku, ne ten s vypnutým e-mailem',
+        str_contains($dr_jana, 'Web') && str_contains($dr_jana, 'Pomalý NAS') && !str_contains($dr_jana, 'Tiskárna netiskne'));
+    // An incident alone alerts nobody, so it is the administrators' even
+    // with agent_notify_admin_only off.
+    $dr_reset();
+    $dr_add(['id' => 4, 'name' => 'NAS', 'last_checked' => $dr_at(60), 'last_status_change' => $dr_at(86400)]);
+    $dr_pdo->exec("INSERT INTO incidents (id, title, impact, status, created_at, acknowledged_at, monitor_id)
+                   VALUES (4, 'Pomalý NAS', 'minor', 'investigating', '2026-09-20 08:00:00', NULL, 4)");
+    $GLOBALS['system_settings']['agent_notify_admin_only'] = '0';
+    bk_send_daily_reminder($dr_pdo, $dr_now);
+    unset($GLOBALS['system_settings']['agent_notify_admin_only']);
+    check('jen incident jejího NAS: Janě nic, administrátorovi ano',
+        array_column($GLOBALS['bk_test_mails'], 'to'), ['admin@example.com']);
     $dr_pdo->exec("DELETE FROM user_subscriptions");
     $dr_pdo->exec("DELETE FROM monitor_users");
     $dr_pdo->exec("DELETE FROM users WHERE id = 2");
+
+    // --- 8. Who hears about a monitor: the one recipient rule -------------
+    // Alerts, the reminder, the digest and the admin notices all read
+    // bk_alert_audience(). Each used to carry its own copy of the rule, and
+    // the private monitors that reached other users were those copies
+    // drifting apart. Jana subscribes and has access; Petr's access is gone;
+    // Eva has access but no subscription; Ota subscribes with his own NULLs
+    // and e-mail off; the second administrator has no address.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web']);
+    $dr_add(['id' => 2, 'name' => 'Server']);
+    $dr_pdo->exec("UPDATE monitors SET email_notifications = 0, sms_notifications = 1 WHERE id = 2");
+    $dr_pdo->exec("UPDATE users SET whatsapp_notifications = 1 WHERE id = 1");
+    $dr_pdo->exec("INSERT INTO users (id, email, email_lang, role, sms_notifications, whatsapp_notifications) VALUES
+        (2, 'jana@example.com', 'en', 'user', 0, 0), (3, 'petr@example.com', NULL, 'user', 0, 0),
+        (4, 'eva@example.com', NULL, 'user', 0, 0), (5, 'ota@example.com', NULL, 'user', 1, 1),
+        (6, NULL, NULL, 'admin', 0, 0)");
+    $dr_pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications, sms_notifications,
+        whatsapp_notifications) VALUES (2, 1, 1, 0, 0), (3, 1, 1, 0, 0), (5, 1, 0, NULL, NULL), (5, 2, NULL, NULL, 0)");
+    $dr_pdo->exec("INSERT INTO monitor_users (user_id, monitor_id) VALUES (2, 1), (4, 1), (5, 1), (5, 2)");
+    $au_of = fn (array $ids, bool $admins_only = false): array
+        => array_column(bk_alert_audience($dr_pdo, $ids, $admins_only), 'monitors', 'id');
+    $au_ch = fn (int $email, int $sms, int $whatsapp): array => ['email' => $email, 'sms' => $sms, 'whatsapp' => $whatsapp];
+    check('kdo slyší o webu a serveru a kterými kanály', $au_of([1, 2]), [
+        // Without a row the monitor's switches and the profile's WhatsApp.
+        1 => [1 => $au_ch(1, 0, 1), 2 => $au_ch(0, 1, 1)],
+        2 => [1 => $au_ch(1, 0, 0)],
+        // A NULL in the row falls back to the monitor, then the profile.
+        5 => [1 => $au_ch(0, 0, 1), 2 => $au_ch(0, 1, 0)],
+        6 => [1 => $au_ch(1, 0, 0), 2 => $au_ch(0, 1, 0)],
+    ]);
+    check('bez monitoru jen administrátoři', $au_of([]), [1 => [], 6 => []]);
+    check('vnitřnosti agenta jen administrátorům', array_keys($au_of([1, 2], true)), [1, 6]);
+    check('o monitoru, který neexistuje, nikdo nic', $au_of([9]), [1 => [], 6 => []]);
+    // The reminder takes the outages from it: Jana for her Web, never for
+    // the server she cannot see; Ota has e-mail off on both; the
+    // administrator without an address gets no e-mail reminder.
+    $au_rem = fn (array $alert_ids): array
+        => array_column(bk_daily_reminder_recipients(bk_alert_audience($dr_pdo, [1, 2]), $alert_ids), 'scope', 'id');
+    check('připomínka o webu: administrátor a Jana', $au_rem([1]), [1 => null, 2 => [1]]);
+    check('připomínka o serveru: jen administrátor', $au_rem([2]), [1 => null]);
+    // Without the access table the administrators still hear, no user, and
+    // the log says why. The digest and the admin notices ask about no
+    // monitor and agent internals check no access: neither needs the table,
+    // so neither warns about it - their old queries read only users.
+    $dr_pdo->exec("ALTER TABLE monitor_users RENAME TO monitor_users_gone");
+    $au_log = (string)tempnam(sys_get_temp_dir(), 'bk_au');
+    $au_log_saved = ini_set('error_log', $au_log);
+    check('bez tabulky přístupů a bez monitoru administrátoři', array_keys($au_of([])), [1, 6]);
+    check('vnitřnosti agenta také', array_keys($au_of([1, 2], true)), [1, 6]);
+    check_false('a log o tabulce mlčí', str_contains((string)file_get_contents($au_log), 'monitor_users unavailable'));
+    check('bez tabulky přístupů jen administrátoři', array_keys($au_of([1, 2])), [1, 6]);
+    ini_set('error_log', (string)$au_log_saved);
+    check_true('a v logu je proč', str_contains((string)file_get_contents($au_log), 'monitor_users unavailable'));
+    @unlink($au_log);
+    $dr_pdo->exec("ALTER TABLE monitor_users_gone RENAME TO monitor_users");
+    $dr_pdo->exec("DELETE FROM user_subscriptions");
+    $dr_pdo->exec("DELETE FROM monitor_users");
+    $dr_pdo->exec("DELETE FROM users WHERE id > 1");
+    $dr_pdo->exec("UPDATE users SET whatsapp_notifications = 0 WHERE id = 1");
 } elseif (function_exists('bk_send_daily_reminder')) {
     // Reported, never skipped in silence: a suite that quietly tests nothing
     // is the same lie as a chart with invented values.

@@ -4992,6 +4992,36 @@ function bk_with_email_lang(string $lang, callable $builder) {
 }
 
 /**
+ * The language an e-mail to this account is written in: its own
+ * users.email_lang, or the global email_lang setting while it has none.
+ * Alerts, the reminder, the digest, admin notices, test mails and previews
+ * all ask this, so no copy can forget the fallback.
+ */
+function bk_recipient_lang(array $user): string {
+    $own = $user['email_lang'] ?? null;
+    return in_array($own, ['cs', 'en'], true) ? (string)$own : (string)get_setting('email_lang', 'cs');
+}
+
+/**
+ * A message rendered once per language: the returned function builds it
+ * through bk_with_email_lang() the first time a language is asked for and
+ * hands out that copy after, so fifty recipients in two languages are two
+ * renders, not fifty.
+ *
+ * @param callable(): mixed $build the message, in the language set when it is called
+ * @return Closure(string): mixed
+ */
+function bk_render_per_lang(callable $build): Closure {
+    $rendered = [];
+    return static function (string $lang) use ($build, &$rendered) {
+        if (!array_key_exists($lang, $rendered)) {
+            $rendered[$lang] = bk_with_email_lang($lang, $build);
+        }
+        return $rendered[$lang];
+    };
+}
+
+/**
  * Registry of metrics available on the Level 3 Metric Detail page (index.php
  * ?view=metric). One source of truth for the key->column mapping, shared by
  * api.php (the vps_metrics query) and the page render (labels/units/Related
@@ -8428,87 +8458,42 @@ function bk_daily_reminder_collect(PDO $pdo, ?int $now = null): array {
 }
 
 /**
- * Who gets the reminder - the alert's recipient rule, widened to several
- * monitors at once.
+ * Who gets the reminder and what each of them reads - the alert's recipient
+ * rule (bk_alert_audience()), widened to several monitors at once. Pure.
  *
- * One alert asks about one monitor (trigger_notifications()); the reminder is
- * about everything that is broken, so a user belongs in the list when they
- * would get an alert for at least ONE of those monitors: an administrator, or
- * a subscriber who still has access to it. The monitor's own
- * `email_notifications` switch is respected exactly as there - a monitor that
- * sends no mail must not start sending it once a day.
+ * One alert asks about one monitor; the reminder is about everything that is
+ * broken, so an account belongs in the list when it would get an e-mail alert
+ * about at least ONE of $alert_ids, the outages and silent agents: every
+ * administrator with an address, or a user whose subscription to one of them
+ * mails. The monitor's own `email_notifications` switch is respected exactly
+ * as there - a monitor that sends no mail must not start sending it once a
+ * day. 'scope' is null for an administrator (all of it), otherwise every
+ * monitor of $audience that would mail the user, an incident's included.
  *
- * @param array $monitor_ids ids of the monitors the reminder talks about
- * @param bool  $admins_only agent internals only (see agent_notify_admin_only)
+ * @param array $audience bk_alert_audience() over every monitor the report names
+ * @param int[] $alert_ids the monitors of the outages and silent agents
+ * @return list<array> the entries of $audience that get it, each with 'scope' (?int[])
  */
-function bk_daily_reminder_recipients(PDO $pdo, array $monitor_ids, bool $admins_only): array {
-    $ids = array_values(array_unique(array_filter(array_map('intval', $monitor_ids), fn (int $id): bool => $id > 0)));
-
-    // Administrators always, even when the reminder is only about incidents
-    // that belong to no monitor - then there is nothing to subscribe to.
-    $sql = "SELECT DISTINCT u.id, u.email, u.email_lang, u.role, u.phone, u.whatsapp_apikey,
-                   u.whatsapp_notifications
-            FROM users u
-            WHERE u.email IS NOT NULL AND u.email != '' AND u.role = 'admin'";
-    $params = [];
-
-    if (!$admins_only && $ids !== []) {
-        $placeholders = implode(',', array_fill(0, count($ids), '?'));
-        $sql .= "
-            UNION
-            SELECT DISTINCT u.id, u.email, u.email_lang, u.role, u.phone, u.whatsapp_apikey,
-                   u.whatsapp_notifications
-            FROM users u
-            JOIN user_subscriptions s ON s.user_id = u.id
-            JOIN monitors m ON m.id = s.monitor_id
-            JOIN monitor_users mu ON mu.user_id = u.id AND mu.monitor_id = m.id
-            WHERE u.email IS NOT NULL AND u.email != ''
-              AND m.id IN ({$placeholders})
-              AND COALESCE(s.email_notifications, m.email_notifications) = 1";
-        $params = $ids;
+function bk_daily_reminder_recipients(array $audience, array $alert_ids): array {
+    $alerting = array_flip(array_map('intval', $alert_ids));
+    $recipients = [];
+    foreach ($audience as $rec) {
+        // An e-mail first: WhatsApp goes along only to an account with an address.
+        if (trim((string)($rec['email'] ?? '')) === '') {
+            continue;
+        }
+        // Administrators always, even when the reminder is only about incidents
+        // that belong to no monitor - then there is nothing to subscribe to.
+        if (($rec['role'] ?? '') === 'admin') {
+            $recipients[] = $rec + ['scope' => null];
+            continue;
+        }
+        $scope = array_keys(array_filter($rec['monitors'], static fn (array $ch): bool => $ch['email'] === 1));
+        if (array_intersect_key(array_flip($scope), $alerting) !== []) {
+            $recipients[] = $rec + ['scope' => $scope];
+        }
     }
-
-    try {
-        $stmt = $pdo->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (PDOException $e) {
-        // The same fallback as the alert path: without the access table the
-        // message still reaches every administrator. Losing the reminder
-        // entirely over a migration that has not run is the worse half.
-        error_log('[reminder] Seznam příjemců selhal, posílá se jen administrátorům: ' . $e->getMessage());
-        $stmt = $pdo->query("SELECT id, email, email_lang, role, phone, whatsapp_apikey, whatsapp_notifications
-                             FROM users WHERE role = 'admin' AND email IS NOT NULL AND email != ''");
-        return $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
-    }
-}
-
-/**
- * Which monitors one reminder recipient is told about: null for an
- * administrator (all of them), otherwise the ones that would alert this user -
- * subscribed, still accessible and with e-mail on, the rule
- * bk_daily_reminder_recipients() admitted them by. A database that cannot
- * answer gives an empty list: nothing of somebody else's goes out on a guess.
- *
- * @return ?int[]
- */
-function bk_daily_reminder_scope(PDO $pdo, array $rec): ?array {
-    if (($rec['role'] ?? '') === 'admin') {
-        return null;
-    }
-    try {
-        $stmt = $pdo->prepare("
-            SELECT s.monitor_id
-            FROM user_subscriptions s
-            JOIN monitors m ON m.id = s.monitor_id
-            JOIN monitor_users mu ON mu.user_id = s.user_id AND mu.monitor_id = s.monitor_id
-            WHERE s.user_id = ? AND COALESCE(s.email_notifications, m.email_notifications) = 1
-        ");
-        $stmt->execute([(int)($rec['id'] ?? 0)]);
-        return array_map('intval', $stmt->fetchAll(PDO::FETCH_COLUMN));
-    } catch (PDOException $e) {
-        return [];
-    }
+    return $recipients;
 }
 
 /**
@@ -8712,25 +8697,27 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
     // class of events, and agent_notify_admin_only keeps those internal.
     $notify_admin_only = get_setting('agent_notify_admin_only', '1') === '1';
     $admins_only = $notify_admin_only && $report['outages'] === [];
-    $recipients = bk_daily_reminder_recipients($pdo, $monitor_ids, $admins_only);
+    // The audience of every monitor the report names, an incident's too: a
+    // user the outages bring in reads the open incident of another of theirs.
+    $recipients = bk_daily_reminder_recipients(bk_alert_audience($pdo,
+        array_merge($monitor_ids, array_column($report['incidents'], 'monitor_id')), $admins_only), $monitor_ids);
 
-    $rendered = [];
+    // One renderer per part: recipients who may read the same part share
+    // its render in each language.
+    $render_part = [];
     $text = bk_daily_reminder_text($report);
     foreach ($recipients as $rec) {
         // Everyone reads only their own part, and agent internals that
         // agent_notify_admin_only keeps in-house stay out of it. Nothing of
         // theirs broken, or nothing but those: no message for them today.
-        $scope = bk_daily_reminder_scope($pdo, $rec);
+        $scope = $rec['scope'];
         $mine = bk_daily_reminder_scoped($report, $scope, $scope === null || !$notify_admin_only);
         if ($mine['problem_count'] === 0 || ($scope !== null && $notify_admin_only && $mine['outages'] === [])) {
             continue;
         }
-        $lang = in_array($rec['email_lang'] ?? '', ['cs', 'en'], true) ? $rec['email_lang'] : $default_lang;
-        $key = $lang . '|' . ($scope === null ? '*' : implode(',', $scope));
-        if (!isset($rendered[$key])) {
-            $rendered[$key] = bk_with_email_lang($lang, fn (): array => bk_render_daily_reminder($mine));
-        }
-        [$subject, $html_body] = $rendered[$key];
+        $part = $scope === null ? '*' : implode(',', $scope);
+        $render_part[$part] ??= bk_render_per_lang(fn (): array => bk_render_daily_reminder($mine));
+        [$subject, $html_body] = $render_part[$part](bk_recipient_lang($rec));
         // send_email() writes the log row itself - one per attempt, failures included.
         if (send_email($rec['email'], $subject, $html_body, [], ['kind' => 'daily_reminder'])) {
             $result['emails']++;
@@ -8824,14 +8811,10 @@ function bk_send_shared_channels(PDO $pdo, string $status, string $kind, string 
  */
 function bk_send_admin_notice(PDO $pdo, string $status, callable $render, int $pushover_priority): array {
     $count = ['attempted' => 0, 'sent' => 0, 'unknown' => 0, 'failed' => 0];
-    $default_lang = (string)get_setting('email_lang', 'cs');
-    $rendered = [];
-    $admins = $pdo->query("SELECT email, email_lang, phone, whatsapp_apikey, whatsapp_notifications
-                           FROM users WHERE role = 'admin'")->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($admins as $admin) {
-        $lang = in_array($admin['email_lang'] ?? '', ['cs', 'en'], true) ? (string)$admin['email_lang'] : $default_lang;
-        $rendered[$lang] ??= bk_with_email_lang($lang, $render);
-        [$subject, $html, $text] = $rendered[$lang];
+    $rendered = bk_render_per_lang($render);
+    // The audience of no monitor: the administrators.
+    foreach (bk_alert_audience($pdo, []) as $admin) {
+        [$subject, $html, $text] = $rendered(bk_recipient_lang($admin));
         if (!empty($admin['email'])) {
             // send_email() writes the row itself; what it knew beyond "not refused" is in the global.
             $GLOBALS['last_mail_delivery'] = null;
@@ -8851,9 +8834,10 @@ function bk_send_admin_notice(PDO $pdo, string $status, callable $render, int $p
             $count[$wa['delivery'] === 'sent' ? 'sent' : ($wa['delivery'] === 'unknown' ? 'unknown' : 'failed')]++;
         }
     }
-    $rendered[$default_lang] ??= bk_with_email_lang($default_lang, $render);
-    $shared = bk_send_shared_channels($pdo, $status, 'admin_notice', $rendered[$default_lang][2],
-        $rendered[$default_lang][0], $pushover_priority, false);
+    // The shared channels belong to nobody, so they speak the global language.
+    [$shared_subject, , $shared_text] = $rendered((string)get_setting('email_lang', 'cs'));
+    $shared = bk_send_shared_channels($pdo, $status, 'admin_notice', $shared_text,
+        $shared_subject, $pushover_priority, false);
     foreach (['attempted', 'sent', 'failed'] as $k) {
         $count[$k] += $shared[$k];
     }
@@ -9145,13 +9129,13 @@ function bk_self_check_run(PDO $pdo, ?string $url, int $now, ?array $config_outp
 }
 
 /**
- * The channels an alert about this monitor really uses for one account - the
- * COALESCE of the recipient query in trigger_notifications(). Pure. $row is
- * the account's user_subscriptions row, null when it has none: then an
- * administrator (always a recipient) follows the monitor's and the profile's
- * switches and a user gets nothing. The subscription form showed 0 for a
- * missing row, and saving it wrote that 0 over e-mail alerts an
- * administrator was in fact receiving.
+ * The channels an alert about this monitor really uses for one account -
+ * what bk_alert_audience() hands every sender and the subscription form
+ * shows. Pure. $row is the account's user_subscriptions row, null when it
+ * has none: then an administrator (always a recipient) follows the
+ * monitor's and the profile's switches and a user gets nothing. The
+ * subscription form showed 0 for a missing row, and saving it wrote that 0
+ * over e-mail alerts an administrator was in fact receiving.
  *
  * @return array{email: int, sms: int, whatsapp: int}
  */
@@ -9198,6 +9182,85 @@ function bk_subscription_row_to_store(bool $is_admin, ?array $stored, array $cho
     }
     // A row that means the same as none is not kept.
     return $row === array_fill_keys(array_keys($row), $none) ? null : $row;
+}
+
+/**
+ * Who hears about these monitors - the one recipient rule of alerts, the
+ * daily reminder, admin notices and the digest. Every administrator; a user
+ * only with a user_subscriptions row for the monitor AND access to it
+ * (monitor_users). An alert carries the monitor's name and outage reason, and
+ * a subscription that outlived the access must not keep mailing them to an
+ * account that lost it. With no monitor (the digest, a notice about the
+ * monitoring itself) that leaves the administrators, and so does $admins_only
+ * (agent internals under agent_notify_admin_only). Anonymous public
+ * subscribers are not accounts: bk_public_sub_notify() asks the public page.
+ *
+ * One entry per account with its users columns, the profile switches among
+ * them, and under 'monitors' the channels each of these monitors uses for it
+ * (bk_subscription_effective()). A monitor it is not to hear about, or one
+ * that does not exist, is missing there. Without the access table (a
+ * migration that has not run) the administrators still hear, but no user: a
+ * message must never fail as a whole.
+ *
+ * @param int[] $monitor_ids
+ * @return list<array{id: int, email: ?string, email_lang: ?string, role: ?string, phone: ?string,
+ *     whatsapp_apikey: ?string, sms_notifications: mixed, whatsapp_notifications: mixed,
+ *     monitors: array<int, array{email: int, sms: int, whatsapp: int}>}>
+ */
+function bk_alert_audience(PDO $pdo, array $monitor_ids, bool $admins_only = false): array {
+    $ids = array_values(array_unique(array_filter(array_map('intval', $monitor_ids), fn (int $id): bool => $id > 0)));
+    $monitors_on = $ids === [] ? '1=0' : 'm.id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')';
+    // LEFT JOIN monitors: an administrator is in even when no monitor matches.
+    $sql = "
+        SELECT u.id, u.email, u.email_lang, u.role, u.phone, u.whatsapp_apikey,
+               u.sms_notifications, u.whatsapp_notifications,
+               m.id AS monitor_id, m.email_notifications AS m_email, m.sms_notifications AS m_sms,
+               s.user_id AS s_user_id, s.email_notifications AS s_email, s.sms_notifications AS s_sms,
+               s.whatsapp_notifications AS s_whatsapp
+        FROM users u
+        LEFT JOIN monitors m ON {$monitors_on}
+        LEFT JOIN user_subscriptions s ON s.user_id = u.id AND s.monitor_id = m.id
+        WHERE u.role = 'admin' OR (s.user_id IS NOT NULL AND %s)
+        ORDER BY u.id, m.id
+    ";
+    // Agent internals and the audience of no monitor (the digest, admin
+    // notices) check no access, so they leave the access table alone: a
+    // missing one must not put a warning in their log.
+    $access = ($admins_only || $ids === []) ? '1=0'
+        : 'EXISTS (SELECT 1 FROM monitor_users mu WHERE mu.user_id = u.id AND mu.monitor_id = m.id)';
+    try {
+        $stmt = $pdo->prepare(sprintf($sql, $access));
+        $stmt->execute($ids);
+    } catch (PDOException $e) {
+        // No access table yet (a migration that has not run): the message
+        // still reaches every admin - it must never fail as a whole - but no user.
+        error_log('[notify] monitor_users unavailable, alerting admins only: ' . $e->getMessage());
+        $stmt = $pdo->prepare(sprintf($sql, '1=0'));
+        $stmt->execute($ids);
+    }
+
+    $audience = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+        $uid = (int)$row['id'];
+        $audience[$uid] ??= [
+            'id' => $uid,
+            'email' => $row['email'],
+            'email_lang' => $row['email_lang'],
+            'role' => $row['role'],
+            'phone' => $row['phone'],
+            'whatsapp_apikey' => $row['whatsapp_apikey'],
+            'sms_notifications' => $row['sms_notifications'],
+            'whatsapp_notifications' => $row['whatsapp_notifications'],
+            'monitors' => [],
+        ];
+        if ($row['monitor_id'] !== null) {
+            $sub = $row['s_user_id'] === null ? null : ['email_notifications' => $row['s_email'],
+                'sms_notifications' => $row['s_sms'], 'whatsapp_notifications' => $row['s_whatsapp']];
+            $audience[$uid]['monitors'][(int)$row['monitor_id']] = bk_subscription_effective($row['role'] === 'admin',
+                $sub, ['email_notifications' => $row['m_email'], 'sms_notifications' => $row['m_sms']], $row);
+        }
+    }
+    return array_values($audience);
 }
 
 function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
@@ -9323,39 +9386,11 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         $status_text = 'SSL CERTIFIKÁT BRZY VYPRŠÍ';
         $emoji = '🔒';
     }
-    // Load all notification recipients (subscribers + administrators without an explicit subscription).
-    // A subscribed user gets the alert only while the monitor is assigned to
-    // them: an alert carries the monitor's name and outage reason, and a stale
-    // subscription must not keep mailing them to an account that lost access.
-    // bk_subscription_effective() repeats these fallbacks for the subscription form.
-    $recipients_sql = "
-        SELECT u.id, u.email, u.phone, u.role, u.whatsapp_apikey, u.email_lang,
-               COALESCE(s.email_notifications, m.email_notifications) as email_notifications,
-               COALESCE(s.sms_notifications, m.sms_notifications, u.sms_notifications) as sms_notifications,
-               COALESCE(s.whatsapp_notifications, u.whatsapp_notifications) as whatsapp_notifications
-        FROM users u
-        CROSS JOIN (SELECT * FROM monitors WHERE id = ?) m
-        LEFT JOIN user_subscriptions s ON u.id = s.user_id AND s.monitor_id = m.id
-        WHERE u.role = 'admin' OR (s.user_id IS NOT NULL AND %s)
-    ";
-    try {
-        $stmt = $pdo->prepare(sprintf($recipients_sql, "EXISTS (SELECT 1 FROM monitor_users mu WHERE mu.user_id = u.id AND mu.monitor_id = m.id)"));
-        $stmt->execute([$monitor['id']]);
-    } catch (PDOException $e) {
-        // No access table yet (a migration that has not run): the alert still
-        // reaches every admin - it must never fail as a whole - but no user.
-        error_log('[notify] monitor_users unavailable, alerting admins only: ' . $e->getMessage());
-        $stmt = $pdo->prepare(sprintf($recipients_sql, '1=0'));
-        $stmt->execute([$monitor['id']]);
-    }
-    $recipients = $stmt->fetchAll();
-
-    // VPS agent events are internal by default - they go to administrators only, not regular subscribers
-    if ($is_agent_event && get_setting('agent_notify_admin_only', '1') === '1') {
-        $recipients = array_values(array_filter($recipients, function ($r) {
-            return ($r['role'] ?? '') === 'admin';
-        }));
-    }
+    // Who hears about it and on which channels: bk_alert_audience(). VPS agent
+    // events are internal by default - administrators only, not regular subscribers.
+    $monitor_id = (int)($monitor['id'] ?? 0);
+    $recipients = bk_alert_audience($pdo, [$monitor_id],
+        $is_agent_event && get_setting('agent_notify_admin_only', '1') === '1');
 
     $time = date('d.m.Y H:i:s');
 
@@ -9409,12 +9444,10 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     // most webmails strip <style>/<head> on delivery and the e-mail would arrive
     // unformatted. Same approach as render_email_wrapper() (the digest).
     $font = "font-family: Arial, Helvetica, sans-serif;";
-    // The e-mail renders per recipient language (users.email_lang, NULL = the global
-    // email_lang) - once per language, not once per recipient. The SMS/WhatsApp and
-    // webhooks below stay single-language.
-    $default_email_lang = get_setting('email_lang', 'cs');
-    $render_alert_email = function (string $lang) use ($alert_status_key, $emoji, $name, $type, $target, $port, $time, $error_msg, $color_theme, $font) {
-        return bk_with_email_lang($lang, function () use ($alert_status_key, $emoji, $name, $type, $target, $port, $time, $error_msg, $color_theme, $font) {
+    // The e-mail renders per recipient language (bk_recipient_lang()) - once per
+    // language, not once per recipient. The SMS/WhatsApp and webhooks below stay
+    // single-language.
+    $render_alert_email = bk_render_per_lang(function () use ($alert_status_key, $emoji, $name, $type, $target, $port, $time, $error_msg, $color_theme, $font) {
         $status_label = t($alert_status_key);
         $subject = "$emoji $status_label: $name";
         $html_body = '
@@ -9465,10 +9498,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     </body>
     </html>';
         return [$subject, $html_body];
-        });
-    };
-    // Cache of rendered variants - keyed by language.
-    $alert_email_by_lang = [];
+    });
 
     // SMS / WhatsApp message
     $sms_body = "$emoji Monitor $name je $status_text. Čas: $time.";
@@ -9484,13 +9514,14 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     }
     
     foreach ($recipients as $rec) {
+        // No channels for this monitor: the account hears nothing about it.
+        $channels = $rec['monitors'][$monitor_id] ?? null;
+        if ($channels === null) {
+            continue;
+        }
         // E-mail notifications - in the recipient's language (fallback: global email_lang)
-        if ($rec['email_notifications'] && !empty($rec['email'])) {
-            $rec_lang = in_array($rec['email_lang'] ?? '', ['cs', 'en'], true) ? $rec['email_lang'] : $default_email_lang;
-            if (!isset($alert_email_by_lang[$rec_lang])) {
-                $alert_email_by_lang[$rec_lang] = $render_alert_email($rec_lang);
-            }
-            [$email_subject, $html_body] = $alert_email_by_lang[$rec_lang];
+        if ($channels['email'] && !empty($rec['email'])) {
+            [$email_subject, $html_body] = $render_alert_email(bk_recipient_lang($rec));
             // send_email() writes the row itself now. The explicit
             // bk_log_notification() that used to stand here would make it two
             // rows for one mail - and every count over the log twice the truth.
@@ -9503,7 +9534,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         
         // SMS notifications (Twilio / SMSbrana) - independent of WhatsApp
         $gateway_type = get_setting('sms_gateway_type', '');
-        if ($rec['sms_notifications'] && !empty($rec['phone'])) {
+        if ($channels['sms'] && !empty($rec['phone'])) {
             if ($gateway_type === 'twilio' || $gateway_type === 'smsbrana') {
                 $sms_ok = send_sms($rec['phone'], $sms_body);
                 bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'sms', $rec['phone'], (bool)$sms_ok,
@@ -9515,7 +9546,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         // The key is bound to a specific phone number, so it exists per-user only.
         // Switched on without a key or a number: bk_send_whatsapp() makes no
         // request and says why; the row used to be missing altogether.
-        if ($rec['whatsapp_notifications'] ?? 0) {
+        if ($channels['whatsapp']) {
             $wa = bk_send_whatsapp((string)$rec['phone'], $sms_body, (string)$rec['whatsapp_apikey']);
             bk_log_notification($pdo, (int)($monitor['id'] ?? 0), $new_status, 'whatsapp', $rec['phone'],
                 ok: $wa['delivery'] !== 'failed', error: $wa['reason'], kind: 'alert',
@@ -15071,29 +15102,25 @@ function send_digest_report_inner($pdo, $period = 'weekly') {
     // HTML render time - once per language among the recipients.
     $data = build_digest_data($pdo, $period);
 
-    // Recipients - all administrators with an e-mail set, including their language
-    $stmt_admins = $pdo->query("SELECT email, email_lang FROM users WHERE role = 'admin' AND email IS NOT NULL AND email != ''");
-    $admins = $stmt_admins->fetchAll();
+    // Recipients - all administrators with an e-mail set (the audience of no
+    // monitor), including their language
+    $admins = array_values(array_filter(bk_alert_audience($pdo, []),
+        static fn (array $a): bool => trim((string)($a['email'] ?? '')) !== ''));
     if (empty($admins)) {
         $GLOBALS['last_mail_error'] = t('digest_error_no_admin_email');
         return false;
     }
 
-    $default_lang = get_setting('email_lang', 'cs');
-    $rendered_by_lang = [];
+    $render = bk_render_per_lang(function () use ($data, $period) {
+        $period_label = ($period === 'monthly') ? t('digest_subject_monthly') : t('digest_subject_weekly');
+        return [
+            "📊 $period_label – {$data['site_title']} ({$data['range_from']} – {$data['range_to']})",
+            render_digest_html($data),
+        ];
+    });
     $any_success = false;
     foreach ($admins as $adm) {
-        $lang = in_array($adm['email_lang'] ?? '', ['cs', 'en'], true) ? $adm['email_lang'] : $default_lang;
-        if (!isset($rendered_by_lang[$lang])) {
-            $rendered_by_lang[$lang] = bk_with_email_lang($lang, function () use ($data, $period) {
-                $period_label = ($period === 'monthly') ? t('digest_subject_monthly') : t('digest_subject_weekly');
-                return [
-                    "📊 $period_label – {$data['site_title']} ({$data['range_from']} – {$data['range_to']})",
-                    render_digest_html($data),
-                ];
-            });
-        }
-        [$subject, $html_body] = $rendered_by_lang[$lang];
+        [$subject, $html_body] = $render(bk_recipient_lang($adm));
         if (send_email($adm['email'], $subject, $html_body, [], ['kind' => 'digest'])) {
             $any_success = true;
         }
@@ -15481,19 +15508,17 @@ function bk_public_sub_notify(PDO $pdo, array $monitor, string $new_status): voi
         return;
     }
     $base_origin = bk_public_base_origin();
-    $rendered = [];
+    $render = bk_render_per_lang(function () use ($monitor, $new_status, $base_origin) {
+        $site = get_setting('site_title', 'Blood Kings Monitoring');
+        $subject = sprintf(t($new_status === 'down' ? 'pubsub_down_subject' : 'pubsub_up_subject'), $monitor['name']);
+        $body = '<p>' . htmlspecialchars(sprintf(t($new_status === 'down' ? 'pubsub_down_body' : 'pubsub_up_body'), $monitor['name'])) . '</p>'
+            . '<p><a href="' . htmlspecialchars($base_origin . '/app/public') . '">' . htmlspecialchars(sprintf(t('pubsub_status_link'), $site)) . '</a></p>';
+        return [$subject, $body, t('pubsub_unsub_line')];
+    });
     foreach ($subs as $sub) {
+        // Not an account: the language was chosen at sign-up, Czech without one.
         $lang = in_array($sub['lang'], ['cs', 'en'], true) ? $sub['lang'] : 'cs';
-        if (!isset($rendered[$lang])) {
-            $rendered[$lang] = bk_with_email_lang($lang, function () use ($monitor, $new_status, $base_origin) {
-                $site = get_setting('site_title', 'Blood Kings Monitoring');
-                $subject = sprintf(t($new_status === 'down' ? 'pubsub_down_subject' : 'pubsub_up_subject'), $monitor['name']);
-                $body = '<p>' . htmlspecialchars(sprintf(t($new_status === 'down' ? 'pubsub_down_body' : 'pubsub_up_body'), $monitor['name'])) . '</p>'
-                    . '<p><a href="' . htmlspecialchars($base_origin . '/app/public') . '">' . htmlspecialchars(sprintf(t('pubsub_status_link'), $site)) . '</a></p>';
-                return [$subject, $body, t('pubsub_unsub_line')];
-            });
-        }
-        [$subject, $body, $unsub_label] = $rendered[$lang];
+        [$subject, $body, $unsub_label] = $render($lang);
         $unsub_link = $base_origin . '/app/unsubscribe?token=' . $sub['unsubscribe_token'];
         $full_body = $body . '<p style="color:#888;font-size:12px"><a href="' . htmlspecialchars($unsub_link) . '">' . htmlspecialchars($unsub_label) . '</a></p>';
         send_email($sub['email'], $subject, $full_body, ['List-Unsubscribe' => '<' . $unsub_link . '>'], [

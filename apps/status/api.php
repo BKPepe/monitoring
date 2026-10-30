@@ -2258,19 +2258,16 @@ if ($action === 'test_notification') {
         bk_api_error(400, 'Neznámý kanál (email, discord, telegram, slack).');
     }
     $tn_email = null;
-    $tn_lang = (string)get_setting('email_lang', 'cs');
+    $tn_me = [];
     try {
         $stmt_tn = $pdo->prepare("SELECT email, email_lang FROM users WHERE id = ? LIMIT 1");
         $stmt_tn->execute([(int)($_SESSION['admin_id'] ?? 0)]);
         $tn_me = $stmt_tn->fetch() ?: [];
         $tn_email = !empty($tn_me['email']) ? (string)$tn_me['email'] : null;
-        if (in_array($tn_me['email_lang'] ?? '', ['cs', 'en'], true)) {
-            $tn_lang = (string)$tn_me['email_lang'];
-        }
     } catch (Exception $e) {
         error_log('[api.php action=test_notification] user lookup failed: ' . $e->getMessage());
     }
-    $tn_result = bk_send_test_notification($tn_channel, $tn_email, $tn_lang);
+    $tn_result = bk_send_test_notification($tn_channel, $tn_email, bk_recipient_lang($tn_me));
     bk_audit_log($pdo, 'test_notification', $tn_channel . ': ' . ($tn_result['ok'] ? 'ok' : 'failed'));
     echo json_encode($tn_result, JSON_UNESCAPED_UNICODE);
     exit;
@@ -5971,9 +5968,7 @@ if ($action === 'digest_preview') {
         // In the language the digest would reach the viewing admin in, as in admin.php.
         $stmt_dp = $pdo->prepare("SELECT email_lang FROM users WHERE id = ? LIMIT 1");
         $stmt_dp->execute([(int)($_SESSION['admin_id'] ?? 0)]);
-        $dp_user_lang = (string)$stmt_dp->fetchColumn();
-        $dp_lang = in_array($dp_user_lang, ['cs', 'en'], true) ? $dp_user_lang : get_setting('email_lang', 'cs');
-        $dp_html = bk_with_email_lang($dp_lang, function () use ($pdo, $dp_period) {
+        $dp_html = bk_with_email_lang(bk_recipient_lang($stmt_dp->fetch() ?: []), function () use ($pdo, $dp_period) {
             return render_digest_html(build_digest_data($pdo, $dp_period, false));
         });
     } catch (Throwable $e) {
