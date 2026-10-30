@@ -29,9 +29,13 @@ function check_false(string $name, bool $actual): void { check($name, $actual, f
 /**
  * Extracts a function from a source file and evaluates it.
  *
- * functions.php cannot be loaded whole (it needs a DB and sends headers), so
- * the tested functions are isolated from the source. __DIR__ is rewritten,
- * otherwise inside eval() it would point at the tests directory and requiring lang files would fail.
+ * For files that cannot be loaded whole: db.php loads config.php and connects
+ * on load, node_client.php runs as a script. functions.php is a library that
+ * run_tests.php and the API suite require. run_pipeline_tests.php still takes
+ * copies of it: it puts stubs in place of three of its senders (send_email,
+ * send_webhook_post, bk_callmebot_request), which a require would declare.
+ * __DIR__ is rewritten, otherwise inside eval() it would point at the tests
+ * directory and requiring lang files would fail.
  *
  * A name that is not in the file throws, the same as bk_test_load_pinned():
  * a renamed or moved function would otherwise turn its whole test block

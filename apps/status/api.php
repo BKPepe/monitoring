@@ -61,7 +61,7 @@ if (defined('BK_INSTALL_REQUEST')) {
     require_once __DIR__ . '/installer.php';
     bk_install_dispatch((string)$action, $pdo ?? null, __DIR__);
 }
-require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/lang.php';
 
 /**

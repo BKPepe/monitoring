@@ -16,8 +16,8 @@ header('Content-Type: application/json; charset=utf-8');
 // Requiring config.php first let its session start before them, and the
 // admin cookie went out without HttpOnly and SameSite.
 require_once __DIR__ . '/db.php';
-// is_in_maintenance(), as cron applies it.
-require_once __DIR__ . '/functions.php';
+// functions.php (through bootstrap.php) for is_in_maintenance(), as cron applies it.
+require_once __DIR__ . '/bootstrap.php';
 
 // monitor_logs.checked_from comes from schema.sql and db.php's migrations;
 // this file no longer adds it again on every request.

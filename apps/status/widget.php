@@ -4,7 +4,7 @@
  * Volání: widget.php?id=12
  */
 
-require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/bootstrap.php';
 
 $mid = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $monitor = null;

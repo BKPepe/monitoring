@@ -15,7 +15,7 @@
  * probing addresses.
  */
 
-require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/lang.php';
 
 /** How many recent events the feed carries. Readers remember only new ones anyway. */

@@ -17,7 +17,9 @@
  * run - one place deciding state and sending notifications, not two.
  */
 
-require_once __DIR__ . '/functions.php';
+// The token lookup and the write need only the database, as in health.php and
+// metrics.php; nothing here calls into functions.php.
+require_once __DIR__ . '/db.php';
 
 header('Content-Type: application/json; charset=utf-8');
 // The response is stateful and must never be cached - neither by us nor on the way.

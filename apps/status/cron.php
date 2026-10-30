@@ -5,7 +5,7 @@
  * Invocation: php cron.php or curl https://status.bloodkings.eu/cron.php
  */
 
-require_once __DIR__ . '/functions.php';
+require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/lang.php';
 
 // Runs only from the CLI or with the correct security key in the URL

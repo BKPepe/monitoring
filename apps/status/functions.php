@@ -1,13 +1,12 @@
 <?php
 /**
  * Monitoring functions and notification delivery
+ *
+ * A library: loading it defines functions and constants and does nothing
+ * else. The database, the session and the settings come from db.php, which
+ * every entry point loads first (bootstrap.php loads both), so the test
+ * suites can require this file without a database.
  */
-
-if (ini_get('session.gc_divisor') === '0' || ini_get('session.gc_divisor') === false) {
-    @ini_set('session.gc_divisor', 100);
-}
-
-require_once __DIR__ . '/db.php';
 
 // CDN versions of frontend libraries - the ONLY place edited on upgrade.
 // apps/status/package.json mirrors the same numbers just for Dependabot (there
@@ -20041,10 +20040,4 @@ function bk_visible_monitor_stmt(PDO $pdo, int $id, string $columns): PDOStateme
     $stmt = $pdo->prepare("SELECT {$columns} FROM monitors WHERE (id = ? OR asset_id = ?) AND {$scope} ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id LIMIT 1");
     $stmt->execute(array_merge([$id, $id], $scope_params, [$id]));
     return $stmt;
-}
-
-// Every entry point reaches here with its session started. Correct the role
-// before any access check reads $_SESSION['admin_role'] directly.
-if (PHP_SAPI !== 'cli' && isset($pdo) && $pdo instanceof PDO) {
-    bk_sync_session_account($pdo);
 }

@@ -61,7 +61,7 @@ try {
 }
 // The same way db.php does it, or fixtures and api.php would disagree on any
 // time from the other side of a DST switch. Copies in the test namespace:
-// functions.php brings db.php into this process further down, and a second
+// bootstrap.php brings db.php into this process further down, and a second
 // declaration of bk_db_clock() would be fatal.
 $clock_ns = bk_test_load_pinned($root . '/db.php', ['bk_db_clock', 'bk_db_clock_sync']);
 ($clock_ns . 'bk_db_clock_sync')($pdo, date_default_timezone_get());
@@ -552,7 +552,7 @@ foreach (($data['catalog'] ?? []) as $entry) {
 // all: the run that started at 00:14 Prague time got 100. So the rollup runs
 // first, in a PHP that loads the app the way cron.php does.
 $ro_out = [];
-exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('require ' . var_export($root . '/functions.php', true) . ';'
+exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('require ' . var_export($root . '/bootstrap.php', true) . ';'
     . ' echo json_encode(bk_rollup_daily_uptime_time($pdo, 2));') . ' 2>&1', $ro_out, $ro_rc);
 check_true('časový souhrn dnů proběhl jako v cronu (' . implode(' ', $ro_out) . ')', $ro_rc === 0 && (int)end($ro_out) > 0);
 [$code, $data] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
@@ -1668,7 +1668,7 @@ if (!empty($cookie_jar)) {
 // The decision logic has database-free tests. This is about the full
 // mechanism: what really gets written to the database and above all what
 // does NOT when escalation has nowhere to go.
-require_once __DIR__ . '/../functions.php';
+require_once __DIR__ . '/../bootstrap.php';
 
 // Preset thresholds actually apply. bk_effective_threshold had tests but
 // NO production caller - the preset editor offered thresholds while the
@@ -3250,35 +3250,33 @@ check('bez času vrací 400, ne prázdný seznam', $code, 400);
 // rest of it did not. A threshold breach is only meaningful with a duration
 // ("above 85 % for 18 minutes", not "at 91 % right now") and with the process
 // behind it, and both are computable from data we already store.
-if (function_exists('bk_metric_pressure')) {
-    $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
-    $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+$pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
 
-    // Ten minutes above the threshold, below it before.
-    for ($i = 14; $i >= 0; $i--) {
-        $val = $i <= 10 ? 91 : 20;
-        $st = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at)
-                             VALUES (2, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
-        $st->execute([$val, $i]);
-    }
-
-    $pressure = bk_metric_pressure($pdo, 2, 'cpu_usage', 85.0);
-    check_true('tlak nad prahem se rozpozná', $pressure !== null);
-    check('a trvá deset minut, ne patnáct', $pressure['minutes'], 10);
-    check('aktuální hodnota sedí', $pressure['current'], 91.0);
-
-    // A value below the threshold is not pressure, even if a spike came before.
-    $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 30, NOW())");
-    check('po poklesu se tlak nehlásí', bk_metric_pressure($pdo, 2, 'cpu_usage', 85.0), null);
-
-    // A single measurement is not a duration.
-    $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
-    $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 99, NOW())");
-    check('jeden vzorek se nevydává za trvání', bk_metric_pressure($pdo, 2, 'cpu_usage', 85.0), null);
-
-    // The column name goes into SQL, so only list members may pass.
-    check('neznámý sloupec se odmítne', bk_metric_pressure($pdo, 2, 'cpu_usage; DROP TABLE monitors', 85.0), null);
+// Ten minutes above the threshold, below it before.
+for ($i = 14; $i >= 0; $i--) {
+    $val = $i <= 10 ? 91 : 20;
+    $st = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at)
+                         VALUES (2, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+    $st->execute([$val, $i]);
 }
+
+$pressure = bk_metric_pressure($pdo, 2, 'cpu_usage', 85.0);
+check_true('tlak nad prahem se rozpozná', $pressure !== null);
+check('a trvá deset minut, ne patnáct', $pressure['minutes'], 10);
+check('aktuální hodnota sedí', $pressure['current'], 91.0);
+
+// A value below the threshold is not pressure, even if a spike came before.
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 30, NOW())");
+check('po poklesu se tlak nehlásí', bk_metric_pressure($pdo, 2, 'cpu_usage', 85.0), null);
+
+// A single measurement is not a duration.
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 99, NOW())");
+check('jeden vzorek se nevydává za trvání', bk_metric_pressure($pdo, 2, 'cpu_usage', 85.0), null);
+
+// The column name goes into SQL, so only list members may pass.
+check('neznámý sloupec se odmítne', bk_metric_pressure($pdo, 2, 'cpu_usage; DROP TABLE monitors', 85.0), null);
 
 // --- Knowledge tips: the threshold comes from the monitor's settings ------
 //
@@ -3287,31 +3285,29 @@ if (function_exists('bk_metric_pressure')) {
 // to 95 still got a critical tip at 81 % - three opinions on "too high".
 require_once $root . '/lang.php';
 
-if (function_exists('bk_get_knowledge_tips')) {
-    $details_85 = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61.0, 'ram_mb' => 8.0]]];
+$details_85 = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61.0, 'ram_mb' => 8.0]]];
 
-    // Threshold 95: 85 % sits below it, no critical tip may appear.
-    $mon_high = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 95];
-    $tips_high = bk_get_knowledge_tips($mon_high, $details_85, [], 'up', [], $pdo);
-    $crit_high = array_filter($tips_high, fn($t) => $t['severity'] === 'critical');
-    check('s prahem 95 se při 85 % nekřičí', count($crit_high), 0);
+// Threshold 95: 85 % sits below it, no critical tip may appear.
+$mon_high = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 95];
+$tips_high = bk_get_knowledge_tips($mon_high, $details_85, [], 'up', [], $pdo);
+$crit_high = array_filter($tips_high, fn($t) => $t['severity'] === 'critical');
+check('s prahem 95 se při 85 % nekřičí', count($crit_high), 0);
 
-    // Threshold 80: the same measurement sits above it.
-    $mon_low = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 80];
-    $tips_low = bk_get_knowledge_tips($mon_low, $details_85, [], 'up', [], $pdo);
-    $crit_low = array_filter($tips_low, fn($t) => $t['severity'] === 'critical');
-    check_true('s prahem 80 kritický tip vznikne', count($crit_low) > 0);
+// Threshold 80: the same measurement sits above it.
+$mon_low = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 80];
+$tips_low = bk_get_knowledge_tips($mon_low, $details_85, [], 'up', [], $pdo);
+$crit_low = array_filter($tips_low, fn($t) => $t['severity'] === 'critical');
+check_true('s prahem 80 kritický tip vznikne', count($crit_low) > 0);
 
-    // And it names the culprit - the sentence exists for that.
-    $text = implode(' ', array_column($crit_low, 'text'));
-    check_true('a jmenuje viníka', str_contains($text, 'hostapd'));
+// And it names the culprit - the sentence exists for that.
+$text = implode(' ', array_column($crit_low, 'text'));
+check_true('a jmenuje viníka', str_contains($text, 'hostapd'));
 
-    // Without a configured threshold the original behaviour (80/50) stays, so
-    // nothing shifts under anyone's feet.
-    $mon_none = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt'];
-    $tips_none = bk_get_knowledge_tips($mon_none, $details_85, [], 'up', [], $pdo);
-    check_true('bez prahu platí původní 80', count(array_filter($tips_none, fn($t) => $t['severity'] === 'critical')) > 0);
-}
+// Without a configured threshold the original behaviour (80/50) stays, so
+// nothing shifts under anyone's feet.
+$mon_none = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt'];
+$tips_none = bk_get_knowledge_tips($mon_none, $details_85, [], 'up', [], $pdo);
+check_true('bez prahu platí původní 80', count(array_filter($tips_none, fn($t) => $t['severity'] === 'critical')) > 0);
 
 // --- Knowledge tips: the threshold comes from the monitor's settings ------
 //
@@ -3320,26 +3316,24 @@ if (function_exists('bk_get_knowledge_tips')) {
 // to 95 still got a critical tip at 81 % - three opinions on "too high".
 require_once $root . '/lang.php';
 
-if (function_exists('bk_get_knowledge_tips')) {
-    $details_85 = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61.0, 'ram_mb' => 8.0]]];
+$details_85 = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61.0, 'ram_mb' => 8.0]]];
 
-    // Threshold 95: 85 % sits below it, no critical tip may appear.
-    $mon_high = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 95];
-    $tips_high = bk_get_knowledge_tips($mon_high, $details_85, [], 'up', [], $pdo);
-    check('s prahem 95 se při 85 % nekřičí', count(array_filter($tips_high, fn($t) => $t['severity'] === 'critical')), 0);
+// Threshold 95: 85 % sits below it, no critical tip may appear.
+$mon_high = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 95];
+$tips_high = bk_get_knowledge_tips($mon_high, $details_85, [], 'up', [], $pdo);
+check('s prahem 95 se při 85 % nekřičí', count(array_filter($tips_high, fn($t) => $t['severity'] === 'critical')), 0);
 
-    // Threshold 80: the same measurement sits above it.
-    $mon_low = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 80];
-    $tips_low = bk_get_knowledge_tips($mon_low, $details_85, [], 'up', [], $pdo);
-    $crit_low = array_filter($tips_low, fn($t) => $t['severity'] === 'critical');
-    check_true('s prahem 80 kritický tip vznikne', count($crit_low) > 0);
-    check_true('a jmenuje viníka', str_contains(implode(' ', array_column($crit_low, 'text')), 'hostapd'));
+// Threshold 80: the same measurement sits above it.
+$mon_low = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 80];
+$tips_low = bk_get_knowledge_tips($mon_low, $details_85, [], 'up', [], $pdo);
+$crit_low = array_filter($tips_low, fn($t) => $t['severity'] === 'critical');
+check_true('s prahem 80 kritický tip vznikne', count($crit_low) > 0);
+check_true('a jmenuje viníka', str_contains(implode(' ', array_column($crit_low, 'text')), 'hostapd'));
 
-    // Without a configured threshold the original behaviour (80/50) stays.
-    $mon_none = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt'];
-    $tips_none = bk_get_knowledge_tips($mon_none, $details_85, [], 'up', [], $pdo);
-    check_true('bez prahu platí původní 80', count(array_filter($tips_none, fn($t) => $t['severity'] === 'critical')) > 0);
-}
+// Without a configured threshold the original behaviour (80/50) stays.
+$mon_none = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt'];
+$tips_none = bk_get_knowledge_tips($mon_none, $details_85, [], 'up', [], $pdo);
+check_true('bez prahu platí původní 80', count(array_filter($tips_none, fn($t) => $t['severity'] === 'critical')) > 0);
 
 // The summary must not contradict itself in one breath.
 //
@@ -3349,47 +3343,43 @@ if (function_exists('bk_get_knowledge_tips')) {
 // The summary composes sentences via t(), so without the dictionary it dies
 // on an undefined function - the same trap cron.php and agent_api.php already took.
 require_once $root . '/lang.php';
-if (function_exists('bk_build_executive_summary')) {
-    $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
-    for ($i = 12; $i >= 0; $i--) {
-        $st = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at)
-                             VALUES (2, 91, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
-        $st->execute([$i]);
-    }
-    $mon = ['id' => 2, 'name' => 'Router', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 85];
-    $text = bk_build_executive_summary($mon, null, [], [], [], $pdo, []);
-    check_true('shrnutí hlásí tlak', str_contains($text, '91'));
-    check_false('a netvrdí zároveň, že je klid', str_contains($text, 'Žádné aktuální problémy'));
-
-    // Without pressure that sentence MUST appear, or the summary would stay silent.
-    $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
-    $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 10, NOW())");
-    $calm = bk_build_executive_summary($mon, null, [], [], [], $pdo, []);
-    check_true('bez tlaku se přizná klid', str_contains($calm, 'Žádné aktuální problémy'));
-    // W2-2: the asset page's sentence leaves the concern and the all-clear to the findings list below it.
-    $tip = [['severity' => 'critical', 'text' => 'Disk je plný.']];
-    check_true('souhrn pro e-mail a starou stránku jmenuje hlavní starost', str_contains(bk_build_executive_summary($mon, null, $tip, [], [], $pdo, []), 'Disk je plný.'));
-    $only_state = bk_build_executive_summary($mon, null, $tip, [], [], $pdo, [], false);
-    check_false('statusSentence starost neopakuje (je hned pod ním v nálezech)', str_contains($only_state, 'Disk je plný.'));
-    check_false('a ani netvrdí klid, ten řekne seznam nálezů', str_contains($only_state, 'Žádné aktuální problémy'));
-    check_true('stav v něm zůstane', $only_state !== '' && str_contains($only_state, 'Router'));
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+for ($i = 12; $i >= 0; $i--) {
+    $st = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at)
+                         VALUES (2, 91, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+    $st->execute([$i]);
 }
+$mon = ['id' => 2, 'name' => 'Router', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 85];
+$text = bk_build_executive_summary($mon, null, [], [], [], $pdo, []);
+check_true('shrnutí hlásí tlak', str_contains($text, '91'));
+check_false('a netvrdí zároveň, že je klid', str_contains($text, 'Žádné aktuální problémy'));
 
-if (function_exists('bk_top_process_in_window')) {
-    $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
-    $pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, cpu_pct, ram_mb)
-                VALUES (2, DATE_SUB(NOW(), INTERVAL 5 MINUTE), 'cpu', 'hostapd', 61.0, 12.0)");
-    $pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, cpu_pct, ram_mb)
-                VALUES (2, DATE_SUB(NOW(), INTERVAL 5 MINUTE), 'cpu', 'kresd', 8.0, 30.0)");
+// Without pressure that sentence MUST appear, or the summary would stay silent.
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 10, NOW())");
+$calm = bk_build_executive_summary($mon, null, [], [], [], $pdo, []);
+check_true('bez tlaku se přizná klid', str_contains($calm, 'Žádné aktuální problémy'));
+// W2-2: the asset page's sentence leaves the concern and the all-clear to the findings list below it.
+$tip = [['severity' => 'critical', 'text' => 'Disk je plný.']];
+check_true('souhrn pro e-mail a starou stránku jmenuje hlavní starost', str_contains(bk_build_executive_summary($mon, null, $tip, [], [], $pdo, []), 'Disk je plný.'));
+$only_state = bk_build_executive_summary($mon, null, $tip, [], [], $pdo, [], false);
+check_false('statusSentence starost neopakuje (je hned pod ním v nálezech)', str_contains($only_state, 'Disk je plný.'));
+check_false('a ani netvrdí klid, ten řekne seznam nálezů', str_contains($only_state, 'Žádné aktuální problémy'));
+check_true('stav v něm zůstane', $only_state !== '' && str_contains($only_state, 'Router'));
 
-    $top = bk_top_process_in_window($pdo, 2, time() - 600, time(), 'cpu');
-    check('viník se najde', $top['name'] ?? null, 'hostapd');
-    check('i s hodnotou', $top['cpu'] ?? null, 61.0);
+$pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
+$pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, cpu_pct, ram_mb)
+            VALUES (2, DATE_SUB(NOW(), INTERVAL 5 MINUTE), 'cpu', 'hostapd', 61.0, 12.0)");
+$pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, cpu_pct, ram_mb)
+            VALUES (2, DATE_SUB(NOW(), INTERVAL 5 MINUTE), 'cpu', 'kresd', 8.0, 30.0)");
 
-    // Outside the window nothing is invented - process history is young and an
-    // older spike simply cannot be explained.
-    check('mimo okno se nehádá', bk_top_process_in_window($pdo, 2, time() - 86400 * 5, time() - 86400 * 4, 'cpu'), null);
-}
+$top = bk_top_process_in_window($pdo, 2, time() - 600, time(), 'cpu');
+check('viník se najde', $top['name'] ?? null, 'hostapd');
+check('i s hodnotou', $top['cpu'] ?? null, 61.0);
+
+// Outside the window nothing is invented - process history is young and an
+// older spike simply cannot be explained.
+check('mimo okno se nehádá', bk_top_process_in_window($pdo, 2, time() - 86400 * 5, time() - 86400 * 4, 'cpu'), null);
 
 // --- Set password from an invite token -----------------------------------
 //
@@ -3427,71 +3417,69 @@ $pdo->prepare("UPDATE users SET password_hash = ? WHERE id = 1")
 // Two steps like the legacy admin: the secret lives in the session until a
 // code proves the QR scanned. The test computes a real code with the same
 // bk_totp_calculate the server verifies with.
-if (function_exists('bk_totp_calculate')) {
-    [$code, $ts] = api_post($base, 'action=totp_setup', [], $cookie_jar);
-    check('totp_setup vrací 200', $code, 200);
-    check_true('a secret', !empty($ts['secret']));
-    check_true('a otpauth URI', str_starts_with($ts['otpauthUri'] ?? '', 'otpauth://totp/'));
+[$code, $ts] = api_post($base, 'action=totp_setup', [], $cookie_jar);
+check('totp_setup vrací 200', $code, 200);
+check_true('a secret', !empty($ts['secret']));
+check_true('a otpauth URI', str_starts_with($ts['otpauthUri'] ?? '', 'otpauth://totp/'));
 
-    // A wrong code must not enable 2FA.
-    [$code] = api_post($base, 'action=totp_confirm', ['code' => '000000'], $cookie_jar);
-    check('špatný kód vrací 400', $code, 400);
-    $totp_row = $pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn();
-    check('a 2FA zůstává vypnuté', (int)$totp_row, 0);
+// A wrong code must not enable 2FA.
+[$code] = api_post($base, 'action=totp_confirm', ['code' => '000000'], $cookie_jar);
+check('špatný kód vrací 400', $code, 400);
+$totp_row = $pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn();
+check('a 2FA zůstává vypnuté', (int)$totp_row, 0);
 
-    // The right code computed from the same secret.
-    $valid_code = bk_totp_calculate($ts['secret'], (int)floor(time() / 30));
-    [$code, $tc] = api_post($base, 'action=totp_confirm', ['code' => $valid_code], $cookie_jar);
-    check('správný kód 2FA zapne', $code, 200);
-    check('v databázi je zapnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
+// The right code computed from the same secret.
+$valid_code = bk_totp_calculate($ts['secret'], (int)floor(time() / 30));
+[$code, $tc] = api_post($base, 'action=totp_confirm', ['code' => $valid_code], $cookie_jar);
+check('správný kód 2FA zapne', $code, 200);
+check('v databázi je zapnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
 
-    // --- Recovery codes ----------------------------------------------------
-    // Enabling 2FA hands out ten one-time codes exactly once; only hashes
-    // are stored. A code signs the user in IN PLACE of the TOTP code when
-    // the phone is gone - and is consumed by doing so.
-    $rc = $tc['recoveryCodes'] ?? [];
-    check('potvrzení vrací 10 záložních kódů', count($rc), 10);
-    check_true('kódy mají tvar xxxxx-xxxxx', (bool)preg_match('/^[a-z2-9]{5}-[a-z2-9]{5}$/', $rc[0] ?? ''));
-    check('v DB je 10 hashů, ne kódy', (int)$pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE user_id = 1 AND used_at IS NULL")->fetchColumn(), 10);
-    check_true('plaintext kód v DB není', $pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE code_hash = " . $pdo->quote(str_replace('-', '', $rc[0])))->fetchColumn() == 0);
+// --- Recovery codes ----------------------------------------------------
+// Enabling 2FA hands out ten one-time codes exactly once; only hashes
+// are stored. A code signs the user in IN PLACE of the TOTP code when
+// the phone is gone - and is consumed by doing so.
+$rc = $tc['recoveryCodes'] ?? [];
+check('potvrzení vrací 10 záložních kódů', count($rc), 10);
+check_true('kódy mají tvar xxxxx-xxxxx', (bool)preg_match('/^[a-z2-9]{5}-[a-z2-9]{5}$/', $rc[0] ?? ''));
+check('v DB je 10 hashů, ne kódy', (int)$pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE user_id = 1 AND used_at IS NULL")->fetchColumn(), 10);
+check_true('plaintext kód v DB není', $pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE code_hash = " . $pdo->quote(str_replace('-', '', $rc[0])))->fetchColumn() == 0);
 
-    [, $mp_rc] = api_get_auth($base, 'action=my_profile', $cookie_jar);
-    check('profil hlásí 10 zbývajících kódů', $mp_rc['totpRecoveryRemaining'] ?? null, 10);
+[, $mp_rc] = api_get_auth($base, 'action=my_profile', $cookie_jar);
+check('profil hlásí 10 zbývajících kódů', $mp_rc['totpRecoveryRemaining'] ?? null, 10);
 
-    // Sign-in with a recovery code instead of the TOTP code (separate jar,
-    // the admin session must stay intact).
-    $rc_jar = tempnam(sys_get_temp_dir(), 'bk_test_rc');
-    [$code, $rc_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[0]], $rc_jar, '');
-    check('záložní kód přihlásí', $code, 200);
-    check('a odpověď říká, kolik kódů zbývá', $rc_login['recoveryCodesRemaining'] ?? null, 9);
+// Sign-in with a recovery code instead of the TOTP code (separate jar,
+// the admin session must stay intact).
+$rc_jar = tempnam(sys_get_temp_dir(), 'bk_test_rc');
+[$code, $rc_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[0]], $rc_jar, '');
+check('záložní kód přihlásí', $code, 200);
+check('a odpověď říká, kolik kódů zbývá', $rc_login['recoveryCodesRemaining'] ?? null, 9);
 
-    // Strictly single use: the same code a second time must fail.
-    [$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[0]], $rc_jar, '');
-    check('použitý kód podruhé nepřihlásí', $code, 401);
-    @unlink($rc_jar);
+// Strictly single use: the same code a second time must fail.
+[$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[0]], $rc_jar, '');
+check('použitý kód podruhé nepřihlásí', $code, 401);
+@unlink($rc_jar);
 
-    // Regeneration requires the password and invalidates the old set.
-    [$code] = api_post($base, 'action=totp_recovery_regenerate', ['password' => 'spatne-heslo'], $cookie_jar);
-    check('regenerace se špatným heslem vrací 400', $code, 400);
-    [$code, $rr] = api_post($base, 'action=totp_recovery_regenerate', ['password' => $bk_test_admin_password], $cookie_jar);
-    check('se správným heslem vrací novou sadu', $code, 200);
-    check('nová sada má zase 10 kódů', count($rr['recoveryCodes'] ?? []), 10);
-    $rc_jar2 = tempnam(sys_get_temp_dir(), 'bk_test_rc2');
-    [$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[1]], $rc_jar2, '');
-    check('starý kód po regeneraci neplatí', $code, 401);
-    @unlink($rc_jar2);
+// Regeneration requires the password and invalidates the old set.
+[$code] = api_post($base, 'action=totp_recovery_regenerate', ['password' => 'spatne-heslo'], $cookie_jar);
+check('regenerace se špatným heslem vrací 400', $code, 400);
+[$code, $rr] = api_post($base, 'action=totp_recovery_regenerate', ['password' => $bk_test_admin_password], $cookie_jar);
+check('se správným heslem vrací novou sadu', $code, 200);
+check('nová sada má zase 10 kódů', count($rr['recoveryCodes'] ?? []), 10);
+$rc_jar2 = tempnam(sys_get_temp_dir(), 'bk_test_rc2');
+[$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[1]], $rc_jar2, '');
+check('starý kód po regeneraci neplatí', $code, 401);
+@unlink($rc_jar2);
 
-    // Disabling without the password must fail - a stolen session must not quietly remove 2FA.
-    [$code] = api_post($base, 'action=totp_disable', ['password' => 'spatne-heslo'], $cookie_jar);
-    check('vypnutí se špatným heslem vrací 400', $code, 400);
-    check('2FA drží', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
+// Disabling without the password must fail - a stolen session must not quietly remove 2FA.
+[$code] = api_post($base, 'action=totp_disable', ['password' => 'spatne-heslo'], $cookie_jar);
+check('vypnutí se špatným heslem vrací 400', $code, 400);
+check('2FA drží', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
 
-    [$code] = api_post($base, 'action=totp_disable', ['password' => $bk_test_admin_password], $cookie_jar);
-    check('se správným heslem se vypne', $code, 200);
-    check('a v databázi je vypnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 0);
-    // Codes without 2FA would be a sign-in backdoor - disabling removes them.
-    check('vypnutí 2FA smaže i záložní kódy', (int)$pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE user_id = 1")->fetchColumn(), 0);
-}
+[$code] = api_post($base, 'action=totp_disable', ['password' => $bk_test_admin_password], $cookie_jar);
+check('se správným heslem se vypne', $code, 200);
+check('a v databázi je vypnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 0);
+// Codes without 2FA would be a sign-in backdoor - disabling removes them.
+check('vypnutí 2FA smaže i záložní kódy', (int)$pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE user_id = 1")->fetchColumn(), 0);
 
 // --- OAuth sign-in and 2FA ------------------------------------------------
 //
@@ -3504,153 +3492,151 @@ if (function_exists('bk_totp_calculate')) {
 // check, the provider request and the redirect around the one call. That the
 // callback makes that call, and nothing else signs a session in, is checked in
 // the source after this block.
-if (function_exists('bk_totp_calculate')) {
-    $oa_secret = bk_totp_generate_secret();
-    $oa_password = 'OauthHeslo123!';
-    $oa_ins = $pdo->prepare("INSERT INTO users (username, email, role, password_hash, oauth_provider, oauth_id, totp_secret, totp_enabled)
-                             VALUES (?, ?, 'user', ?, 'github', ?, ?, ?)");
-    $oa_ins->execute(['oauth_totp', 'oauth-totp@example.com', password_hash($oa_password, PASSWORD_BCRYPT), '9000001', $oa_secret, 1]);
-    $oa_totp_id = (int)$pdo->lastInsertId();
-    $oa_ins->execute(['oauth_plain', 'oauth-plain@example.com', password_hash($oa_password, PASSWORD_BCRYPT), '9000002', null, 0]);
-    $oa_plain_id = (int)$pdo->lastInsertId();
-    $oa_code = fn (): string => bk_totp_calculate($oa_secret, (int)floor(time() / 30));
+$oa_secret = bk_totp_generate_secret();
+$oa_password = 'OauthHeslo123!';
+$oa_ins = $pdo->prepare("INSERT INTO users (username, email, role, password_hash, oauth_provider, oauth_id, totp_secret, totp_enabled)
+                         VALUES (?, ?, 'user', ?, 'github', ?, ?, ?)");
+$oa_ins->execute(['oauth_totp', 'oauth-totp@example.com', password_hash($oa_password, PASSWORD_BCRYPT), '9000001', $oa_secret, 1]);
+$oa_totp_id = (int)$pdo->lastInsertId();
+$oa_ins->execute(['oauth_plain', 'oauth-plain@example.com', password_hash($oa_password, PASSWORD_BCRYPT), '9000002', null, 0]);
+$oa_plain_id = (int)$pdo->lastInsertId();
+$oa_code = fn (): string => bk_totp_calculate($oa_secret, (int)floor(time() / 30));
 
-    // bk_oauth_login() in a child PHP that loads the app like a request does:
-    // the result, what it left in the session, and that session's id.
-    $oa_login = function (string $oauth_id) use ($root): array {
-        $php = 'require ' . var_export($root . '/functions.php', true) . ';'
-            . '$r = bk_oauth_login($pdo, "github", ' . var_export($oauth_id, true) . ');'
-            . 'echo json_encode(["result" => $r, "session" => $_SESSION, "sid" => session_id()]);';
-        $out = [];
-        exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($php) . ' 2>&1', $out, $rc);
-        $res = json_decode((string)end($out), true);
-        return [$rc, is_array($res) ? $res : ['output' => implode(' ', $out)]];
-    };
-    // A cookie jar that carries the child's session to the server.
-    $oa_jar = function (string $sid): string {
-        $file = tempnam(sys_get_temp_dir(), 'bk_test_oa');
-        file_put_contents($file, "127.0.0.1\tFALSE\t/\tFALSE\t0\tPHPSESSID\t{$sid}\n");
-        return $file;
-    };
-    // admin.php in that session: [HTTP code, body, redirect target].
-    $oa_admin = function (string $file, ?array $post = null) use ($base): array {
-        $ch = curl_init($base . '/admin.php');
-        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30,
-            CURLOPT_COOKIEFILE => $file, CURLOPT_COOKIEJAR => $file]);
-        if ($post !== null) {
-            curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => http_build_query($post)]);
-        }
-        $body = (string)curl_exec($ch);
-        return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), $body, (string)curl_getinfo($ch, CURLINFO_REDIRECT_URL)];
-    };
-    $oa_csrf = fn (string $html): string => preg_match('/name="csrf_token" value="([0-9a-f]{64})"/', $html, $m) ? $m[1] : '';
-    $oa_last_success = function (int $user_id) use ($pdo): ?string {
-        $stmt = $pdo->prepare("SELECT description FROM audit_log WHERE action = 'login_success' AND actor_user_id = ? ORDER BY id DESC LIMIT 1");
-        $stmt->execute([$user_id]);
-        $d = $stmt->fetchColumn();
-        return $d === false ? null : (string)$d;
-    };
-
-    // An account with 2FA: the provider stands in for the password only.
-    [$oa_rc, $oa] = $oa_login('9000001');
-    check('OAuth účtu s 2FA neskončí přihlášením (' . ($oa['output'] ?? 'ok') . ')', [$oa_rc, $oa['result'] ?? null], [0, 'pending_2fa']);
-    check('session drží jen čekající účet, žádné přihlášení',
-        [(int)($oa['session']['pending_2fa_user_id'] ?? 0), $oa['session']['admin_logged_in'] ?? null, $oa['session']['admin_id'] ?? null],
-        [$oa_totp_id, null, null]);
-    check('a audit žádné přihlášení nezapsal', $oa_last_success($oa_totp_id), null);
-    $oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
-    [, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
-    check('API tu session nebere jako přihlášenou', $oa_sess['authenticated'] ?? null, false);
-    [$code, $oa_page] = $oa_admin($oa_cj);
-    check_true('admin.php po OAuth ukáže krok s kódem 2FA', $code === 200 && str_contains($oa_page, 'name="totp_login_code"'));
-    // A recovery code has letters: a digits-only keypad on a phone cannot type it.
-    check_false('pole kódu nevynutí číselnou klávesnici, záložní kód má písmena',
-        (bool)preg_match('/<input[^>]*name="totp_code"[^>]*inputmode="numeric"/', $oa_page));
-    $oa_token = $oa_csrf($oa_page);
-
-    [$code, $oa_page] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => '000000', 'csrf_token' => $oa_token]);
-    check_true('špatný kód nepřihlásí a krok s kódem zůstane', $code === 200 && str_contains($oa_page, 'name="totp_login_code"'));
-    check('špatný kód se zapíše jako login_failed, který počítá zámek',
-        (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'login_failed' AND actor_username = 'oauth_totp'")->fetchColumn(), 1);
-    [$code, , $oa_loc] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_code(), 'csrf_token' => $oa_token]);
-    check('správný kód přihlásí a vede na admin.php jako dřív', [$code, str_ends_with($oa_loc, '/admin.php')], [302, true]);
-    [, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
-    check('pak je session přihlášená za ten účet',
-        [$oa_sess['authenticated'] ?? null, $oa_sess['user']['username'] ?? null], [true, 'oauth_totp']);
-    check('audit říká, že první krok byl OAuth, ne heslo', $oa_last_success($oa_totp_id), 'Přes GitHub OAuth + 2FA');
-    @unlink($oa_cj);
-
-    // A recovery code in place of the TOTP code, as after the password.
-    $oa_recovery = bk_totp_generate_recovery_codes($pdo, $oa_totp_id);
-    [, $oa] = $oa_login('9000001');
-    $oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
-    [, $oa_page] = $oa_admin($oa_cj);
-    [$code] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_recovery[0], 'csrf_token' => $oa_csrf($oa_page)]);
-    [, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
-    check('záložní kód po OAuth přihlásí', [$code, $oa_sess['authenticated'] ?? null], [302, true]);
-    check('a spotřebuje se', bk_totp_recovery_remaining($pdo, $oa_totp_id), 9);
-    check('audit zaznamená použitý záložní kód',
-        (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'totp_recovery_used' AND actor_user_id = {$oa_totp_id}")->fetchColumn(), 1);
-    @unlink($oa_cj);
-
-    // The lockout of the code step holds after OAuth: five failures on the
-    // account's name refuse even the right code.
-    $oa_fail = $pdo->prepare("INSERT INTO audit_log (actor_username, action, description) VALUES ('oauth_totp', 'login_failed', 'test')");
-    for ($i = 0; $i < 5; $i++) {
-        $oa_fail->execute();
+// bk_oauth_login() in a child PHP that loads the app like a request does:
+// the result, what it left in the session, and that session's id.
+$oa_login = function (string $oauth_id) use ($root): array {
+    $php = 'require ' . var_export($root . '/bootstrap.php', true) . ';'
+        . '$r = bk_oauth_login($pdo, "github", ' . var_export($oauth_id, true) . ');'
+        . 'echo json_encode(["result" => $r, "session" => $_SESSION, "sid" => session_id()]);';
+    $out = [];
+    exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($php) . ' 2>&1', $out, $rc);
+    $res = json_decode((string)end($out), true);
+    return [$rc, is_array($res) ? $res : ['output' => implode(' ', $out)]];
+};
+// A cookie jar that carries the child's session to the server.
+$oa_jar = function (string $sid): string {
+    $file = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+    file_put_contents($file, "127.0.0.1\tFALSE\t/\tFALSE\t0\tPHPSESSID\t{$sid}\n");
+    return $file;
+};
+// admin.php in that session: [HTTP code, body, redirect target].
+$oa_admin = function (string $file, ?array $post = null) use ($base): array {
+    $ch = curl_init($base . '/admin.php');
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30,
+        CURLOPT_COOKIEFILE => $file, CURLOPT_COOKIEJAR => $file]);
+    if ($post !== null) {
+        curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => http_build_query($post)]);
     }
-    [, $oa] = $oa_login('9000001');
-    $oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
-    [, $oa_page] = $oa_admin($oa_cj);
-    [$code, $oa_page] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_code(), 'csrf_token' => $oa_csrf($oa_page)]);
-    [, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
-    check_true('zamčený účet nepřihlásí ani správný kód po OAuth',
-        $code === 200 && str_contains($oa_page, 'Příliš mnoho neúspěšných pokusů') && ($oa_sess['authenticated'] ?? null) === false);
-    @unlink($oa_cj);
-    // The suite signs in from 127.0.0.1 throughout; these failures must not lock out what follows.
-    $pdo->exec("DELETE FROM audit_log WHERE action = 'login_failed' AND actor_username = 'oauth_totp'");
+    $body = (string)curl_exec($ch);
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), $body, (string)curl_getinfo($ch, CURLINFO_REDIRECT_URL)];
+};
+$oa_csrf = fn (string $html): string => preg_match('/name="csrf_token" value="([0-9a-f]{64})"/', $html, $m) ? $m[1] : '';
+$oa_last_success = function (int $user_id) use ($pdo): ?string {
+    $stmt = $pdo->prepare("SELECT description FROM audit_log WHERE action = 'login_success' AND actor_user_id = ? ORDER BY id DESC LIMIT 1");
+    $stmt->execute([$user_id]);
+    $d = $stmt->fetchColumn();
+    return $d === false ? null : (string)$d;
+};
 
-    // Without 2FA an OAuth identity signs in at once, as it always did.
-    [$oa_rc, $oa] = $oa_login('9000002');
-    check('OAuth bez 2FA přihlásí hned',
-        [$oa_rc, $oa['result'] ?? null, $oa['session']['admin_logged_in'] ?? null, (int)($oa['session']['admin_id'] ?? 0)],
-        [0, 'signed_in', true, $oa_plain_id]);
-    check_false('a nic nečeká na kód', isset($oa['session']['pending_2fa_user_id']));
-    $oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
-    [, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
-    check('server tu session bere jako přihlášenou',
-        [$oa_sess['authenticated'] ?? null, $oa_sess['user']['username'] ?? null], [true, 'oauth_plain']);
-    check('audit zapíše přihlášení přes OAuth', $oa_last_success($oa_plain_id), 'Přes GitHub OAuth');
-    @unlink($oa_cj);
+// An account with 2FA: the provider stands in for the password only.
+[$oa_rc, $oa] = $oa_login('9000001');
+check('OAuth účtu s 2FA neskončí přihlášením (' . ($oa['output'] ?? 'ok') . ')', [$oa_rc, $oa['result'] ?? null], [0, 'pending_2fa']);
+check('session drží jen čekající účet, žádné přihlášení',
+    [(int)($oa['session']['pending_2fa_user_id'] ?? 0), $oa['session']['admin_logged_in'] ?? null, $oa['session']['admin_id'] ?? null],
+    [$oa_totp_id, null, null]);
+check('a audit žádné přihlášení nezapsal', $oa_last_success($oa_totp_id), null);
+$oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('API tu session nebere jako přihlášenou', $oa_sess['authenticated'] ?? null, false);
+[$code, $oa_page] = $oa_admin($oa_cj);
+check_true('admin.php po OAuth ukáže krok s kódem 2FA', $code === 200 && str_contains($oa_page, 'name="totp_login_code"'));
+// A recovery code has letters: a digits-only keypad on a phone cannot type it.
+check_false('pole kódu nevynutí číselnou klávesnici, záložní kód má písmena',
+    (bool)preg_match('/<input[^>]*name="totp_code"[^>]*inputmode="numeric"/', $oa_page));
+$oa_token = $oa_csrf($oa_page);
 
-    // An identity no account has linked signs nobody in.
-    [, $oa] = $oa_login('9000999');
-    check('nepropojený OAuth účet nepřihlásí nikoho', [$oa['result'] ?? null, $oa['session'] ?? null], ['no_account', []]);
+[$code, $oa_page] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => '000000', 'csrf_token' => $oa_token]);
+check_true('špatný kód nepřihlásí a krok s kódem zůstane', $code === 200 && str_contains($oa_page, 'name="totp_login_code"'));
+check('špatný kód se zapíše jako login_failed, který počítá zámek',
+    (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'login_failed' AND actor_username = 'oauth_totp'")->fetchColumn(), 1);
+[$code, , $oa_loc] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_code(), 'csrf_token' => $oa_token]);
+check('správný kód přihlásí a vede na admin.php jako dřív', [$code, str_ends_with($oa_loc, '/admin.php')], [302, true]);
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('pak je session přihlášená za ten účet',
+    [$oa_sess['authenticated'] ?? null, $oa_sess['user']['username'] ?? null], [true, 'oauth_totp']);
+check('audit říká, že první krok byl OAuth, ne heslo', $oa_last_success($oa_totp_id), 'Přes GitHub OAuth + 2FA');
+@unlink($oa_cj);
 
-    // The password of the same account stops at the same step (admin.php),
-    // and the API asks for the code before it signs in.
-    $oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
-    [$code, $oa_page] = $oa_admin($oa_cj, ['login' => '1', 'username' => 'oauth_totp', 'password' => $oa_password]);
-    check_true('heslo účtu s 2FA v admin.php vede na krok s kódem', $code === 200 && str_contains($oa_page, 'name="totp_login_code"'));
-    [$code] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_code(), 'csrf_token' => $oa_csrf($oa_page)]);
-    check('a kód přihlásí', $code, 302);
-    check('audit u hesla zůstává Jméno a heslo + 2FA', $oa_last_success($oa_totp_id), 'Jméno a heslo + 2FA');
-    @unlink($oa_cj);
+// A recovery code in place of the TOTP code, as after the password.
+$oa_recovery = bk_totp_generate_recovery_codes($pdo, $oa_totp_id);
+[, $oa] = $oa_login('9000001');
+$oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
+[, $oa_page] = $oa_admin($oa_cj);
+[$code] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_recovery[0], 'csrf_token' => $oa_csrf($oa_page)]);
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('záložní kód po OAuth přihlásí', [$code, $oa_sess['authenticated'] ?? null], [302, true]);
+check('a spotřebuje se', bk_totp_recovery_remaining($pdo, $oa_totp_id), 9);
+check('audit zaznamená použitý záložní kód',
+    (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'totp_recovery_used' AND actor_user_id = {$oa_totp_id}")->fetchColumn(), 1);
+@unlink($oa_cj);
 
-    $oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
-    [$code, $oa_api] = api_post($base, 'action=login', ['username' => 'oauth_totp', 'password' => $oa_password], $oa_cj, '');
-    [, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
-    check('API: heslo účtu s 2FA vrátí requires2fa a nepřihlásí',
-        [$code, $oa_api['requires2fa'] ?? null, $oa_sess['authenticated'] ?? null], [200, true, false]);
-    [$code, $oa_api] = api_post($base, 'action=login', ['username' => 'oauth_totp', 'password' => $oa_password, 'totp_code' => $oa_code()], $oa_cj, '');
-    check('API: s kódem přihlásí, bez záložního kódu', [$code, $oa_api['authenticated'] ?? null,
-        array_key_exists('recoveryCodesRemaining', $oa_api ?? []) ? $oa_api['recoveryCodesRemaining'] : 'chybí'], [200, true, null]);
-    check('audit u API zůstává Password + 2FA', $oa_last_success($oa_totp_id), 'Password + 2FA');
-    @unlink($oa_cj);
-
-    $pdo->exec("DELETE FROM totp_recovery_codes WHERE user_id IN ({$oa_totp_id}, {$oa_plain_id})");
-    $pdo->exec("DELETE FROM users WHERE id IN ({$oa_totp_id}, {$oa_plain_id})");
+// The lockout of the code step holds after OAuth: five failures on the
+// account's name refuse even the right code.
+$oa_fail = $pdo->prepare("INSERT INTO audit_log (actor_username, action, description) VALUES ('oauth_totp', 'login_failed', 'test')");
+for ($i = 0; $i < 5; $i++) {
+    $oa_fail->execute();
 }
+[, $oa] = $oa_login('9000001');
+$oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
+[, $oa_page] = $oa_admin($oa_cj);
+[$code, $oa_page] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_code(), 'csrf_token' => $oa_csrf($oa_page)]);
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check_true('zamčený účet nepřihlásí ani správný kód po OAuth',
+    $code === 200 && str_contains($oa_page, 'Příliš mnoho neúspěšných pokusů') && ($oa_sess['authenticated'] ?? null) === false);
+@unlink($oa_cj);
+// The suite signs in from 127.0.0.1 throughout; these failures must not lock out what follows.
+$pdo->exec("DELETE FROM audit_log WHERE action = 'login_failed' AND actor_username = 'oauth_totp'");
+
+// Without 2FA an OAuth identity signs in at once, as it always did.
+[$oa_rc, $oa] = $oa_login('9000002');
+check('OAuth bez 2FA přihlásí hned',
+    [$oa_rc, $oa['result'] ?? null, $oa['session']['admin_logged_in'] ?? null, (int)($oa['session']['admin_id'] ?? 0)],
+    [0, 'signed_in', true, $oa_plain_id]);
+check_false('a nic nečeká na kód', isset($oa['session']['pending_2fa_user_id']));
+$oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('server tu session bere jako přihlášenou',
+    [$oa_sess['authenticated'] ?? null, $oa_sess['user']['username'] ?? null], [true, 'oauth_plain']);
+check('audit zapíše přihlášení přes OAuth', $oa_last_success($oa_plain_id), 'Přes GitHub OAuth');
+@unlink($oa_cj);
+
+// An identity no account has linked signs nobody in.
+[, $oa] = $oa_login('9000999');
+check('nepropojený OAuth účet nepřihlásí nikoho', [$oa['result'] ?? null, $oa['session'] ?? null], ['no_account', []]);
+
+// The password of the same account stops at the same step (admin.php),
+// and the API asks for the code before it signs in.
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+[$code, $oa_page] = $oa_admin($oa_cj, ['login' => '1', 'username' => 'oauth_totp', 'password' => $oa_password]);
+check_true('heslo účtu s 2FA v admin.php vede na krok s kódem', $code === 200 && str_contains($oa_page, 'name="totp_login_code"'));
+[$code] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_code(), 'csrf_token' => $oa_csrf($oa_page)]);
+check('a kód přihlásí', $code, 302);
+check('audit u hesla zůstává Jméno a heslo + 2FA', $oa_last_success($oa_totp_id), 'Jméno a heslo + 2FA');
+@unlink($oa_cj);
+
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+[$code, $oa_api] = api_post($base, 'action=login', ['username' => 'oauth_totp', 'password' => $oa_password], $oa_cj, '');
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('API: heslo účtu s 2FA vrátí requires2fa a nepřihlásí',
+    [$code, $oa_api['requires2fa'] ?? null, $oa_sess['authenticated'] ?? null], [200, true, false]);
+[$code, $oa_api] = api_post($base, 'action=login', ['username' => 'oauth_totp', 'password' => $oa_password, 'totp_code' => $oa_code()], $oa_cj, '');
+check('API: s kódem přihlásí, bez záložního kódu', [$code, $oa_api['authenticated'] ?? null,
+    array_key_exists('recoveryCodesRemaining', $oa_api ?? []) ? $oa_api['recoveryCodesRemaining'] : 'chybí'], [200, true, null]);
+check('audit u API zůstává Password + 2FA', $oa_last_success($oa_totp_id), 'Password + 2FA');
+@unlink($oa_cj);
+
+$pdo->exec("DELETE FROM totp_recovery_codes WHERE user_id IN ({$oa_totp_id}, {$oa_plain_id})");
+$pdo->exec("DELETE FROM users WHERE id IN ({$oa_totp_id}, {$oa_plain_id})");
 
 // The callback cannot run here, so its source is held to the tested path.
 // admin_logged_in is set only by bk_login_start_session() and by api.php
@@ -3730,56 +3716,54 @@ $names_left = function (PDO $pdo): array {
     return $rows ?: [];
 };
 
-if (function_exists('bk_prune_process_samples')) {
-    // 1. Without thinning only what is beyond retention is dropped.
-    $seed_samples($pdo);
-    $r = bk_prune_process_samples($pdo, 30, 0, 50.0);
-    check('za retencí se smaže', $r['deleted'], 1);
-    check('bez prořezávání se nic neprořezává', $r['pruned'], 0);
-    check(
-        'v okně retence zůstane všechno',
-        $names_left($pdo),
-        ['dnesni-klidny', 'dnesni-spicka', 'stary-klidny', 'stary-spicka', 'stary-zravy-na-pamet']
-    );
+// 1. Without thinning only what is beyond retention is dropped.
+$seed_samples($pdo);
+$r = bk_prune_process_samples($pdo, 30, 0, 50.0);
+check('za retencí se smaže', $r['deleted'], 1);
+check('bez prořezávání se nic neprořezává', $r['pruned'], 0);
+check(
+    'v okně retence zůstane všechno',
+    $names_left($pdo),
+    ['dnesni-klidny', 'dnesni-spicka', 'stary-klidny', 'stary-spicka', 'stary-zravy-na-pamet']
+);
 
-    // 2. With thinning on, old calm samples vanish and the peaks stay.
-    $seed_samples($pdo);
-    $r = bk_prune_process_samples($pdo, 30, 7, 50.0);
-    check('prořezal se jeden klidný starý vzorek', $r['pruned'], 1);
-    check('a dvě špičky se označily', $r['marked'], 2);
-    check(
-        'dnešek nedotčen, ze starých zbyly špičky',
-        $names_left($pdo),
-        ['dnesni-klidny', 'dnesni-spicka', 'stary-spicka', 'stary-zravy-na-pamet']
-    );
+// 2. With thinning on, old calm samples vanish and the peaks stay.
+$seed_samples($pdo);
+$r = bk_prune_process_samples($pdo, 30, 7, 50.0);
+check('prořezal se jeden klidný starý vzorek', $r['pruned'], 1);
+check('a dvě špičky se označily', $r['marked'], 2);
+check(
+    'dnešek nedotčen, ze starých zbyly špičky',
+    $names_left($pdo),
+    ['dnesni-klidny', 'dnesni-spicka', 'stary-spicka', 'stary-zravy-na-pamet']
+);
 
-    // The marking must be visible in the data - a thinned window would otherwise
-    // look like a time when nothing happened.
-    $kept = $pdo->query("SELECT kept_reason FROM process_samples WHERE name = 'stary-spicka'")->fetchColumn();
-    check('přeživší vzorek přizná, že je z prořezaného okna', $kept, 'peak');
-    $fresh = $pdo->query("SELECT kept_reason FROM process_samples WHERE name = 'dnesni-klidny'")->fetchColumn();
-    check('čerstvý vzorek zůstává raw', $fresh, 'raw');
+// The marking must be visible in the data - a thinned window would otherwise
+// look like a time when nothing happened.
+$kept = $pdo->query("SELECT kept_reason FROM process_samples WHERE name = 'stary-spicka'")->fetchColumn();
+check('přeživší vzorek přizná, že je z prořezaného okna', $kept, 'peak');
+$fresh = $pdo->query("SELECT kept_reason FROM process_samples WHERE name = 'dnesni-klidny'")->fetchColumn();
+check('čerstvý vzorek zůstává raw', $fresh, 'raw');
 
-    // 3. Thinning configured beyond the retention boundary is a no-op.
-    //
-    // Mind what this case does NOT test: it does not guard data loss, because
-    // the first phase deletes the affected window before the second reaches it -
-    // verified by sabotage, the tests kept passing with the guard removed. The
-    // guard therefore protects no data, it only saves two pointless queries.
-    // The test guards what matters: fresh samples stay untouched in that configuration.
-    $seed_samples($pdo);
-    $r = bk_prune_process_samples($pdo, 5, 30, 50.0);
-    check('prořezání za hranicí retence nic neprořeže', $r['pruned'], 0);
-    check('a nic neoznačí', $r['marked'], 0);
-    check('čerstvé vzorky zůstanou nedotčené', $names_left($pdo), ['dnesni-klidny', 'dnesni-spicka']);
+// 3. Thinning configured beyond the retention boundary is a no-op.
+//
+// Mind what this case does NOT test: it does not guard data loss, because
+// the first phase deletes the affected window before the second reaches it -
+// verified by sabotage, the tests kept passing with the guard removed. The
+// guard therefore protects no data, it only saves two pointless queries.
+// The test guards what matters: fresh samples stay untouched in that configuration.
+$seed_samples($pdo);
+$r = bk_prune_process_samples($pdo, 5, 30, 50.0);
+check('prořezání za hranicí retence nic neprořeže', $r['pruned'], 0);
+check('a nic neoznačí', $r['marked'], 0);
+check('čerstvé vzorky zůstanou nedotčené', $names_left($pdo), ['dnesni-klidny', 'dnesni-spicka']);
 
-    // 4. Disabled history empties the table - data nobody collects and
-    //    nobody sees has no business in the database.
-    $seed_samples($pdo);
-    $r = bk_prune_process_samples($pdo, 0);
-    check_true('vypnutá historie se přizná', $r['disabled']);
-    check('a tabulka je prázdná', $names_left($pdo), []);
-}
+// 4. Disabled history empties the table - data nobody collects and
+//    nobody sees has no business in the database.
+$seed_samples($pdo);
+$r = bk_prune_process_samples($pdo, 0);
+check_true('vypnutá historie se přizná', $r['disabled']);
+check('a tabulka je prázdná', $names_left($pdo), []);
 
 // --- Settings: save, read back, save again ------------------------------
 //
@@ -5368,193 +5352,191 @@ $set_setting('agent_notifications_enabled', $ra_switch === '' ? '1' : $ra_switch
 // the build itself. The snapshot is the dangerous one - it decides what counts
 // as "new this week", so a wrong write would either mail the whole list again
 // every Monday or never mail anything again.
-if (function_exists('bk_digest_routers')) {
-    $dg_state = fn (): array => $pdo->query("SELECT rec_key, active, severity, first_digest_week, raised_digest_week, UNIX_TIMESTAMP(last_seen) AS seen FROM router_rec_state WHERE monitor_id = 2 ORDER BY rec_key")->fetchAll(PDO::FETCH_ASSOC);
-    $dg_week = date('o-\WW');
-    $dg_item = fn (string $key, string $sev, string $rule = 'disk_temp_warm'): array =>
-        bk_rec_item($rule, $key, 'storage', $sev, ['kind' => 'disk'], ['name' => 'sda', 'disk' => 'SSD (sda)']);
-    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+$dg_state = fn (): array => $pdo->query("SELECT rec_key, active, severity, first_digest_week, raised_digest_week, UNIX_TIMESTAMP(last_seen) AS seen FROM router_rec_state WHERE monitor_id = 2 ORDER BY rec_key")->fetchAll(PDO::FETCH_ASSOC);
+$dg_week = date('o-\WW');
+$dg_item = fn (string $key, string $sev, string $rule = 'disk_temp_warm'): array =>
+    bk_rec_item($rule, $key, 'storage', $sev, ['kind' => 'disk'], ['name' => 'sda', 'disk' => 'SSD (sda)']);
+$pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
 
-    // The blocks above leave the router in whatever state their own last case
-    // needed (one of them deliberately strips the disk list), so this block
-    // seeds what it measures: the fixture's radios and disks, one disk row and
-    // two days of its history.
-    $dg_seed = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
-    $dg_seed['agent_version'] = $omnia_fx['payload']['version'];
-    $dg_seed['agent_last_seen'] = time();
-    $dg_seed['wifi_radios'] = $omnia_fx['payload']['wifi_radios'];
-    $dg_seed['storage_disks'] = $omnia_fx['payload']['storage_disks'];
-    $dg_seed['storage_disks'][0]['key'] = 'digestdiskaaaaaa';
-    // The fixture payload carries no `filesystems` (the capture did not have
-    // one), so the mount this block needs is written out here.
-    $dg_seed['filesystems'] = [['mount' => '/srv', 'fstype' => 'ext4', 'total_kb' => 1048576,
-        'used_pct' => 19.0, 'avail_kb' => 800000]];
-    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_seed)]);
-    $pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
-    $pdo->prepare(
-        "INSERT INTO storage_disks (monitor_id, disk_key, name, transport, rotational, size_bytes, first_seen, last_seen)
-         VALUES (2, 'digestdiskaaaaaa', 'sda', 'sata', 0, 120034123776, DATE_SUB(NOW(), INTERVAL 400 DAY), NOW())"
-    )->execute();
-    $dg_disk_id = (int)$pdo->lastInsertId();
-    $dg_day = $pdo->prepare(
-        "INSERT INTO storage_disk_daily (disk_id, day, samples, temp_sum, temp_n, temp_max, runtime_bad_blocks)
-         VALUES (?, DATE_SUB(CURDATE(), INTERVAL ? DAY), 24, ?, 24, 69, 3)"
-    );
-    $dg_day->execute([$dg_disk_id, 2, 24 * 67]);
-    $dg_day->execute([$dg_disk_id, 3, 24 * 66]);
+// The blocks above leave the router in whatever state their own last case
+// needed (one of them deliberately strips the disk list), so this block
+// seeds what it measures: the fixture's radios and disks, one disk row and
+// two days of its history.
+$dg_seed = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+$dg_seed['agent_version'] = $omnia_fx['payload']['version'];
+$dg_seed['agent_last_seen'] = time();
+$dg_seed['wifi_radios'] = $omnia_fx['payload']['wifi_radios'];
+$dg_seed['storage_disks'] = $omnia_fx['payload']['storage_disks'];
+$dg_seed['storage_disks'][0]['key'] = 'digestdiskaaaaaa';
+// The fixture payload carries no `filesystems` (the capture did not have
+// one), so the mount this block needs is written out here.
+$dg_seed['filesystems'] = [['mount' => '/srv', 'fstype' => 'ext4', 'total_kb' => 1048576,
+    'used_pct' => 19.0, 'avail_kb' => 800000]];
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_seed)]);
+$pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
+$pdo->prepare(
+    "INSERT INTO storage_disks (monitor_id, disk_key, name, transport, rotational, size_bytes, first_seen, last_seen)
+     VALUES (2, 'digestdiskaaaaaa', 'sda', 'sata', 0, 120034123776, DATE_SUB(NOW(), INTERVAL 400 DAY), NOW())"
+)->execute();
+$dg_disk_id = (int)$pdo->lastInsertId();
+$dg_day = $pdo->prepare(
+    "INSERT INTO storage_disk_daily (disk_id, day, samples, temp_sum, temp_n, temp_max, runtime_bad_blocks)
+     VALUES (?, DATE_SUB(CURDATE(), INTERVAL ? DAY), 24, ?, 24, 69, 3)"
+);
+$dg_day->execute([$dg_disk_id, 2, 24 * 67]);
+$dg_day->execute([$dg_disk_id, 3, 24 * 66]);
 
-    // 1. The inputs batch: three queries for the whole chunk, the result keyed
-    //    by monitor id. Monitor 2 has the fixture's disks and a week of metrics.
-    $dg_in = bk_router_rec_inputs_batch($pdo, [2, 96], date('Y-m-d'));
-    check('Digest: dávka vstupů odpoví na každý router zvlášť', array_keys($dg_in), [2, 96]);
-    check('Digest: okno je sedm celých dní před dneškem', count($dg_in[2]['window']['days']), 7);
-    check('Digest: disky routeru se načtou i se svými dny',
-        [count($dg_in[2]['disks']), count($dg_in[2]['disks']['digestdiskaaaaaa']['daily'] ?? [])], [1, 2]);
-    // A column the reading never filled has to come back NULL: the counter
-    // rules ask "did it grow", and a zero would be an answer nobody measured.
-    $dg_daily = $dg_in[2]['disks']['digestdiskaaaaaa']['daily'];
-    $dg_newest = $dg_daily[max(array_keys($dg_daily))] ?? [];
-    check('Digest: den bez záznamu zůstane nezměřený, ne nulový',
-        [array_key_exists('media_errors', $dg_newest), $dg_newest['media_errors'], $dg_newest['runtime_bad_blocks']],
-        [true, null, 3]);
-    check('Digest: prázdný stav je prázdné pole, ne null', $dg_in[96]['state'], []);
+// 1. The inputs batch: three queries for the whole chunk, the result keyed
+//    by monitor id. Monitor 2 has the fixture's disks and a week of metrics.
+$dg_in = bk_router_rec_inputs_batch($pdo, [2, 96], date('Y-m-d'));
+check('Digest: dávka vstupů odpoví na každý router zvlášť', array_keys($dg_in), [2, 96]);
+check('Digest: okno je sedm celých dní před dneškem', count($dg_in[2]['window']['days']), 7);
+check('Digest: disky routeru se načtou i se svými dny',
+    [count($dg_in[2]['disks']), count($dg_in[2]['disks']['digestdiskaaaaaa']['daily'] ?? [])], [1, 2]);
+// A column the reading never filled has to come back NULL: the counter
+// rules ask "did it grow", and a zero would be an answer nobody measured.
+$dg_daily = $dg_in[2]['disks']['digestdiskaaaaaa']['daily'];
+$dg_newest = $dg_daily[max(array_keys($dg_daily))] ?? [];
+check('Digest: den bez záznamu zůstane nezměřený, ne nulový',
+    [array_key_exists('media_errors', $dg_newest), $dg_newest['media_errors'], $dg_newest['runtime_bad_blocks']],
+    [true, null, 3]);
+check('Digest: prázdný stav je prázdné pole, ne null', $dg_in[96]['state'], []);
 
-    // 2. The snapshot: the first build of a week writes, a retry does not.
-    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'warning')], $dg_week, [], []);
-    $rows = $dg_state();
-    check('Digest: první sestavení týdne uloží položku jako novou',
-        [count($rows), $rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week'], $rows[0]['raised_digest_week']],
-        [1, 1, 'warning', $dg_week, null]);
+// 2. The snapshot: the first build of a week writes, a retry does not.
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'warning')], $dg_week, [], []);
+$rows = $dg_state();
+check('Digest: první sestavení týdne uloží položku jako novou',
+    [count($rows), $rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week'], $rows[0]['raised_digest_week']],
+    [1, 1, 'warning', $dg_week, null]);
 
-    // Back-date last_seen inside the SAME week: a retry between 08:00 and
-    // 12:00 must leave the row completely alone. The build's week, not a
-    // plain half hour: at 00:15 on a Monday that is last week, which
-    // re-stamps the row by design (the pinned block below runs that case).
-    $pdo->prepare("UPDATE router_rec_state SET last_seen = ? WHERE monitor_id = 2")
-        ->execute([bk_test_back_in_week($dg_week, time(), 1800)]);
-    $before = $dg_state()[0]['seen'];
-    $state_now = [];
-    foreach ($dg_state() as $r) {
-        $state_now[$r['rec_key']] = ['active' => (int)$r['active'], 'severity' => $r['severity'],
-            'first_digest_week' => $r['first_digest_week'], 'last_seen' => date('Y-m-d H:i:s', (int)$r['seen'])];
-    }
-    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'warning')], $dg_week, [], $state_now);
-    check('Digest: opakované sestavení ve stejném týdnu nic nepřepíše', $dg_state()[0]['seen'], $before);
-
-    // 3. A severity that rose is the reason an old item is mailed in full again.
-    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'critical')], $dg_week, [], $state_now);
-    $rows = $dg_state();
-    check('Digest: zhoršení zapíše týden, kdy se zhoršilo',
-        [$rows[0]['severity'], $rows[0]['raised_digest_week']], ['critical', $dg_week]);
-
-    // 4. What was evaluated and stopped firing is cleared; what could NOT be
-    //    evaluated keeps everything, or the next data would mail it as new.
-    $state_now = [
-        'disk_temp_warm:d:a' => ['active' => 1, 'severity' => 'critical', 'first_digest_week' => $dg_week],
-        'disk_temp_warm:d:b' => ['active' => 1, 'severity' => 'warning', 'first_digest_week' => '2026-W30'],
-    ];
-    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, [], $state_now);
-    $rows = $dg_state();
-    check('Digest: vyhodnocená a už nehořící položka se zhasne',
-        [$rows[0]['rec_key'], $rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week']],
-        ['disk_temp_warm:d:a', 0, null, null]);
-
-    $pdo->prepare("UPDATE router_rec_state SET active = 1, severity = 'warning', first_digest_week = '2026-W30' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->execute();
-    $state_now['disk_temp_warm:d:a'] = ['active' => 1, 'severity' => 'warning', 'first_digest_week' => '2026-W30'];
-    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, ['disk_temp_warm:d:a'], $state_now);
-    $rows = $dg_state();
-    check('Digest: nevyhodnocená položka si nechá všechno',
-        [$rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week']], [1, 'warning', '2026-W30']);
-
-    // A mute survives the snapshot: it is the owner's decision, not a state.
-    $pdo->prepare("UPDATE router_rec_state SET muted_at = NOW(), muted_severity = 'warning', mute_reason = 'vím o tom' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:b'")->execute();
-    bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, [], []);
-    check('Digest: ztlumení přežije zápis snímku',
-        (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:b' AND muted_at IS NOT NULL")->fetchColumn(), 1);
-    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
-
-    // 5. The whole section, against the routers the suite really has.
-    $dg = bk_digest_routers($pdo, false);
-    $dg_by_id = [];
-    foreach ($dg['routers'] as $r) {
-        $dg_by_id[(int)$r['id']] = $r;
-    }
-    check_true('Digest: sekce zná routery této databáze', isset($dg_by_id[2]));
-    check('Digest: náhled nic nezapíše',
-        (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2")->fetchColumn(), 0);
-    check_true('Digest: router s 0.1.7 se hodnotí', (bool)$dg_by_id[2]['applicable']);
-    check_true('Digest: fakta se staví jen pro vykreslené routery a nesou rádio i disk',
-        count($dg_by_id[2]['facts']['radios'] ?? []) >= 1 && count($dg_by_id[2]['facts']['disks'] ?? []) >= 1);
-    check_false('Digest: v faktech není SSID',
-        str_contains(json_encode($dg_by_id[2]['facts'], JSON_UNESCAPED_UNICODE), 'Domov'));
-    check('Digest: nejhorší závažnost řadí routery, nejvýš deset', count($dg['routers']) <= 10, true);
-    foreach ($dg['routers'] as $r) {
-        check_true('Digest: každý router má jen položky bez page_only',
-            !array_filter($r['items_full'], fn ($i) => !empty($i['page_only'])));
-    }
-
-    // A router whose agent is older than 0.1.7 says so instead of looking healthy.
-    $dg_old = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
-    $dg_keep = $dg_old['agent_version'] ?? null;
-    $dg_old['agent_version'] = '0.1.6';
-    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_old)]);
-    $dg2 = bk_digest_routers($pdo, false);
-    foreach ($dg2['routers'] as $r) {
-        if ((int)$r['id'] === 2) {
-            check('Digest: starší agent se nehodnotí a řekne proč', [$r['applicable'], $r['reason']], [false, 'agent_old']);
-            check('Digest: a jeho verze je v datech', $r['reason_params']['version'] ?? null, '0.1.6');
-        }
-    }
-    $dg_old['agent_version'] = $dg_keep;
-    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_old)]);
-
-    // 6. The snapshot really is written when the build is not a preview.
-    //    The fixture's filesystems are a fifth full, so the monitor's own
-    //    threshold is lowered to make a real rule fire through the real path.
-    $dg_thr = $pdo->query("SELECT hdd_threshold FROM monitors WHERE id = 2")->fetchColumn();
-    $pdo->prepare("UPDATE monitors SET hdd_threshold = 5 WHERE id = 2")->execute();
-    $dg3 = bk_digest_routers($pdo, true);
-    $dg_fired = [];
-    foreach ($dg3['routers'] as $r) {
-        if ((int)$r['id'] === 2) {
-            foreach (array_merge($r['items_full'], $r['items_open']) as $i) {
-                $dg_fired[] = (string)$i['key'];
-            }
-        }
-    }
-    sort($dg_fired);
-    check_true('Digest: plný oddíl se do sekce dostane', count($dg_fired) >= 1);
-    $dg_saved = $pdo->query("SELECT rec_key FROM router_rec_state WHERE monitor_id = 2 AND active = 1 ORDER BY rec_key")->fetchAll(PDO::FETCH_COLUMN);
-    check('Digest: ostré sestavení uloží právě to, co hoří', $dg_saved, $dg_fired);
-    check('Digest: a označí to za novinku tohoto týdne',
-        $pdo->query("SELECT DISTINCT first_digest_week FROM router_rec_state WHERE monitor_id = 2 AND active = 1")->fetchAll(PDO::FETCH_COLUMN),
-        [$dg_week]);
-
-    // 7. And the same thing as HTML: the preview renders with the very
-    //    template the e-mail uses, so this is the only place where a fatal in
-    //    the section or a missing dictionary key would show up.
-    if (isset($cookie_jar)) {
-        // site_url as the old label asked for it - the URL of the status page.
-        // The link is built from its origin, so it cannot lose /status.
-        $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('site_url', 'https://bloodkings.eu/status') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-        $ch = curl_init($base . '/api.php?action=digest_preview&period=weekly');
-        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIEJAR => $cookie_jar,
-            CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_TIMEOUT => 30]);
-        $dg_html = (string)curl_exec($ch);
-        $pdo->exec("DELETE FROM settings WHERE key_name = 'site_url'");
-        check_true('Digest: e-mail má sekci Routery', str_contains($dg_html, 'Routery'));
-        check_true('Digest: a v ní jméno routeru i s odkazem na jeho stránku',
-            str_contains($dg_html, 'Router bez metrik')
-            && str_contains($dg_html, 'href="https://bloodkings.eu/status/index.php?expand=2"'));
-        check_true('Digest: položka je vidět i s tím, co se naměřilo a co s tím',
-            str_contains($dg_html, 'Plný oddíl') && str_contains($dg_html, 'Uvolněte místo'));
-        check_true('Digest: fakta o disku jsou v e-mailu, ne poplach',
-            str_contains($dg_html, 'vadné bloky za běhu: 3'));
-        check_false('Digest: e-mail neobsahuje SSID', str_contains($dg_html, 'Domov'));
-    }
-    $pdo->prepare("UPDATE monitors SET hdd_threshold = ? WHERE id = 2")->execute([$dg_thr]);
-    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+// Back-date last_seen inside the SAME week: a retry between 08:00 and
+// 12:00 must leave the row completely alone. The build's week, not a
+// plain half hour: at 00:15 on a Monday that is last week, which
+// re-stamps the row by design (the pinned block below runs that case).
+$pdo->prepare("UPDATE router_rec_state SET last_seen = ? WHERE monitor_id = 2")
+    ->execute([bk_test_back_in_week($dg_week, time(), 1800)]);
+$before = $dg_state()[0]['seen'];
+$state_now = [];
+foreach ($dg_state() as $r) {
+    $state_now[$r['rec_key']] = ['active' => (int)$r['active'], 'severity' => $r['severity'],
+        'first_digest_week' => $r['first_digest_week'], 'last_seen' => date('Y-m-d H:i:s', (int)$r['seen'])];
 }
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'warning')], $dg_week, [], $state_now);
+check('Digest: opakované sestavení ve stejném týdnu nic nepřepíše', $dg_state()[0]['seen'], $before);
+
+// 3. A severity that rose is the reason an old item is mailed in full again.
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'critical')], $dg_week, [], $state_now);
+$rows = $dg_state();
+check('Digest: zhoršení zapíše týden, kdy se zhoršilo',
+    [$rows[0]['severity'], $rows[0]['raised_digest_week']], ['critical', $dg_week]);
+
+// 4. What was evaluated and stopped firing is cleared; what could NOT be
+//    evaluated keeps everything, or the next data would mail it as new.
+$state_now = [
+    'disk_temp_warm:d:a' => ['active' => 1, 'severity' => 'critical', 'first_digest_week' => $dg_week],
+    'disk_temp_warm:d:b' => ['active' => 1, 'severity' => 'warning', 'first_digest_week' => '2026-W30'],
+];
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, [], $state_now);
+$rows = $dg_state();
+check('Digest: vyhodnocená a už nehořící položka se zhasne',
+    [$rows[0]['rec_key'], $rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week']],
+    ['disk_temp_warm:d:a', 0, null, null]);
+
+$pdo->prepare("UPDATE router_rec_state SET active = 1, severity = 'warning', first_digest_week = '2026-W30' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->execute();
+$state_now['disk_temp_warm:d:a'] = ['active' => 1, 'severity' => 'warning', 'first_digest_week' => '2026-W30'];
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, ['disk_temp_warm:d:a'], $state_now);
+$rows = $dg_state();
+check('Digest: nevyhodnocená položka si nechá všechno',
+    [$rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week']], [1, 'warning', '2026-W30']);
+
+// A mute survives the snapshot: it is the owner's decision, not a state.
+$pdo->prepare("UPDATE router_rec_state SET muted_at = NOW(), muted_severity = 'warning', mute_reason = 'vím o tom' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:b'")->execute();
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, [], []);
+check('Digest: ztlumení přežije zápis snímku',
+    (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:b' AND muted_at IS NOT NULL")->fetchColumn(), 1);
+$pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+
+// 5. The whole section, against the routers the suite really has.
+$dg = bk_digest_routers($pdo, false);
+$dg_by_id = [];
+foreach ($dg['routers'] as $r) {
+    $dg_by_id[(int)$r['id']] = $r;
+}
+check_true('Digest: sekce zná routery této databáze', isset($dg_by_id[2]));
+check('Digest: náhled nic nezapíše',
+    (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2")->fetchColumn(), 0);
+check_true('Digest: router s 0.1.7 se hodnotí', (bool)$dg_by_id[2]['applicable']);
+check_true('Digest: fakta se staví jen pro vykreslené routery a nesou rádio i disk',
+    count($dg_by_id[2]['facts']['radios'] ?? []) >= 1 && count($dg_by_id[2]['facts']['disks'] ?? []) >= 1);
+check_false('Digest: v faktech není SSID',
+    str_contains(json_encode($dg_by_id[2]['facts'], JSON_UNESCAPED_UNICODE), 'Domov'));
+check('Digest: nejhorší závažnost řadí routery, nejvýš deset', count($dg['routers']) <= 10, true);
+foreach ($dg['routers'] as $r) {
+    check_true('Digest: každý router má jen položky bez page_only',
+        !array_filter($r['items_full'], fn ($i) => !empty($i['page_only'])));
+}
+
+// A router whose agent is older than 0.1.7 says so instead of looking healthy.
+$dg_old = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+$dg_keep = $dg_old['agent_version'] ?? null;
+$dg_old['agent_version'] = '0.1.6';
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_old)]);
+$dg2 = bk_digest_routers($pdo, false);
+foreach ($dg2['routers'] as $r) {
+    if ((int)$r['id'] === 2) {
+        check('Digest: starší agent se nehodnotí a řekne proč', [$r['applicable'], $r['reason']], [false, 'agent_old']);
+        check('Digest: a jeho verze je v datech', $r['reason_params']['version'] ?? null, '0.1.6');
+    }
+}
+$dg_old['agent_version'] = $dg_keep;
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_old)]);
+
+// 6. The snapshot really is written when the build is not a preview.
+//    The fixture's filesystems are a fifth full, so the monitor's own
+//    threshold is lowered to make a real rule fire through the real path.
+$dg_thr = $pdo->query("SELECT hdd_threshold FROM monitors WHERE id = 2")->fetchColumn();
+$pdo->prepare("UPDATE monitors SET hdd_threshold = 5 WHERE id = 2")->execute();
+$dg3 = bk_digest_routers($pdo, true);
+$dg_fired = [];
+foreach ($dg3['routers'] as $r) {
+    if ((int)$r['id'] === 2) {
+        foreach (array_merge($r['items_full'], $r['items_open']) as $i) {
+            $dg_fired[] = (string)$i['key'];
+        }
+    }
+}
+sort($dg_fired);
+check_true('Digest: plný oddíl se do sekce dostane', count($dg_fired) >= 1);
+$dg_saved = $pdo->query("SELECT rec_key FROM router_rec_state WHERE monitor_id = 2 AND active = 1 ORDER BY rec_key")->fetchAll(PDO::FETCH_COLUMN);
+check('Digest: ostré sestavení uloží právě to, co hoří', $dg_saved, $dg_fired);
+check('Digest: a označí to za novinku tohoto týdne',
+    $pdo->query("SELECT DISTINCT first_digest_week FROM router_rec_state WHERE monitor_id = 2 AND active = 1")->fetchAll(PDO::FETCH_COLUMN),
+    [$dg_week]);
+
+// 7. And the same thing as HTML: the preview renders with the very
+//    template the e-mail uses, so this is the only place where a fatal in
+//    the section or a missing dictionary key would show up.
+if (isset($cookie_jar)) {
+    // site_url as the old label asked for it - the URL of the status page.
+    // The link is built from its origin, so it cannot lose /status.
+    $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('site_url', 'https://bloodkings.eu/status') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+    $ch = curl_init($base . '/api.php?action=digest_preview&period=weekly');
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIEJAR => $cookie_jar,
+        CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_TIMEOUT => 30]);
+    $dg_html = (string)curl_exec($ch);
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'site_url'");
+    check_true('Digest: e-mail má sekci Routery', str_contains($dg_html, 'Routery'));
+    check_true('Digest: a v ní jméno routeru i s odkazem na jeho stránku',
+        str_contains($dg_html, 'Router bez metrik')
+        && str_contains($dg_html, 'href="https://bloodkings.eu/status/index.php?expand=2"'));
+    check_true('Digest: položka je vidět i s tím, co se naměřilo a co s tím',
+        str_contains($dg_html, 'Plný oddíl') && str_contains($dg_html, 'Uvolněte místo'));
+    check_true('Digest: fakta o disku jsou v e-mailu, ne poplach',
+        str_contains($dg_html, 'vadné bloky za běhu: 3'));
+    check_false('Digest: e-mail neobsahuje SSID', str_contains($dg_html, 'Domov'));
+}
+$pdo->prepare("UPDATE monitors SET hdd_threshold = ? WHERE id = 2")->execute([$dg_thr]);
+$pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
 
 // --- The SLA and digest fixtures just after midnight, on a pinned clock -------
 //
@@ -5654,58 +5636,54 @@ try {
 // page (500) and the digest with it. The conntrack scan looked for its peak
 // under the column name, which metrics_daily never uses (`conntrack`), so it
 // never ran at all and its rule could not fire.
-if (function_exists('bk_router_rec_inputs_batch')) {
-    $x13_days = bk_router_rec_window(date('Y-m-d'))['days'];
-    $x13_day = $x13_days[3];
-    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('cpu_core_max', 'conntrack')")->execute();
-    $x13_daily = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, ?, ?, 1, 20, ?, 1440)");
-    $x13_daily->execute([$x13_day, 'cpu_core_max', 99]);
-    $x13_daily->execute([$x13_day, 'conntrack', 95]);
-    $x13_before = (int)$pdo->query("SELECT COALESCE(MAX(id), 0) FROM vps_metrics")->fetchColumn();
-    $x13_min = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_core_max, cpu_core_max_softirq, wan_rx_mbps, wan_tx_mbps, conntrack_pct, conntrack_drops, checked_at) VALUES (2, ?, ?, ?, ?, ?, ?, ?)");
-    foreach (['12:00:00', '12:01:00', '12:02:00'] as $x13_t) {
-        $x13_min->execute([99.0, 90.0, 400.0, 20.0, null, null, "{$x13_day} {$x13_t}"]);
-    }
-    // Under the bar (softirq 50 %): the same minute shape, not counted.
-    $x13_min->execute([99.0, 50.0, 400.0, 20.0, null, null, "{$x13_day} 12:03:00"]);
-    $x13_min->execute([null, null, null, null, 95.0, 4, "{$x13_day} 13:00:00"]);
-    $x13_min->execute([null, null, null, null, 96.0, 3, "{$x13_day} 13:01:00"]);
-    $x13_in = bk_router_rec_inputs_batch($pdo, [2], date('Y-m-d'))[2] ?? [];
-    check('X13: minuty se saturovaným jádrem se spočítají podle checked_at', $x13_in['forwarding_minutes'] ?? null, 3);
-    check('X13: den s plnou tabulkou spojení nese zahozená spojení i špičku',
-        $x13_in['conntrack_days'][$x13_day] ?? null, ['drops' => 7.0, 'pct' => 96.0]);
-    if ($logged_in) {
-        [$x13_code] = api_get_auth($base, 'action=router_recommendations&monitor_id=2', $cookie_jar);
-        check('X13: doporučení routeru se špičkou v měsíci odpoví 200, ne 500', $x13_code, 200);
-    }
-    $pdo->prepare("DELETE FROM vps_metrics WHERE monitor_id = 2 AND id > ?")->execute([$x13_before]);
-    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('cpu_core_max', 'conntrack')")->execute();
+$x13_days = bk_router_rec_window(date('Y-m-d'))['days'];
+$x13_day = $x13_days[3];
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('cpu_core_max', 'conntrack')")->execute();
+$x13_daily = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, ?, ?, 1, 20, ?, 1440)");
+$x13_daily->execute([$x13_day, 'cpu_core_max', 99]);
+$x13_daily->execute([$x13_day, 'conntrack', 95]);
+$x13_before = (int)$pdo->query("SELECT COALESCE(MAX(id), 0) FROM vps_metrics")->fetchColumn();
+$x13_min = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_core_max, cpu_core_max_softirq, wan_rx_mbps, wan_tx_mbps, conntrack_pct, conntrack_drops, checked_at) VALUES (2, ?, ?, ?, ?, ?, ?, ?)");
+foreach (['12:00:00', '12:01:00', '12:02:00'] as $x13_t) {
+    $x13_min->execute([99.0, 90.0, 400.0, 20.0, null, null, "{$x13_day} {$x13_t}"]);
 }
+// Under the bar (softirq 50 %): the same minute shape, not counted.
+$x13_min->execute([99.0, 50.0, 400.0, 20.0, null, null, "{$x13_day} 12:03:00"]);
+$x13_min->execute([null, null, null, null, 95.0, 4, "{$x13_day} 13:00:00"]);
+$x13_min->execute([null, null, null, null, 96.0, 3, "{$x13_day} 13:01:00"]);
+$x13_in = bk_router_rec_inputs_batch($pdo, [2], date('Y-m-d'))[2] ?? [];
+check('X13: minuty se saturovaným jádrem se spočítají podle checked_at', $x13_in['forwarding_minutes'] ?? null, 3);
+check('X13: den s plnou tabulkou spojení nese zahozená spojení i špičku',
+    $x13_in['conntrack_days'][$x13_day] ?? null, ['drops' => 7.0, 'pct' => 96.0]);
+if ($logged_in) {
+    [$x13_code] = api_get_auth($base, 'action=router_recommendations&monitor_id=2', $cookie_jar);
+    check('X13: doporučení routeru se špičkou v měsíci odpoví 200, ne 500', $x13_code, 200);
+}
+$pdo->prepare("DELETE FROM vps_metrics WHERE monitor_id = 2 AND id > ?")->execute([$x13_before]);
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('cpu_core_max', 'conntrack')")->execute();
 
 
 // --- The digest's week figures read only W ------------------------------------
 //
 // The facts line prints each radio's noise and airtime "this week". The batch
 // loads thirty days, so a reading from twenty days ago must not move them.
-if (function_exists('bk_digest_router_facts')) {
-    $wk_days = bk_router_rec_window(date('Y-m-d'))['days'];
-    $wk_old = date('Y-m-d', (int)strtotime(date('Y-m-d') . ' -20 days'));
-    $wk_keep = (string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn();
-    $wk_details = json_decode($wk_keep, true) ?: [];
-    $wk_details['wifi_radios'] = [['radio' => 'phy0-ap0', 'mode' => 'ap', 'band' => '5GHz', 'channel' => 36]];
-    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($wk_details)]);
-    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g')")->execute();
-    $wk_ins = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, ?, ?, ?, ?, ?, 1440)");
-    $wk_ins->execute([$wk_days[2], 'wifi_noise_5g', -92, -92, -92]);
-    $wk_ins->execute([$wk_old, 'wifi_noise_5g', -60, -60, -60]);
-    $wk_ins->execute([$wk_days[2], 'wifi_busy_5g', 10, 10, 10]);
-    $wk_ins->execute([$wk_old, 'wifi_busy_5g', 90, 90, 90]);
-    $wk_radio = bk_digest_router_facts($pdo, [['id' => 2, 'applicable' => true]])[0]['facts']['radios'][0] ?? [];
-    check('Digest: šum a vytížení kanálu za týden jsou jen ze sedmi dní',
-        [$wk_radio['noise_week'] ?? null, $wk_radio['busy_week'] ?? null], [-92.0, 10.0]);
-    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g')")->execute();
-    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([$wk_keep]);
-}
+$wk_days = bk_router_rec_window(date('Y-m-d'))['days'];
+$wk_old = date('Y-m-d', (int)strtotime(date('Y-m-d') . ' -20 days'));
+$wk_keep = (string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn();
+$wk_details = json_decode($wk_keep, true) ?: [];
+$wk_details['wifi_radios'] = [['radio' => 'phy0-ap0', 'mode' => 'ap', 'band' => '5GHz', 'channel' => 36]];
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($wk_details)]);
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g')")->execute();
+$wk_ins = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, ?, ?, ?, ?, ?, 1440)");
+$wk_ins->execute([$wk_days[2], 'wifi_noise_5g', -92, -92, -92]);
+$wk_ins->execute([$wk_old, 'wifi_noise_5g', -60, -60, -60]);
+$wk_ins->execute([$wk_days[2], 'wifi_busy_5g', 10, 10, 10]);
+$wk_ins->execute([$wk_old, 'wifi_busy_5g', 90, 90, 90]);
+$wk_radio = bk_digest_router_facts($pdo, [['id' => 2, 'applicable' => true]])[0]['facts']['radios'][0] ?? [];
+check('Digest: šum a vytížení kanálu za týden jsou jen ze sedmi dní',
+    [$wk_radio['noise_week'] ?? null, $wk_radio['busy_week'] ?? null], [-92.0, 10.0]);
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g')")->execute();
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([$wk_keep]);
 
 
 // --- The WAN port finding over the wire: measured cause and speed-test minutes --
@@ -5713,7 +5691,7 @@ if (function_exists('bk_digest_router_facts')) {
 // A router of its own (id 9500), so the seeded days cannot collide with what
 // the blocks above left on monitor 2. The daily rows say what the week held;
 // the raw minutes carry the speed-test flag (1 / 0 / NULL) the finding counts.
-if ($logged_in && function_exists('bk_router_rec_window')) {
+if ($logged_in) {
     $wp_id = 9500;
     $wp_win = bk_router_rec_window(date('Y-m-d'));
     $wp_days = $wp_win['days'];
@@ -5779,26 +5757,24 @@ if ($logged_in && function_exists('bk_router_rec_window')) {
 // One query answers both: the ring branch divides by the router's packets over
 // every interface, the error rate by the WAN port's own. A day's sum must stay
 // what it was before the rows were kept per interface.
-if (function_exists('bk_router_rec_inputs_batch')) {
-    $rp_id = 9501;
-    $rp_days = bk_router_rec_window(date('Y-m-d'))['days'];
-    $pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$rp_id]);
-    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES (?, 'Packets router', 'openwrt', '10.9.5.2', 'up', 'Síť', '{}')")
-        ->execute([$rp_id]);
-    $rp_ins = $pdo->prepare("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total, rx_packets_total, tx_packets_total) VALUES (?, ?, ?, 0, 0, ?, 0)");
-    $rp_ins->execute([$rp_id, 'eth2', $rp_days[0], 1000]);
-    $rp_ins->execute([$rp_id, 'br-lan', $rp_days[0], 500]);
-    $rp_ins->execute([$rp_id, 'br-lan', $rp_days[1], 70]);
-    $rp_in = bk_router_rec_inputs_batch($pdo, [$rp_id], date('Y-m-d'))[$rp_id] ?? [];
-    $rp_rx = $rp_in['rx_packets'] ?? [];
-    ksort($rp_rx);
-    $rp_ifaces = array_keys($rp_in['rx_packets_iface'] ?? []);
-    sort($rp_ifaces);
-    check('pakety: součet dne přes rozhraní zůstane, port WAN má své vlastní dny',
-        [$rp_rx, $rp_in['rx_packets_iface']['eth2'] ?? null, $rp_ifaces],
-        [[$rp_days[0] => 1500.0, $rp_days[1] => 70.0], [$rp_days[0] => 1000.0], ['br-lan', 'eth2']]);
-    $pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$rp_id]);
-}
+$rp_id = 9501;
+$rp_days = bk_router_rec_window(date('Y-m-d'))['days'];
+$pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$rp_id]);
+$pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES (?, 'Packets router', 'openwrt', '10.9.5.2', 'up', 'Síť', '{}')")
+    ->execute([$rp_id]);
+$rp_ins = $pdo->prepare("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total, rx_packets_total, tx_packets_total) VALUES (?, ?, ?, 0, 0, ?, 0)");
+$rp_ins->execute([$rp_id, 'eth2', $rp_days[0], 1000]);
+$rp_ins->execute([$rp_id, 'br-lan', $rp_days[0], 500]);
+$rp_ins->execute([$rp_id, 'br-lan', $rp_days[1], 70]);
+$rp_in = bk_router_rec_inputs_batch($pdo, [$rp_id], date('Y-m-d'))[$rp_id] ?? [];
+$rp_rx = $rp_in['rx_packets'] ?? [];
+ksort($rp_rx);
+$rp_ifaces = array_keys($rp_in['rx_packets_iface'] ?? []);
+sort($rp_ifaces);
+check('pakety: součet dne přes rozhraní zůstane, port WAN má své vlastní dny',
+    [$rp_rx, $rp_in['rx_packets_iface']['eth2'] ?? null, $rp_ifaces],
+    [[$rp_days[0] => 1500.0, $rp_days[1] => 70.0], [$rp_days[0] => 1000.0], ['br-lan', 'eth2']]);
+$pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$rp_id]);
 
 
 // --- The five router endpoints (CORE 3.9, WAN 3.6; CORE 6.3 tests 7-9) -------
@@ -5971,33 +5947,31 @@ if ($logged_in) {
 // spike costs nothing extra. Measured with the server's own SELECT counter,
 // so a rule that starts querying per router shows up here and not in
 // production.
-if (function_exists('bk_digest_routers')) {
-    $selects = function () use ($pdo): int {
-        $row = $pdo->query("SHOW SESSION STATUS LIKE 'Com_select'")->fetch(PDO::FETCH_ASSOC);
-        return (int)($row['Value'] ?? 0);
-    };
-    $cost_ins = $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES (?, ?, 'openwrt', '10.9.0.1', 'up', 'Síť', ?)");
-    $cost_details = json_encode(['agent_version' => '0.1.7', 'agent_last_seen' => time(),
-        'filesystems' => [['mount' => '/srv', 'fstype' => 'ext4', 'total_kb' => 1048576, 'used_pct' => 19.0, 'avail_kb' => 800000]]]);
-    for ($i = 0; $i < 120; $i++) {
-        $cost_ins->execute([9000 + $i, 'Cost router ' . $i, $cost_details]);
-    }
-    // The counter also sees the two SHOW statements themselves; they are not
-    // SELECTs, so nothing has to be subtracted.
-    $cost_before = $selects();
-    $cost_data = bk_digest_routers($pdo, false);
-    $cost_used = $selects() - $cost_before;
-    check_true('Cena digestu: 120 routerů se sestaví ve třech dávkách', count($cost_data['routers']) === 10 && $cost_data['more'] >= 110);
-    // 1 list + 3 chunks x at most 7 (X13) + the second fetch of facts, which
-    // is one more batch of at most 7 plus its own details query. The bound is
-    // per CHUNK, so it does not move when a router is added. A chunk that
-    // holds speed tests adds two outage queries; these routers have none.
-    check_true('Cena digestu: nejvýše 7 dotazů na dávku po 50 routerech (' . $cost_used . ' celkem)', $cost_used <= 1 + 4 * 7 + 1);
-    check_true('Cena digestu: routery bez špiček žádný dotaz navíc', $cost_used < 120);
-    $pdo->exec("DELETE FROM monitors WHERE id >= 9000 AND id < 9120");
-    check('Cena digestu: testovací routery po sobě uklidí',
-        (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE id >= 9000 AND id < 9120")->fetchColumn(), 0);
+$selects = function () use ($pdo): int {
+    $row = $pdo->query("SHOW SESSION STATUS LIKE 'Com_select'")->fetch(PDO::FETCH_ASSOC);
+    return (int)($row['Value'] ?? 0);
+};
+$cost_ins = $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES (?, ?, 'openwrt', '10.9.0.1', 'up', 'Síť', ?)");
+$cost_details = json_encode(['agent_version' => '0.1.7', 'agent_last_seen' => time(),
+    'filesystems' => [['mount' => '/srv', 'fstype' => 'ext4', 'total_kb' => 1048576, 'used_pct' => 19.0, 'avail_kb' => 800000]]]);
+for ($i = 0; $i < 120; $i++) {
+    $cost_ins->execute([9000 + $i, 'Cost router ' . $i, $cost_details]);
 }
+// The counter also sees the two SHOW statements themselves; they are not
+// SELECTs, so nothing has to be subtracted.
+$cost_before = $selects();
+$cost_data = bk_digest_routers($pdo, false);
+$cost_used = $selects() - $cost_before;
+check_true('Cena digestu: 120 routerů se sestaví ve třech dávkách', count($cost_data['routers']) === 10 && $cost_data['more'] >= 110);
+// 1 list + 3 chunks x at most 7 (X13) + the second fetch of facts, which
+// is one more batch of at most 7 plus its own details query. The bound is
+// per CHUNK, so it does not move when a router is added. A chunk that
+// holds speed tests adds two outage queries; these routers have none.
+check_true('Cena digestu: nejvýše 7 dotazů na dávku po 50 routerech (' . $cost_used . ' celkem)', $cost_used <= 1 + 4 * 7 + 1);
+check_true('Cena digestu: routery bez špiček žádný dotaz navíc', $cost_used < 120);
+$pdo->exec("DELETE FROM monitors WHERE id >= 9000 AND id < 9120");
+check('Cena digestu: testovací routery po sobě uklidí',
+    (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE id >= 9000 AND id < 9120")->fetchColumn(), 0);
 
 // --- Retention of the router tables (X7) -------------------------------------
 //
@@ -8075,7 +8049,7 @@ check('s čistým config.php site_health nic nehlásí', array_key_exists('confi
 // a recorder, so nothing is sent; a failure is a stubbed "Ah{...}" answer on
 // the same URL, because db.php keeps the real API clean now.
 // =======================================================================
-$sc_code = 'require ' . var_export($root . '/functions.php', true) . ';'
+$sc_code = 'require ' . var_export($root . '/bootstrap.php', true) . ';'
     . '$notes = [];'
     . '$notify = function (PDO $p, string $e, array $s) use (&$notes): array {'
     . '    $notes[] = [$e, $s["failures"] ?? null];'

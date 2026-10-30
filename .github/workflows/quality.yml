@@ -106,10 +106,14 @@ jobs:
           # Musi odpovidat produkci (cPanel ea-php84) - testovat na jine
           # verzi znamena netestovat to, co uzivatelum opravdu bezi.
           php-version: '8.4'
-          # No PHP coverage: the suites test eval()'d copies of the functions,
-          # which Xdebug credits to tests/, so the number only ever measured
-          # installer.php, lang.php, lang/*.php and cloudflare_colos.php (336
-          # lines), never functions.php or api.php.
+          # No PHP coverage yet. While the suites tested eval()'d copies of
+          # the functions, which Xdebug credits to tests/, the number never
+          # reached functions.php. run_tests.php now requires functions.php
+          # itself (only run_pipeline_tests.php still copies functions.php,
+          # to stub the senders), so it would. The single helpers the suites
+          # still copy out of db.php and other files stay credited to tests/,
+          # and api.php is otherwise reached only over HTTP in the api job.
+          # Turning coverage on is a change of its own.
           coverage: none
           extensions: mbstring, curl, pdo
 

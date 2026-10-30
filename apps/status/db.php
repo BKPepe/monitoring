@@ -18,8 +18,16 @@
  * Secure is only ever turned ON here, for a request that arrived over HTTPS
  * (directly or through the proxy). It is never turned off, so .user.ini's
  * unconditional Secure stays in force on production.
+ *
+ * A host that ships session.gc_divisor = 0 gets PHP's default of 100 back,
+ * on the command line too: cron.php starts a session through config.php as
+ * well. This line used to open functions.php, which api.php and node_api.php
+ * load only after config.php has started the session.
  */
 function bk_session_harden(): void {
+    if (ini_get('session.gc_divisor') === '0' || ini_get('session.gc_divisor') === false) {
+        @ini_set('session.gc_divisor', 100);
+    }
     if (PHP_SAPI === 'cli' || session_status() !== PHP_SESSION_NONE || headers_sent()) {
         return;
     }

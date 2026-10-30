@@ -18,7 +18,8 @@ An open-source, ultra-fast server and service status monitoring application buil
 * `widget.php` - Compact iFrame status card for embedding on external websites.
 * `report.php` - SLA report generator (HTML/CSV format).
 * `db.php` - PDO database connection initializer with auto-migrations.
-* `functions.php` - Core measurement library, alert routing (Pushover, PagerDuty, Telegram, Discord, Slack), and TOTP engine.
+* `functions.php` - Core measurement library, alert routing (Pushover, PagerDuty, Telegram, Discord, Slack), and TOTP engine. It only defines functions; the tests require it without a database.
+* `bootstrap.php` - What every page and endpoint that uses `functions.php` loads first: `db.php`, the library, and the check of a signed-in account's role.
 * `schema.sql` - Complete MySQL database structure.
 
 ---
