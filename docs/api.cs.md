@@ -454,7 +454,9 @@ selhání pod stovkami řádků.
 Následující akce se z UI volaly, ale v `api.php` nebyly. Protože neznámá akce
 vracela výchozí přehled služeb s kódem 200, tvářilo se každé takové volání
 jako úspěch. **Dnes neznámá akce vrací 400** a hlídá to lint
-(`run_api_action_lint.php`).
+(`run_api_action_lint.php`). Týž lint selže na akci, kterou z aplikace nic
+nevolá, pokud neuvádí, proč zůstává (`assign_preset` a `dashboard_insights`,
+dokud vlastník neprojde přístupový log kvůli volajícím zvenku, `audit_logs`).
 
 | Endpoint | Přístup | Popis |
 |---|---|---|

@@ -294,9 +294,6 @@ if ($action === 'session') {
 // login attempt looked successful client-side while no session was ever
 // created.
 if ($action === 'login') {
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        bk_api_json(['success' => false, 'message' => 'Method not allowed.'], 405);
-    }
     $login_input = json_decode(file_get_contents('php://input'), true) ?: [];
     $username = trim($login_input['username'] ?? '');
     $password = (string)($login_input['password'] ?? '');
@@ -1067,7 +1064,7 @@ if ($action === 'archive_monitor' || $action === 'unarchive_monitor') {
         }
         $pdo->commit();
         // Summaries cached with the monitor in (or out) are stale now.
-        $pdo->exec("DELETE FROM settings WHERE key_name IN ('websites_overview_cache', 'dashboard_insights_cache', 'dashboard_insights_cache_cs', 'dashboard_insights_cache_en') OR key_name LIKE 'regions_cache_%' OR key_name LIKE 'findings\\_summary\\_%'");
+        $pdo->exec("DELETE FROM settings WHERE key_name IN ('websites_overview_cache', 'dashboard_insights_cache_cs', 'dashboard_insights_cache_en') OR key_name LIKE 'regions_cache_%' OR key_name LIKE 'findings\\_summary\\_%'");
         log_monitor_event($pdo, $am_id, $am['name'], $am['type'], $am_archive ? 'monitor_archived' : 'monitor_restored', $am_archive ? 'Monitor archivován' : 'Monitor obnoven z archivu');
         bk_audit_log($pdo, $am_archive ? 'monitor_archived' : 'monitor_restored', (string)$am['name'], 'monitor', $am_id);
         echo json_encode(['success' => true, 'archived' => $am_archive, 'incidentsClosed' => $am_closed], JSON_UNESCAPED_UNICODE);
@@ -4080,9 +4077,6 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
         exit;
     }
 
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        bk_api_error(405, 'Vyžadován POST.');
-    }
     $mp_input = json_decode(file_get_contents('php://input'), true) ?: [];
 
     try {
@@ -4149,9 +4143,6 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
 // dostane stejnou odpoved jako expirovany - z chyby se neda poznat, jestli
 // token nekdy existoval.
 if ($action === 'set_password') {
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        bk_api_error(405, 'Vyžadován POST.');
-    }
     $sp_input = json_decode(file_get_contents('php://input'), true) ?: [];
     $sp_token = trim((string)($sp_input['token'] ?? ''));
     $sp_pass = (string)($sp_input['password'] ?? '');
@@ -4187,9 +4178,6 @@ if ($action === 'set_password') {
 // opravdu naskenoval - jinak by sel ucet zamknout neoverenym secretem.
 if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_disable' || $action === 'totp_recovery_regenerate') {
     bk_require_login();
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        bk_api_error(405, 'Vyžadován POST.');
-    }
     $totp_input = json_decode(file_get_contents('php://input'), true) ?: [];
     $totp_uid = (int)$_SESSION['admin_id'];
 
@@ -7371,10 +7359,6 @@ if ($action === 'public_subscribers' || $action === 'delete_public_subscriber') 
  * e-mails, otherwise the form could be used to probe who has an account.
  */
 if ($action === 'forgot_password') {
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        bk_api_error(405, 'Použijte POST.');
-    }
-
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
     $fp_email = trim((string)($input['email'] ?? ''));
 
@@ -7405,10 +7389,6 @@ if ($action === 'forgot_password') {
  * public endpoint could add an administrator to a running installation.
  */
 if ($action === 'setup') {
-    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        bk_api_error(405, 'Použijte POST.');
-    }
-
     try {
         $user_count = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
         if ($user_count > 0) {

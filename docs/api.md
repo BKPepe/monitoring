@@ -462,7 +462,10 @@ bury its own failure under hundreds of rows.
 The actions below were called from the UI but did not exist in `api.php`.
 Because an unknown action returned the default service overview with code 200,
 every such call looked like a success. **Today an unknown action returns 400**
-and a lint guards it (`run_api_action_lint.php`).
+and a lint guards it (`run_api_action_lint.php`). The same lint fails on an
+action nothing in the app calls, unless it names why the action stays
+(`assign_preset` and `dashboard_insights` until the owner has checked the
+access log for outside callers, `audit_logs`).
 
 | Endpoint | Access | Description |
 |---|---|---|

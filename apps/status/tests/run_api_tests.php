@@ -1962,6 +1962,18 @@ check_true('a řekne, co je špatně', str_contains((string)($unknown['error'] ?
 check('chyba přes HTTP: bajty stejné jako dřív', [$code, $raw], [400, '{"error":"Neznámá akce „rozhodne_neexistujici_akce\\"."}']);
 [$code, , $raw] = bk_raw_request($base . '/api.php?action=incident_action');
 check('405 přes HTTP: bajty stejné jako dřív', [$code, $raw], [405, '{"error":"Vyžadován POST."}']);
+// These handlers checked the method once more themselves, login and forgot
+// password with bodies of their own. The guard at the top of api.php answers
+// every GET of them first, so those checks never ran and are gone.
+$m4_get = [];
+foreach (['login', 'update_profile', 'oauth_unlink', 'set_password', 'totp_setup', 'totp_confirm', 'totp_disable',
+    'totp_recovery_regenerate', 'forgot_password', 'setup'] as $m4_action) {
+    [$code, , $raw] = bk_raw_request($base . '/api.php?action=' . $m4_action);
+    if ([$code, $raw] !== [405, '{"error":"Vyžadován POST."}']) {
+        $m4_get[] = "{$m4_action}: {$code} {$raw}";
+    }
+}
+check('GET na akce, které si metodu hlídaly samy, odmítne už společná stráž', $m4_get, []);
 [$code, , $raw] = bk_raw_request($base . '/api.php?action=login', ['Content-Type: application/json'], '{"username":"nikdo_takovy","password":"x"}');
 check('špatné heslo přes HTTP: bajty stejné jako dřív', [$code, $raw], [401, '{"success":false,"message":"Invalid username or password."}']);
 $pdo->exec("DELETE FROM audit_log WHERE action = 'login_failed' AND actor_username = 'nikdo_takovy'");

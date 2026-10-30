@@ -178,6 +178,45 @@ foreach (array_keys($dc_files) as $dc_path) {
 @rmdir($dc_dir . '/lang');
 @rmdir($dc_dir);
 
+// --- run_api_action_lint.php: a comment is no caller --------------------------
+// The lint runs over a small tree of its own. Only lines that began with a
+// comment marker used to be dropped, so a JSDoc one-liner over a type kept an
+// action alive after its last caller was gone. A comment of any shape is no
+// call now; an address in quotes or in JSX text still is, and a problem line
+// keeps its number after a block comment over several lines.
+$al_dir = sys_get_temp_dir() . '/bk_action_lint_' . bin2hex(random_bytes(4));
+$al_files = [
+    'apps/status/tests/run_api_action_lint.php' => (string)file_get_contents(__DIR__ . '/run_api_action_lint.php'),
+    'apps/status/api.php' => "<?php\nif (\$action === 'shown' || \$action === 'listed' || \$action === 'doc_only') {}\n"
+        . "if (\$action === 'assign_preset' || \$action === 'dashboard_insights' || \$action === 'audit_logs') {}\n",
+    'apps/monitor/src/row.ts' => "/** One row of `api.php?action=doc_only`. */\n"
+        . "export type Row = { id: number }; // from api.php?action=doc_only\n"
+        . "/* api.php?action=doc_only\n   over two lines */\n"
+        . "export const load = () => fetch('https://example.com/status/api.php?action=shown'); // in quotes\n",
+    'apps/monitor/src/about.tsx' => "export const About = () => <p>GET https://example.com/status/api.php?action=listed</p>;\n",
+];
+$al_run = function () use ($al_dir): array {
+    exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($al_dir . '/apps/status/tests/run_api_action_lint.php') . ' 2>&1', $out, $rc);
+    return [$rc, implode("\n", $out)];
+};
+foreach ($al_files as $al_path => $al_src) {
+    @mkdir(dirname($al_dir . '/' . $al_path), 0700, true);
+    file_put_contents($al_dir . '/' . $al_path, $al_src);
+}
+[$al_rc, $al_out] = $al_run();
+check('lint akcí: komentář žádné volání není, adresa v uvozovkách a v textu JSX ano',
+    [$al_rc, preg_match('/nic nevolá:\n\n((?:  .+\n)+)/', $al_out . "\n", $al_m) ? trim($al_m[1]) : $al_out], [1, 'doc_only']);
+$al_files['apps/monitor/src/late.ts'] = "/*\n * three lines\n */\nrequest('nope');\n";
+file_put_contents($al_dir . '/apps/monitor/src/late.ts', $al_files['apps/monitor/src/late.ts']);
+[$al_rc, $al_out] = $al_run();
+check('lint akcí: za blokovým komentářem sedí číslo řádku', [$al_rc, str_contains($al_out, 'late.ts:4 volá action=nope')], [1, true]);
+foreach (array_keys($al_files) as $al_path) {
+    @unlink($al_dir . '/' . $al_path);
+}
+foreach (['apps/status/tests', 'apps/status', 'apps/monitor/src', 'apps/monitor', 'apps', ''] as $al_sub) {
+    @rmdir(rtrim($al_dir . '/' . $al_sub, '/'));
+}
+
 
 // --- bk_validate_import_target: imported targets ----------------------------
 // Everything a hosting-side check can never reach is blocked. Exactly this
