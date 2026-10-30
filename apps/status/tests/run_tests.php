@@ -87,6 +87,57 @@ foreach (['heartbeat.php', 'metrics.php'] as $hb_file) {
 }
 check('heartbeat.php a metrics.php nesahají na nic z functions.php, stačí jim db.php', $hb_calls, []);
 
+// --- bk_api_json / bk_api_error: the answers of api.php ---------------------
+// They replace about 160 pairs of http_response_code() and echo json_encode()
+// in api.php, so the body has to stay byte for byte what the pair sent. Each
+// call ends the request, so each runs in a child PHP: what it printed, the
+// status it set and what went to the error log (stderr on the command line).
+$api_answer = function (string $call, string $action = 'zkouska'): array {
+    $php = 'require ' . var_export(__DIR__ . '/assert_helpers.php', true) . ';'
+        . 'bk_test_load_functions(' . var_export(__DIR__ . '/../api.php', true) . ', ["bk_api_json", "bk_api_error", "bk_api_printable"]);'
+        . '$action = ' . var_export($action, true) . ';'
+        . 'register_shutdown_function(function () { fwrite(STDERR, "\nHTTP=" . http_response_code()); });'
+        . $call . ';';
+    $proc = proc_open([PHP_BINARY, '-d', 'log_errors=1', '-d', 'error_log=', '-r', $php], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    $out = (string)stream_get_contents($pipes[1]);
+    $err = (string)stream_get_contents($pipes[2]);
+    proc_close($proc);
+    $status = preg_match('/HTTP=(\d+)\s*$/', $err, $m) ? (int)$m[1] : null;
+    return [$status, $out, trim(preg_replace('/\s*HTTP=\d+\s*$/', '', $err))];
+};
+$api_pair = fn (array $payload): string => json_encode($payload, JSON_UNESCAPED_UNICODE);
+check('chyba 404: stejné tělo jako dřívější pár, nic v logu',
+    $api_answer('bk_api_error(404, "Monitor nenalezen.")'), [404, $api_pair(['error' => 'Monitor nenalezen.']), '']);
+check('chyba s dalšími klíči: error první, unicode i lomítka jako dřív',
+    $api_answer('bk_api_error(400, "Přepínač musí být 0 nebo 1: a/b", ["invalidKeys" => ["a/b"], "id" => 7])'),
+    [400, $api_pair(['error' => 'Přepínač musí být 0 nebo 1: a/b', 'invalidKeys' => ['a/b'], 'id' => 7]), '']);
+check('bk_api_json drží pořadí klíčů, jak ho handler napsal',
+    $api_answer('bk_api_json(["entries" => [], "error" => "Historii se nepodařilo načíst."], 500)')[1],
+    $api_pair(['entries' => [], 'error' => 'Historii se nepodařilo načíst.']));
+[$api_code, $api_body, $api_log] = $api_answer('bk_api_error(500, "Účet se nepodařilo založit.")');
+check('každá 500 jde i do logu, s akcí a větou',
+    [$api_code, $api_body, $api_log], [500, $api_pair(['error' => 'Účet se nepodařilo založit.']), '[api.php action=zkouska] HTTP 500: Účet se nepodařilo založit.']);
+[$api_code, $api_body, $api_log] = $api_answer('bk_api_json(["name" => "\xB1"], 200)');
+check('nezakódovatelná odpověď je 500 s chybou, ne prázdná 200',
+    [$api_code, $api_body], [500, $api_pair(['error' => 'Odpověď serveru se nepodařilo sestavit.'])]);
+check_true('a log řekne proč (' . $api_log . ')', str_contains($api_log, 'HTTP 200 answer not encoded: Malformed UTF-8')
+    && str_contains($api_log, 'HTTP 500: Odpověď serveru se nepodařilo sestavit.'));
+// $action comes from the query string unchecked, and the unknown-action
+// sentence carries it: invalid UTF-8 in it makes that answer unencodable,
+// which logs the action twice. A newline in it wrote lines of the caller's
+// choosing, and its length was the caller's too.
+$api_forged = "x\xB1\n[api.php action=save_user] HTTP 500: podvrh\r\x1B" . str_repeat('y', 300);
+$api_shown = 'x\xB1\x0A[api.php action=save_user] HTTP 500: podvrh\x0D\x1B' . str_repeat('y', 52) . '…';
+check('akce z požadavku jde do logu opsaná v \xNN a zkrácená, žádný řádek navíc',
+    $api_answer('bk_api_error(400, sprintf(\'Neznámá akce „%s".\', $action))', $api_forged),
+    [500, $api_pair(['error' => 'Odpověď serveru se nepodařilo sestavit.']),
+        "[api.php action={$api_shown}] HTTP 400 answer not encoded: Malformed UTF-8 characters, possibly incorrectly encoded\n"
+        . "[api.php action={$api_shown}] HTTP 500: Odpověď serveru se nepodařilo sestavit."]);
+bk_test_load_functions(__DIR__ . '/../api.php', ['bk_api_printable']);
+check('akce z požadavku: obyčejný název zůstane, jiný typ se jen pojmenuje, 100 bajtů se nezkrátí',
+    [bk_api_printable('save_user'), bk_api_printable(['x']), bk_api_printable(str_repeat('a', 100))],
+    ['save_user', 'array', str_repeat('a', 100)]);
+
 // --- find_dead_code.php: what counts as a use -------------------------------
 // The finder runs over a small tree of its own. A PHP function named only in a
 // comment or called only from a test is no use by the app, and an inline JS

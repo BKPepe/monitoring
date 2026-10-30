@@ -121,7 +121,12 @@ and the operator's name.
 
 Error body: `{"error": "Description in Czech"}`. Agent endpoints return
 `{"success": false, "message": "…"}` instead - a historical difference;
-unifying it would break deployed agents.
+unifying it would break deployed agents. Every `5xx` error of `api.php` is
+also written to the server log with its action, and an error answer that
+cannot be encoded as JSON (invalid UTF-8) is a `500` with an error instead of
+its own status with an empty body. Most success answers still call
+`json_encode()` themselves, and one of those that cannot be encoded still
+arrives as an empty `200`.
 
 **A failed read is never an empty success.** When the query behind a list or
 a summary fails, the answer is `500` with `{"error": "<code>", "message":

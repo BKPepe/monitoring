@@ -1952,6 +1952,15 @@ $pdo->exec("DELETE FROM notification_log WHERE kind = 'escalation'");
 [$code, $unknown] = api_get($base, 'action=rozhodne_neexistujici_akce');
 check('neznámá akce vrací 400, ne tiché 200', $code, 400);
 check_true('a řekne, co je špatně', str_contains((string)($unknown['error'] ?? ''), 'Neznámá akce'));
+// bk_api_error() and bk_api_json() answer these now: over HTTP the body is
+// still exactly the bytes the http_response_code() + echo json_encode() pair sent.
+[$code, , $raw] = bk_raw_request($base . '/api.php?action=rozhodne_neexistujici_akce');
+check('chyba přes HTTP: bajty stejné jako dřív', [$code, $raw], [400, '{"error":"Neznámá akce „rozhodne_neexistujici_akce\\"."}']);
+[$code, , $raw] = bk_raw_request($base . '/api.php?action=incident_action');
+check('405 přes HTTP: bajty stejné jako dřív', [$code, $raw], [405, '{"error":"Vyžadován POST."}']);
+[$code, , $raw] = bk_raw_request($base . '/api.php?action=login', ['Content-Type: application/json'], '{"username":"nikdo_takovy","password":"x"}');
+check('špatné heslo přes HTTP: bajty stejné jako dřív', [$code, $raw], [401, '{"success":false,"message":"Invalid username or password."}']);
+$pdo->exec("DELETE FROM audit_log WHERE action = 'login_failed' AND actor_username = 'nikdo_takovy'");
 
 // An empty action keeps the old behaviour (the default service overview).
 [$code] = api_get($base, '');

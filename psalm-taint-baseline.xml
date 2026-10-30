@@ -2,6 +2,7 @@
 <files psalm-version="6.16.1@f1f5de594dc76faf8784e02d3dc4716c91c6f6ac">
   <file src="apps/status/api.php">
     <TaintedHtml>
+      <code><![CDATA[$body]]></code>
       <code><![CDATA[json_encode($series_payload, JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode([
             'metric' => $metric,
@@ -71,13 +72,7 @@
                 'relative' => bk_relative_time_label($e['ts']),
             ], $timeline),
         ], JSON_UNESCAPED_UNICODE)]]></code>
-      <code><![CDATA[json_encode([
-        'error' => sprintf('Neznámá akce „%s".', $action),
-    ], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['catalog' => $catalog, 'tiles' => $saved], JSON_UNESCAPED_UNICODE)]]></code>
-      <code><![CDATA[json_encode(['error' => "Akce '{$ra_action}' není pro tento monitor v seznamu povolených akcí."], JSON_UNESCAPED_UNICODE)]]></code>
-      <code><![CDATA[json_encode(['error' => "Typ služby '{$s_type}' zatím neumíme aktivně kontrolovat a služba nehlásí port, přes který by šla testovat. Import by generoval jen prázdné kontroly."], JSON_UNESCAPED_UNICODE)]]></code>
-      <code><![CDATA[json_encode(['error' => $target_error], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['ok' => true, 'key' => $rm_key, 'muted' => $rm_on, 'mute' => $rm_mute],
             JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['presets' => $presets, 'catalog' => $catalog], JSON_UNESCAPED_UNICODE)]]></code>
@@ -85,6 +80,7 @@
       <code><![CDATA[json_encode(['unit' => $unit, 'label' => $label, 'days' => $days_out], JSON_UNESCAPED_UNICODE)]]></code>
     </TaintedHtml>
     <TaintedTextWithQuotes>
+      <code><![CDATA[$body]]></code>
       <code><![CDATA[json_encode($series_payload, JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode([
             'metric' => $metric,
@@ -154,13 +150,7 @@
                 'relative' => bk_relative_time_label($e['ts']),
             ], $timeline),
         ], JSON_UNESCAPED_UNICODE)]]></code>
-      <code><![CDATA[json_encode([
-        'error' => sprintf('Neznámá akce „%s".', $action),
-    ], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['catalog' => $catalog, 'tiles' => $saved], JSON_UNESCAPED_UNICODE)]]></code>
-      <code><![CDATA[json_encode(['error' => "Akce '{$ra_action}' není pro tento monitor v seznamu povolených akcí."], JSON_UNESCAPED_UNICODE)]]></code>
-      <code><![CDATA[json_encode(['error' => "Typ služby '{$s_type}' zatím neumíme aktivně kontrolovat a služba nehlásí port, přes který by šla testovat. Import by generoval jen prázdné kontroly."], JSON_UNESCAPED_UNICODE)]]></code>
-      <code><![CDATA[json_encode(['error' => $target_error], JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['ok' => true, 'key' => $rm_key, 'muted' => $rm_on, 'mute' => $rm_mute],
             JSON_UNESCAPED_UNICODE)]]></code>
       <code><![CDATA[json_encode(['presets' => $presets, 'catalog' => $catalog], JSON_UNESCAPED_UNICODE)]]></code>

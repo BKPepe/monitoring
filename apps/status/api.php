@@ -65,6 +65,18 @@ require_once __DIR__ . '/bootstrap.php';
 require_once __DIR__ . '/lang.php';
 
 /**
+ * Request text as the error log may show it: every byte outside printable
+ * ASCII (a newline, invalid UTF-8) written as \xNN, and the rest cut after
+ * $max bytes with "…". $action comes from the query string unchecked, and a
+ * newline in it wrote a log line of the caller's choosing.
+ */
+function bk_api_printable(mixed $text, int $max = 100): string {
+    $text = is_string($text) ? $text : get_debug_type($text);
+    $shown = (string)preg_replace_callback('/[^\x20-\x7E]/', fn (array $m): string => sprintf('\x%02X', ord($m[0])), substr($text, 0, $max));
+    return strlen($text) > $max ? $shown . '…' : $shown;
+}
+
+/**
  * A read that failed: an error status and a code, never a success body.
  *
  * Many catch blocks here used to answer 200 with an empty list - `monitors: []`,
@@ -78,7 +90,7 @@ require_once __DIR__ . '/lang.php';
 function bk_api_fail(string $code, int $http = 500, ?Throwable $e = null, string $message = ''): never {
     global $action;
     if ($e !== null) {
-        error_log('[api.php action=' . (string)$action . '] ' . $code . ': ' . $e->getMessage());
+        error_log('[api.php action=' . bk_api_printable($action) . '] ' . $code . ': ' . $e->getMessage());
     }
     if (!headers_sent()) {
         http_response_code($http);
@@ -90,6 +102,51 @@ function bk_api_fail(string $code, int $http = 500, ?Throwable $e = null, string
     }
     echo json_encode($body, JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+/**
+ * A JSON answer with $status, and the end of the request.
+ *
+ * The body is byte for byte what `http_response_code(N); echo
+ * json_encode($payload, JSON_UNESCAPED_UNICODE); exit;` sent, the pair this
+ * replaces in about 160 places, with two differences. A 5xx also goes to the
+ * server log with the action and its `error`, where some catch blocks logged
+ * nothing. And a payload json_encode() cannot encode (invalid UTF-8 in a
+ * stored value or in the request) answers 500 with an error, where `echo
+ * false` sent the error status with an empty body. The success answers
+ * that echo json_encode() themselves are unchanged: one that cannot be
+ * encoded is still an empty 200.
+ *
+ * Psalm reports the taint of every caller's payload at the one echo below,
+ * and the baseline waives that echo as `$body`, so a request value in a new
+ * answer does not fail it: the body is JSON, sent as application/json.
+ */
+function bk_api_json(array $payload, int $status = 200): never {
+    global $action;
+    $log_action = bk_api_printable($action);
+    $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
+    if ($body === false) {
+        error_log('[api.php action=' . $log_action . '] HTTP ' . $status . ' answer not encoded: ' . json_last_error_msg());
+        $status = 500;
+        $payload = ['error' => 'Odpověď serveru se nepodařilo sestavit.'];
+        $body = (string)json_encode($payload, JSON_UNESCAPED_UNICODE);
+    }
+    if ($status >= 500) {
+        $logged = $payload['error'] ?? null;
+        error_log('[api.php action=' . $log_action . '] HTTP ' . $status . ': '
+            . (is_string($logged) ? $logged : (string)json_encode($logged, JSON_UNESCAPED_UNICODE)));
+    }
+    http_response_code($status);
+    echo $body;
+    exit;
+}
+
+/**
+ * An error answer: `{"error": "<a sentence for people>"}` with $extra keys
+ * after it, $status, and the end of the request (bk_api_json()).
+ */
+function bk_api_error(int $status, string $message, array $extra = []): never {
+    bk_api_json(['error' => $message] + $extra, $status);
 }
 
 /**
@@ -150,16 +207,12 @@ $bk_csrf_on_post = array_merge(
 );
 
 if (in_array($action, $bk_post_only_actions, true) && $_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405);
-    echo json_encode(['error' => 'Vyžadován POST.'], JSON_UNESCAPED_UNICODE);
-    exit;
+    bk_api_error(405, 'Vyžadován POST.');
 }
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($action, $bk_csrf_on_post, true)) {
     $bk_csrf_in = (string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ($_POST['csrf_token'] ?? ''));
     if ($bk_csrf_in === '' || empty($_SESSION['csrf_token']) || !hash_equals((string)$_SESSION['csrf_token'], $bk_csrf_in)) {
-        http_response_code(403);
-        echo json_encode(['error' => 'Chybí nebo nesouhlasí CSRF token. Obnovte stránku a zkuste akci znovu.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(403, 'Chybí nebo nesouhlasí CSRF token. Obnovte stránku a zkuste akci znovu.');
     }
 }
 
@@ -238,9 +291,7 @@ if ($action === 'session') {
 // created.
 if ($action === 'login') {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['success' => false, 'message' => 'Method not allowed.']);
-        exit;
+        bk_api_json(['success' => false, 'message' => 'Method not allowed.'], 405);
     }
     $login_input = json_decode(file_get_contents('php://input'), true) ?: [];
     $username = trim($login_input['username'] ?? '');
@@ -249,9 +300,7 @@ if ($action === 'login') {
 
     $lockout_secs = bk_login_lockout_seconds($pdo, $username);
     if ($lockout_secs > 0) {
-        http_response_code(429);
-        echo json_encode(['success' => false, 'message' => 'Too many failed attempts. Try again in ' . ceil($lockout_secs / 60) . ' min.']);
-        exit;
+        bk_api_json(['success' => false, 'message' => 'Too many failed attempts. Try again in ' . ceil($lockout_secs / 60) . ' min.'], 429);
     }
 
     $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ? LIMIT 1");
@@ -260,9 +309,7 @@ if ($action === 'login') {
 
     if (!$user || !password_verify($password, $user['password_hash'])) {
         bk_audit_log($pdo, 'login_failed', 'Invalid username/password: ' . $username, null, null, null, $username);
-        http_response_code(401);
-        echo json_encode(['success' => false, 'message' => 'Invalid username or password.']);
-        exit;
+        bk_api_json(['success' => false, 'message' => 'Invalid username or password.'], 401);
     }
 
     $login_recovery_left = null;
@@ -272,9 +319,7 @@ if ($action === 'login') {
         $login_second = bk_login_second_factor($pdo, $user, $totp_code);
         if (!$login_second['ok']) {
             bk_audit_log($pdo, 'login_failed', 'Invalid 2FA code', null, null, $user['id'], $user['username']);
-            http_response_code(401);
-            echo json_encode(['success' => false, 'message' => 'Invalid 2FA code.']);
-            exit;
+            bk_api_json(['success' => false, 'message' => 'Invalid 2FA code.'], 401);
         }
         $login_recovery_left = $login_second['recovery_left'];
         bk_login_start_session($pdo, $user, 'Password + 2FA');
@@ -616,9 +661,7 @@ if ($action === 'save_monitor') {
         $stmt_asset = $pdo->prepare("SELECT COUNT(*) FROM assets WHERE id = ?");
         $stmt_asset->execute([$asset_id]);
         if ((int)$stmt_asset->fetchColumn() === 0) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Zařízení (asset) ' . $asset_id . ' neexistuje.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Zařízení (asset) ' . $asset_id . ' neexistuje.');
         }
     }
     $new_asset_name = trim($input['new_asset_name'] ?? '');
@@ -700,17 +743,13 @@ if ($action === 'save_monitor') {
         : null;
 
     if ($type === 'heartbeat' && $heartbeat_interval === null) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Heartbeat monitor potřebuje interval - jak často se má úloha ozvat.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Heartbeat monitor potřebuje interval - jak často se má úloha ozvat.');
     }
 
     // Heartbeat nema co kontrolovat aktivne, takze cil nevyzadujeme - uloha se
     // hlasi sama. Cil by u nej byl jen matouci prazdny formularovy radek.
     if (empty($name) || (empty($target) && !in_array($type, ['vps', 'openwrt', 'heartbeat'], true))) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Název a cíl jsou povinné údaje.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Název a cíl jsou povinné údaje.');
     }
 
     // Two switches of the dialog: on the public status page (W1-G3) and the
@@ -732,13 +771,11 @@ if ($action === 'save_monitor') {
         } else {
             // "false" or "" would read as on through a truthiness test; a
             // switch that decides what the public sees is refused instead.
-            http_response_code(400);
-            echo json_encode([
+            bk_api_json([
                 'error' => 'invalid_switch',
                 'invalidKeys' => [$sw_key],
                 'message' => 'Přepínač musí být true/false (1/0).',
-            ], JSON_UNESCAPED_UNICODE);
-            exit;
+            ], 400);
         }
     }
     $mon_save_switches = function (int $monitor_id) use ($pdo, $mon_switches): void {
@@ -812,9 +849,7 @@ if ($action === 'heartbeat_info') {
         $hb = $stmt->fetch();
 
         if (!$hb || $hb['type'] !== 'heartbeat') {
-            http_response_code(404);
-            echo json_encode(['error' => 'Heartbeat monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Heartbeat monitor nenalezen.');
         }
 
         // The token is missing on monitors created before this type existed,
@@ -850,8 +885,7 @@ if ($action === 'heartbeat_info') {
         ], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] heartbeat_info selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Údaje o heartbeatu se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Údaje o heartbeatu se nepodařilo načíst.');
     }
     exit;
 }
@@ -874,8 +908,7 @@ if ($action === 'delete_monitor') {
             bk_api_fail('delete_monitor_failed', 500, $e, 'Monitor se nepodařilo smazat.');
         }
     } else {
-        http_response_code(400);
-        echo json_encode(['error' => 'Neplatné ID monitoru'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(400, 'Neplatné ID monitoru');
     }
     exit;
 }
@@ -895,14 +928,10 @@ if ($action === 'archive_monitor' || $action === 'unarchive_monitor') {
         $stmt_am->execute([$am_id]);
         $am = $stmt_am->fetch();
         if (!$am) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Monitor nenalezen.');
         }
         if ($am_archive === !empty($am['archived_at'])) {
-            http_response_code(409);
-            echo json_encode(['error' => $am_archive ? 'Monitor už je archivovaný.' : 'Monitor není archivovaný.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(409, $am_archive ? 'Monitor už je archivovaný.' : 'Monitor není archivovaný.');
         }
         $pdo->beginTransaction();
         if ($am_archive) {
@@ -934,8 +963,7 @@ if ($action === 'archive_monitor' || $action === 'unarchive_monitor') {
         if ($pdo->inTransaction()) {
             $pdo->rollBack();
         }
-        http_response_code(500);
-        echo json_encode(['error' => 'Archivaci se nepodařilo provést.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Archivaci se nepodařilo provést.');
     }
     exit;
 }
@@ -952,14 +980,10 @@ if ($action === 'agent_install_info') {
         $stmt_ai->execute([$ai_id]);
         $ai = $stmt_ai->fetch();
         if (!$ai) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Monitor nenalezen.');
         }
         if (!empty($ai['archived_at'])) {
-            http_response_code(409);
-            echo json_encode(['error' => 'Monitor je archivovaný. Nejdřív ho obnovte.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(409, 'Monitor je archivovaný. Nejdřív ho obnovte.');
         }
         if (empty($ai['agent_key'])) {
             $ai['agent_key'] = bin2hex(random_bytes(16));
@@ -988,8 +1012,7 @@ if ($action === 'agent_install_info') {
             ],
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Údaje pro instalaci agenta se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Údaje pro instalaci agenta se nepodařilo načíst.');
     }
     exit;
 }
@@ -1115,9 +1138,7 @@ if ($action === 'import_discovered_service') {
     }
 
     if ($s_name === '') {
-        http_response_code(400);
-        echo json_encode(['error' => 'Název služby je povinný.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Název služby je povinný.');
     }
 
     // 'agent' mode: a private-network service is checked locally by the agent
@@ -1129,9 +1150,7 @@ if ($action === 'import_discovered_service') {
         $s_type = 'agent_service';
         $s_target = $s_process !== '' && preg_match('/^[A-Za-z0-9_.@-]{1,64}$/', $s_process) ? $s_process : '';
         if ($s_target === '' && !$s_port) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Agent-side kontrola potřebuje aspoň název procesu nebo port služby - agent nehlásí ani jedno.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Agent-side kontrola potřebuje aspoň název procesu nebo port služby - agent nehlásí ani jedno.');
         }
     }
 
@@ -1142,9 +1161,7 @@ if ($action === 'import_discovered_service') {
     $cron_checkable = ['web', 'cpanel', 'port', 'minecraft', 'teamspeak', 'discord', 'vps', 'openwrt', 'agent_service'];
     if (!in_array($s_type, $cron_checkable, true)) {
         if (!$s_port) {
-            http_response_code(400);
-            echo json_encode(['error' => "Typ služby '{$s_type}' zatím neumíme aktivně kontrolovat a služba nehlásí port, přes který by šla testovat. Import by generoval jen prázdné kontroly."], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, "Typ služby '{$s_type}' zatím neumíme aktivně kontrolovat a služba nehlásí port, přes který by šla testovat. Import by generoval jen prázdné kontroly.");
         }
         $s_type = 'port';
     }
@@ -1189,9 +1206,7 @@ if ($action === 'import_discovered_service') {
         // Exception: an agent-side check has no public address (target = process).
         $target_error = $s_mode === 'agent' ? null : bk_validate_import_target($s_target);
         if ($target_error !== null) {
-            http_response_code(400);
-            echo json_encode(['error' => $target_error], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, $target_error);
         }
 
         if ($discovered_asset_id === null) {
@@ -1226,27 +1241,19 @@ if ($action === 'import_discovered_service') {
 if ($action === 'upload_logo') {
     bk_require_admin();
     if (empty($_FILES['logo']) || !is_array($_FILES['logo'])) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí soubor (pole "logo").'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí soubor (pole "logo").');
     }
     $f = $_FILES['logo'];
     if (($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Nahrání selhalo (kód ' . (int)$f['error'] . ').'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Nahrání selhalo (kód ' . (int)$f['error'] . ').');
     }
     if ((int)$f['size'] > 2 * 1024 * 1024) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Soubor je příliš velký (max 2 MB).'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Soubor je příliš velký (max 2 MB).');
     }
     $info = @getimagesize($f['tmp_name']);
     $allowed = [IMAGETYPE_PNG => 'png', IMAGETYPE_JPEG => 'jpg', IMAGETYPE_WEBP => 'webp'];
     if (!$info || !isset($allowed[$info[2]])) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Podporované formáty: PNG, JPG, WebP. SVG z bezpečnostních důvodů nahrát nelze — vložte na něj URL ručně.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Podporované formáty: PNG, JPG, WebP. SVG z bezpečnostních důvodů nahrát nelze — vložte na něj URL ručně.');
     }
     try {
         $ext = $allowed[$info[2]];
@@ -1320,19 +1327,13 @@ if ($action === 'trigger_remote_action') {
         $ra_monitor_allowed = $ra_monitor ? array_filter(explode(',', (string)($ra_monitor['allowed_actions'] ?? ''))) : [];
 
         if (!$ra_monitor || empty($ra_monitor['remote_actions_enabled'])) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Remote Actions nejsou pro tento monitor povolené - nejdřív je zapněte v jeho nastavení.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Remote Actions nejsou pro tento monitor povolené - nejdřív je zapněte v jeho nastavení.');
         }
         if (!in_array($ra_action, $ra_allowed_types, true) || !in_array($ra_action, $ra_monitor_allowed, true)) {
-            http_response_code(400);
-            echo json_encode(['error' => "Akce '{$ra_action}' není pro tento monitor v seznamu povolených akcí."], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, "Akce '{$ra_action}' není pro tento monitor v seznamu povolených akcí.");
         }
         if ($ra_action === 'restart_service' && !preg_match('/^[A-Za-z0-9_.@-]{1,64}$/', $ra_service)) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Akce restart_service vyžaduje název služby (povolené znaky: písmena, číslice, _.@-).'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Akce restart_service vyžaduje název služby (povolené znaky: písmena, číslice, _.@-).');
         }
 
         $stmt = $pdo->prepare("INSERT INTO agent_actions (monitor_id, action_type, service_name, status) VALUES (?, ?, ?, 'pending')");
@@ -1340,8 +1341,7 @@ if ($action === 'trigger_remote_action') {
         bk_audit_log($pdo, 'remote_action_triggered', $ra_action . ($ra_action === 'restart_service' ? " ({$ra_service})" : '') . ' na ' . $ra_monitor['name'], 'monitor', $ra_mid);
         echo json_encode(['success' => true, 'queued' => $ra_action], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Akci se nepodařilo zařadit do fronty.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Akci se nepodařilo zařadit do fronty.');
     }
     exit;
 }
@@ -1356,26 +1356,20 @@ if ($action === 'convert_to_agent_check') {
     $cv_proc = trim((string)($input['process'] ?? ''));
     bk_refuse_archived_write($pdo, $cv_id);
     if (!preg_match('/^[A-Za-z0-9_.@-]{1,64}$/', $cv_proc)) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Zadejte název procesu (písmena, číslice, _.@-), který má agent kontrolovat.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Zadejte název procesu (písmena, číslice, _.@-), který má agent kontrolovat.');
     }
     try {
         $stmt_cv = $pdo->prepare("SELECT m.id, m.name, m.asset_id FROM monitors m WHERE m.id = ?");
         $stmt_cv->execute([$cv_id]);
         $cv_mon = $stmt_cv->fetch();
         if (!$cv_mon || $cv_mon['asset_id'] === null) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Monitor nenalezen nebo nemá přiřazené zařízení (asset).'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Monitor nenalezen nebo nemá přiřazené zařízení (asset).');
         }
         // The asset must have an agent to take the check over.
         $stmt_ag = $pdo->prepare("SELECT COUNT(*) FROM monitors WHERE asset_id = ? AND type IN ('vps', 'openwrt') AND archived_at IS NULL");
         $stmt_ag->execute([$cv_mon['asset_id']]);
         if ((int)$stmt_ag->fetchColumn() === 0) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Na tomto zařízení není agent, který by kontrolu převzal.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Na tomto zařízení není agent, který by kontrolu převzal.');
         }
         // History stays (only type and target change), the status resets to
         // 'unknown' - nothing is claimed until the agent's first result.
@@ -1385,8 +1379,7 @@ if ($action === 'convert_to_agent_check') {
         bk_audit_log($pdo, 'monitor_updated', $cv_mon['name'] . ' → agent-side kontrola (' . $cv_proc . ')', 'monitor', $cv_id);
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Převod se nepodařil.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Převod se nepodařil.');
     }
     exit;
 }
@@ -1428,9 +1421,7 @@ if ($action === 'dashboard_layout') {
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!$uid) {
-            http_response_code(403);
-            echo json_encode(['error' => 'Rozložení lze uložit jen přihlášenému uživateli.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(403, 'Rozložení lze uložit jen přihlášenému uživateli.');
         }
         $input = json_decode(file_get_contents('php://input'), true) ?: [];
         $tiles = [];
@@ -1447,8 +1438,7 @@ if ($action === 'dashboard_layout') {
             bk_setting_set($pdo, 'dashboard_layout_user_' . $uid, json_encode($tiles, JSON_UNESCAPED_UNICODE));
             echo json_encode(['success' => true, 'tiles' => $tiles], JSON_UNESCAPED_UNICODE);
         } catch (Throwable $e) {
-            http_response_code(500);
-            echo json_encode(['error' => 'Rozložení se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+            bk_api_error(500, 'Rozložení se nepodařilo uložit.');
         }
         exit;
     }
@@ -1551,8 +1541,7 @@ if ($action === 'dashboard_layout') {
 
         echo json_encode(['catalog' => $catalog, 'tiles' => $saved], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Katalog dlaždic se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Katalog dlaždic se nepodařilo sestavit.');
     }
     exit;
 }
@@ -1603,25 +1592,17 @@ if ($action === 'clear_monitor_history') {
     $ch_confirm = trim((string)($ch_input['confirm_name'] ?? ''));
     bk_refuse_archived_write($pdo, $ch_id);
     if ($ch_id <= 0) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí monitor_id.');
     }
     try {
         $stmt_name = $pdo->prepare("SELECT name FROM monitors WHERE id = ? LIMIT 1");
         $stmt_name->execute([$ch_id]);
         $ch_name = $stmt_name->fetchColumn();
         if ($ch_name === false) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Monitor nenalezen.');
         }
         if ($ch_confirm !== (string)$ch_name) {
-            http_response_code(400);
-            echo json_encode([
-                'error' => 'Pro potvrzení opište přesný název monitoru.',
-            ], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Pro potvrzení opište přesný název monitoru.');
         }
 
         bk_audit_log($pdo, 'monitor_history_cleared', (string)$ch_name, 'monitor', $ch_id);
@@ -1639,8 +1620,7 @@ if ($action === 'clear_monitor_history') {
         echo json_encode(['success' => true, 'message' => 'Historie monitoru byla smazána.'], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[api.php action=clear_monitor_history] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Historii se nepodařilo smazat.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Historii se nepodařilo smazat.');
     }
     exit;
 }
@@ -1657,8 +1637,7 @@ if ($action === 'redetect_location') {
         echo json_encode(['success' => true, 'location' => $rl_loc], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[api.php action=redetect_location] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Lokalitu se nepodařilo zjistit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Lokalitu se nepodařilo zjistit.');
     }
     exit;
 }
@@ -1690,9 +1669,7 @@ if ($action === 'toggle_maintenance') {
     $tm_desc = trim((string)($tm_input['description'] ?? ''));
     $tm_end = trim((string)($tm_input['maintenance_end'] ?? ''));
     if (count($tm_ids) === 0) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí monitor_ids.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí monitor_ids.');
     }
     try {
         $place = implode(',', array_fill(0, count($tm_ids), '?'));
@@ -1730,8 +1707,7 @@ if ($action === 'toggle_maintenance') {
         echo json_encode(['success' => true, 'changed' => count($tm_ids), 'maintenance' => $tm_on], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[api.php action=toggle_maintenance] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Údržbu se nepodařilo přepnout.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Údržbu se nepodařilo přepnout.');
     }
     exit;
 }
@@ -1746,9 +1722,7 @@ if ($action === 'process_top') {
     $pt_kind = ($_GET['kind'] ?? 'cpu') === 'ram' ? 'ram' : 'cpu';
     $pt_minutes = min(43200, max(15, (int)($_GET['minutes'] ?? 1440)));
     if ($pt_monitor <= 0) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí monitor_id.');
     }
     // For the users the monitor belongs to, and admins: a monitor is its users' whole.
     bk_require_monitor_view($pdo, $pt_monitor);
@@ -1807,9 +1781,7 @@ if ($action === 'interface_traffic_daily') {
     $itd_monitor = (int)($_GET['monitor_id'] ?? 0);
     $itd_days = min(180, max(1, (int)($_GET['days'] ?? 30)));
     if ($itd_monitor <= 0) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí monitor_id.');
     }
     // For the users the monitor belongs to, and admins: a monitor is its users' whole.
     bk_require_monitor_view($pdo, $itd_monitor);
@@ -1895,9 +1867,7 @@ if ($action === 'notification_log') {
     $nl_want_summary = ($_GET['summary'] ?? '') === '1';
 
     if ($nl_ok !== '' && $nl_ok !== '0' && $nl_ok !== '1') {
-        http_response_code(400);
-        echo json_encode(['error' => 'Parametr ok smí být jen 0 nebo 1.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Parametr ok smí být jen 0 nebo 1.');
     }
 
     // delivery=failed,unknown - the known results only. A value outside them
@@ -1909,9 +1879,7 @@ if ($action === 'notification_log') {
     if ($nl_delivery_raw !== '') {
         $nl_delivery_asked = array_map('trim', explode(',', $nl_delivery_raw));
         if (array_diff($nl_delivery_asked, $nl_delivery_known) !== []) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Parametr delivery smí obsahovat jen sent, failed, unknown a skipped.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Parametr delivery smí obsahovat jen sent, failed, unknown a skipped.');
         }
         $nl_delivery = array_values(array_intersect($nl_delivery_known, $nl_delivery_asked));
     }
@@ -1928,9 +1896,7 @@ if ($action === 'notification_log') {
         }
         $nl_ts = strtotime($nl_raw);
         if ($nl_ts === false) {
-            http_response_code(400);
-            echo json_encode(['error' => "Parametr {$nl_bound} není platné datum."], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, "Parametr {$nl_bound} není platné datum.");
         }
         // A bare date as the upper bound means the whole day. "to=2026-09-20"
         // asked for that day, not for the split second it began.
@@ -2059,8 +2025,7 @@ if ($action === 'notification_log') {
         // 500, not a 200 with an empty list: both readers of this endpoint show
         // an empty log as "nothing was sent", and a failed read is no evidence
         // of that. The admin page turns the status code into a visible error.
-        http_response_code(500);
-        echo json_encode(['entries' => [], 'error' => 'Historii notifikací se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        bk_api_json(['entries' => [], 'error' => 'Historii notifikací se nepodařilo načíst.'], 500);
     }
     exit;
 }
@@ -2094,8 +2059,7 @@ if ($action === 'site_health') {
     } catch (Throwable $e) {
         error_log('[api.php action=site_health] ' . $e->getMessage());
         // 500, never "all is well" from a read that died.
-        http_response_code(500);
-        echo json_encode(['error' => 'Stav webu se nepodařilo zjistit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Stav webu se nepodařilo zjistit.');
     }
     exit;
 }
@@ -2172,8 +2136,7 @@ if ($action === 'notification_health') {
         error_log('[api.php action=notification_health] ' . $e->getMessage());
         // 500, never an empty list: "no problems" from a query that died is
         // the one answer this endpoint must not give.
-        http_response_code(500);
-        echo json_encode(['error' => 'Stav doručování zpráv se nepodařilo zjistit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Stav doručování zpráv se nepodařilo zjistit.');
     }
     exit;
 }
@@ -2183,9 +2146,7 @@ if ($action === 'test_notification') {
     $tn_input = json_decode((string)file_get_contents('php://input'), true);
     $tn_channel = is_array($tn_input) ? (string)($tn_input['channel'] ?? '') : '';
     if (!in_array($tn_channel, ['email', 'discord', 'telegram', 'slack'], true)) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Neznámý kanál (email, discord, telegram, slack).'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Neznámý kanál (email, discord, telegram, slack).');
     }
     $tn_email = null;
     $tn_lang = (string)get_setting('email_lang', 'cs');
@@ -2211,9 +2172,7 @@ if ($action === 'save_settings') {
 
     $input = json_decode(file_get_contents('php://input'), true);
     if (!$input || !isset($input['settings']) || !is_array($input['settings'])) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybějící data nastavení.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybějící data nastavení.');
     }
 
     $allowed_keys = bk_settings_keys();
@@ -2235,12 +2194,7 @@ if ($action === 'save_settings') {
         }
     }
     if ($bk_bad_switches !== []) {
-        http_response_code(400);
-        echo json_encode([
-            'error' => 'Přepínač musí být 0 nebo 1, prázdná hodnota se neukládá: ' . implode(', ', $bk_bad_switches),
-            'invalidKeys' => $bk_bad_switches,
-        ], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Přepínač musí být 0 nebo 1, prázdná hodnota se neukládá: ' . implode(', ', $bk_bad_switches), ['invalidKeys' => $bk_bad_switches]);
     }
 
     try {
@@ -2287,8 +2241,7 @@ if ($action === 'generate_metrics_token') {
 
         echo json_encode(['success' => true, 'metricsToken' => $new_token], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Chyba při generování tokenu.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Chyba při generování tokenu.');
     }
     exit;
 }
@@ -2543,9 +2496,7 @@ if ($action === 'events') {
 if ($action === 'monitor_insights') {
     $monitor_id = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
     if ($monitor_id <= 0) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí monitor_id.');
     }
     bk_require_monitor_view($pdo, $monitor_id);
     try {
@@ -2553,9 +2504,7 @@ if ($action === 'monitor_insights') {
         $stmt_mon->execute([$monitor_id]);
         $monitor = $stmt_mon->fetch();
         if (!$monitor) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Monitor nenalezen.');
         }
 
         $details = bk_monitor_details($monitor);
@@ -2644,8 +2593,7 @@ if ($action === 'monitor_insights') {
             ], $timeline),
         ]);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Nepodařilo se sestavit souhrn monitoru.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Nepodařilo se sestavit souhrn monitoru.');
     }
     exit;
 }
@@ -3341,9 +3289,7 @@ if ($action === 'badge') {
             $bdg_allowed = in_array($bdg_mid, bk_public_monitor_ids($pdo), true)
                 || (!empty($_SESSION['admin_logged_in']) && bk_can_view_monitor($pdo, $bdg_mid));
             if (!$bdg_row || !$bdg_allowed) {
-                http_response_code(404);
-                echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(404, 'Monitor nenalezen.');
             }
             $bdg_label = (string)$bdg_row['name'];
             if (($_GET['type'] ?? '') === 'uptime') {
@@ -3386,9 +3332,7 @@ if ($action === 'badge') {
             ][$bdg_state] ?? $bdg_words['unknown'];
         }
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Stav se nepodařilo zjistit.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(500, 'Stav se nepodařilo zjistit.');
     }
 
     // Width by estimate, ~6.2 px per character at 11px Verdana - the same trick
@@ -3605,9 +3549,7 @@ if ($action === 'incident_action') {
         $stmt->execute([$incident_id]);
         $incident = $stmt->fetch();
         if (!$incident) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Incident nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Incident nenalezen.');
         }
 
         // Extra fields for the answer - empty unless an operation has something
@@ -3629,9 +3571,7 @@ if ($action === 'incident_action') {
         } elseif ($op === 'note') {
             $message = trim((string)($input['message'] ?? ''));
             if ($message === '') {
-                http_response_code(400);
-                echo json_encode(['error' => 'Poznámka nesmí být prázdná.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(400, 'Poznámka nesmí být prázdná.');
             }
             $status = in_array($input['status'] ?? '', ['investigating', 'identified', 'monitoring'], true)
                 ? $input['status'] : (string)$incident['status'];
@@ -3658,15 +3598,12 @@ if ($action === 'incident_action') {
             $add_update((string)$incident['status'], "[{$username}] Postmortem " . ($text !== '' ? 'doplněn.' : 'odstraněn.'));
             bk_audit_log($pdo, 'incident_postmortem', "Incident #{$incident_id}: postmortem", 'incident', $incident_id);
         } else {
-            http_response_code(400);
-            echo json_encode(['error' => 'Neznámá operace.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Neznámá operace.');
         }
 
         echo json_encode(array_merge(['success' => true], $ia_extra), JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Akci se nepodařilo provést.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Akci se nepodařilo provést.');
     }
     exit;
 }
@@ -3687,17 +3624,13 @@ if ($action === 'create_incident') {
     $ci_monitor_id = isset($input['monitorId']) ? (int)$input['monitorId'] : 0;
 
     if ($title === '') {
-        http_response_code(400);
-        echo json_encode(['error' => 'Název incidentu je povinný.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Název incidentu je povinný.');
     }
     if ($ci_monitor_id > 0) {
         $stmt_ci_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ?");
         $stmt_ci_mon->execute([$ci_monitor_id]);
         if ($stmt_ci_mon->fetchColumn() === false) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Monitor nenalezen.');
         }
         bk_refuse_archived_write($pdo, $ci_monitor_id);
         $stmt_ci_open = $pdo->prepare("SELECT id FROM incidents WHERE monitor_id = ? AND status != 'resolved' LIMIT 1");
@@ -3706,9 +3639,7 @@ if ($action === 'create_incident') {
         if ($ci_open !== false) {
             // Two open incidents for one monitor would split the timeline and the
             // outage card can only ever link to one of them.
-            http_response_code(409);
-            echo json_encode(['error' => 'Tento monitor už má otevřený incident.', 'id' => (int)$ci_open], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(409, 'Tento monitor už má otevřený incident.', ['id' => (int)$ci_open]);
         }
     }
 
@@ -3724,8 +3655,7 @@ if ($action === 'create_incident') {
 
         echo json_encode(['success' => true, 'id' => $incident_id], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Incident se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Incident se nepodařilo uložit.');
     }
     exit;
 }
@@ -3790,8 +3720,7 @@ if ($action === 'presets') {
 
         echo json_encode(['presets' => $presets, 'catalog' => $catalog], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Presety se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Presety se nepodařilo načíst.');
     }
     exit;
 }
@@ -3804,9 +3733,7 @@ if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'ass
         if ($action === 'save_preset') {
             $name = trim((string)($input['name'] ?? ''));
             if ($name === '') {
-                http_response_code(400);
-                echo json_encode(['error' => 'Název presetu nesmí být prázdný.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(400, 'Název presetu nesmí být prázdný.');
             }
             $metrics = [];
             foreach ((array)($input['metrics'] ?? []) as $mk) {
@@ -3862,9 +3789,7 @@ if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'ass
         $preset_id = (int)($input['presetId'] ?? 0);
         $monitor_ids = array_values(array_filter(array_map('intval', (array)($input['monitorIds'] ?? []))));
         if (empty($monitor_ids)) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Nebyl vybrán žádný monitor.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Nebyl vybrán žádný monitor.');
         }
         $placeholders = implode(',', array_fill(0, count($monitor_ids), '?'));
         $stmt = $pdo->prepare("UPDATE monitors SET preset_id = ? WHERE id IN ({$placeholders})");
@@ -3872,8 +3797,7 @@ if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'ass
         bk_audit_log($pdo, 'preset_assigned', "Preset #{$preset_id} přiřazen " . count($monitor_ids) . " monitorům", 'preset', $preset_id);
         echo json_encode(['success' => true, 'updated' => count($monitor_ids)], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Operaci s presetem se nepodařilo provést.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Operaci s presetem se nepodařilo provést.');
     }
     exit;
 }
@@ -3886,9 +3810,7 @@ if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'ass
 if ($action === 'check_stages') {
     $monitor_id = (int)($_GET['monitor_id'] ?? 0);
     if ($monitor_id <= 0) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí monitor_id.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí monitor_id.');
     }
     bk_require_monitor_view($pdo, $monitor_id);
     try {
@@ -3916,8 +3838,7 @@ if ($action === 'check_stages') {
             'status' => $row['status'],
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Rozpad kontroly se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Rozpad kontroly se nepodařilo načíst.');
     }
     exit;
 }
@@ -4004,8 +3925,7 @@ if ($action === 'export_config') {
         header('Content-Disposition: attachment; filename="' . $filename . '"');
         echo json_encode($export, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Export se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Export se nepodařilo sestavit.');
     }
     exit;
 }
@@ -4025,9 +3945,7 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
             $stmt_mp->execute([$mp_uid]);
             $mp = $stmt_mp->fetch();
             if (!$mp) {
-                http_response_code(404);
-                echo json_encode(['error' => 'Účet nenalezen.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(404, 'Účet nenalezen.');
             }
             echo json_encode([
                 'username' => $mp['username'],
@@ -4045,16 +3963,13 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
             ], JSON_UNESCAPED_UNICODE);
         } catch (Throwable $e) {
             error_log('[my_profile] ' . $e->getMessage());
-            http_response_code(500);
-            echo json_encode(['error' => 'Profil se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+            bk_api_error(500, 'Profil se nepodařilo načíst.');
         }
         exit;
     }
 
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['error' => 'Vyžadován POST.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(405, 'Vyžadován POST.');
     }
     $mp_input = json_decode(file_get_contents('php://input'), true) ?: [];
 
@@ -4063,18 +3978,14 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
         $stmt_me->execute([$mp_uid]);
         $mp_me = $stmt_me->fetch();
         if (!$mp_me) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Účet nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Účet nenalezen.');
         }
 
         if ($action === 'oauth_unlink') {
             // Odpojeni chce heslo - ukradena session nesmi tise odpojit
             // prihlasovani a prevzit ucet pres OAuth provider.
             if (!password_verify((string)($mp_input['password'] ?? ''), $mp_me['password_hash'])) {
-                http_response_code(400);
-                echo json_encode(['error' => 'Nesprávné heslo - účet zůstává propojený.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(400, 'Nesprávné heslo - účet zůstává propojený.');
             }
             $pdo->prepare("UPDATE users SET oauth_provider = NULL, oauth_id = NULL WHERE id = ?")->execute([$mp_uid]);
             bk_audit_log($pdo, 'oauth_unlinked', '', 'user', $mp_uid);
@@ -4085,9 +3996,7 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
         // update_profile
         $mp_email = trim((string)($mp_input['email'] ?? ''));
         if ($mp_email === '') {
-            http_response_code(400);
-            echo json_encode(['error' => 'E-mail je povinný.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'E-mail je povinný.');
         }
         $mp_phone = trim((string)($mp_input['phone'] ?? ''));
         $mp_lang = in_array($mp_input['emailLang'] ?? null, ['cs', 'en'], true) ? $mp_input['emailLang'] : null;
@@ -4102,14 +4011,10 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
         $mp_hash = $mp_me['password_hash'];
         if ($mp_new_pass !== '') {
             if (strlen($mp_new_pass) < 8) {
-                http_response_code(400);
-                echo json_encode(['error' => 'Heslo musí mít alespoň 8 znaků.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(400, 'Heslo musí mít alespoň 8 znaků.');
             }
             if (!password_verify((string)($mp_input['oldPassword'] ?? ''), $mp_me['password_hash'])) {
-                http_response_code(400);
-                echo json_encode(['error' => 'Stávající heslo je nesprávné. Změna neproběhla.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(400, 'Stávající heslo je nesprávné. Změna neproběhla.');
             }
             $mp_hash = password_hash($mp_new_pass, PASSWORD_BCRYPT);
         }
@@ -4120,8 +4025,7 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[update_profile] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Profil se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Profil se nepodařilo uložit.');
     }
     exit;
 }
@@ -4134,23 +4038,17 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
 // token nekdy existoval.
 if ($action === 'set_password') {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['error' => 'Vyžadován POST.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(405, 'Vyžadován POST.');
     }
     $sp_input = json_decode(file_get_contents('php://input'), true) ?: [];
     $sp_token = trim((string)($sp_input['token'] ?? ''));
     $sp_pass = (string)($sp_input['password'] ?? '');
 
     if ($sp_token === '') {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí token.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí token.');
     }
     if (strlen($sp_pass) < 8) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Heslo musí mít alespoň 8 znaků.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Heslo musí mít alespoň 8 znaků.');
     }
 
     try {
@@ -4159,9 +4057,7 @@ if ($action === 'set_password') {
         $stmt_sp->execute([$sp_hash]);
         $sp_user = $stmt_sp->fetch();
         if (!$sp_user) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Odkaz je neplatný nebo už vypršel. Požádejte o nový.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Odkaz je neplatný nebo už vypršel. Požádejte o nový.');
         }
         $stmt_up = $pdo->prepare("UPDATE users SET password_hash = ?, password_reset_token_hash = NULL, password_reset_expires = NULL WHERE id = ?");
         $stmt_up->execute([password_hash($sp_pass, PASSWORD_BCRYPT), (int)$sp_user['id']]);
@@ -4169,8 +4065,7 @@ if ($action === 'set_password') {
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[set_password] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Heslo se nepodařilo nastavit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Heslo se nepodařilo nastavit.');
     }
     exit;
 }
@@ -4181,9 +4076,7 @@ if ($action === 'set_password') {
 if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_disable' || $action === 'totp_recovery_regenerate') {
     bk_require_login();
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['error' => 'Vyžadován POST.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(405, 'Vyžadován POST.');
     }
     $totp_input = json_decode(file_get_contents('php://input'), true) ?: [];
     $totp_uid = (int)$_SESSION['admin_id'];
@@ -4205,14 +4098,10 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
             $totp_pending = $_SESSION['totp_pending_secret'] ?? '';
             $totp_code = trim((string)($totp_input['code'] ?? ''));
             if ($totp_pending === '') {
-                http_response_code(400);
-                echo json_encode(['error' => '2FA nastavení vypršelo, začněte prosím znovu.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(400, '2FA nastavení vypršelo, začněte prosím znovu.');
             }
             if (!bk_totp_verify_code($totp_pending, $totp_code)) {
-                http_response_code(400);
-                echo json_encode(['error' => 'Neplatný kód z autentikační aplikace.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(400, 'Neplatný kód z autentikační aplikace.');
             }
             $stmt_t = $pdo->prepare("UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?");
             $stmt_t->execute([$totp_pending, $totp_uid]);
@@ -4233,14 +4122,10 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
             $stmt_me->execute([$totp_uid]);
             $trr_me = $stmt_me->fetch();
             if (!$trr_me || empty($trr_me['totp_enabled'])) {
-                http_response_code(400);
-                echo json_encode(['error' => 'Záložní kódy mají smysl jen se zapnutým 2FA.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(400, 'Záložní kódy mají smysl jen se zapnutým 2FA.');
             }
             if (!password_verify((string)($totp_input['password'] ?? ''), $trr_me['password_hash'])) {
-                http_response_code(400);
-                echo json_encode(['error' => 'Nesprávné heslo - kódy zůstávají beze změny.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(400, 'Nesprávné heslo - kódy zůstávají beze změny.');
             }
             $totp_recovery = bk_totp_generate_recovery_codes($pdo, $totp_uid);
             bk_audit_log($pdo, 'totp_recovery_regenerated', '', 'user', $totp_uid);
@@ -4254,9 +4139,7 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
         $stmt_me->execute([$totp_uid]);
         $totp_me = $stmt_me->fetch();
         if (!$totp_me || !password_verify((string)($totp_input['password'] ?? ''), $totp_me['password_hash'])) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Nesprávné heslo - 2FA zůstává zapnuté.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Nesprávné heslo - 2FA zůstává zapnuté.');
         }
         $stmt_t = $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?");
         $stmt_t->execute([$totp_uid]);
@@ -4272,8 +4155,7 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[totp] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Operace se nepodařila.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Operace se nepodařila.');
     }
     exit;
 }
@@ -4286,9 +4168,7 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
 if ($action === 'status_page') {
     $sp_slug = trim((string)($_GET['slug'] ?? ''));
     if ($sp_slug === '') {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí slug.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí slug.');
     }
     try {
         $stmt_sp = $pdo->prepare("SELECT title, description, is_public, monitor_ids, display_options FROM status_pages WHERE slug = ? LIMIT 1");
@@ -4298,9 +4178,7 @@ if ($action === 'status_page') {
         $sp_is_admin = bk_viewer()['is_admin'];
 
         if (!$sp_row || ((int)$sp_row['is_public'] !== 1 && !$sp_is_admin)) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Stránka nenalezena.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Stránka nenalezena.');
         }
 
         $sp_ids = json_decode($sp_row['monitor_ids'] ?? '', true);
@@ -4362,8 +4240,7 @@ if ($action === 'status_pages') {
         }
         echo json_encode(['pages' => $pages], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Status stránky se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Status stránky se nepodařilo načíst.');
     }
     exit;
 }
@@ -4381,9 +4258,7 @@ if ($action === 'save_status_page' || $action === 'delete_status_page') {
 
         $title = trim((string)($input['title'] ?? ''));
         if ($title === '') {
-            http_response_code(400);
-            echo json_encode(['error' => 'Název stránky nesmí být prázdný.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Název stránky nesmí být prázdný.');
         }
 
         // The slug goes into the URL, hence safe characters only. Derived from
@@ -4447,15 +4322,11 @@ if ($action === 'save_status_page' || $action === 'delete_status_page') {
     } catch (PDOException $e) {
         // A duplicate slug is the user's error, not the server's - say it clearly.
         $duplicate = str_contains($e->getMessage(), 'uniq_status_page_slug') || $e->getCode() === '23000';
-        http_response_code($duplicate ? 400 : 500);
-        echo json_encode([
-            'error' => $duplicate
-                ? 'Stránka s tímto slugem už existuje — zvolte jiný.'
-                : 'Status stránku se nepodařilo uložit.',
-        ], JSON_UNESCAPED_UNICODE);
+        bk_api_error($duplicate ? 400 : 500, $duplicate
+            ? 'Stránka s tímto slugem už existuje — zvolte jiný.'
+            : 'Status stránku se nepodařilo uložit.');
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Status stránku se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Status stránku se nepodařilo uložit.');
     }
     exit;
 }
@@ -4550,8 +4421,7 @@ if ($action === 'regions') {
         }
         echo json_encode($rg_project($regions_payload), JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Přehled měřicích míst se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Přehled měřicích míst se nepodařilo sestavit.');
     }
     exit;
 }
@@ -4670,8 +4540,7 @@ if ($action === 'websites_overview') {
         }
         echo json_encode($wo_filter($data), JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
-        http_response_code(500);
-        echo json_encode(['error' => 'Přehled SLA se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Přehled SLA se nepodařilo sestavit.');
     }
     exit;
 }
@@ -5565,9 +5434,7 @@ if ($action === 'link_traffic') {
         $stmt_mon = bk_visible_monitor_stmt($pdo, $monitor_id, 'id, type, last_details');
         $mon_row = $stmt_mon->fetch();
         if (!$mon_row) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Monitor nenalezen');
         }
         $details = bk_monitor_details($mon_row);
         $out = bk_get_link_traffic($pdo, (int)$mon_row['id'], $details, $days);
@@ -5575,8 +5442,7 @@ if ($action === 'link_traffic') {
         echo json_encode($out, JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[api] link_traffic selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Chyba při načítání provozu podle linky'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Chyba při načítání provozu podle linky');
     }
     exit;
 }
@@ -5596,9 +5462,7 @@ if ($action === 'metric_detail') {
     $map = bk_metric_column_map();
 
     if (!isset($map[$metric]) && $metric !== 'response_time' && $metric !== 'latency') {
-        http_response_code(404);
-        echo json_encode(['error' => 'Neznámá metrika.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(404, 'Neznámá metrika.');
     }
 
     try {
@@ -5610,9 +5474,7 @@ if ($action === 'metric_detail') {
         $mon = $stmt->fetch();
 
         if (!$mon) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Monitor nenalezen.');
         }
 
         $is_latency = ($metric === 'response_time' || $metric === 'latency');
@@ -5728,8 +5590,7 @@ if ($action === 'metric_detail') {
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[metric_detail] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Nepodařilo se načíst kontext metriky.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Nepodařilo se načíst kontext metriky.');
     }
     exit;
 }
@@ -5751,9 +5612,7 @@ if ($action === 'process_history') {
     $radius = min(180, max(1, (int)($_GET['radius'] ?? 10)));
 
     if ($monitor_id <= 0 || $around <= 0) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí monitor_id nebo čas.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí monitor_id nebo čas.');
     }
     // Process names, PIDs and per-process usage describe what runs on the machine:
     // only for the users the monitor belongs to, and admins.
@@ -5820,8 +5679,7 @@ if ($action === 'process_history') {
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[process_history] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Nepodařilo se načíst historii procesů.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Nepodařilo se načíst historii procesů.');
     }
     exit;
 }
@@ -5835,12 +5693,10 @@ if ($action === 'metric_series_batch') {
     if ($minutes === null) {
         // 90d/180d/1y live in the daily rollups, which only action=metric_series
         // reads. This answered them with the last 24 hours under the long label.
-        http_response_code(400);
-        echo json_encode([
+        bk_api_json([
             'error' => 'period_unsupported',
             'message' => 'Období delší než 30 dní čte action=metric_series (denní souhrny).',
-        ], JSON_UNESCAPED_UNICODE);
-        exit;
+        ], 400);
     }
 
     try {
@@ -6008,9 +5864,7 @@ if ($action === 'digest_preview') {
     // An unknown period is refused, never shown as the weekly digest.
     $dp_raw = $_GET['period'] ?? '';
     if ($dp_raw !== 'weekly' && $dp_raw !== 'monthly') {
-        http_response_code(400);
-        echo json_encode(['error' => 'Období musí být weekly nebo monthly.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Období musí být weekly nebo monthly.');
     }
     $dp_period = $dp_raw === 'monthly' ? 'monthly' : 'weekly';
     try {
@@ -6078,9 +5932,7 @@ if ($action === 'save_subscriptions') {
     $user_id = (int)($_SESSION['admin_id'] ?? 0);
     $input = json_decode(file_get_contents('php://input'), true);
     if (!$input || !isset($input['subscriptions'])) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybějící data.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybějící data.');
     }
     try {
         $pdo->beginTransaction();
@@ -6131,9 +5983,8 @@ if ($action === 'save_subscriptions') {
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         $pdo->rollBack();
-        http_response_code(500);
         error_log('[save_subscriptions] ' . $e->getMessage());
-        echo json_encode(['error' => 'Odběry se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Odběry se nepodařilo uložit.');
     }
     exit;
 }
@@ -6151,18 +6002,14 @@ if ($action === 'save_user' || $action === 'delete_user') {
     if ($action === 'delete_user') {
         $du_id = (int)($su_input['id'] ?? 0);
         if ($du_id === (int)($_SESSION['admin_id'] ?? 0)) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Nemůžete smazat svůj vlastní přihlášený účet.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Nemůžete smazat svůj vlastní přihlášený účet.');
         }
         try {
             $stmt_du = $pdo->prepare("SELECT username FROM users WHERE id = ?");
             $stmt_du->execute([$du_id]);
             $du_username = $stmt_du->fetchColumn();
             if ($du_username === false) {
-                http_response_code(404);
-                echo json_encode(['error' => 'Uživatel nenalezen.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(404, 'Uživatel nenalezen.');
             }
             // Explicitly, not only through the foreign key: an install whose
             // table was created without it must not keep access rows of a deleted account.
@@ -6172,8 +6019,7 @@ if ($action === 'save_user' || $action === 'delete_user') {
             echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
         } catch (Throwable $e) {
             error_log('[delete_user] ' . $e->getMessage());
-            http_response_code(500);
-            echo json_encode(['error' => 'Uživatele se nepodařilo smazat.'], JSON_UNESCAPED_UNICODE);
+            bk_api_error(500, 'Uživatele se nepodařilo smazat.');
         }
         exit;
     }
@@ -6215,14 +6061,10 @@ if ($action === 'save_user' || $action === 'delete_user') {
     };
 
     if ($su_username === '' || $su_email === '') {
-        http_response_code(400);
-        echo json_encode(['error' => 'Uživatelské jméno a e-mail jsou povinné.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Uživatelské jméno a e-mail jsou povinné.');
     }
     if ($su_password !== '' && strlen($su_password) < 8) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Heslo musí mít alespoň 8 znaků.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Heslo musí mít alespoň 8 znaků.');
     }
 
     try {
@@ -6233,9 +6075,7 @@ if ($action === 'save_user' || $action === 'delete_user') {
             $stmt_old->execute([$su_id]);
             $su_old = $stmt_old->fetch();
             if (!$su_old) {
-                http_response_code(404);
-                echo json_encode(['error' => 'Uživatel nenalezen.'], JSON_UNESCAPED_UNICODE);
-                exit;
+                bk_api_error(404, 'Uživatel nenalezen.');
             }
             $pdo->beginTransaction();
             if ($su_password !== '') {
@@ -6298,12 +6138,10 @@ if ($action === 'save_user' || $action === 'delete_user') {
             $pdo->rollBack();
         }
         if ((string)$e->getCode() === '23000') {
-            http_response_code(400);
-            echo json_encode(['error' => 'Uživatelské jméno nebo e-mail už existuje.'], JSON_UNESCAPED_UNICODE);
+            bk_api_error(400, 'Uživatelské jméno nebo e-mail už existuje.');
         } else {
             error_log('[save_user] ' . $e->getMessage());
-            http_response_code(500);
-            echo json_encode(['error' => 'Uživatele se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+            bk_api_error(500, 'Uživatele se nepodařilo uložit.');
         }
     }
     exit;
@@ -6485,8 +6323,7 @@ if ($action === 'collection_health') {
         ], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] collection_health selhal: ' . $e->getMessage());
-        http_response_code(503);
-        echo json_encode(['error' => 'Stav sběru dat se nepodařilo zjistit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(503, 'Stav sběru dat se nepodařilo zjistit.');
     }
     exit;
 }
@@ -6621,8 +6458,7 @@ if ($action === 'public_status') {
         // Never return an invented "healthy" state on error - the client must see
         // that the infrastructure state could not be determined, not a false "all OK".
         error_log('[api] public_status failed: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Nepodařilo se zjistit stav infrastruktury.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Nepodařilo se zjistit stav infrastruktury.');
     }
     exit;
 }
@@ -6715,8 +6551,7 @@ if ($action === 'speedtest_history') {
         ], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] speedtest_history selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Historii měření rychlosti se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Historii měření rychlosti se nepodařilo načíst.');
     }
     exit;
 }
@@ -6740,9 +6575,7 @@ if ($action === 'router_recommendations') {
         $rr_stmt->execute([$rr_monitor_id]);
         $rr_monitor = $rr_stmt->fetch();
         if (!$rr_monitor) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Monitor nenalezen.');
         }
         $rr_details = bk_monitor_details($rr_monitor);
         $rr_in = bk_router_rec_inputs($pdo, $rr_monitor, $rr_details, date('Y-m-d'));
@@ -6806,8 +6639,7 @@ if ($action === 'router_recommendations') {
         ], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] router_recommendations selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Doporučení pro router se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Doporučení pro router se nepodařilo sestavit.');
     }
     exit;
 }
@@ -6840,9 +6672,7 @@ if ($action === 'router_recommendation_mute') {
     $rm_rule = explode(':', $rm_key, 2)[0];
     if (!preg_match('/^[a-z0-9_]{3,40}(:[A-Za-z0-9._:-]{1,39})?$/', $rm_key)
         || !in_array($rm_rule, bk_router_rec_thresholds()['rank'], true)) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Neznámý klíč doporučení.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Neznámý klíč doporučení.');
     }
 
     try {
@@ -6850,9 +6680,7 @@ if ($action === 'router_recommendation_mute') {
         $rm_stmt->execute([$rm_monitor_id]);
         $rm_monitor = $rm_stmt->fetch();
         if (!$rm_monitor) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Monitor nenalezen.');
         }
         $rm_mute = null;
         if ($rm_on) {
@@ -6897,8 +6725,7 @@ if ($action === 'router_recommendation_mute') {
             JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] router_recommendation_mute selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Změnu se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Změnu se nepodařilo uložit.');
     }
     exit;
 }
@@ -7001,8 +6828,7 @@ if ($action === 'storage_history') {
             JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] storage_history selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Historii disků se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Historii disků se nepodařilo načíst.');
     }
     exit;
 }
@@ -7027,9 +6853,7 @@ if ($action === 'wan_bottleneck') {
         $wb_stmt->execute([$wb_monitor_id]);
         $wb_monitor = $wb_stmt->fetch();
         if (!$wb_monitor) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Monitor nenalezen.');
         }
         $wb_details = bk_monitor_details($wb_monitor);
         $wb_path = is_array($wb_details['wan_path'] ?? null) ? $wb_details['wan_path'] : null;
@@ -7163,8 +6987,7 @@ if ($action === 'wan_bottleneck') {
         ], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] wan_bottleneck selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Rozbor linky WAN se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Rozbor linky WAN se nepodařilo sestavit.');
     }
     exit;
 }
@@ -7203,9 +7026,7 @@ if ($action === 'wan_settings_save') {
     $ws_up = $ws_range($ws_input['plan_up_mbit'] ?? null, 1, 100000, 'plan_up_mbit');
     $ws_pct = $ws_range($ws_input['plan_ok_pct'] ?? null, 30, 100, 'plan_ok_pct');
     if ($ws_bad !== []) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Neplatná hodnota: ' . implode(', ', $ws_bad)], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Neplatná hodnota: ' . implode(', ', $ws_bad));
     }
 
     try {
@@ -7242,8 +7063,7 @@ if ($action === 'wan_settings_save') {
         ], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] wan_settings_save selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Nastavení se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Nastavení se nepodařilo uložit.');
     }
     exit;
 }
@@ -7298,8 +7118,7 @@ if ($action === 'user_audit_log') {
         echo json_encode(['entries' => $entries], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] user_audit_log selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Auditní protokol se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Auditní protokol se nepodařilo načíst.');
     }
     exit;
 }
@@ -7320,9 +7139,7 @@ if ($action === 'public_subscribe') {
     $ps_email = trim((string)($ps_input['email'] ?? ''));
     $ps_lang = ($ps_input['lang'] ?? '') === 'en' ? 'en' : 'cs';
     if (!filter_var($ps_email, FILTER_VALIDATE_EMAIL)) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Neplatná e-mailová adresa.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Neplatná e-mailová adresa.');
     }
     $ps_ip = bk_client_ip();
     try {
@@ -7330,9 +7147,7 @@ if ($action === 'public_subscribe') {
         $stmt_rl = $pdo->prepare("SELECT COUNT(*) FROM public_subscribers WHERE created_ip = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)");
         $stmt_rl->execute([$ps_ip]);
         if ((int)$stmt_rl->fetchColumn() >= 5) {
-            http_response_code(429);
-            echo json_encode(['error' => 'Příliš mnoho pokusů. Zkuste to později.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(429, 'Příliš mnoho pokusů. Zkuste to později.');
         }
         $ps_token = bk_public_sub_issue($pdo, $ps_email, $ps_lang, $ps_ip);
         if ($ps_token !== null && !bk_public_sub_send_confirm($ps_email, $ps_lang, $ps_token, bk_public_base_origin())) {
@@ -7355,8 +7170,7 @@ if ($action === 'public_subscribe') {
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[public_subscribe] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Odběr se nepodařilo založit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Odběr se nepodařilo založit.');
     }
     exit;
 }
@@ -7365,26 +7179,21 @@ if ($action === 'public_subscribe_confirm') {
     $psc_input = json_decode(file_get_contents('php://input'), true) ?: [];
     $psc_token = trim((string)($psc_input['token'] ?? ''));
     if ($psc_token === '') {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí token.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí token.');
     }
     try {
         $stmt_psc = $pdo->prepare("SELECT id FROM public_subscribers WHERE confirm_token_hash = ? AND confirmed_at IS NULL LIMIT 1");
         $stmt_psc->execute([hash('sha256', $psc_token)]);
         $psc_row = $stmt_psc->fetch();
         if (!$psc_row) {
-            http_response_code(400);
-            echo json_encode(['error' => 'Odkaz je neplatný nebo už byl použit.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Odkaz je neplatný nebo už byl použit.');
         }
         $pdo->prepare("UPDATE public_subscribers SET confirmed_at = NOW(), confirm_token_hash = NULL WHERE id = ?")
             ->execute([(int)$psc_row['id']]);
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[public_subscribe_confirm] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Potvrzení se nepodařilo.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Potvrzení se nepodařilo.');
     }
     exit;
 }
@@ -7393,9 +7202,7 @@ if ($action === 'public_unsubscribe') {
     $pu_input = json_decode(file_get_contents('php://input'), true) ?: [];
     $pu_token = trim((string)($pu_input['token'] ?? ''));
     if ($pu_token === '') {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí token.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí token.');
     }
     try {
         $stmt_pu = $pdo->prepare("DELETE FROM public_subscribers WHERE unsubscribe_token = ?");
@@ -7405,8 +7212,7 @@ if ($action === 'public_unsubscribe') {
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[public_unsubscribe] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Odhlášení se nepodařilo.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Odhlášení se nepodařilo.');
     }
     exit;
 }
@@ -7437,8 +7243,7 @@ if ($action === 'public_subscribers' || $action === 'delete_public_subscriber') 
         echo json_encode(['subscribers' => $ps_out], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[public_subscribers] ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Seznam odběratelů se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Seznam odběratelů se nepodařilo načíst.');
     }
     exit;
 }
@@ -7455,9 +7260,7 @@ if ($action === 'public_subscribers' || $action === 'delete_public_subscriber') 
  */
 if ($action === 'forgot_password') {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['error' => 'Použijte POST.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(405, 'Použijte POST.');
     }
 
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
@@ -7491,19 +7294,13 @@ if ($action === 'forgot_password') {
  */
 if ($action === 'setup') {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-        http_response_code(405);
-        echo json_encode(['error' => 'Použijte POST.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(405, 'Použijte POST.');
     }
 
     try {
         $user_count = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
         if ($user_count > 0) {
-            http_response_code(409);
-            echo json_encode([
-                'error' => 'Instalace už proběhla - účet existuje. Přihlaste se, nebo použijte obnovu hesla.',
-            ], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(409, 'Instalace už proběhla - účet existuje. Přihlaste se, nebo použijte obnovu hesla.');
         }
 
         $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
@@ -7512,16 +7309,10 @@ if ($action === 'setup') {
         $su_password = (string)($input['password'] ?? '');
 
         if ($su_username === '' || $su_email === '' || strlen($su_password) < 8) {
-            http_response_code(400);
-            echo json_encode([
-                'error' => 'Zadejte jméno, e-mail a heslo dlouhé aspoň 8 znaků.',
-            ], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'Zadejte jméno, e-mail a heslo dlouhé aspoň 8 znaků.');
         }
         if (!filter_var($su_email, FILTER_VALIDATE_EMAIL)) {
-            http_response_code(400);
-            echo json_encode(['error' => 'E-mail nemá platný tvar.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(400, 'E-mail nemá platný tvar.');
         }
 
         $stmt = $pdo->prepare("INSERT INTO users (username, email, role, password_hash) VALUES (?, ?, 'admin', ?)");
@@ -7545,8 +7336,7 @@ if ($action === 'setup') {
         echo json_encode(['success' => true, 'id' => $new_user_id, 'csrfToken' => bk_csrf_token()], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] setup selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Účet se nepodařilo založit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Účet se nepodařilo založit.');
     }
     exit;
 }
@@ -7573,9 +7363,7 @@ if ($action === 'export_csv') {
         $csv_monitor = $stmt_mon->fetch();
 
         if (!$csv_monitor) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Monitor nenalezen.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Monitor nenalezen.');
         }
 
         $stmt_logs = $pdo->prepare("
@@ -7619,8 +7407,7 @@ if ($action === 'export_csv') {
         fclose($out);
     } catch (PDOException $e) {
         error_log('[api] export_csv selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Export se nepodařilo sestavit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Export se nepodařilo sestavit.');
     }
     exit;
 }
@@ -7646,9 +7433,7 @@ if ($action === 'save_annotation') {
     bk_refuse_archived_write($pdo, $ann_monitor_id);
 
     if ($ann_monitor_id <= 0 || $ann_metric === '' || $ann_note === '' || $ann_ts === false) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí monitor, metrika, čas nebo text poznámky.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí monitor, metrika, čas nebo text poznámky.');
     }
 
     try {
@@ -7675,8 +7460,7 @@ if ($action === 'save_annotation') {
         echo json_encode(['success' => true, 'id' => $ann_new_id], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] save_annotation selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Poznámku se nepodařilo uložit.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Poznámku se nepodařilo uložit.');
     }
     exit;
 }
@@ -7729,8 +7513,7 @@ if ($action === 'annotations') {
         echo json_encode(['annotations' => $annotations], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] annotations selhaly: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Poznámky se nepodařilo načíst.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Poznámky se nepodařilo načíst.');
     }
     exit;
 }
@@ -7742,9 +7525,7 @@ if ($action === 'delete_annotation') {
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
     $ann_id = (int)($input['id'] ?? 0);
     if ($ann_id <= 0) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Chybí id poznámky.'], JSON_UNESCAPED_UNICODE);
-        exit;
+        bk_api_error(400, 'Chybí id poznámky.');
     }
 
     try {
@@ -7753,17 +7534,14 @@ if ($action === 'delete_annotation') {
         $stmt->execute([$ann_id]);
         $ann_row = $stmt->fetch();
         if (!$ann_row) {
-            http_response_code(404);
-            echo json_encode(['error' => 'Poznámka nenalezena.'], JSON_UNESCAPED_UNICODE);
-            exit;
+            bk_api_error(404, 'Poznámka nenalezena.');
         }
         $pdo->prepare("DELETE FROM metric_annotations WHERE id = ?")->execute([$ann_id]);
         bk_audit_log($pdo, 'annotation_deleted', mb_substr((string)$ann_row['note'], 0, 80), 'monitor', (int)$ann_row['monitor_id']);
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {
         error_log('[api] delete_annotation selhal: ' . $e->getMessage());
-        http_response_code(500);
-        echo json_encode(['error' => 'Poznámku se nepodařilo smazat.'], JSON_UNESCAPED_UNICODE);
+        bk_api_error(500, 'Poznámku se nepodařilo smazat.');
     }
     exit;
 }
@@ -7781,11 +7559,7 @@ if ($action === 'delete_annotation') {
  * not want to cut off whatever relies on it out there.
  */
 if ($action !== '') {
-    http_response_code(400);
-    echo json_encode([
-        'error' => sprintf('Neznámá akce „%s".', $action),
-    ], JSON_UNESCAPED_UNICODE);
-    exit;
+    bk_api_error(400, sprintf('Neznámá akce „%s".', $action));
 }
 
 // 6. Default JSON service overview from the DB

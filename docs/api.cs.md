@@ -119,7 +119,11 @@ i jméno operátora.
 
 Tělo chyby: `{"error": "Popis česky"}`. Endpointy agentů vracejí místo toho
 `{"success": false, "message": "…"}` - historický rozdíl, sjednocení by
-rozbilo nasazené agenty.
+rozbilo nasazené agenty. Každá chyba `5xx` z `api.php` se zapíše i do logu
+serveru i s akcí, a chybová odpověď, kterou nejde zakódovat do JSON (neplatné
+UTF-8), je `500` s chybou místo svého stavu s prázdným tělem. Většina
+úspěšných odpovědí pořád volá `json_encode()` sama a ta z nich, kterou nejde
+zakódovat, pořád přijde jako prázdná `200`.
 
 **Selhané čtení nikdy není prázdný úspěch.** Když selže dotaz za seznamem
 nebo souhrnem, odpověď je `500` s `{"error": "<kód>", "message": "<věta
