@@ -3,33 +3,37 @@ import { KeyRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { GithubIcon, GoogleIcon } from '@/components/ui/brand-icons';
 import { useLanguage } from '@/context/language-context';
+import { OAUTH_LABELS, oauthLabel, oauthProblemText, oauthStartUrl, readOauthOutcome } from '@/lib/oauth';
 import { SetupField, SetupNotice } from './setup-ui';
 
-const OAUTH_LABELS: Record<string, string> = {
-  github: 'GitHub',
-  google: 'Google',
-  discord: 'Discord',
-  gitlab: 'GitLab',
-};
+interface LoginSession {
+  providers: string[];
+  /** A sign-in passed its first step (password or OAuth) and waits for the 2FA code. */
+  pending2fa: boolean;
+}
 
 /**
- * The providers the login offers. The server lists the configured ones in
- * `action=session` (`oauthProviders`); a button for a provider without a
- * client ID only led to an error page (W2-12). A server that does not send
- * the list yet keeps the one button it always had.
+ * What the login page needs from `action=session`. The server lists the
+ * configured OAuth providers (`oauthProviders`); a button for a provider
+ * without a client ID only led to an error page (W2-12). A server that does
+ * not send the list yet keeps the one button it always had. `pending2fa`
+ * says a sign-in waits for its code - an OAuth sign-in lands here for it.
  */
-function useOauthProviders(): string[] {
-  const [providers, setProviders] = React.useState<string[]>([]);
+function useLoginSession(): LoginSession {
+  const [session, setSession] = React.useState<LoginSession>({ providers: [], pending2fa: false });
   React.useEffect(() => {
     let active = true;
     fetch('/status/api.php?action=session', { credentials: 'include' })
       .then((res) => res.json().catch(() => ({})))
       .then((data) => {
         if (!active) return;
-        const list = (data as { oauthProviders?: unknown }).oauthProviders;
-        if (Array.isArray(list))
-          setProviders(list.filter((p): p is string => typeof p === 'string' && p in OAUTH_LABELS));
-        else setProviders(['github']);
+        const { oauthProviders: list, pending2fa } = data as { oauthProviders?: unknown; pending2fa?: unknown };
+        setSession({
+          providers: Array.isArray(list)
+            ? list.filter((p): p is string => typeof p === 'string' && oauthLabel(p) !== null)
+            : ['github'],
+          pending2fa: pending2fa === true,
+        });
       })
       // No answer, no promise of a working provider.
       .catch(() => {});
@@ -37,7 +41,7 @@ function useOauthProviders(): string[] {
       active = false;
     };
   }, []);
-  return providers;
+  return session;
 }
 
 /** The sign-in form with 2FA, the forgotten-password request and the configured OAuth providers. */
@@ -50,10 +54,23 @@ export function LoginForm() {
   const [totpCode, setTotpCode] = React.useState('');
   const [require2FA, setRequire2FA] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState('');
+  // An OAuth round trip that did not sign in comes back here and says why.
+  const [error, setError] = React.useState(() => {
+    const outcome = readOauthOutcome(window.location.search);
+    return outcome?.problem ? oauthProblemText(outcome.problem, outcome.provider, t) : '';
+  });
   const [success, setSuccess] = React.useState('');
   const [showForgot, setShowForgot] = React.useState(false);
-  const providers = useOauthProviders();
+  const [otherWay, setOtherWay] = React.useState(false);
+  const { providers, pending2fa } = useLoginSession();
+  const codeOnly = pending2fa && !otherWay;
+
+  const signedIn = () => {
+    setSuccess(t('setup.login_success', 'Přihlášení úspěšné! Přesměrovávám na dashboard...'));
+    setTimeout(() => {
+      window.location.href = bk_after_login_target();
+    }, 800);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,10 +100,7 @@ export function LoginForm() {
           data.message || t('setup.login_failed', 'Přihlášení selhalo. Zkontrolujte své přihlašovací údaje.')
         );
       }
-      setSuccess(t('setup.login_success', 'Přihlášení úspěšné! Přesměrovávám na dashboard...'));
-      setTimeout(() => {
-        window.location.href = bk_after_login_target();
-      }, 800);
+      signedIn();
     } catch (err) {
       setError(
         err instanceof Error && err.message
@@ -97,6 +111,86 @@ export function LoginForm() {
       setLoading(false);
     }
   };
+
+  // The code alone, for a sign-in the session already holds (action=login_2fa).
+  const submitCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    setSuccess('');
+    try {
+      const res = await fetch('/status/api.php?action=login_2fa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ totp_code: totpCode }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.success) {
+        throw new Error(
+          data.message || t('setup.login_failed', 'Přihlášení selhalo. Zkontrolujte své přihlašovací údaje.')
+        );
+      }
+      signedIn();
+    } catch (err) {
+      setError(
+        err instanceof Error && err.message
+          ? err.message
+          : t('setup.login_failed', 'Přihlášení selhalo. Zkontrolujte své přihlašovací údaje.')
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // No numeric keypad: a recovery code (xxxxx-xxxxx) has letters.
+  const codeField = (
+    <SetupField
+      label={t('setup.totp_code_label', 'Ověřovací kód 2FA')}
+      autoFocus
+      autoComplete="one-time-code"
+      value={totpCode}
+      onChange={(e) => setTotpCode(e.target.value.replace(/\s+/g, ''))}
+      placeholder="123456"
+      maxLength={11}
+      className="[&_input]:text-center [&_input]:text-lg [&_input]:font-bold [&_input]:tracking-[0.2em]"
+      hint={t('setup.totp_hint', 'Zadejte aktuální 6místný kód vygenerovaný v mobilní aplikaci.')}
+    />
+  );
+
+  if (codeOnly) {
+    return (
+      <div className="space-y-4">
+        <p className="text-muted-foreground text-sm">
+          {t(
+            'setup.pending_2fa_hint',
+            'Přihlášení čeká na kód dvoufázového ověření. Zadejte kód z autentikační aplikace, nebo jeden ze záložních kódů.'
+          )}
+        </p>
+        {error && <SetupNotice tone="error">{error}</SetupNotice>}
+        {success && <SetupNotice tone="success">{success}</SetupNotice>}
+        <form onSubmit={submitCode} className="space-y-4">
+          {codeField}
+          <Button type="submit" variant="primary" size="lg" disabled={loading || !totpCode} className="w-full">
+            {loading
+              ? t('setup.verifying', 'Ověřuji údaje...')
+              : t('setup.confirm_2fa', 'Potvrdit 2FA kód a přihlásit se')}
+          </Button>
+        </form>
+        <button
+          type="button"
+          onClick={() => {
+            setOtherWay(true);
+            setTotpCode('');
+            setError('');
+          }}
+          className="text-link w-full text-center text-xs underline-offset-4 hover:underline"
+        >
+          {t('setup.pending_2fa_other', 'Přihlásit se jinak')}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -133,20 +227,7 @@ export function LoginForm() {
             </button>
           }
         />
-        {(require2FA || totpCode) && (
-          <SetupField
-            label={t('setup.totp_code_label', 'Ověřovací kód 2FA')}
-            autoFocus
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            value={totpCode}
-            onChange={(e) => setTotpCode(e.target.value.replace(/\s+/g, ''))}
-            placeholder="123456"
-            maxLength={11}
-            className="[&_input]:text-center [&_input]:text-lg [&_input]:font-bold [&_input]:tracking-[0.2em]"
-            hint={t('setup.totp_hint', 'Zadejte aktuální 6místný kód vygenerovaný v mobilní aplikaci.')}
-          />
-        )}
+        {(require2FA || totpCode) && codeField}
         <Button type="submit" variant="primary" size="lg" disabled={loading} className="w-full">
           {loading
             ? t('setup.verifying', 'Ověřuji údaje...')
@@ -165,7 +246,7 @@ export function LoginForm() {
             const Icon = key === 'github' ? GithubIcon : key === 'google' ? GoogleIcon : KeyRound;
             return (
               <Button key={key} asChild variant="outline" className="w-full">
-                <a href={`/status/admin.php?login_oauth=${key}`}>
+                <a href={oauthStartUrl(key)}>
                   <Icon className="size-4" />
                   {t('setup.oauth_with', { provider: OAUTH_LABELS[key] }, `Přihlásit se přes ${OAUTH_LABELS[key]}`)}
                 </a>

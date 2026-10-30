@@ -5,7 +5,7 @@ import { requestSessionRecheck } from './session-recheck';
  * Actions whose 401 is an answer about credentials (a wrong password, an
  * expired e-mail link), not a sign that the signed-in session is gone.
  */
-const AUTH_ACTIONS = /action=(session|login|logout|setup|set_password|forgot_password|totp_[a-z_]+)\b/;
+const AUTH_ACTIONS = /action=(session|login|login_2fa|logout|setup|set_password|forgot_password|totp_[a-z_]+)\b/;
 
 /**
  * Global fetch wrapper: every POST to api.php carries the session's CSRF

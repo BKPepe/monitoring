@@ -167,7 +167,7 @@ function bk_api_error(int $status, string $message, array $extra = []): never {
  * Keeping that list correct is not left to memory - run_session_lock_lint.php
  * re-derives it from the code and fails the build when the two disagree.
  */
-$bk_session_writers = ['login', 'logout', 'setup', 'totp_setup', 'totp_confirm'];
+$bk_session_writers = ['login', 'login_2fa', 'oauth_start', 'oauth_callback', 'logout', 'setup', 'totp_setup', 'totp_confirm'];
 if (!in_array($action, $bk_session_writers, true) && session_status() === PHP_SESSION_ACTIVE) {
     session_write_close();
 }
@@ -195,10 +195,10 @@ $bk_post_only_actions = [
     'router_recommendation_mute', 'wan_settings_save',
     'delete_public_subscriber',
     // these establish the session / authenticate by other means than the cookie - POST yes, CSRF no
-    'login', 'logout', 'setup', 'forgot_password', 'set_password',
+    'login', 'login_2fa', 'logout', 'setup', 'forgot_password', 'set_password',
     'public_subscribe', 'public_subscribe_confirm', 'public_unsubscribe',
 ];
-$bk_csrf_exempt = ['login', 'logout', 'setup', 'forgot_password', 'set_password',
+$bk_csrf_exempt = ['login', 'login_2fa', 'logout', 'setup', 'forgot_password', 'set_password',
     'public_subscribe', 'public_subscribe_confirm', 'public_unsubscribe'];
 // alerts_read_state and dashboard_layout are GET read + POST write in one action.
 $bk_csrf_on_post = array_merge(
@@ -279,6 +279,10 @@ if ($action === 'session') {
         'csrfToken' => $_SESSION['csrf_token'] ?? null,
         'loginUrl' => '/app/setup',
         'oauthProviders' => $oauth_providers,
+        // A sign-in that passed its first step (the password, or an OAuth
+        // provider) and waits for the 2FA code: the login page asks for the
+        // code alone and sends it to action=login_2fa.
+        'pending2fa' => !$is_logged_in && !empty($_SESSION['pending_2fa_user_id']),
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -331,15 +335,123 @@ if ($action === 'login') {
         exit;
     }
 
-    echo json_encode([
+    bk_api_signed_in($user, $login_recovery_left);
+}
+
+/**
+ * The answer of a completed sign-in (action=login, action=login_2fa): the
+ * account and the CSRF token of the session it now has.
+ * recoveryCodesRemaining is a number only when a recovery code signed it in,
+ * so the app can say how many one-time codes are left.
+ */
+function bk_api_signed_in(array $user, ?int $recovery_left): never {
+    bk_api_json([
         'success' => true,
         'authenticated' => true,
         'user' => ['id' => (int)$user['id'], 'username' => $user['username'], 'email' => $user['email'] ?? '', 'role' => $user['role']],
         'csrfToken' => bk_csrf_token(),
-        // Present only when a recovery code signed this login in - the client
-        // should tell the user how many one-time codes are left.
-        'recoveryCodesRemaining' => $login_recovery_left,
-    ], JSON_UNESCAPED_UNICODE);
+        'recoveryCodesRemaining' => $recovery_left,
+    ]);
+}
+
+// 1b2. The 2FA code of a sign-in the session is waiting on. Its first step
+// was the password (action=login answered requires2fa, or admin.php's form) or
+// an OAuth provider (oauth_callback sent the browser to /app/setup). Until a
+// code is accepted the session holds only the account id, never a sign-in; a
+// recovery code works in place of the TOTP code, and a wrong one counts
+// towards the lockout like a wrong password.
+if ($action === 'login_2fa') {
+    $l2_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $l2_code = trim((string)($l2_input['totp_code'] ?? ''));
+    $l2_user = false;
+    if (!empty($_SESSION['pending_2fa_user_id'])) {
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+        $stmt->execute([(int)$_SESSION['pending_2fa_user_id']]);
+        $l2_user = $stmt->fetch();
+    }
+    if (!$l2_user || empty($l2_user['totp_enabled'])) {
+        // Nothing waits, or the account is gone or no longer has 2FA: the
+        // sign-in starts again from its first step.
+        unset($_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_via']);
+        bk_api_json(['success' => false, 'message' => 'No sign-in is waiting for a code. Sign in again.'], 401);
+    }
+    $lockout_secs = bk_login_lockout_seconds($pdo, $l2_user['username']);
+    if ($lockout_secs > 0) {
+        bk_api_json(['success' => false, 'message' => 'Too many failed attempts. Try again in ' . ceil($lockout_secs / 60) . ' min.'], 429);
+    }
+    $l2_second = bk_login_second_factor($pdo, $l2_user, $l2_code);
+    if (!$l2_second['ok']) {
+        bk_audit_log($pdo, 'login_failed', 'Invalid 2FA code', null, null, $l2_user['id'], $l2_user['username']);
+        bk_api_json(['success' => false, 'message' => 'Invalid 2FA code.'], 401);
+    }
+    // The audit names the first step: a session pending from before that
+    // was recorded could only have come through the password.
+    bk_login_start_session($pdo, $l2_user, ($_SESSION['pending_2fa_via'] ?? 'Password') . ' + 2FA');
+    bk_api_signed_in($l2_user, $l2_second['recovery_left']);
+}
+
+// 1b3. OAuth sign-in and account linking, a browser navigation in both steps.
+//
+// oauth_start (?provider=github|google|discord|gitlab, &link=1 to link the
+// provider to the signed-in account) sends the browser to the provider with a
+// fresh state. The provider answers at admin.php, the callback URL every
+// provider has registered, which forwards here to oauth_callback. Both end in
+// /app: the dashboard, the profile after a link, or the login page, which asks
+// for the 2FA code of a pending sign-in or names what went wrong
+// (bk_oauth_problem_url). Nothing here answers JSON.
+//
+// The identity is only ever the provider's immutable account id
+// (oauth_provider + oauth_id), never the e-mail. Sign-in used to match the
+// e-mail GitHub returned, and an admin can quietly change any user's e-mail,
+// so changing a stranger's address and signing in with one's own OAuth
+// account would have taken that account over. oauth_id is written only here,
+// after a link the account's owner started while signed in and is still
+// signed in to finish (bk_oauth_finish).
+if ($action === 'oauth_start') {
+    $os_provider = (string)($_GET['provider'] ?? '');
+    $os_link = !empty($_GET['link']);
+    if ($os_link && empty($_SESSION['admin_logged_in'])) {
+        // The session ended before the link: sign in first, then the profile.
+        header('Location: ' . bk_setup_url() . '?' . http_build_query(['next' => '/profile']));
+        exit;
+    }
+    $os_url = bk_oauth_authorize_url($os_provider, $os_link ? (int)$_SESSION['admin_id'] : null);
+    header('Location: ' . ($os_url ?? bk_oauth_problem_url('unavailable', $os_provider, $os_link)));
+    exit;
+}
+
+if ($action === 'oauth_callback') {
+    $oc_link = isset($_SESSION['oauth_link_user_id']) ? (int)$_SESSION['oauth_link_user_id'] : null;
+    $oc_expected = (string)($_SESSION['oauth_state'] ?? '');
+    $oc_provider = (string)($_SESSION['oauth_provider'] ?? '');
+    $oc_state = is_string($_GET['state'] ?? null) ? $_GET['state'] : '';
+    $oc_code = is_string($_GET['code'] ?? null) ? $_GET['code'] : '';
+    // A state this session did not issue is a forged or replayed answer (or a
+    // stale tab). It leaves the session's own state alone, so the round trip
+    // the session did start can still finish.
+    if ($oc_expected === '' || !hash_equals($oc_expected, $oc_state)
+        || !isset(bk_oauth_providers()[$oc_provider])) {
+        header('Location: ' . bk_oauth_problem_url('state', $oc_provider, $oc_link !== null));
+        exit;
+    }
+    unset($_SESSION['oauth_state'], $_SESSION['oauth_provider'], $_SESSION['oauth_link_user_id']);
+    if ($oc_code === '') {
+        // The provider answered with an error instead of a code: the person
+        // cancelled at the provider (access_denied), or it refused the request.
+        // Anyone holding a state can write that error, so the log gets it as
+        // printable ASCII: a newline in it would start a line of their own.
+        $oc_error = is_string($_GET['error'] ?? null) ? $_GET['error'] : '';
+        error_log('[oauth] ' . $oc_provider . ' answered without a code: ' . bk_api_printable($oc_error));
+        header('Location: ' . bk_oauth_problem_url($oc_error === 'access_denied' ? 'denied' : 'provider', $oc_provider, $oc_link !== null));
+        exit;
+    }
+    $oc_identity = bk_oauth_fetch_identity($oc_provider, $oc_code, bk_oauth_redirect_uri());
+    if (!$oc_identity['ok']) {
+        error_log('[oauth] ' . $oc_provider . ': ' . $oc_identity['error']);
+        header('Location: ' . bk_oauth_problem_url('provider', $oc_provider, $oc_link !== null));
+        exit;
+    }
+    header('Location: ' . bk_oauth_finish($pdo, $oc_provider, (string)$oc_identity['id'], $oc_link));
     exit;
 }
 

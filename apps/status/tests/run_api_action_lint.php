@@ -29,7 +29,7 @@ if ($api_src === false) {
 }
 
 /** Actions api.php handles (`$action === 'x'`, compound conditions included). */
-preg_match_all("/\\\$action === '([a-z_]+)'/", $api_src, $m);
+preg_match_all("/\\\$action === '([a-z0-9_]+)'/", $api_src, $m);
 $known = array_unique($m[1] ?? []);
 sort($known);
 
@@ -89,7 +89,7 @@ foreach ($files as $file) {
         $hits = [];
 
         // 1. A direct address: api.php?action=…, admin.php?action=… etc.
-        if (preg_match_all('/(\w+)\.php\?action=([a-z_]+)/', $line, $direct, PREG_SET_ORDER)) {
+        if (preg_match_all('/(\w+)\.php\?action=([a-z0-9_]+)/', $line, $direct, PREG_SET_ORDER)) {
             foreach ($direct as $d) {
                 if ($d[1] === 'api') {
                     $hits[] = $d[2];
@@ -101,14 +101,14 @@ foreach ($files as $file) {
         // the URL dynamically (`?action=${action}`), so pattern 1 misses them. This
         // tudy proklouzlo save_user/delete_user - klient je volal, api.php je
         // never knew, the unknown action returned 200 and the UI reported a nonexistent success.
-        if (preg_match_all("/(?:request|mutate)(?:<[^>]*>)?\(\s*'([a-z_]+)'/", $line, $helper_calls)) {
+        if (preg_match_all("/(?:request|mutate)(?:<[^>]*>)?\(\s*'([a-z0-9_]+)'/", $line, $helper_calls)) {
             foreach ($helper_calls[1] as $hc) {
                 $hits[] = $hc;
             }
         }
 
         // 2. Via the constant: `${API_BASE}?action=…`
-        if ($base_is_api && preg_match_all('/API_BASE\}\?action=([a-z_]+)/', $line, $viabase)) {
+        if ($base_is_api && preg_match_all('/API_BASE\}\?action=([a-z0-9_]+)/', $line, $viabase)) {
             foreach ($viabase[1] as $a) {
                 $hits[] = $a;
             }

@@ -58,10 +58,32 @@ Session state: `GET /status/api.php?action=session`.
 
 An account with two-factor gets the same second step after the password and
 after an OAuth provider. `action=login` answers `requires2fa` and wants
-`totp_code` (the TOTP code or a recovery code) with the password again; an
-OAuth sign-in (`admin.php?login_oauth=`) stops at the code form of admin.php.
-Until a code is accepted the session holds only the pending account, never a
-sign-in.
+`totp_code` (the TOTP code or a recovery code) with the password again. Until
+a code is accepted the session holds only the pending account, never a
+sign-in, and `action=session` says `pending2fa: true`; `POST
+action=login_2fa` with `{"totp_code": "…"}` alone then finishes it. It
+answers like `action=login`: 401 for a wrong code (it counts towards the
+lockout) or when nothing waits, 429 while the account is locked.
+
+OAuth sign-in is a browser navigation, not a call: `GET
+/status/api.php?action=oauth_start&provider=github` (or `google`, `discord`,
+`gitlab`; `&link=1` links the provider to the signed-in account instead)
+sends the browser to the provider. The provider answers at `admin.php`, the
+callback URL registered with it, which forwards to `action=oauth_callback`.
+That ends in /app: `/app/` when signed in, `/app/setup` when the account
+waits for its 2FA code, `/app/profile?oauth=linked` after a link. A round trip
+that did not finish goes to `/app/setup` (or `/app/profile` for a link) with
+`oauth_error` = `state` (an answer this session did not start), `unavailable`
+(no client ID), `denied` (cancelled at the provider), `provider` (the
+provider did not confirm the account), `not_linked` (no account has linked
+this identity) or `link_session` (the account that started the link is no
+longer the one signed in, so nothing was linked), and `provider`.
+`link_session` comes to the profile only while the session is still signed
+in; a session whose account was deleted meanwhile is no longer, and gets it
+on `/app/setup`. A sign-in or a sign-out drops a round trip the session had
+started, and its answer gets `state`. /app is the one next to the
+`/status` directory, so an install under a subdirectory stays in it. The old
+`admin.php?login_oauth=` and `?link_oauth=` links forward to `oauth_start`.
 
 ### Who sees which monitor
 
@@ -461,8 +483,9 @@ and a lint guards it (`run_api_action_lint.php`).
 real email of the logged-in user - it used to return a hardcoded
 `admin@bloodkings.eu` regardless of who was signed in. `oauthProviders` lists the
 keys of the OAuth providers that have a client ID set (`github`, `google`,
-`discord`; `[]` = none), so the login page draws only buttons that work. The
-client ID itself is never sent.
+`discord`, `gitlab`; `[]` = none), so the login page draws only buttons that
+work. The client ID itself is never sent. `pending2fa` is `true` while a
+sign-in waits for its 2FA code (`action=login_2fa`).
 
 ---
 
@@ -973,6 +996,7 @@ LTE backup; that figure is real, it is just not the line speed.
 | `action=save_user` / `delete_user` | admin | User management for the React app (create sends the invite e-mail, delete refuses the own account; `monitorIds` sets which monitors a `user` account sees - omitted keeps the assignment, `[]` clears it, unknown ids are dropped); before 2026-08 these existed only as admin.php form handlers and the React page's calls hit "unknown action" |
 | `action=my_profile` / `update_profile` | logged in | Own profile: contacts, notification channels, e-mail language, password change (requires the current password) |
 | `action=oauth_unlink` | logged in | Unlink the OAuth sign-in (requires the current password) |
+| `action=oauth_start` / `oauth_callback` | public, link: logged in | OAuth sign-in and linking as a browser navigation that ends in /app (see Authentication) |
 | `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | logged in | Two-factor enrollment: the secret stays in the session until a code confirms it; confirming returns ten one-time recovery codes (hashes only are stored, shown exactly once); a recovery code works in place of the TOTP code at login and is consumed; regenerating a set and disabling both require the password |
 | `action=set_password` | public (one-time token) | Set a password from an invite or reset e-mail; the token is consumed on first success |
 
@@ -1219,10 +1243,17 @@ a probe's `down` can give it.
 Since 2026-08 every state-changing action accepts **POST only** (GET gets 405)
 and every session-authenticated write must carry the session's CSRF token in
 the `X-CSRF-Token` header (multipart forms may send a `csrf_token` field
-instead). The token comes back from `action=login` and `action=session`.
+instead). The token comes back from `action=login`, `action=login_2fa` and
+`action=session`; every sign-in leaves one in the session, an OAuth one too.
 Token-authenticated flows (`set_password`) and session-establishing ones
-(`login`, `setup`, `forgot_password`, `logout`) are exempt. CORS reflects
-only the site's own origin - a foreign origin gets no
+(`login`, `login_2fa`, `setup`, `forgot_password`, `logout`) are exempt. Two
+actions write the session on a GET. `oauth_start` puts a fresh `state`, the
+provider and the account a link is for in the session, replacing a round
+trip already started; like any link it can be opened from another site. The
+provider sends the browser back to `oauth_callback`, which signs in or links
+the provider to the account; the single-use `state` of the session's own
+`oauth_start` guards it instead of the token (see Authentication). CORS
+reflects only the site's own origin - a foreign origin gets no
 `Access-Control-Allow-Origin` at all.
 
 The session cookie is `HttpOnly` and `SameSite=Lax`, and `Secure` over HTTPS.

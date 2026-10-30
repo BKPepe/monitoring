@@ -29,106 +29,31 @@ if (isset($_GET['action']) && $_GET['action'] === 'set_password') {
     exit;
 }
 
-// OAuth SSO přihlášení - start flow pro libovolného nakonfigurovaného
-// poskytovatele (github/google/discord/gitlab, viz bk_oauth_providers()).
-if (isset($_GET['login_oauth']) && array_key_exists($_GET['login_oauth'], bk_oauth_providers())) {
-    $oauth_provider_key = $_GET['login_oauth'];
-    $oauth_cfg = bk_oauth_providers()[$oauth_provider_key];
-    $client_id = get_setting('oauth_' . $oauth_provider_key . '_client_id');
-    if (!empty($client_id)) {
-        $state = bin2hex(random_bytes(16));
-        $_SESSION['oauth_state'] = $state;
-        $_SESSION['oauth_provider'] = $oauth_provider_key;
-        unset($_SESSION['oauth_link_user_id']);
-        $authorize_url = $oauth_cfg['authorize_url'] . '?' . http_build_query([
-            'client_id' => $client_id,
-            'redirect_uri' => bk_current_admin_url(),
-            'scope' => $oauth_cfg['scope'],
-            'state' => $state,
-            'response_type' => 'code',
-        ]);
-        header('Location: ' . $authorize_url);
-        exit;
-    }
-}
-
-// Propojení OAuth účtu k JIŽ přihlášenému účtu (Profil) - na rozdíl od
-// login_oauth výše se tu netvrdí nic o totožnosti, jen se k aktuální session
-// přidá oauth_provider/oauth_id. Vyžaduje aktivní session (kontrola stejná
-// jako $is_logged_in níže, ale ta se počítá až pod tímhle blokem).
-if (isset($_GET['link_oauth']) && array_key_exists($_GET['link_oauth'], bk_oauth_providers()) && !empty($_SESSION['admin_logged_in'])) {
-    $oauth_provider_key = $_GET['link_oauth'];
-    $oauth_cfg = bk_oauth_providers()[$oauth_provider_key];
-    $client_id = get_setting('oauth_' . $oauth_provider_key . '_client_id');
-    if (!empty($client_id)) {
-        $state = bin2hex(random_bytes(16));
-        $_SESSION['oauth_state'] = $state;
-        $_SESSION['oauth_provider'] = $oauth_provider_key;
-        $_SESSION['oauth_link_user_id'] = $_SESSION['admin_id'];
-        $authorize_url = $oauth_cfg['authorize_url'] . '?' . http_build_query([
-            'client_id' => $client_id,
-            'redirect_uri' => bk_current_admin_url(),
-            'scope' => $oauth_cfg['scope'],
-            'state' => $state,
-            'response_type' => 'code',
-        ]);
-        header('Location: ' . $authorize_url);
-        exit;
-    }
-}
-
-// OAuth callback (sdílený pro login i propojení účtu, viz oauth_link_user_id).
-// Identita se ověřuje výhradně přes neměnné ID účtu u poskytovatele
-// (oauth_provider + oauth_id), nikdy přes e-mail. Dřív se přihlášení matchovalo
-// podle e-mailu z GitHub API - jenže e-mail je pole, které admin může komukoliv
-// tiše přepsat v editaci uživatele (viz audit log u user_updated), takže by šlo
-// změnou e-mailu cizího účtu a přihlášením přes vlastní OAuth ten účet převzít.
-// oauth_id se nastavuje jen tady, jen po výslovném propojení vlastníkem účtu.
-if (isset($_GET['code']) && isset($_GET['state'])) {
-    if (!isset($_SESSION['oauth_state']) || $_GET['state'] !== $_SESSION['oauth_state']) {
-        $login_error = 'Neplatný stav OAuth (CSRF ochrana).';
-    } else {
-        unset($_SESSION['oauth_state']);
-        $oauth_provider_key = $_SESSION['oauth_provider'] ?? '';
-        unset($_SESSION['oauth_provider']);
-        $oauth_link_user_id = $_SESSION['oauth_link_user_id'] ?? null;
-        unset($_SESSION['oauth_link_user_id']);
-
-        $providers = bk_oauth_providers();
-        if (empty($oauth_provider_key) || !isset($providers[$oauth_provider_key])) {
-            $login_error = 'Neplatný OAuth požadavek (neznámý poskytovatel).';
-        } else {
-            $identity = bk_oauth_fetch_identity($oauth_provider_key, $_GET['code'], bk_current_admin_url());
-            $provider_label = $providers[$oauth_provider_key]['label'];
-
-            if (!$identity['ok']) {
-                $login_error = $provider_label . ' OAuth: ' . $identity['error'];
-            } elseif ($oauth_link_user_id) {
-                // Propojení - jen zapsat oauth_provider/oauth_id k účtu, co je
-                // právě přihlášený (dokázal to heslem/OAuth předtím).
-                $stmt = $pdo->prepare("UPDATE users SET oauth_provider = ?, oauth_id = ? WHERE id = ?");
-                $stmt->execute([$oauth_provider_key, $identity['id'], $oauth_link_user_id]);
-                bk_audit_log($pdo, 'oauth_linked', $provider_label, 'user', $oauth_link_user_id, $oauth_link_user_id, $_SESSION['admin_username'] ?? null);
-                header('Location: admin.php#profile-section');
-                exit;
-            } else {
-                // Login - hledá se výhradně podle (provider, oauth_id).
-                // An account with 2FA is not signed in here: it waits for its
-                // code on the form below, the same step as after the password.
-                if (bk_oauth_login($pdo, $oauth_provider_key, $identity['id']) !== 'no_account') {
-                    // Signed in, or the code form - either way on a clean URL,
-                    // so a reload does not replay the spent code and state.
-                    header('Location: admin.php');
-                    exit;
-                }
-                $login_error = 'Tenhle ' . htmlspecialchars($provider_label) . ' účet není propojený s žádným uživatelem. Přihlaste se heslem a propojte ho v Profilu.';
-            }
+// OAuth sign-in and account linking run in api.php (oauth_start and
+// oauth_callback) and end in /app. admin.php stays the callback URL every
+// provider has registered, so GitHub, Google, Discord and GitLab need no new
+// registration: the provider's answer goes on to api.php with its query, and
+// so do the old start links (?login_oauth=, ?link_oauth=).
+if (isset($_GET['state']) && (isset($_GET['code']) || isset($_GET['error']))) {
+    $oauth_forward = [];
+    foreach (['code', 'state', 'error'] as $oauth_key) {
+        if (isset($_GET[$oauth_key]) && is_string($_GET[$oauth_key])) {
+            $oauth_forward[$oauth_key] = $_GET[$oauth_key];
         }
     }
+    header('Location: api.php?action=oauth_callback&' . http_build_query($oauth_forward));
+    exit;
+}
+if (isset($_GET['login_oauth']) || isset($_GET['link_oauth'])) {
+    $oauth_link = isset($_GET['link_oauth']);
+    $oauth_provider = $oauth_link ? $_GET['link_oauth'] : $_GET['login_oauth'];
+    header('Location: api.php?action=oauth_start&' . http_build_query(
+        ['provider' => is_string($oauth_provider) ? $oauth_provider : ''] + ($oauth_link ? ['link' => 1] : [])));
+    exit;
 }
 
-// Zpracování přihlášení (chybu z OAuth callbacku výše nesmíme přepsat)
-$login_error = $login_error ?? '';
+// Zpracování přihlášení
+$login_error = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
     if (!empty($_POST['csrf_token'])) {
         bk_csrf_check();
@@ -166,8 +91,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
 // Krok 2 přihlášení s 2FA - ověření 6místného kódu proti účtu, co už prošel
 // heslem v kroku výše (pending_2fa_user_id). Samostatný POST handler, protože
 // přihlašovací formulář teď v tomhle kroku posílá jen kód, ne username/password.
-// The OAuth callback above ends here too, and a recovery code works in place
-// of the TOTP code, as at api.php's action=login.
+// A recovery code works in place of the TOTP code, as at api.php's
+// action=login. An OAuth sign-in waits for its code in /app (login_2fa).
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_login_code'])) {
     bk_csrf_check();
     $pending_user_id = $_SESSION['pending_2fa_user_id'] ?? 0;
@@ -2364,7 +2289,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         <h3 style="font-size: 0.9rem; color: var(--color-red); margin: 1.5rem 0 1rem 0; text-transform: uppercase;">Přihlášení přes OAuth (SSO)</h3>
                         <small style="font-size: 0.75rem; color: var(--text-muted); display: block; margin-bottom: 0.75rem;">
                             OAuth přihlášení funguje jen pro účty, které si ho samy propojily v Profilu (heslem ověřená akce) - nikdy nejde založit nový účet ani se přihlásit k cizímu jen tím, že se sedí na stejném e-mailu.
-                            Jako Authorization/Redirect callback URL u každého poskytovatele zadejte <code><?php echo htmlspecialchars(bk_current_admin_url()); ?></code>.
+                            Jako Authorization/Redirect callback URL u každého poskytovatele zadejte <code><?php echo htmlspecialchars(bk_oauth_redirect_uri()); ?></code>.
                         </small>
                         <?php foreach (bk_oauth_providers() as $op_key => $op_cfg): ?>
                         <div class="form-row">

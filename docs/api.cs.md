@@ -59,9 +59,31 @@ Stav relace: `GET /status/api.php?action=session`.
 
 Účet s dvoufázovým ověřením dostane stejný druhý krok po hesle i po OAuth
 poskytovateli. `action=login` odpoví `requires2fa` a chce `totp_code` (TOTP
-kód nebo záložní kód) spolu s heslem znovu; přihlášení přes OAuth
-(`admin.php?login_oauth=`) se zastaví na formuláři s kódem v admin.php. Dokud
-kód neprojde, session drží jen čekající účet, nikdy přihlášení.
+kód nebo záložní kód) spolu s heslem znovu. Dokud kód neprojde, session drží
+jen čekající účet, nikdy přihlášení, a `action=session` říká `pending2fa:
+true`; přihlášení pak dokončí `POST action=login_2fa` jen s `{"totp_code":
+"…"}`. Odpovídá jako `action=login`: 401 na špatný kód (počítá se do
+zámku) nebo když nic nečeká, 429, dokud je účet zamčený.
+
+Přihlášení přes OAuth je navigace prohlížeče, ne volání: `GET
+/status/api.php?action=oauth_start&provider=github` (nebo `google`,
+`discord`, `gitlab`; `&link=1` místo toho propojí poskytovatele
+s přihlášeným účtem) pošle prohlížeč k poskytovateli. Ten odpoví na
+`admin.php`, adresu zaregistrovanou u něj, a admin.php to přepošle na
+`action=oauth_callback`. To končí v /app: `/app/` po přihlášení, `/app/setup`,
+když účet čeká na kód 2FA, `/app/profile?oauth=linked` po propojení. Cesta,
+která nedoběhla, vede na `/app/setup` (u propojení na `/app/profile`)
+s `oauth_error` = `state` (odpověď, kterou tahle session nezačala),
+`unavailable` (chybí client ID), `denied` (zrušeno u poskytovatele),
+`provider` (poskytovatel účet nepotvrdil), `not_linked` (tuhle identitu
+nemá propojenou žádný účet) nebo `link_session` (účet, který propojení
+začal, už není ten přihlášený, takže se nic nepropojilo) a s `provider`.
+`link_session` vede na profil, jen dokud je session pořád přihlášená; když
+její účet mezitím někdo smazal, už přihlášená není a vede na `/app/setup`.
+Přihlášení i odhlášení zahodí cestu, kterou session předtím začala, a odpověď
+na ni dostane `state`. /app je ta vedle
+adresáře `/status`, takže instalace v podadresáři v něm zůstane. Staré odkazy
+`admin.php?login_oauth=` a `?link_oauth=` přeposílají na `oauth_start`.
 
 ### Kdo vidí který monitor
 
@@ -453,8 +475,9 @@ jako úspěch. **Dnes neznámá akce vrací 400** a hlídá to lint
 skutečný e-mail přihlášeného - dřív se vracelo natvrdo `admin@bloodkings.eu`
 bez ohledu na to, kdo je přihlášený. `oauthProviders` vyjmenuje klíče
 poskytovatelů OAuth, kteří mají nastavené client ID (`github`, `google`,
-`discord`; `[]` = žádný), takže přihlašovací stránka kreslí jen funkční
-tlačítka. Samotné client ID se nikdy neposílá.
+`discord`, `gitlab`; `[]` = žádný), takže přihlašovací stránka kreslí jen
+funkční tlačítka. Samotné client ID se nikdy neposílá. `pending2fa` je
+`true`, dokud přihlášení čeká na kód 2FA (`action=login_2fa`).
 
 ---
 
@@ -953,6 +976,7 @@ LTE zálohu; to číslo je skutečné, jen to není rychlost linky.
 | `action=save_user` / `delete_user` | admin | Správa uživatelů pro React (vytvoření posílá pozvánkový e-mail, smazání odmítne vlastní účet; `monitorIds` určuje, které monitory účet `user` vidí - vynechané pole přiřazení zachová, `[]` ho zruší, neexistující id se zahodí); do 2026-08 existovaly jen jako formulářové handlery v admin.php a volání z Reactu končila na „neznámé akci" |
 | `action=my_profile` / `update_profile` | přihlášený | Vlastní profil: kontakty, kanály notifikací, jazyk e-mailů, změna hesla (vyžaduje stávající heslo) |
 | `action=oauth_unlink` | přihlášený | Odpojení OAuth přihlašování (vyžaduje stávající heslo) |
+| `action=oauth_start` / `oauth_callback` | veřejné, propojení: přihlášený | Přihlášení a propojení přes OAuth jako navigace prohlížeče, která končí v /app (viz Autentizace) |
 | `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | přihlášený | Zapnutí dvoufázového ověření: tajemství žije v session, dokud ho kód nepotvrdí; potvrzení vrací deset jednorázových záložních kódů (ukládají se jen hashe, zobrazí se právě jednou); záložní kód funguje při přihlášení místo TOTP kódu a spotřebuje se; nová sada i vypnutí vyžadují heslo |
 | `action=set_password` | veřejné (jednorázový token) | Nastavení hesla z pozvánky nebo resetu; token se spotřebuje prvním úspěchem |
 
@@ -1194,10 +1218,17 @@ výpadku, který potvrdil cron; `down` sondy ho dát může.
 Od 2026-08 každá stav měnící akce přijímá **jen POST** (GET dostane 405)
 a každý session-autentizovaný zápis musí nést CSRF token session v hlavičce
 `X-CSRF-Token` (multipart formuláře mohou poslat pole `csrf_token`). Token
-vrací `action=login` a `action=session`. Tokenem autentizované toky
-(`set_password`) a akce session teprve zakládající (`login`, `setup`,
-`forgot_password`, `logout`) jsou vyjmuté. CORS odráží jen vlastní origin -
-cizí origin `Access-Control-Allow-Origin` nedostane vůbec.
+vrací `action=login`, `action=login_2fa` a `action=session`; každé
+přihlášení ho v session nechá, i přes OAuth. Tokenem autentizované toky
+(`set_password`) a akce session teprve zakládající (`login`, `login_2fa`,
+`setup`, `forgot_password`, `logout`) jsou vyjmuté. Dvě akce zapisují do
+session na GET. `oauth_start` do ní dá nový `state`, poskytovatele a účet,
+pro který je propojení, a nahradí tak cestu už rozběhnutou; jako každý odkaz
+ho jde otevřít i z cizího webu. Poskytovatel vrátí prohlížeč na
+`oauth_callback`, který přihlásí nebo propojí poskytovatele s účtem; místo
+tokenu ho hlídá jednorázový `state` z vlastního `oauth_start` téže session
+(viz Autentizace). CORS odráží jen vlastní origin - cizí origin
+`Access-Control-Allow-Origin` nedostane vůbec.
 
 Cookie session má `HttpOnly` a `SameSite=Lax`, přes HTTPS i `Secure`. db.php je
 nastaví dřív, než config.php stihne session spustit, a `/status/.user.ini` je

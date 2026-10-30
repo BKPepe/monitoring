@@ -161,6 +161,8 @@ describe('Kdy se relace ověřuje znovu (W1-A7)', () => {
     onSessionRecheck(heard);
 
     await fetch('/status/api.php?action=login', { method: 'GET' });
+    // A wrong 2FA code of a pending sign-in is about the code, not the session.
+    await fetch('/status/api.php?action=login_2fa', { method: 'GET' });
     expect(heard).not.toHaveBeenCalled();
     await fetch('/status/api.php?action=monitors');
     expect(heard).toHaveBeenCalledTimes(1);

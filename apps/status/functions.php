@@ -31,7 +31,7 @@ define('BK_CDN_QRCODE_SRI', 'sha384-dykayVHnol2xD+KCZ38PbDk0WZnbP5x/sO6gOXKU3h+b
  * always just "read my stable account ID", nothing more (no e-mail) - both
  * sign-in and account linking run exclusively through users.oauth_provider/oauth_id
  * (set only by explicit linking in one's own Profile, never automatically
- * by e-mail - see the security note at the OAuth callback in admin.php on
+ * by e-mail - see the security note at the OAuth callback in api.php on
  * why e-mail as an identifier was a problem).
  */
 function bk_oauth_providers() {
@@ -138,8 +138,8 @@ function bk_oauth_fetch_identity($provider_key, $code, $redirect_uri) {
 }
 
 /**
- * Sign-in with an identity the provider has just confirmed (the OAuth callback
- * in admin.php, after bk_oauth_fetch_identity). The account is looked up by
+ * Sign-in with an identity the provider has just confirmed (api.php's OAuth
+ * callback, after bk_oauth_fetch_identity). The account is looked up by
  * (provider, oauth_id) alone, never by e-mail. The provider stands in for the
  * password only: an account with 2FA still has to give its code, so it goes
  * through bk_login_first_factor_passed() like a password sign-in does.
@@ -156,6 +156,104 @@ function bk_oauth_login(PDO $pdo, string $provider_key, string $oauth_id): strin
         return 'no_account';
     }
     return bk_login_first_factor_passed($pdo, $user, 'Přes ' . $provider_label . ' OAuth') ? 'signed_in' : 'pending_2fa';
+}
+
+/**
+ * The callback URL every OAuth provider has registered: admin.php next to the
+ * script that runs. The flow lives in api.php (oauth_start, oauth_callback),
+ * and admin.php only forwards the provider's answer there, so GitHub, Google,
+ * Discord and GitLab need no new registration. Scheme and host are read the
+ * way admin.php always read them: a provider refuses the token exchange for a
+ * redirect_uri other than the one the authorize step sent.
+ */
+function bk_oauth_redirect_uri(): string {
+    $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
+    $dir = rtrim(str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? '/'))), '/');
+    return $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? '') . $dir . '/admin.php';
+}
+
+/**
+ * Starts a sign-in, or a link to the signed-in account ($link_user_id), with
+ * an OAuth provider: a fresh state in the session, and the provider's
+ * authorize URL to send the browser to. Null for a provider that is unknown
+ * or has no client ID. Linking claims nothing about who signs in: the
+ * callback only adds the provider's id to the account that started it.
+ */
+function bk_oauth_authorize_url(string $provider_key, ?int $link_user_id): ?string {
+    $cfg = bk_oauth_providers()[$provider_key] ?? null;
+    $client_id = $cfg !== null ? trim((string)get_setting('oauth_' . $provider_key . '_client_id')) : '';
+    if ($client_id === '') {
+        return null;
+    }
+    $state = bin2hex(random_bytes(16));
+    $_SESSION['oauth_state'] = $state;
+    $_SESSION['oauth_provider'] = $provider_key;
+    if ($link_user_id !== null) {
+        $_SESSION['oauth_link_user_id'] = $link_user_id;
+    } else {
+        unset($_SESSION['oauth_link_user_id']);
+    }
+    return $cfg['authorize_url'] . '?' . http_build_query([
+        'client_id' => $client_id,
+        'redirect_uri' => bk_oauth_redirect_uri(),
+        'scope' => $cfg['scope'],
+        'state' => $state,
+        'response_type' => 'code',
+    ]);
+}
+
+/**
+ * Where /app shows the end of an OAuth round trip that did not sign in or
+ * link: the login page, or the profile for a link, with the reason as a code
+ * the app words in either language (state, unavailable, denied, provider,
+ * not_linked, link_session) and the provider it was about.
+ */
+function bk_oauth_problem_url(string $reason, string $provider_key, bool $link): string {
+    $query = ['oauth_error' => $reason];
+    if (isset(bk_oauth_providers()[$provider_key])) {
+        $query['provider'] = $provider_key;
+    }
+    return bk_app_url(($link ? '/profile?' : '/setup?') . http_build_query($query));
+}
+
+/**
+ * The end of the callback, once the provider has confirmed an identity, as
+ * the /app address to send the browser to. A link writes the identity to the
+ * account that started it (proven by its password or an earlier sign-in) and
+ * opens the profile, but only while that account is the one signed in here:
+ * a session that signed out or is another account's by now (or whose account
+ * was deleted meanwhile) gets link_session and nothing is written or
+ * audited. A sign-in goes through bk_oauth_login(): signed in opens the
+ * dashboard, an account with 2FA opens the login page, which asks for the
+ * code (action=session says pending2fa), and an identity no account has
+ * linked goes back there with not_linked.
+ */
+function bk_oauth_finish(PDO $pdo, string $provider_key, string $oauth_id, ?int $link_user_id): string {
+    if ($link_user_id !== null) {
+        $signed_in = !empty($_SESSION['admin_logged_in']);
+        if (!$signed_in || (int)($_SESSION['admin_id'] ?? 0) !== $link_user_id) {
+            return bk_oauth_problem_url('link_session', $provider_key, $signed_in);
+        }
+        $stmt = $pdo->prepare("UPDATE users SET oauth_provider = ?, oauth_id = ? WHERE id = ?");
+        $stmt->execute([$provider_key, $oauth_id, $link_user_id]);
+        if ($stmt->rowCount() === 0) {
+            // MySQL counts changed rows: the identity the account already has
+            // changes none, and is a link. A deleted account matches none.
+            $has = $pdo->prepare("SELECT COUNT(*) FROM users WHERE id = ? AND oauth_provider = ? AND oauth_id = ?");
+            $has->execute([$link_user_id, $provider_key, $oauth_id]);
+            if ((int)$has->fetchColumn() === 0) {
+                return bk_oauth_problem_url('link_session', $provider_key, true);
+            }
+        }
+        $provider_label = bk_oauth_providers()[$provider_key]['label'] ?? $provider_key;
+        bk_audit_log($pdo, 'oauth_linked', $provider_label, 'user', $link_user_id, $link_user_id, $_SESSION['admin_username'] ?? null);
+        return bk_app_url('/profile?' . http_build_query(['oauth' => 'linked', 'provider' => $provider_key]));
+    }
+    return match (bk_oauth_login($pdo, $provider_key, $oauth_id)) {
+        'signed_in' => bk_app_url('/'),
+        'pending_2fa' => bk_setup_url(),
+        default => bk_oauth_problem_url('not_linked', $provider_key, false),
+    };
 }
 
 /**
@@ -15527,7 +15625,8 @@ function bk_render_totp_section($me, $site_title) {
 /**
  * Renders the linked OAuth accounts card (Profile) - only one provider at a
  * time (the schema has a single oauth_provider/oauth_id column pair per user).
- * Linking goes only through link_oauth (see admin.php), never by e-mail.
+ * Linking goes only through api.php's oauth_start (admin.php?link_oauth=
+ * forwards there), never by e-mail.
  */
 function bk_render_oauth_section($me) {
     $providers = bk_oauth_providers();
@@ -15698,8 +15797,11 @@ function bk_login_second_factor(PDO $pdo, array $user, string $code): array {
  * one other place that sets it is api.php action=setup, for the first account
  * the install has just created; the API suite checks both in the source. A
  * new session id first, so an id planted before the sign-in is not the
- * account's; a pending 2FA step is over. $via goes to the audit log as the way
- * the account signed in.
+ * account's; a pending 2FA step is over, and so is an OAuth round trip the
+ * session had started (its state and the account a link was for). The session
+ * gets its CSRF token here: an OAuth sign-in ends in /app, which reads the
+ * token from action=session, with no answer of its own to carry one. $via
+ * goes to the audit log as the way the account signed in.
  */
 function bk_login_start_session(PDO $pdo, array $user, string $via): void {
     session_regenerate_id(true);
@@ -15707,7 +15809,9 @@ function bk_login_start_session(PDO $pdo, array $user, string $via): void {
     $_SESSION['admin_username'] = $user['username'];
     $_SESSION['admin_id'] = $user['id'];
     $_SESSION['admin_role'] = $user['role'];
-    unset($_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_via']);
+    unset($_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_via'],
+        $_SESSION['oauth_state'], $_SESSION['oauth_provider'], $_SESSION['oauth_link_user_id']);
+    bk_csrf_token();
     bk_audit_log($pdo, 'login_success', $via, 'user', $user['id'], $user['id'], $user['username']);
 }
 
@@ -15803,15 +15907,6 @@ function bk_issue_password_reset_token($pdo, $user_id, $ttl_seconds = 172800) {
     return $raw_token;
 }
 
-/**
- * Absolute URL of the current admin.php derived from the request - same
- * approach as the OAuth redirect_uri. Unlike digest e-mails (cron, no request)
- * this always runs inside an HTTP request, so the site_url setting is not needed.
- */
-function bk_current_admin_url() {
-    $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
-    return $scheme . '://' . $_SERVER['HTTP_HOST'] . $_SERVER['SCRIPT_NAME'];
-}
 
 /**
  * Issues a password reset token and e-mails the link.

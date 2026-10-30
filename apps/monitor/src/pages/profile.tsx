@@ -11,6 +11,7 @@ import { SubscriptionsCard } from '@/components/subscriptions-card';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { resolveUrl } from '@/api/http-source';
+import { oauthProblemText, oauthStartUrl, readOauthOutcome } from '@/lib/oauth';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 
 interface MyProfile {
@@ -288,16 +289,20 @@ function ProfileForm({ profile, onSaved }: { profile: MyProfile; onSaved: (passw
 }
 
 /**
- * OAuth login link. Linking runs through the legacy admin.php?link_oauth=
- * redirect flow (the OAuth callback lands there); unlinking asks for the
- * password so a stolen session cannot quietly take over the account's login.
+ * OAuth login link. Linking is a browser round trip through api.php's
+ * oauth_start; the server sends the browser back here with the outcome in
+ * the query, which this card shows. Unlinking asks for the password so a
+ * stolen session cannot quietly take over the account's login.
  */
 function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () => void }) {
   const { t } = useLanguage();
   const [unlinking, setUnlinking] = React.useState(false);
   const [password, setPassword] = React.useState('');
   const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [outcome] = React.useState(() => readOauthOutcome(window.location.search));
+  const [error, setError] = React.useState<string | null>(() =>
+    outcome?.problem ? oauthProblemText(outcome.problem, outcome.provider, t) : null
+  );
 
   const unlink = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -325,6 +330,11 @@ function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () =
   return (
     <Panel icon={Link2} title={t('profile.oauth_title', 'Přihlašování přes externí účet')} bodyClassName="space-y-3">
       {error && <ErrorState size="inline" message={error} />}
+      {outcome?.linked && outcome.provider && !error && (
+        <p className="text-up text-sm">
+          {t('oauth.linked', { provider: outcome.provider }, `Účet ${outcome.provider} je propojený.`)}
+        </p>
+      )}
 
       {profile.oauthProvider ? (
         <div className="space-y-3">
@@ -368,12 +378,12 @@ function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () =
           </p>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" asChild>
-              <a href={resolveUrl('admin.php?link_oauth=github')}>
+              <a href={oauthStartUrl('github', true)}>
                 <GithubIcon className="size-4" /> {t('profile.link_github', 'Propojit GitHub')}
               </a>
             </Button>
             <Button size="sm" variant="outline" asChild>
-              <a href={resolveUrl('admin.php?link_oauth=google')}>
+              <a href={oauthStartUrl('google', true)}>
                 <GoogleIcon className="size-4" /> {t('profile.link_google', 'Propojit Google')}
               </a>
             </Button>

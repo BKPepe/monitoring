@@ -290,15 +290,21 @@ function bk_monitor_details(array $row): array {
 }
 
 /**
- * The installer's address, next to this directory: /status/x.php -> /app/setup.
+ * An address in the app next to this directory: /status/x.php with
+ * '/profile' -> /app/profile.
  *
  * Built from SCRIPT_NAME (the server's own path, never request input), so an
- * install under /monitoring/status/ sends people to /monitoring/app/setup.
+ * install under /monitoring/status/ sends people to /monitoring/app/profile.
  */
-function bk_setup_url(): string {
+function bk_app_url(string $path): string {
     $status_dir = rtrim(str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? '/x.php'))), '/');
     $base = rtrim(str_replace('\\', '/', dirname($status_dir === '' ? '/' : $status_dir)), '/');
-    return $base . '/app/setup';
+    return $base . '/app' . $path;
+}
+
+/** The installer's address, next to this directory: /status/x.php -> /app/setup. */
+function bk_setup_url(): string {
+    return bk_app_url('/setup');
 }
 
 /**

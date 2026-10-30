@@ -1960,6 +1960,40 @@ const translations: Record<string, { cs: string; en: string }> = {
   'setup.forgot_submit': { cs: 'Odeslat', en: 'Submit' },
   'setup.totp_code_label': { cs: 'Ověřovací kód 2FA', en: '2FA verification code' },
   'setup.oauth_with': { cs: 'Přihlásit se přes {provider}', en: 'Sign in with {provider}' },
+  'setup.pending_2fa_hint': {
+    cs: 'Přihlášení čeká na kód dvoufázového ověření. Zadejte kód z autentikační aplikace, nebo jeden ze záložních kódů.',
+    en: 'The sign-in is waiting for its two-factor code. Enter the code from your authenticator app, or one of your recovery codes.',
+  },
+  'setup.pending_2fa_other': { cs: 'Přihlásit se jinak', en: 'Sign in another way' },
+  'oauth.error_state': {
+    cs: 'Odpověď poskytovatele nepatří k přihlášení, které tento prohlížeč začal (neplatný nebo starý stav). Zkuste to znovu.',
+    en: 'The provider answered for a sign-in this browser did not start (an invalid or old state). Try again.',
+  },
+  'oauth.error_generic': {
+    cs: 'Přihlášení přes externí účet se nepodařilo dokončit. Zkuste to znovu.',
+    en: 'The sign-in with an external account did not finish. Try again.',
+  },
+  'oauth.error_unavailable': {
+    cs: 'Přihlášení přes {provider} není na tomto serveru nastavené.',
+    en: 'Sign-in with {provider} is not set up on this server.',
+  },
+  'oauth.error_denied': {
+    cs: 'Přihlášení přes {provider} bylo u poskytovatele zrušeno.',
+    en: 'The sign-in with {provider} was cancelled at the provider.',
+  },
+  'oauth.error_not_linked': {
+    cs: 'Tenhle účet {provider} není propojený s žádným uživatelem. Přihlaste se heslem a propojte ho v Profilu.',
+    en: 'This {provider} account is not linked to any user. Sign in with your password and link it in your Profile.',
+  },
+  'oauth.error_provider': {
+    cs: 'Poskytovatel {provider} účet nepotvrdil: výměna kódu za token nebo načtení identity selhala. Zkuste to znovu.',
+    en: '{provider} did not confirm the account: exchanging the code for a token or reading the identity failed. Try again.',
+  },
+  'oauth.error_link_session': {
+    cs: 'Propojení začal účet, který tu už není přihlášený. Nic se nepropojilo; přihlaste se a začněte znovu v Profilu.',
+    en: 'The link was started by an account that is no longer signed in here. Nothing was linked; sign in and start again in your Profile.',
+  },
+  'oauth.linked': { cs: 'Účet {provider} je propojený.', en: 'Your {provider} account is linked.' },
   'install.title': { cs: 'Instalace', en: 'Installation' },
   'install.progress': { cs: 'Postup instalace', en: 'Installation progress' },
   'install.step_database': { cs: 'Databáze', en: 'Database' },

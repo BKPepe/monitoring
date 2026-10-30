@@ -151,17 +151,21 @@ file_put_contents($config_path, "<?php\n"
     . "date_default_timezone_set(TIMEZONE);\n");
 
 // --- 4. The built-in PHP server -------------------------------------------
+// Its stderr is the error log of every request (error_log() writes there), so
+// a check can read what one request logged: from the size before it.
+$server_log = (string)tempnam(sys_get_temp_dir(), 'bk_test_log');
 $server = proc_open(
     sprintf('php -S 127.0.0.1:%d -t %s', $port, escapeshellarg($root)),
-    [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
+    [1 => ['file', '/dev/null', 'w'], 2 => ['file', $server_log, 'a']],
     $pipes
 );
 
-$cleanup = function () use ($server, $config_path, $config_backup) {
+$cleanup = function () use ($server, $config_path, $config_backup, $server_log) {
     if (is_resource($server)) {
         proc_terminate($server);
         proc_close($server);
     }
+    @unlink($server_log);
     // config.php belongs to the developer, not the test - restored to its original state.
     if ($config_backup !== null) {
         file_put_contents($config_path, $config_backup);
@@ -3492,15 +3496,16 @@ check('vypnutí 2FA smaže i záložní kódy', (int)$pdo->query("SELECT COUNT(*
 
 // --- OAuth sign-in and 2FA ------------------------------------------------
 //
-// The OAuth callback in admin.php signed a linked account in at once, so an
-// account with 2FA never gave the code its password sign-in asks for. The
-// provider's round trip (code -> token -> account id over HTTPS) cannot run
-// here. What follows it is bk_oauth_login(), which a child PHP calls the way
-// the callback does, in a real session. admin.php then gets that session over
-// HTTP and has to ask for the code. Left untested in the callback: the state
-// check, the provider request and the redirect around the one call. That the
-// callback makes that call, and nothing else signs a session in, is checked in
-// the source after this block.
+// OAuth signed a linked account in at once in admin.php, so an account with
+// 2FA never gave the code its password sign-in asks for (R346), and every
+// sign-in ended in the legacy admin.php. The flow now runs in api.php
+// (oauth_start, oauth_callback) and ends in /app; admin.php only forwards the
+// provider's answer, so the callback URL the providers know still works.
+// The provider's round trip (code -> token -> account id over HTTPS) cannot
+// run here. Everything around it does: the start and its state, the stub,
+// the callback up to that request, and bk_oauth_finish(), what the callback
+// does with the identity, which a child PHP calls in a real session. The code
+// step of a pending session then runs over HTTP (action=login_2fa).
 $oa_secret = bk_totp_generate_secret();
 $oa_password = 'OauthHeslo123!';
 $oa_ins = $pdo->prepare("INSERT INTO users (username, email, role, password_hash, oauth_provider, oauth_id, totp_secret, totp_enabled)
@@ -3511,11 +3516,17 @@ $oa_ins->execute(['oauth_plain', 'oauth-plain@example.com', password_hash($oa_pa
 $oa_plain_id = (int)$pdo->lastInsertId();
 $oa_code = fn (): string => bk_totp_calculate($oa_secret, (int)floor(time() / 30));
 
-// bk_oauth_login() in a child PHP that loads the app like a request does:
-// the result, what it left in the session, and that session's id.
-$oa_login = function (string $oauth_id) use ($root): array {
+// bk_oauth_finish() in a child PHP that loads the app like a request to
+// $script does: where it sends the browser, what it left in the session, and
+// that session's id. $link links to that account instead, in a session signed
+// in as $as: the account that started the link unless a test says otherwise,
+// 0 = signed out.
+$oa_finish = function (string $oauth_id, ?int $link = null, ?int $as = null, string $script = '/status/api.php') use ($root): array {
+    $as ??= $link;
     $php = 'require ' . var_export($root . '/bootstrap.php', true) . ';'
-        . '$r = bk_oauth_login($pdo, "github", ' . var_export($oauth_id, true) . ');'
+        . '$_SERVER["SCRIPT_NAME"] = ' . var_export($script, true) . ';'
+        . ($as ? '$_SESSION["admin_logged_in"] = true; $_SESSION["admin_id"] = ' . $as . '; $_SESSION["admin_username"] = "linker";' : '')
+        . '$r = bk_oauth_finish($pdo, "github", ' . var_export($oauth_id, true) . ', ' . var_export($link, true) . ');'
         . 'echo json_encode(["result" => $r, "session" => $_SESSION, "sid" => session_id()]);';
     $out = [];
     exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($php) . ' 2>&1', $out, $rc);
@@ -3527,6 +3538,15 @@ $oa_jar = function (string $sid): string {
     $file = tempnam(sys_get_temp_dir(), 'bk_test_oa');
     file_put_contents($file, "127.0.0.1\tFALSE\t/\tFALSE\t0\tPHPSESSID\t{$sid}\n");
     return $file;
+};
+// A navigation in that session, redirects not followed: [HTTP code, Location].
+$oa_nav = function (string $path, string $jar) use ($base): array {
+    $ch = curl_init($base . '/' . $path);
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30, CURLOPT_HEADER => true,
+        CURLOPT_COOKIEFILE => $jar, CURLOPT_COOKIEJAR => $jar]);
+    $raw = (string)curl_exec($ch);
+    $head = substr($raw, 0, (int)curl_getinfo($ch, CURLINFO_HEADER_SIZE));
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), preg_match('/^Location:\s*(\S+)/mi', $head, $m) ? $m[1] : ''];
 };
 // admin.php in that session: [HTTP code, body, redirect target].
 $oa_admin = function (string $file, ?array $post = null) use ($base): array {
@@ -3546,44 +3566,48 @@ $oa_last_success = function (int $user_id) use ($pdo): ?string {
     $d = $stmt->fetchColumn();
     return $d === false ? null : (string)$d;
 };
+$oa_fails = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'login_failed' AND actor_username = 'oauth_totp'")->fetchColumn();
+$oa_l2 = fn (string $jar, string $code): array => api_post($base, 'action=login_2fa', ['totp_code' => $code], $jar, '');
 
-// An account with 2FA: the provider stands in for the password only.
-[$oa_rc, $oa] = $oa_login('9000001');
-check('OAuth účtu s 2FA neskončí přihlášením (' . ($oa['output'] ?? 'ok') . ')', [$oa_rc, $oa['result'] ?? null], [0, 'pending_2fa']);
+// An account with 2FA: the provider stands in for the password only, and the
+// browser goes to the login page of /app, which asks for the code.
+[$oa_rc, $oa] = $oa_finish('9000001');
+check('OAuth účtu s 2FA vede na přihlášení v /app, ne do admin.php (' . ($oa['output'] ?? 'ok') . ')',
+    [$oa_rc, $oa['result'] ?? null], [0, '/app/setup']);
 check('session drží jen čekající účet, žádné přihlášení',
     [(int)($oa['session']['pending_2fa_user_id'] ?? 0), $oa['session']['admin_logged_in'] ?? null, $oa['session']['admin_id'] ?? null],
     [$oa_totp_id, null, null]);
 check('a audit žádné přihlášení nezapsal', $oa_last_success($oa_totp_id), null);
 $oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
 [, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
-check('API tu session nebere jako přihlášenou', $oa_sess['authenticated'] ?? null, false);
-[$code, $oa_page] = $oa_admin($oa_cj);
-check_true('admin.php po OAuth ukáže krok s kódem 2FA', $code === 200 && str_contains($oa_page, 'name="totp_login_code"'));
-// A recovery code has letters: a digits-only keypad on a phone cannot type it.
-check_false('pole kódu nevynutí číselnou klávesnici, záložní kód má písmena',
-    (bool)preg_match('/<input[^>]*name="totp_code"[^>]*inputmode="numeric"/', $oa_page));
-$oa_token = $oa_csrf($oa_page);
+check('API tu session nebere jako přihlášenou, ale řekne, že čeká na kód',
+    [$oa_sess['authenticated'] ?? null, $oa_sess['pending2fa'] ?? null], [false, true]);
 
-[$code, $oa_page] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => '000000', 'csrf_token' => $oa_token]);
-check_true('špatný kód nepřihlásí a krok s kódem zůstane', $code === 200 && str_contains($oa_page, 'name="totp_login_code"'));
-check('špatný kód se zapíše jako login_failed, který počítá zámek',
-    (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'login_failed' AND actor_username = 'oauth_totp'")->fetchColumn(), 1);
-[$code, , $oa_loc] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_code(), 'csrf_token' => $oa_token]);
-check('správný kód přihlásí a vede na admin.php jako dřív', [$code, str_ends_with($oa_loc, '/admin.php')], [302, true]);
+[$code, $oa_api] = $oa_l2($oa_cj, '000000');
+check('špatný kód nepřihlásí', [$code, $oa_api['message'] ?? null], [401, 'Invalid 2FA code.']);
+check('a zapíše se jako login_failed, který počítá zámek', $oa_fails(), 1);
 [, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
-check('pak je session přihlášená za ten účet',
-    [$oa_sess['authenticated'] ?? null, $oa_sess['user']['username'] ?? null], [true, 'oauth_totp']);
+check('krok s kódem po špatném kódu trvá', [$oa_sess['authenticated'] ?? null, $oa_sess['pending2fa'] ?? null], [false, true]);
+[$code, $oa_api] = $oa_l2($oa_cj, $oa_code());
+check('správný kód přihlásí jako action=login',
+    [$code, $oa_api['authenticated'] ?? null, $oa_api['user']['username'] ?? null,
+        array_key_exists('recoveryCodesRemaining', $oa_api ?? []) ? $oa_api['recoveryCodesRemaining'] : 'chybí'],
+    [200, true, 'oauth_totp', null]);
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('pak je session přihlášená za ten účet a nic nečeká',
+    [$oa_sess['authenticated'] ?? null, $oa_sess['user']['username'] ?? null, $oa_sess['pending2fa'] ?? null], [true, 'oauth_totp', false]);
 check('audit říká, že první krok byl OAuth, ne heslo', $oa_last_success($oa_totp_id), 'Přes GitHub OAuth + 2FA');
+[$code] = $oa_l2($oa_cj, $oa_code());
+check('přihlášená session už žádný kód nečeká', $code, 401);
 @unlink($oa_cj);
 
 // A recovery code in place of the TOTP code, as after the password.
 $oa_recovery = bk_totp_generate_recovery_codes($pdo, $oa_totp_id);
-[, $oa] = $oa_login('9000001');
+[, $oa] = $oa_finish('9000001');
 $oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
-[, $oa_page] = $oa_admin($oa_cj);
-[$code] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_recovery[0], 'csrf_token' => $oa_csrf($oa_page)]);
-[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
-check('záložní kód po OAuth přihlásí', [$code, $oa_sess['authenticated'] ?? null], [302, true]);
+[$code, $oa_api] = $oa_l2($oa_cj, $oa_recovery[0]);
+check('záložní kód po OAuth přihlásí a řekne, kolik jich zbývá',
+    [$code, $oa_api['authenticated'] ?? null, $oa_api['recoveryCodesRemaining'] ?? null], [200, true, 9]);
 check('a spotřebuje se', bk_totp_recovery_remaining($pdo, $oa_totp_id), 9);
 check('audit zaznamená použitý záložní kód',
     (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'totp_recovery_used' AND actor_user_id = {$oa_totp_id}")->fetchColumn(), 1);
@@ -3595,39 +3619,186 @@ $oa_fail = $pdo->prepare("INSERT INTO audit_log (actor_username, action, descrip
 for ($i = 0; $i < 5; $i++) {
     $oa_fail->execute();
 }
-[, $oa] = $oa_login('9000001');
+[, $oa] = $oa_finish('9000001');
 $oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
-[, $oa_page] = $oa_admin($oa_cj);
-[$code, $oa_page] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_code(), 'csrf_token' => $oa_csrf($oa_page)]);
+[$code] = $oa_l2($oa_cj, $oa_code());
 [, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
-check_true('zamčený účet nepřihlásí ani správný kód po OAuth',
-    $code === 200 && str_contains($oa_page, 'Příliš mnoho neúspěšných pokusů') && ($oa_sess['authenticated'] ?? null) === false);
-@unlink($oa_cj);
+check('zamčený účet nepřihlásí ani správný kód po OAuth', [$code, $oa_sess['authenticated'] ?? null], [429, false]);
 // The suite signs in from 127.0.0.1 throughout; these failures must not lock out what follows.
 $pdo->exec("DELETE FROM audit_log WHERE action = 'login_failed' AND actor_username = 'oauth_totp'");
+// A pending account that has dropped 2FA since starts again from its first step.
+$pdo->exec("UPDATE users SET totp_enabled = 0 WHERE id = {$oa_totp_id}");
+[$code] = $oa_l2($oa_cj, $oa_code());
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('účet, který mezitím 2FA vypnul, kód nepřihlásí a čekání skončí',
+    [$code, $oa_sess['authenticated'] ?? null, $oa_sess['pending2fa'] ?? null], [401, false, false]);
+$pdo->exec("UPDATE users SET totp_enabled = 1 WHERE id = {$oa_totp_id}");
+@unlink($oa_cj);
 
-// Without 2FA an OAuth identity signs in at once, as it always did.
-[$oa_rc, $oa] = $oa_login('9000002');
-check('OAuth bez 2FA přihlásí hned',
+// Without 2FA an OAuth identity signs in at once, as it always did, and the
+// browser opens the dashboard of /app.
+[$oa_rc, $oa] = $oa_finish('9000002');
+check('OAuth bez 2FA přihlásí hned a vede na /app/',
     [$oa_rc, $oa['result'] ?? null, $oa['session']['admin_logged_in'] ?? null, (int)($oa['session']['admin_id'] ?? 0)],
-    [0, 'signed_in', true, $oa_plain_id]);
+    [0, '/app/', true, $oa_plain_id]);
 check_false('a nic nečeká na kód', isset($oa['session']['pending_2fa_user_id']));
 $oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
 [, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
 check('server tu session bere jako přihlášenou',
     [$oa_sess['authenticated'] ?? null, $oa_sess['user']['username'] ?? null], [true, 'oauth_plain']);
 check('audit zapíše přihlášení přes OAuth', $oa_last_success($oa_plain_id), 'Přes GitHub OAuth');
+// /app reads its CSRF token from action=session, and nothing on the way from
+// the callback to /app answers with one: without a token in the session every
+// write of an OAuth sign-in failed, and a reload read null again.
+$oa_token = (string)($oa_sess['csrfToken'] ?? '');
+check_true('přihlášení přes OAuth nechá v session CSRF token a action=session ho vrátí',
+    (bool)preg_match('/^[0-9a-f]{64}$/', $oa_token) && $oa_token === ($oa['session']['csrf_token'] ?? null));
+[$code, $oa_api] = api_post($base, 'action=alerts_read_state', ['readUpToId' => 7], $oa_cj, $oa_token);
+check('a zápis s ním projde', [$code, $oa_api['success'] ?? null,
+    (int)$pdo->query("SELECT alerts_read_log_id FROM users WHERE id = {$oa_plain_id}")->fetchColumn()], [200, true, 7]);
 @unlink($oa_cj);
 
-// An identity no account has linked signs nobody in.
-[, $oa] = $oa_login('9000999');
-check('nepropojený OAuth účet nepřihlásí nikoho', [$oa['result'] ?? null, $oa['session'] ?? null], ['no_account', []]);
+// An identity no account has linked signs nobody in and says so on the login page.
+[, $oa] = $oa_finish('9000999');
+check('nepropojený OAuth účet nepřihlásí nikoho a /app řekne proč',
+    [$oa['result'] ?? null, $oa['session'] ?? null], ['/app/setup?oauth_error=not_linked&provider=github', []]);
 
-// The password of the same account stops at the same step (admin.php),
-// and the API asks for the code before it signs in.
+// A link writes the identity to the account that started it and opens the profile.
+[, $oa] = $oa_finish('9000777', $oa_plain_id);
+$oa_linked = $pdo->query("SELECT oauth_provider, oauth_id FROM users WHERE id = {$oa_plain_id}")->fetch();
+check('propojení zapíše identitu k účtu, který ho začal, a vede na profil',
+    [$oa['result'] ?? null, $oa_linked['oauth_provider'] ?? null, $oa_linked['oauth_id'] ?? null],
+    ['/app/profile?oauth=linked&provider=github', 'github', '9000777']);
+check('a audit ho zapíše',
+    (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'oauth_linked' AND target_id = {$oa_plain_id}")->fetchColumn(), 1);
+// The same identity again changes no row, which MySQL counts as 0: still a
+// link, not a missing account.
+[, $oa] = $oa_finish('9000777', $oa_plain_id);
+check('opakované propojení téže identity je pořád propojení', $oa['result'] ?? null, '/app/profile?oauth=linked&provider=github');
+// The account that started the link is not the one signed in any more:
+// another account's session, a signed-out one, or an account deleted after
+// bootstrap's sync, which the UPDATE finds no row of (the child sets the
+// session after bootstrap). Nothing is written or audited, and the reason
+// goes to the page this session can open. On a real callback a sign-in or a
+// sign-out has dropped the round trip already (state, below), and bootstrap
+// signs out a session whose account is gone: link_session on /app/setup.
+$oa_audits = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'oauth_linked'")->fetchColumn();
+$oa_audit_before = $oa_audits();
+$oa_gone = (int)$pdo->query("SELECT MAX(id) + 1000 FROM users")->fetchColumn();
+[, $oa_other] = $oa_finish('9000888', $oa_plain_id, $oa_totp_id);
+[, $oa_out] = $oa_finish('9000888', $oa_plain_id, 0);
+[, $oa_deleted] = $oa_finish('9000888', $oa_gone);
+check('propojení za jiný, odhlášený nebo smazaný účet odmítne a /app řekne proč',
+    [$oa_other['result'] ?? null, $oa_out['result'] ?? null, $oa_deleted['result'] ?? null],
+    ['/app/profile?oauth_error=link_session&provider=github', '/app/setup?oauth_error=link_session&provider=github',
+        '/app/profile?oauth_error=link_session&provider=github']);
+check('identita účtu zůstane a audit nic nezapíše',
+    [$pdo->query("SELECT oauth_id FROM users WHERE id = {$oa_plain_id}")->fetchColumn(),
+        (int)$pdo->query("SELECT COUNT(*) FROM users WHERE oauth_id = '9000888'")->fetchColumn(), $oa_audits()],
+    ['9000777', 0, $oa_audit_before]);
+
+// An install under a subdirectory has its /app next to its /status, and
+// every end of the callback goes there.
+$oa_sub = '/monitoring/status/api.php';
+check('instalace v podadresáři končí v /app vedle svého /status',
+    [$oa_finish('9000777', null, null, $oa_sub)[1]['result'] ?? null, $oa_finish('9000001', null, null, $oa_sub)[1]['result'] ?? null,
+        $oa_finish('9000999', null, null, $oa_sub)[1]['result'] ?? null, $oa_finish('9000777', $oa_plain_id, null, $oa_sub)[1]['result'] ?? null,
+        $oa_finish('9000777', $oa_plain_id, 0, $oa_sub)[1]['result'] ?? null],
+    ['/monitoring/app/', '/monitoring/app/setup', '/monitoring/app/setup?oauth_error=not_linked&provider=github',
+        '/monitoring/app/profile?oauth=linked&provider=github', '/monitoring/app/setup?oauth_error=link_session&provider=github']);
+
+// The start: a provider without a client ID, or one the server does not
+// know, goes back to /app with the reason instead of to an error page.
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+check('start u poskytovatele bez client ID vrátí /app s důvodem',
+    $oa_nav('api.php?action=oauth_start&provider=github', $oa_cj), [302, '/app/setup?oauth_error=unavailable&provider=github']);
+check('neznámý poskytovatel taky, bez jména',
+    $oa_nav('api.php?action=oauth_start&provider=nikdo', $oa_cj), [302, '/app/setup?oauth_error=unavailable']);
+check('propojení bez přihlášení vede na přihlášení a pak do profilu',
+    $oa_nav('api.php?action=oauth_start&provider=github&link=1', $oa_cj), [302, '/app/setup?next=%2Fprofile']);
+$pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('oauth_github_client_id', 'test-client') ON DUPLICATE KEY UPDATE key_value = 'test-client'");
+[$code, $oa_to] = $oa_nav('api.php?action=oauth_start&provider=github', $oa_cj);
+parse_str((string)parse_url($oa_to, PHP_URL_QUERY), $oa_q);
+check('start pošle prohlížeč na GitHub s callbackem na admin.php, jak ho poskytovatel zná',
+    [$code, strtok($oa_to, '?'), $oa_q['client_id'] ?? null, $oa_q['redirect_uri'] ?? null, $oa_q['response_type'] ?? null],
+    [302, 'https://github.com/login/oauth/authorize', 'test-client', $base . '/admin.php', 'code']);
+check_true('se stavem z 32 hex znaků', (bool)preg_match('/^[0-9a-f]{32}$/', (string)($oa_q['state'] ?? '')));
+// The callback: a state this session did not issue leaves its own one standing.
+check('callback s cizím stavem vrátí /app s důvodem state',
+    $oa_nav('api.php?action=oauth_callback&code=x&state=' . str_repeat('0', 32), $oa_cj),
+    [302, '/app/setup?oauth_error=state&provider=github']);
+check('zrušení u poskytovatele s platným stavem: /app řekne denied',
+    $oa_nav('api.php?action=oauth_callback&error=access_denied&state=' . ($oa_q['state'] ?? ''), $oa_cj),
+    [302, '/app/setup?oauth_error=denied&provider=github']);
+check('stav se spotřebuje, podruhé už neprojde',
+    $oa_nav('api.php?action=oauth_callback&error=access_denied&state=' . ($oa_q['state'] ?? ''), $oa_cj),
+    [302, '/app/setup?oauth_error=state']);
+// The provider's error goes to the log, and whoever holds a state writes it.
+[, $oa_to] = $oa_nav('api.php?action=oauth_start&provider=github', $oa_cj);
+parse_str((string)parse_url($oa_to, PHP_URL_QUERY), $oa_q);
+clearstatcache();
+$oa_log_from = (int)filesize($server_log);
+check('chyba poskytovatele se zapíše do logu, ale nový řádek v ní řádek nezaloží',
+    $oa_nav('api.php?action=oauth_callback&state=' . ($oa_q['state'] ?? '') . '&error='
+        . rawurlencode("x\n[api.php action=save_user] HTTP 500: podvrh"), $oa_cj),
+    [302, '/app/setup?oauth_error=provider&provider=github']);
+$oa_logged = (string)file_get_contents($server_log, false, null, $oa_log_from);
+check('v logu je opsaná v \xNN na řádku [oauth], podvržený řádek tam není',
+    [str_contains($oa_logged, '[oauth] github answered without a code: x\x0A[api.php action=save_user] HTTP 500: podvrh'),
+        (bool)preg_match('/^\[api\.php action=save_user\]/m', $oa_logged)],
+    [true, false]);
+@unlink($oa_cj);
+// A link started while signed in comes back to the profile.
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+api_post($base, 'action=login', ['username' => 'oauth_plain', 'password' => $oa_password], $oa_cj, '');
+[$code, $oa_to] = $oa_nav('api.php?action=oauth_start&provider=github&link=1', $oa_cj);
+parse_str((string)parse_url($oa_to, PHP_URL_QUERY), $oa_q);
+check('propojení přihlášeného účtu jde ke GitHubu', [$code, strtok($oa_to, '?')], [302, 'https://github.com/login/oauth/authorize']);
+check('a jeho konec vede zpět na profil',
+    $oa_nav('api.php?action=oauth_callback&error=server_error&state=' . ($oa_q['state'] ?? ''), $oa_cj),
+    [302, '/app/profile?oauth_error=provider&provider=github']);
+// A sign-in ends the round trip the session had started: a link one account
+// began cannot finish after another account signed in in the same browser.
+[, $oa_to] = $oa_nav('api.php?action=oauth_start&provider=github&link=1', $oa_cj);
+parse_str((string)parse_url($oa_to, PHP_URL_QUERY), $oa_q);
+api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password], $oa_cj, '');
+check('přihlášení jiného účtu rozběhnuté propojení zahodí, jeho konec už neprojde',
+    [strlen((string)($oa_q['state'] ?? '')),
+        $oa_nav('api.php?action=oauth_callback&error=server_error&state=' . ($oa_q['state'] ?? ''), $oa_cj)],
+    [32, [302, '/app/setup?oauth_error=state']]);
+// A sign-out ends it too: the session is gone, so its answer is a state no
+// session issued, not link_session.
+[, $oa_to] = $oa_nav('api.php?action=oauth_start&provider=github&link=1', $oa_cj);
+parse_str((string)parse_url($oa_to, PHP_URL_QUERY), $oa_q);
+api_post($base, 'action=logout', [], $oa_cj, '');
+check('odhlášení rozběhnuté propojení zahodí, jeho konec skončí na state',
+    [strlen((string)($oa_q['state'] ?? '')),
+        $oa_nav('api.php?action=oauth_callback&error=server_error&state=' . ($oa_q['state'] ?? ''), $oa_cj)],
+    [32, [302, '/app/setup?oauth_error=state']]);
+@unlink($oa_cj);
+$pdo->exec("DELETE FROM settings WHERE key_name = 'oauth_github_client_id'");
+
+// admin.php stays the callback URL the four providers know and forwards it,
+// and the old start links, with their query.
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+check('admin.php předá odpověď poskytovatele do api.php',
+    $oa_nav('admin.php?code=abc&state=def', $oa_cj), [302, 'api.php?action=oauth_callback&code=abc&state=def']);
+check('i zrušení u poskytovatele',
+    $oa_nav('admin.php?error=access_denied&state=def', $oa_cj), [302, 'api.php?action=oauth_callback&state=def&error=access_denied']);
+check('starý odkaz na přihlášení míří na oauth_start',
+    $oa_nav('admin.php?login_oauth=github', $oa_cj), [302, 'api.php?action=oauth_start&provider=github']);
+check('starý odkaz na propojení taky, s link=1',
+    $oa_nav('admin.php?link_oauth=google', $oa_cj), [302, 'api.php?action=oauth_start&provider=google&link=1']);
+@unlink($oa_cj);
+
+// The password of the same account stops at the same step: admin.php's form
+// in the legacy UI, and the API asks for the code before it signs in.
 $oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
 [$code, $oa_page] = $oa_admin($oa_cj, ['login' => '1', 'username' => 'oauth_totp', 'password' => $oa_password]);
 check_true('heslo účtu s 2FA v admin.php vede na krok s kódem', $code === 200 && str_contains($oa_page, 'name="totp_login_code"'));
+// A recovery code has letters: a digits-only keypad on a phone cannot type it.
+check_false('pole kódu nevynutí číselnou klávesnici, záložní kód má písmena',
+    (bool)preg_match('/<input[^>]*name="totp_code"[^>]*inputmode="numeric"/', $oa_page));
 [$code] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_code(), 'csrf_token' => $oa_csrf($oa_page)]);
 check('a kód přihlásí', $code, 302);
 check('audit u hesla zůstává Jméno a heslo + 2FA', $oa_last_success($oa_totp_id), 'Jméno a heslo + 2FA');
@@ -3643,18 +3814,31 @@ check('API: s kódem přihlásí, bez záložního kódu', [$code, $oa_api['auth
     array_key_exists('recoveryCodesRemaining', $oa_api ?? []) ? $oa_api['recoveryCodesRemaining'] : 'chybí'], [200, true, null]);
 check('audit u API zůstává Password + 2FA', $oa_last_success($oa_totp_id), 'Password + 2FA');
 @unlink($oa_cj);
+// After the password alone, the code by itself finishes the sign-in too.
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+api_post($base, 'action=login', ['username' => 'oauth_totp', 'password' => $oa_password], $oa_cj, '');
+[$code, $oa_api] = $oa_l2($oa_cj, $oa_code());
+check('API: po heslu stačí login_2fa jen s kódem', [$code, $oa_api['authenticated'] ?? null], [200, true]);
+check('audit pak říká Password + 2FA', $oa_last_success($oa_totp_id), 'Password + 2FA');
+@unlink($oa_cj);
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+[$code, $oa_api] = $oa_l2($oa_cj, $oa_code());
+check('login_2fa bez čekajícího přihlášení nepřihlásí nikoho',
+    [$code, $oa_api['message'] ?? null], [401, 'No sign-in is waiting for a code. Sign in again.']);
+@unlink($oa_cj);
 
 $pdo->exec("DELETE FROM totp_recovery_codes WHERE user_id IN ({$oa_totp_id}, {$oa_plain_id})");
 $pdo->exec("DELETE FROM users WHERE id IN ({$oa_totp_id}, {$oa_plain_id})");
 
-// The callback cannot run here, so its source is held to the tested path.
-// admin_logged_in is set only by bk_login_start_session() and by api.php
-// action=setup (the install's first account). bk_login_start_session() runs
-// only for an account without 2FA (bk_login_first_factor_passed) or after
-// bk_login_second_factor(): once in admin.php's code step, once in api.php
-// action=login. A callback that set admin_logged_in itself or called
-// bk_login_start_session() would sign a 2FA account in without its code, and
-// the checks above, which call bk_oauth_login(), would still pass.
+// The provider's request cannot run here, so the callback's source is held to
+// the tested path. admin_logged_in is set only by bk_login_start_session()
+// and by api.php action=setup (the install's first account).
+// bk_login_start_session() runs only for an account without 2FA
+// (bk_login_first_factor_passed) or after bk_login_second_factor(): in
+// admin.php's code step, in api.php action=login and action=login_2fa. A
+// callback that set admin_logged_in itself or called bk_login_start_session()
+// would sign a 2FA account in without its code, and the checks above, which
+// call bk_oauth_finish(), would still pass.
 $oa_src = [];
 foreach (glob($root . '/*.php') ?: [] as $oa_file) {
     $oa_stripped = '';
@@ -3690,9 +3874,12 @@ check('admin_logged_in nastavuje jen bk_login_start_session a setup prvního ú�
     ['api.php action=setup', 'functions.php bk_login_start_session']);
 check('bk_login_start_session se volá jen bez 2FA nebo po druhém faktoru',
     $oa_sites('/(?<!function )\bbk_login_start_session\s*\(/'),
-    ['admin.php', 'api.php action=login', 'functions.php bk_login_first_factor_passed']);
-check('OAuth callback v admin.php přihlašuje přes bk_oauth_login',
-    preg_match_all('/\bbk_oauth_login\s*\(/', $oa_src['admin.php'] ?? ''), 1);
+    ['admin.php', 'api.php action=login', 'api.php action=login_2fa', 'functions.php bk_login_first_factor_passed']);
+check('OAuth callback v api.php končí přes bk_oauth_finish, ten přihlašuje přes bk_oauth_login',
+    [$oa_sites('/(?<!function )\bbk_oauth_finish\s*\(/'), $oa_sites('/(?<!function )\bbk_oauth_login\s*\(/')],
+    [['api.php action=oauth_callback'], ['functions.php bk_oauth_finish']]);
+check('admin.php už nikoho přes OAuth nepřihlašuje, jen přeposílá',
+    preg_match_all('/\bbk_oauth_(?:login|finish|fetch_identity)\s*\(/', $oa_src['admin.php'] ?? ''), 0);
 
 // --- Retention for process history --------------------------------------
 //
