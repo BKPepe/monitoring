@@ -4341,6 +4341,20 @@ if (isset($cookie_jar)) {
         return false;
     };
 
+    // Events of the same second: the digest keeps the newest 25, and under a
+    // LIMIT MySQL returns equal times in any order, so this preview and
+    // admin.php's below listed the same new servers in different orders now
+    // and then. The later row comes first now, every time.
+    $dg_tie = date('Y-m-d H:i:s');
+    $dg_tie_ins = $pdo->prepare("INSERT INTO monitor_events (monitor_id, monitor_name, monitor_type, event_type, description, occurred_at)
+                                 VALUES (NULL, ?, 'vps', 'monitor_added', 'test', ?)");
+    $dg_tie_ins->execute(['Souběh A', $dg_tie]);
+    $dg_tie_ins->execute(['Souběh B', $dg_tie]);
+    $dg_tie_names = array_values(array_filter(array_column(build_digest_data($pdo, 'weekly', false)['new_servers'], 'name'),
+        fn ($n) => str_starts_with((string)$n, 'Souběh ')));
+    check('nové servery ze stejné sekundy: pozdější řádek první, pokaždé stejně', $dg_tie_names, ['Souběh B', 'Souběh A']);
+    $pdo->exec("DELETE FROM monitor_events WHERE monitor_name LIKE 'Souběh %'");
+
     $digest_en = $digest_preview('en');
     check_true('EN digest se vyrenderoval', str_contains($digest_en, 'Weekly Report'));
     // DB data stays in its original language - only the template translates.

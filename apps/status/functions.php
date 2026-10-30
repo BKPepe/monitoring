@@ -14038,7 +14038,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         SELECT monitor_id, monitor_name, monitor_type, event_type, description, occurred_at
         FROM monitor_events
         WHERE occurred_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
-        ORDER BY occurred_at DESC
+        ORDER BY occurred_at DESC, id DESC
         LIMIT 25
     ");
     $stmt_events_recent->execute([$days]);
