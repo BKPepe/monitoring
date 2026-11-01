@@ -4650,6 +4650,20 @@ $role_of = function (int $uid) use ($pdo): ?string {
 $force_schema_bump = function () use ($pdo): void {
     $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('schema_version', 'test-old') ON DUPLICATE KEY UPDATE key_value = 'test-old'");
 };
+// The one-time data fixes that ran (migrations.php keeps their ids), and a
+// database from before one of them: its id leaves the record.
+$data_fixes_applied = function () use ($pdo): array {
+    $ids = json_decode((string)$pdo->query("SELECT key_value FROM settings WHERE key_name = 'data_fixes_applied'")->fetchColumn(), true);
+    return is_array($ids) ? $ids : [];
+};
+$forget_data_fix = function (string $id) use ($pdo, $data_fixes_applied): void {
+    $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'data_fixes_applied'")
+        ->execute([json_encode(array_values(array_diff($data_fixes_applied(), [$id])))]);
+};
+check('první běh migrací zapsal všechny jednorázové opravy dat', $data_fixes_applied(), [
+    'cpanel-monitors-to-web', 'agent-keys', 'one-asset-per-monitor', 'speedtest-source-turris', 'speedtest-below-0.1-mbps',
+    'cloudflare-location-history',
+]);
 $pdo->prepare("INSERT INTO users (username, email, password_hash, role) VALUES ('second_admin', 'second_admin@example.com', ?, 'admin')")
     ->execute([password_hash('DruheHeslo123!', PASSWORD_DEFAULT)]);
 $second_admin_id = (int)$pdo->lastInsertId();
@@ -6482,6 +6496,9 @@ $old_speedtest->execute(['2026-09-01 05:00:00', 0.0148, 0.0087, 'librespeed']);
 $old_speedtest->execute(['2026-09-02 05:00:00', 0.5, 0.0121, 'librespeed']);
 $old_speedtest->execute(['2026-09-03 05:00:00', 940.25, 48.5, 'librespeed']);
 
+// Those rows are older than both speed test fixes.
+$forget_data_fix('speedtest-source-turris');
+$forget_data_fix('speedtest-below-0.1-mbps');
 $force_schema_bump();
 api_get($base, 'action=public_status');
 check_true('migrace routerového vydání doběhla', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn() !== 'test-old');
@@ -6532,14 +6549,62 @@ if ($table_exists('metric_annotations')) {
     $pdo->exec("DELETE FROM metric_annotations WHERE note = 'po migraci'");
 }
 
-// A later schema bump runs the same statements again. A result that a 0.1.7
-// agent really measured (it carries bytes_received) must survive it, however small.
+// A later schema bump does not run the fixes again: a result that a 0.1.7
+// agent really measured (it carries bytes_received) stays, however small,
+// and so do the rows the fixes repaired.
 $pdo->exec("INSERT INTO speedtest_results (monitor_id, measured_at, download_mbps, upload_mbps, source, bytes_received) VALUES (2, '2026-09-04 05:00:00', 0.05, 0.04, 'agent', 93750)");
 $force_schema_bump();
 api_get($base, 'action=public_status');
+check_true('obě opravy rychlostí jsou zase v záznamu',
+    !array_diff(['speedtest-source-turris', 'speedtest-below-0.1-mbps'], $data_fixes_applied()));
 check('opakovaná migrace nesmaže malou hodnotu, kterou agent 0.1.7 opravdu naměřil', $speedtest_row('2026-09-04 05:00:00'), ['download_mbps' => 0.05, 'upload_mbps' => 0.04, 'source' => 'agent']);
 check('opakovaná migrace nechá dřív opravené řádky být', $speedtest_row('2026-09-02 05:00:00'), ['download_mbps' => 0.5, 'upload_mbps' => null, 'source' => 'turris']);
 $pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+
+// --- The monitor type cpanel is retired (D7, M28) --------------------------
+// A database from before the data fix still holds a cpanel monitor. The fix
+// makes it a web check of its host with the exporter's address as
+// cpanel_stats_url, records its id and never runs again: a cpanel row that
+// turns up later stays as it is. Nothing makes one: save_monitor maps an
+// older client's cpanel the same way and refuses a target without a host.
+$cp_row = fn (int $id): array => $pdo->query("SELECT type, target, cpanel_stats_url FROM monitors WHERE id = {$id}")->fetch(PDO::FETCH_NUM) ?: [];
+$cp_saved_id = 0;
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+            (264, 'D7 hosting', 'cpanel', 'https://hosting.example.test/cpanel_stats.php?key=d7-test', 'unknown', 'Test')");
+try {
+    $forget_data_fix('cpanel-monitors-to-web');
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    check('oprava dat převede monitor cpanel na web hostitele s adresou exportéru', [
+        $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn() !== 'test-old', $cp_row(264),
+        in_array('cpanel-monitors-to-web', $data_fixes_applied(), true),
+    ], [true, ['web', 'https://hosting.example.test', 'https://hosting.example.test/cpanel_stats.php?key=d7-test'], true]);
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+                (265, 'D7 pozdě', 'cpanel', 'https://late.example.test/cpanel_stats.php', 'unknown', 'Test')");
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    check('další bump ji nespustí: převod proběhne jen jednou', [
+        $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn() !== 'test-old', $cp_row(265)[0] ?? null,
+    ], [true, 'cpanel']);
+
+    [$cp_code, $cp_saved] = api_post($base, 'action=save_monitor', [
+        'id' => 0, 'name' => 'D7 klient', 'type' => 'cpanel', 'target' => 'https://client.example.test/cpanel_stats.php?key=d7',
+    ], $cookie_jar);
+    $cp_saved_id = (int)($cp_saved['id'] ?? 0);
+    check('save_monitor: typ cpanel staršího klienta uloží web hostitele s adresou exportéru', [$cp_code, $cp_row($cp_saved_id)],
+        [200, ['web', 'https://client.example.test', 'https://client.example.test/cpanel_stats.php?key=d7']]);
+    [$cp_bad_code, $cp_bad] = api_post($base, 'action=save_monitor', ['id' => 0, 'name' => 'D7 bez hostitele', 'type' => 'cpanel', 'target' => 'cpanel_stats.php'], $cookie_jar);
+    check('save_monitor: typ cpanel bez hostitele je 400 a nic neuloží', [
+        $cp_bad_code, str_contains((string)($cp_bad['error'] ?? ''), 'cpanel_stats_url'),
+        (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE name = 'D7 bez hostitele'")->fetchColumn(),
+    ], [400, true, 0]);
+} finally {
+    $cp_asset = $pdo->query("SELECT asset_id FROM monitors WHERE id = {$cp_saved_id}")->fetchColumn();
+    $pdo->exec("DELETE FROM monitors WHERE id IN (264, 265, {$cp_saved_id})");
+    if ($cp_asset) {
+        $pdo->exec("DELETE FROM assets WHERE id = " . (int)$cp_asset);
+    }
+}
 
 // =======================================================================
 // Outgoing message log - one row per attempt, written inside send_email()
@@ -7564,6 +7629,8 @@ try {
         && in_array('🇺🇸 Mumbai, US' . $cf_suffix, $cf_locations($cf_pub_before['regions'] ?? []), true));
 
     $cf_before = $cf_labels();
+    // The rows are older than the fix, so the database has not had it.
+    $forget_data_fix('cloudflare-location-history');
     $force_schema_bump();
     api_get($base, 'action=public_status');
     check('migrace Cloudflare proběhla a uložila novou verzi', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn(), $cf_version);
@@ -7623,8 +7690,10 @@ try {
         '🇮🇳 Mumbai, IN' . $cf_suffix => 120,
     ]);
 
-    // A second run (every later schema bump) finds nothing to change.
+    // A second run (a run cut short before its record was stored) finds
+    // nothing to change.
     $cf_snap_first = $cf_snapshot();
+    $forget_data_fix('cloudflare-location-history');
     $force_schema_bump();
     api_get($base, 'action=public_status');
     check('druhý běh migrace: verze zase uložená', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn(), $cf_version);

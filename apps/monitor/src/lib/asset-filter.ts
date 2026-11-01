@@ -25,7 +25,6 @@ const KNOWN_TYPES = [
   'dns',
   'vps',
   'openwrt',
-  'cpanel',
   'agent_service',
   'teamspeak',
   'minecraft',

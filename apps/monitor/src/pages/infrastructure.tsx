@@ -32,7 +32,6 @@ import {
   Plug,
   HeartPulse,
   Network,
-  PanelsTopLeft,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { PageHeader } from '@/components/layout/page-header';
@@ -79,7 +78,6 @@ const TYPE_ICON: Record<string, LucideIcon> = {
   dns: Network,
   vps: Server,
   openwrt: Router,
-  cpanel: PanelsTopLeft,
   agent_service: Boxes,
   teamspeak: Mic,
   minecraft: Gamepad2,

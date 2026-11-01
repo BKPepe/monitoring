@@ -20,7 +20,6 @@ const FEATURED_BY_TYPE: Record<string, readonly string[]> = {
   openwrt: ROUTER,
   router: ROUTER,
   vps: SERVER,
-  cpanel: SERVER,
   agent_service: ['cpu', 'ram', 'response_time'],
   teamspeak: ['response_time', 'ts_clients', 'cpu', 'ram'],
   minecraft: ['response_time', 'mc_players'],

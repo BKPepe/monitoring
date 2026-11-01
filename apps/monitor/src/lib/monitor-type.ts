@@ -95,9 +95,6 @@ const PROFILES: Record<string, MonitorTypeProfile> = {
   discord: PROBE,
   vps: MACHINE,
   openwrt: MACHINE,
-  // A shared hosting account: the panel reports load, memory and quota, but
-  // nothing pings the box and no process list ever arrives.
-  cpanel: { ...MACHINE, temperature: false, processes: 'none' },
   // One process watched by the agent of its server. Its CPU and memory are the
   // process's own (megabytes, not a share of the machine) and come from the
   // parent's rankings; it has no disk, no sensor and no latency of its own.
@@ -196,8 +193,6 @@ export function monitorTypeLabel(type: string | null | undefined, t: TranslateFn
       return t('montype.vps', 'Server s agentem');
     case 'openwrt':
       return t('montype.openwrt', 'OpenWrt router');
-    case 'cpanel':
-      return t('montype.cpanel', 'cPanel hosting');
     case 'agent_service':
       return t('montype.agent_service', 'Služba pod agentem');
     case 'teamspeak':

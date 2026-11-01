@@ -47,7 +47,6 @@ const translations: Record<string, { cs: string; en: string }> = {
   'montype.dns': { cs: 'DNS dotaz', en: 'DNS query' },
   'montype.vps': { cs: 'Server s agentem', en: 'Server with agent' },
   'montype.openwrt': { cs: 'OpenWrt router', en: 'OpenWrt router' },
-  'montype.cpanel': { cs: 'cPanel hosting', en: 'cPanel hosting' },
   'montype.agent_service': { cs: 'Služba pod agentem', en: 'Service under an agent' },
   'montype.teamspeak': { cs: 'TeamSpeak server', en: 'TeamSpeak server' },
   'montype.minecraft': { cs: 'Minecraft server', en: 'Minecraft server' },

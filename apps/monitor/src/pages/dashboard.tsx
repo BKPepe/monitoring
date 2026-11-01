@@ -1202,7 +1202,6 @@ const typeIcon: Record<string, LucideIcon> = {
   discord: MessageSquare,
   openwrt: RouterIcon,
   vps: Server,
-  cpanel: Server,
   port: Server,
   dns: Server,
   agent_service: Radar,

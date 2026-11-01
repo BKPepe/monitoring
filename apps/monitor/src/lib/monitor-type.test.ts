@@ -65,14 +65,6 @@ describe('monitorTypeProfile', () => {
     }
   });
 
-  it('leaves a cPanel account without a sensor and without a process list', () => {
-    const p = monitorTypeProfile('cpanel');
-    expect(p.cpu).toBe(true);
-    expect(p.disk).toBe(true);
-    expect(p.temperature).toBe(false);
-    expect(p.processes).toBe('none');
-  });
-
   it('leaves a heartbeat with no measurement at all', () => {
     const p = monitorTypeProfile('heartbeat');
     expect([p.latency, p.cpu, p.ram, p.disk, p.temperature]).toEqual([false, false, false, false, false]);
@@ -104,7 +96,6 @@ describe('monitorTypeLabel', () => {
       'discord',
       'openwrt',
       'vps',
-      'cpanel',
       'port',
       'dns',
       'agent_service',
@@ -131,7 +122,6 @@ describe('monitorTypeLabel', () => {
       'montype.dns',
       'montype.vps',
       'montype.openwrt',
-      'montype.cpanel',
       'montype.agent_service',
       'montype.teamspeak',
       'montype.minecraft',

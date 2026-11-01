@@ -845,8 +845,7 @@ export function AssetDetailPage() {
 
             {/* A heartbeat has no target to connect to - a certificate
                 nor "the protocol uses no TLS" makes sense for it. */}
-            {/* A cPanel account can still carry its site's certificate; an
-                agent machine's card only ever said "N/A". */}
+            {/* An agent machine's card only ever said "N/A". */}
             {!isRouter &&
               upperKind !== 'VPS' &&
               !isDiscord &&
@@ -1715,10 +1714,9 @@ function isRouterKind(kind: string | null | undefined): boolean {
   return upper === 'ROUTER' || upper === 'OPENWRT';
 }
 
-/** A machine with an agent or a hosting account: its services tab is about storage. */
+/** A machine with an agent: its services tab is about storage. */
 function isServerKind(kind: string | null | undefined): boolean {
-  const upper = (kind || '').toUpperCase();
-  return upper === 'VPS' || upper === 'CPANEL';
+  return (kind || '').toUpperCase() === 'VPS';
 }
 
 /** A count on a tab, quieter than its name; nothing at zero. */

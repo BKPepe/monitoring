@@ -28,10 +28,13 @@ if (count(get_included_files()) === 1) {
  * A deploy uploads db.php and this file one after the other. A new db.php
  * next to the old list would otherwise run the old steps, find them all
  * applied and store the new version, and the new steps would never run.
- * db.php runs the list only when the two versions agree.
+ * db.php runs the list only when the two versions agree. It requires this
+ * file before it compares them, though: a function declared here needs a
+ * name no db.php ever declared, or an older db.php that still declares it
+ * fails every request that is due to migrate on the redeclaration.
  */
 function bk_schema_migrations_version(): string {
-    return '20260927r022';
+    return '20261101r023';
 }
 
 /**
@@ -41,9 +44,12 @@ function bk_schema_migrations_version(): string {
  * Every step is safe to repeat: the whole list runs on every new
  * BK_SCHEMA_VERSION and again after a run with a real error. An ALTER of an
  * existing column or index fails as already applied, CREATE is IF NOT
- * EXISTS, an UPDATE matches nothing the second time.
+ * EXISTS, an UPDATE matches nothing the second time. A rewrite of stored
+ * data that is needed once is a data fix (bk_data_fixes()), not a step: the
+ * last step runs those the database has not had yet.
  *
- * A new step goes at the end, after the table it alters, and needs a new
+ * A new step goes before that last one, 'one-time data fixes', which runs
+ * on the finished schema, and after the table it alters. It needs a new
  * version, the same in bk_schema_migrations_version() below and in
  * BK_SCHEMA_VERSION in db.php: a database that already stores the current
  * version never reads this list again. Every column and table added here
@@ -86,32 +92,8 @@ function bk_schema_migrations(): array {
         "ALTER TABLE monitors MODIFY COLUMN status VARCHAR(20) DEFAULT 'unknown'",
         "ALTER TABLE monitor_logs MODIFY COLUMN status VARCHAR(20) NOT NULL",
         "ALTER TABLE monitors ADD COLUMN cpanel_stats_url VARCHAR(255) DEFAULT NULL",
-        // Old cpanel monitors become web monitors; the address they had moves
-        // to cpanel_stats_url.
-        'cpanel monitors to web' => static function (PDO $pdo): void {
-            $stmt_check_cpanel = $pdo->query("SELECT * FROM monitors WHERE type = 'cpanel'");
-            $cpanel_monitors = $stmt_check_cpanel->fetchAll();
-            foreach ($cpanel_monitors as $m) {
-                $parsed = parse_url($m['target']);
-                $base_target = ($parsed['scheme'] ?? 'https') . '://' . ($parsed['host'] ?? 'localhost');
-
-                $stmt_update = $pdo->prepare("UPDATE monitors SET type = 'web', target = ?, cpanel_stats_url = ? WHERE id = ?");
-                $stmt_update->execute([$base_target, $m['target'], $m['id']]);
-            }
-        },
         "ALTER TABLE users ADD COLUMN whatsapp_notifications TINYINT(1) DEFAULT 0",
         "ALTER TABLE user_subscriptions ADD COLUMN whatsapp_notifications TINYINT(1) DEFAULT 0",
-        // Every existing monitor without an agent_key gets one.
-        'agent keys' => static function (PDO $pdo): void {
-            $stmt_null_keys = $pdo->query("SELECT id FROM monitors WHERE agent_key IS NULL OR agent_key = ''");
-            $null_monitors = $stmt_null_keys->fetchAll();
-            if (!empty($null_monitors)) {
-                $stmt_set_key = $pdo->prepare("UPDATE monitors SET agent_key = ? WHERE id = ?");
-                foreach ($null_monitors as $m) {
-                    $stmt_set_key->execute([bin2hex(random_bytes(16)), $m['id']]);
-                }
-            }
-        },
         // Threshold values for the VPS agent.
         "ALTER TABLE monitors ADD COLUMN cpu_threshold INT DEFAULT 90",
         "ALTER TABLE monitors ADD COLUMN ram_threshold INT DEFAULT 95",
@@ -270,15 +252,16 @@ function bk_schema_migrations(): array {
         // gets its own new 1:1 asset - no guessing which monitors "really"
         // belong together (there is no reliable signal for that - agent_key is
         // always unique, category is just a label). Merging monitors into one
-        // asset is strictly a manual admin action (see admin.php).
+        // asset is strictly a manual admin action (see admin.php). The
+        // monitors that predate the table get theirs from a data fix.
         "CREATE TABLE IF NOT EXISTS `assets` (`id` INT AUTO_INCREMENT PRIMARY KEY, `name` VARCHAR(150) NOT NULL, `icon` VARCHAR(30) DEFAULT NULL, `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         "ALTER TABLE monitors ADD COLUMN asset_id INT DEFAULT NULL",
-        // A step with its own rule, as is the last one. MySQL answers a second
-        // run with 1826 (already applied); other servers name the same
-        // duplicate with codes of their own, and some hosts refuse a named key
-        // added by ALTER at all. Whatever it answers is logged and never holds
-        // the version back: the key only guards the link, and the steps below
-        // do not need it.
+        // A step with its own rule, as is the Cloudflare data fix. MySQL
+        // answers a second run with 1826 (already applied); other servers
+        // name the same duplicate with codes of their own, and some hosts
+        // refuse a named key added by ALTER at all. Whatever it answers is
+        // logged and never holds the version back: the key only guards the
+        // link, and the steps below do not need it.
         'asset_id foreign key' => static function (PDO $pdo): void {
             try {
                 $pdo->exec("ALTER TABLE monitors ADD CONSTRAINT fk_monitors_asset_id FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE SET NULL");
@@ -286,15 +269,6 @@ function bk_schema_migrations(): array {
                 if (!bk_db_already_applied($e)) {
                     error_log('[db] migration: the named foreign key on monitors.asset_id was not added: ' . $e->getMessage());
                 }
-            }
-        },
-        'one asset per monitor without one' => static function (PDO $pdo): void {
-            $stmt_unassigned = $pdo->query("SELECT id, name FROM monitors WHERE asset_id IS NULL");
-            foreach ($stmt_unassigned->fetchAll() as $um) {
-                $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
-                $stmt_new_asset->execute([$um['name']]);
-                $stmt_assign = $pdo->prepare("UPDATE monitors SET asset_id = ? WHERE id = ?");
-                $stmt_assign->execute([(int)$pdo->lastInsertId(), $um['id']]);
             }
         },
 
@@ -613,17 +587,6 @@ function bk_schema_migrations(): array {
         "ALTER TABLE speedtest_results ADD COLUMN bytes_received BIGINT DEFAULT NULL",
         "ALTER TABLE speedtest_results ADD COLUMN bytes_sent BIGINT DEFAULT NULL",
         "ALTER TABLE speedtest_results ADD COLUMN diagnostics TEXT DEFAULT NULL",
-        // 'librespeed' was a constant no query read; every such row was started
-        // by the Turris scheduler.
-        "UPDATE speedtest_results SET source = 'turris' WHERE source = 'librespeed'",
-        // Agents before 0.1.7 divided results of 1000 Mbit/s and more once too
-        // often and stored 0.01-0.08. No real line measures that, so the value
-        // is unmeasured, not slow. Per column; a file still on the router
-        // repairs the row when 0.1.7 sends it again. Only rows without
-        // bytes_received (= written by an older agent) are touched, so a later
-        // schema bump can never erase a value a 0.1.7 agent really measured.
-        "UPDATE speedtest_results SET download_mbps = NULL WHERE download_mbps < 0.1 AND bytes_received IS NULL",
-        "UPDATE speedtest_results SET upload_mbps = NULL WHERE upload_mbps < 0.1 AND bytes_received IS NULL",
 
         // One row per physical disk of a router. disk_key is a hash of
         // transport, port, sysfs model and size - never a serial number or a
@@ -793,20 +756,227 @@ function bk_schema_migrations(): array {
         // sent the flag since 0.1.7; only last_details kept it until now.
         "ALTER TABLE vps_metrics ADD COLUMN speedtest_active TINYINT DEFAULT NULL",
 
+        // Last, on the finished schema: the data fixes this database has not
+        // had yet (bk_data_fixes_run).
+        'one-time data fixes' => static function (PDO $pdo): void {
+            bk_data_fixes_run($pdo);
+        },
+    ];
+}
+
+/**
+ * The one-time data fixes in the order they run, each under an id that
+ * never changes.
+ *
+ * A data fix rewrites stored rows, not the schema: a value an older version
+ * stored wrongly, a monitor type that is gone. These were steps of the list
+ * above and ran again on every schema bump; the cpanel conversion then
+ * rewrote any cpanel monitor to web on whichever deploy bumped the version
+ * next. Now a later run skips a fix that ran: bk_data_fixes_run() keeps the
+ * ids that ran in the settings row data_fixes_applied. A fix can still run
+ * twice: a run cut short records nothing (bk_data_fixes_run() writes the
+ * record once, after the loop), and nothing serialises the list, so two
+ * requests that start it at the same moment both run what neither has
+ * recorded yet, as they always ran every step. A fix has to be safe to
+ * repeat, also beside a request that runs it at the same time.
+ *
+ * A new fix goes at the end under a new id and needs a version bump, as a
+ * new step does: the list runs only then. An id is never reused or renamed,
+ * or a database that ran the old fix would skip the new one. A fix can go
+ * once every database has run it; its id may stay in the record.
+ *
+ * @return array<string, Closure(PDO): void>
+ */
+function bk_data_fixes(): array {
+    return [
+        // The monitor type cpanel is retired (owner decision D7): a cpanel
+        // monitor becomes a web check of its host, and the address it had,
+        // the exporter's cpanel_stats.php, moves to cpanel_stats_url, where
+        // cron reads the hosting's figures for a web monitor.
+        'cpanel-monitors-to-web' => static function (PDO $pdo): void {
+            $stmt_update = $pdo->prepare("UPDATE monitors SET type = 'web', target = ?, cpanel_stats_url = ? WHERE id = ?");
+            foreach ($pdo->query("SELECT id, target FROM monitors WHERE type = 'cpanel'")->fetchAll() as $m) {
+                $parsed = parse_url((string)$m['target']);
+                $base_target = ($parsed['scheme'] ?? 'https') . '://' . ($parsed['host'] ?? 'localhost');
+                $stmt_update->execute([$base_target, $m['target'], $m['id']]);
+            }
+        },
+        // Every monitor created before agent keys gets one. Every path that
+        // creates a monitor sets it since.
+        'agent-keys' => static function (PDO $pdo): void {
+            $stmt_set_key = $pdo->prepare("UPDATE monitors SET agent_key = ? WHERE id = ?");
+            foreach ($pdo->query("SELECT id FROM monitors WHERE agent_key IS NULL OR agent_key = ''")->fetchAll() as $m) {
+                $stmt_set_key->execute([bin2hex(random_bytes(16)), $m['id']]);
+            }
+        },
+        // Every monitor created before assets gets its own 1:1 asset. Every
+        // path that creates a monitor gives it one since; a monitor whose
+        // asset is deleted later stays without one (assetId null). A monitor
+        // that got its asset from a request running the list at the same
+        // time keeps that one, and the asset made here is deleted again.
+        'one-asset-per-monitor' => static function (PDO $pdo): void {
+            $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
+            $stmt_assign = $pdo->prepare("UPDATE monitors SET asset_id = ? WHERE id = ? AND asset_id IS NULL");
+            $stmt_drop_asset = $pdo->prepare("DELETE FROM assets WHERE id = ?");
+            foreach ($pdo->query("SELECT id, name FROM monitors WHERE asset_id IS NULL")->fetchAll() as $um) {
+                $stmt_new_asset->execute([$um['name']]);
+                $asset_id = (int)$pdo->lastInsertId();
+                $stmt_assign->execute([$asset_id, $um['id']]);
+                if ($stmt_assign->rowCount() === 0) {
+                    $stmt_drop_asset->execute([$asset_id]);
+                }
+            }
+        },
+        // 'librespeed' was a constant no query read; every such row was started
+        // by the Turris scheduler.
+        'speedtest-source-turris' => static function (PDO $pdo): void {
+            $pdo->exec("UPDATE speedtest_results SET source = 'turris' WHERE source = 'librespeed'");
+        },
+        // Agents before 0.1.7 divided results of 1000 Mbit/s and more once too
+        // often and stored 0.01-0.08. No real line measures that, so the value
+        // is unmeasured, not slow. Per column; a file still on the router
+        // repairs the row when 0.1.7 sends it again. Only rows without
+        // bytes_received (= written by an older agent) are touched, so the fix
+        // never erases a value a 0.1.7 agent really measured.
+        'speedtest-below-0.1-mbps' => static function (PDO $pdo): void {
+            $pdo->exec("UPDATE speedtest_results SET download_mbps = NULL WHERE download_mbps < 0.1 AND bytes_received IS NULL");
+            $pdo->exec("UPDATE speedtest_results SET upload_mbps = NULL WHERE upload_mbps < 0.1 AND bytes_received IS NULL");
+        },
         // Cloudflare Worker checks posted before agents e13a2d4 carry a US flag
-        // on every colo (20260924cf). Data only, safe to repeat on every later
-        // bump. Like the foreign key above, an error is logged and never holds
-        // the version back: no schema step needs these labels, and a column
-        // that is not utf8mb4 (an older self-hosted database) refuses the
-        // COLLATE on every run.
-        'Cloudflare location history' => static function (PDO $pdo): void {
+        // on every colo (20260924cf). Like the asset_id foreign key step, an
+        // error is logged and fails nothing: no schema step needs these
+        // labels, and a column that is not utf8mb4 (an older self-hosted
+        // database) refuses the COLLATE every time.
+        'cloudflare-location-history' => static function (PDO $pdo): void {
             try {
-                bk_cf_fix_location_history($pdo);
+                bk_cf_relabel_location_history($pdo);
             } catch (PDOException $e) {
-                error_log('[db] migration: the Cloudflare location history was not rewritten: ' . $e->getMessage());
+                error_log('[db] data fix: the Cloudflare location history was not rewritten: ' . $e->getMessage());
             }
         },
     ];
+}
+
+/**
+ * Gives the Cloudflare Worker's past checks the country of the colo they ran in.
+ *
+ * Until agents e13a2d4 the Worker put its egress IP's country (US) next to the
+ * right city, and every page shows the stored label: "🇺🇸 Mumbai, US". Each
+ * wrong label is rebuilt from the Worker's map (cloudflare_colos.php); other
+ * providers, unknown cities and correct labels are left alone.
+ *
+ * Cost on a quarter million rows: one pass over idx_logs_regions (it holds
+ * checked_from and the id, so no row is read) finds the distinct labels, then
+ * one UPDATE per wrong label, walking only the id range that label was posted
+ * in. The labels are compared in utf8mb4_bin: the table's unicode_ci weighs
+ * every emoji the same, so "🇺🇸 X" and "🇩🇪 X" would be one value there.
+ * A second run finds nothing to change. Returns the number of rows rewritten.
+ *
+ * Until 20261101r023 db.php declared it as bk_cf_fix_location_history(), a
+ * name this file must not take (bk_schema_migrations_version()).
+ */
+function bk_cf_relabel_location_history(PDO $pdo): int {
+    require_once __DIR__ . '/cloudflare_colos.php';
+    $labels = $pdo->query("
+        SELECT checked_from COLLATE utf8mb4_bin AS label, MIN(id) AS first_id, MAX(id) AS last_id
+        FROM monitor_logs
+        WHERE checked_from LIKE '%(AS13335 Cloudflare)'
+        GROUP BY checked_from COLLATE utf8mb4_bin
+    ")->fetchAll();
+    $update = $pdo->prepare("
+        UPDATE monitor_logs SET checked_from = ?
+        WHERE id BETWEEN ? AND ? AND checked_from COLLATE utf8mb4_bin = ?
+    ");
+    $rows = 0;
+    foreach ($labels as $l) {
+        $fixed = bk_cf_corrected_label((string)$l['label']);
+        if ($fixed !== null) {
+            $update->execute([$fixed, (int)$l['first_id'], (int)$l['last_id'], $l['label']]);
+            $rows += $update->rowCount();
+        }
+    }
+    if ($rows > 0) {
+        // The regions answer is cached for ten minutes with the old labels in it.
+        $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'regions_cache_%'");
+        error_log("[db] Cloudflare Worker locations: {$rows} checks relabelled with their colo's country");
+    }
+    // The digest compares each region's latency with the last digest's by
+    // label; renamed there as well, the trend of a relabelled colo carries on.
+    // Where the right label is already in the snapshot, its value stays.
+    // Checked on every run, not only when rows changed: a run cut short after
+    // the UPDATEs would otherwise never get here again.
+    $read = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = ?");
+    $write = $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = ?");
+    foreach (['digest_snapshot_weekly', 'digest_snapshot_monthly'] as $key) {
+        $read->execute([$key]);
+        $snapshot = json_decode((string)$read->fetchColumn(), true);
+        if (!is_array($snapshot) || !is_array($snapshot['regions'] ?? null)) {
+            continue;
+        }
+        $regions = [];
+        foreach ($snapshot['regions'] as $label => $latency) {
+            $fixed = bk_cf_corrected_label((string)$label);
+            if ($fixed === null) {
+                $regions[$label] = $latency;
+            } elseif (!array_key_exists($fixed, $snapshot['regions']) && !array_key_exists($fixed, $regions)) {
+                $regions[$fixed] = $latency;
+            }
+        }
+        if ($regions !== $snapshot['regions']) {
+            $snapshot['regions'] = $regions;
+            $write->execute([json_encode($snapshot, JSON_UNESCAPED_UNICODE), $key]);
+        }
+    }
+    return $rows;
+}
+
+/**
+ * The last migration step: runs the data fixes this database has not had,
+ * then stores the record of those that ran.
+ *
+ * A fix that failed fails the step, after the record is stored. The version
+ * then stays and the list, this step with it, runs again 10 minutes later;
+ * the fixes that did run are not repeated.
+ */
+function bk_data_fixes_run(PDO $pdo): void {
+    $record = json_decode((string)$pdo->query("SELECT key_value FROM settings WHERE key_name = 'data_fixes_applied'")->fetchColumn(), true);
+    $applied = is_array($record) ? array_values(array_filter($record, 'is_string')) : [];
+    $result = bk_data_fixes_apply($pdo, bk_data_fixes(), $applied);
+    if ($result['applied'] !== $applied) {
+        bk_setting_set($pdo, 'data_fixes_applied', (string)json_encode($result['applied']));
+    }
+    if ($result['error'] !== null) {
+        throw $result['error'];
+    }
+}
+
+/**
+ * Runs the fixes whose id $applied does not hold, in order, and returns
+ * $applied with the ids of those that ran, and the first error.
+ *
+ * A fix that fails is logged with its id and left out of the record, so the
+ * next run tries it again; the fixes after it still run. Only a PDOException
+ * is caught, as in bk_schema_migrate().
+ *
+ * @param array<string, Closure(PDO): void> $fixes
+ * @param list<string> $applied
+ * @return array{applied: list<string>, error: ?PDOException}
+ */
+function bk_data_fixes_apply(PDO $pdo, array $fixes, array $applied): array {
+    $error = null;
+    foreach ($fixes as $id => $fix) {
+        if (in_array($id, $applied, true)) {
+            continue;
+        }
+        try {
+            $fix($pdo);
+            $applied[] = $id;
+        } catch (PDOException $e) {
+            error_log("[db] data fix {$id} failed: " . $e->getMessage());
+            $error ??= $e;
+        }
+    }
+    return ['applied' => $applied, 'error' => $error];
 }
 
 /**

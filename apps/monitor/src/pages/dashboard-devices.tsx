@@ -20,7 +20,7 @@ import { socTemperatureC } from '@/lib/router-overview';
 import type { SparkSample } from '@/lib/sparkline-segments';
 
 /** The kinds that are a machine with an agent: they get a card with their own readings. */
-const DEVICE_TYPES = ['openwrt', 'vps', 'cpanel'];
+const DEVICE_TYPES = ['openwrt', 'vps'];
 
 export function isDeviceMonitor(m: ApiMonitor): boolean {
   return DEVICE_TYPES.includes(normalizeMonitorType(m.type));

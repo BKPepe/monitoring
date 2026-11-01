@@ -532,7 +532,11 @@ agenta (`vps`/`openwrt`), kterému ji `convert_to_agent_check` může předat.
 **Admin.** Vytvoří (`id: 0`) nebo upraví monitor. Tělo je JSON.
 
 Typy: `web`, `port`, `vps`, `openwrt`, `minecraft`, `teamspeak`, `discord`,
-`heartbeat`, `agent_service`.
+`heartbeat`, `agent_service`. Typ `cpanel` skončil: čísla hostingu čte webový
+monitor s `cpanel_stats_url` a jednorázová oprava dat na něj převedla každý
+uložený monitor `cpanel`. Starší klient, který typ `cpanel` posílá dál,
+dostane totéž - `web` s jeho hostitelem jako `target` a poslanou adresou jako
+`cpanel_stats_url`; `target` bez hostitele je `400`.
 
 Vybrané parametry:
 
@@ -540,6 +544,7 @@ Vybrané parametry:
 |---|---|---|
 | `target` | vše kromě `vps`, `openwrt`, `heartbeat` | Povinný tam, kde platí |
 | `body_keyword` | `web` | Tělo odpovědi musí obsahovat tento řetězec |
+| `cpanel_stats_url` | `web` | `cpanel_stats.php` hostingu i s klíčem; cron z něj vedle HTTP kontroly čte disk, paměť a další |
 | `heartbeat_interval` | `heartbeat` | **Sekundy.** Povinný, minimum 60 |
 | `heartbeat_grace` | `heartbeat` | Sekundy; `null` = hlídá se přesně na interval |
 | `latency_threshold_ms` | vše | `null` = upozornění na zpomalení vypnuté |

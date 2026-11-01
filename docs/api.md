@@ -540,7 +540,11 @@ it to.
 **Admin.** Creates (`id: 0`) or edits a monitor. The body is JSON.
 
 Types: `web`, `port`, `vps`, `openwrt`, `minecraft`, `teamspeak`, `discord`,
-`heartbeat`, `agent_service`.
+`heartbeat`, `agent_service`. The type `cpanel` is retired: a web monitor with
+`cpanel_stats_url` reads the hosting's figures, and a one-time data fix made
+every stored `cpanel` monitor one. An older client that still sends
+`"type": "cpanel"` gets the same - `web` with its host as `target` and the
+address it sent as `cpanel_stats_url`; a `target` with no host is `400`.
 
 Selected parameters:
 
@@ -548,6 +552,7 @@ Selected parameters:
 |---|---|---|
 | `target` | everything except `vps`, `openwrt`, `heartbeat` | Required where it applies |
 | `body_keyword` | `web` | The response body must contain this string |
+| `cpanel_stats_url` | `web` | The hosting's `cpanel_stats.php` with its key; cron reads disk, memory and the rest from it next to the HTTP check |
 | `heartbeat_interval` | `heartbeat` | **Seconds.** Required, minimum 60 |
 | `heartbeat_grace` | `heartbeat` | Seconds; `null` = checked exactly on the interval |
 | `latency_threshold_ms` | all | `null` = slowdown alerts disabled |

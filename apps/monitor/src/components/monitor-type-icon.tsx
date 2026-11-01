@@ -31,7 +31,6 @@ const TYPE_ICONS: Record<string, LucideIcon> = {
   discord: MessageCircle,
   openwrt: Router,
   vps: Server,
-  cpanel: Server,
   port: Plug,
   heartbeat: HeartPulse,
   agent_service: Activity,

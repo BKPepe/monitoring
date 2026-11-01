@@ -315,10 +315,6 @@ foreach ($monitors as $monitor) {
             // window sent a "back online" notification to every channel.
             break;
             
-        case 'cpanel':
-            $check_result = check_cpanel($target, $timeout);
-            break;
-            
         case 'port':
             $check_result = check_socket($target, $port ?: 80, $timeout);
             break;
@@ -371,9 +367,6 @@ foreach ($monitors as $monitor) {
         switch ($type) {
             case 'web':
                 $retry_result = check_http($target, $timeout, $monitor['body_keyword'] ?? null);
-                break;
-            case 'cpanel':
-                $retry_result = check_cpanel($target, $timeout);
                 break;
             case 'port':
                 $retry_result = check_socket($target, $port ?: 80, $timeout);
@@ -631,25 +624,6 @@ foreach ($monitors as $monitor) {
             }
             
             $details = json_encode($details_arr, JSON_UNESCAPED_UNICODE);
-        } elseif ($type === 'cpanel') {
-            $details = json_encode([
-                'disk' => $check_result['disk'] ?? null,
-                'memory' => $check_result['memory'] ?? null,
-                'processes' => $check_result['processes'] ?? null,
-                'database' => $check_result['database'] ?? null,
-                'bandwidth' => $check_result['bandwidth'] ?? null,
-                'postgresql' => $check_result['postgresql'] ?? null,
-                'cpu' => $check_result['cpu'] ?? null
-            ], JSON_UNESCAPED_UNICODE);
-            
-            if ($new_status === 'up') {
-                // NULL for missing metrics - same reason as for web monitors above.
-                $cpu_val = isset($check_result['cpu']['percent']) ? floatval($check_result['cpu']['percent']) : null;
-                $ram_val = isset($check_result['memory']['percent']) ? floatval($check_result['memory']['percent']) : null;
-                $hdd_val = isset($check_result['disk']['percent']) ? floatval($check_result['disk']['percent']) : null;
-                $stmt_metrics = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage) VALUES (?, ?, ?, ?)");
-                $stmt_metrics->execute([$id, $cpu_val, $ram_val, $hdd_val]);
-            }
         }
     }
     

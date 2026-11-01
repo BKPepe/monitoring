@@ -275,8 +275,6 @@ function monitor_type_icon(string $type, string $target = '', string $size = '1.
             return '<i class="fas fa-headset" style="color:#5bb5e5;font-size:'.$size.';" title="TeamSpeak"></i>';
         case 'vps':
             return '<i class="fas fa-server" style="color:#a78bfa;font-size:'.$size.';" title="VPS"></i>';
-        case 'cpanel':
-            return '<i class="fas fa-server" style="color:#0f9f90;font-size:'.$size.';" title="cPanel Hosting"></i>';
         case 'port':
             return '<i class="fas fa-network-wired" style="color:#60a5fa;font-size:'.$size.';" title="Port"></i>';
         case 'openwrt':

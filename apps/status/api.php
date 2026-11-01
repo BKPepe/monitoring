@@ -760,6 +760,20 @@ if ($action === 'save_monitor') {
     $type = trim($input['type'] ?? 'web');
     if ($type === 'https' || $type === 'http') $type = 'web';
     $target = trim($input['target'] ?? '');
+    // The type cpanel is retired (owner decision D7). A client that still
+    // sends it gets what the data fix cpanel-monitors-to-web made of every
+    // stored one: a web check of the host, with the address it sent, the
+    // exporter's cpanel_stats.php, as cpanel_stats_url. A target with no host
+    // to check is refused rather than guessed.
+    if ($type === 'cpanel') {
+        $cp_parts = parse_url($target);
+        if (!is_array($cp_parts) || empty($cp_parts['host'])) {
+            bk_api_error(400, 'Typ cpanel už neexistuje: založte monitor typu web s adresou webu a adresu cpanel_stats.php zadejte jako cpanel_stats_url.');
+        }
+        $input['cpanel_stats_url'] = $target;
+        $target = ($cp_parts['scheme'] ?? 'https') . '://' . $cp_parts['host'];
+        $type = 'web';
+    }
     $port = !empty($input['port']) ? (int)$input['port'] : null;
     $category = trim($input['category'] ?? ($type === 'web' ? 'Webové Portály & API' : ($type === 'teamspeak' || $type === 'minecraft' ? 'Komunikační & Herní Servery' : 'Síťová Infrastruktura & Routery')));
 
@@ -1188,7 +1202,7 @@ if ($action === 'discovered_services') {
                 //  - blocking remains only where no path is left.
                 $src_is_agent = in_array(strtolower((string)($row['type'] ?? '')), ['vps', 'openwrt'], true);
                 $svc_proc = isset($svc['process']) && $svc['process'] !== '' ? (string)$svc['process'] : null;
-                $cron_checkable_types = ['web', 'cpanel', 'port', 'minecraft', 'teamspeak', 'discord'];
+                $cron_checkable_types = ['web', 'port', 'minecraft', 'teamspeak', 'discord'];
                 $svc_type_lc = strtolower((string)($svc['type'] ?? 'web'));
                 $active_possible = $import_blocked === null
                     && (in_array($svc_type_lc, $cron_checkable_types, true) || ($port !== null && $port > 0));
@@ -1267,7 +1281,7 @@ if ($action === 'import_discovered_service') {
     // samba...) imports as a port check - otherwise the monitor just generated
     // unmeasurable 'unknown' records every minute (that is how kresd got
     // 0 % SLA despite never being tested by any check).
-    $cron_checkable = ['web', 'cpanel', 'port', 'minecraft', 'teamspeak', 'discord', 'vps', 'openwrt', 'agent_service'];
+    $cron_checkable = ['web', 'port', 'minecraft', 'teamspeak', 'discord', 'vps', 'openwrt', 'agent_service'];
     if (!in_array($s_type, $cron_checkable, true)) {
         if (!$s_port) {
             bk_api_error(400, "Typ služby '{$s_type}' zatím neumíme aktivně kontrolovat a služba nehlásí port, přes který by šla testovat. Import by generoval jen prázdné kontroly.");

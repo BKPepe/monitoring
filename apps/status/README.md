@@ -1,6 +1,6 @@
 # Blood Kings - Status & Telemetry Monitoring System
 
-An open-source, ultra-fast server and service status monitoring application built with PHP and MySQL. It features active uptime probing (HTTP/S, TCP, Minecraft, TeamSpeak 3, Discord, cPanel) and passive system resource telemetry pushed from remote agents (Linux, Windows, Docker, OpenWrt).
+An open-source, ultra-fast server and service status monitoring application built with PHP and MySQL. It features active uptime probing (HTTP/S with cPanel hosting stats, TCP, Minecraft, TeamSpeak 3, Discord) and passive system resource telemetry pushed from remote agents (Linux, Windows, Docker, OpenWrt).
 
 ---
 
@@ -16,7 +16,7 @@ An open-source, ultra-fast server and service status monitoring application buil
 * `badge.php` - Dynamic vector SVG badge generator (`badge.php?id=12&type=status|uptime`).
 * `widget.php` - Deprecated alias: a 302 to the 30-day availability badge (`api.php?action=badge&type=uptime`).
 * `db.php` - PDO database connection initializer; runs the migrations when the schema version changes.
-* `migrations.php` - The schema migrations: one ordered list and the runner that applies it.
+* `migrations.php` - The schema migrations (one ordered list and the runner that applies it) and the one-time data fixes, each run once per database.
 * `functions.php` - Core measurement library, alert routing (Pushover, PagerDuty, Telegram, Discord, Slack), and TOTP engine. It only defines functions; the tests require it without a database.
 * `bootstrap.php` - What every page and endpoint that uses `functions.php` loads first: `db.php`, the library, and the check of a signed-in account's role.
 * `schema.sql` - Complete MySQL database structure.

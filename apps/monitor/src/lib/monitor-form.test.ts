@@ -148,7 +148,6 @@ describe('formFromMonitor -> formToPayload: an untouched edit saves back what is
     // Types the picker does not offer keep their own and save it back.
     ['port', 'host.example.test:2222', 'host.example.test', 2222],
     ['dns', 'ns.example.test', 'ns.example.test', null],
-    ['cpanel', 'cpanel.example.test', 'cpanel.example.test', null],
     ['agent_service', 'nginx', 'nginx', null],
   ])('%s', (type, target, savedTarget, savedPort) => {
     const mon = monitor({ ...CONFIGURED, type, target, category: 'Weby' });

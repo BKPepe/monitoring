@@ -4694,7 +4694,8 @@ check_true('a text chyby MySQL jde jen do logu serveru', str_contains((string)fi
 // duplicate row: 1062 there is a UNIQUE index the data breaks. Any other
 // error is logged with its step and reported, and the steps after it still
 // run; db.php stores schema_version only when nothing is reported.
-bk_test_load_functions(__DIR__ . '/../migrations.php', ['bk_schema_migrations', 'bk_schema_migrate']);
+bk_test_load_functions(__DIR__ . '/../migrations.php', ['bk_schema_migrations', 'bk_schema_migrate',
+    'bk_data_fixes', 'bk_data_fixes_apply', 'bk_cf_relabel_location_history']);
 $mg_pdo = new BkInstallFakePdo();
 $mg_pdo->fail = $in_imp->fail;
 $mg_rows = fn (): int => (int)$mg_pdo->query('SELECT COUNT(*) FROM m')->fetchColumn();
@@ -4742,22 +4743,94 @@ check('seznam migrací: krok je příkaz SQL, nebo funkce se jménem do logu',
     count($mg_steps));
 check('seznam migrací: žádný příkaz se neopakuje (dvojí MODIFY status je pryč)', count(array_unique($mg_sql)), count($mg_sql));
 
+check('poslední krok migrací spouští jednorázové opravy dat', array_key_last($mg_steps), 'one-time data fixes');
+
+// A deploy uploads db.php and migrations.php one after the other, and db.php
+// requires migrations.php before it compares the versions. db.php up to r022
+// declared the Cloudflare relabel itself: under that name in migrations.php,
+// every request due to migrate between the two uploads died on the
+// redeclaration. Here that db.php's declaration, then the new list.
+$mg_mixed = sys_get_temp_dir() . '/bk_mixed_upload_' . bin2hex(random_bytes(4)) . '.php';
+file_put_contents($mg_mixed, "<?php\nfunction bk_cf_fix_location_history(PDO \$pdo): int { return 0; }\nrequire_once "
+    . var_export(realpath(__DIR__ . '/../migrations.php'), true) . ";\necho 'ok';\n");
+exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($mg_mixed) . ' 2>&1', $mg_mixed_out, $mg_mixed_rc);
+@unlink($mg_mixed);
+check('migrations.php se načte i vedle db.php r022: žádná funkce dvakrát', [$mg_mixed_rc, $mg_mixed_out], [0, ['ok']]);
+
+// One-time data fixes (M28): the last step runs each fix the database has not
+// had and keeps its id, so a fix that ran never runs again on a later bump. A
+// failed one is logged with its id and left out of the record, the fixes
+// after it still run, and its error fails the step.
+$df_list = bk_data_fixes();
+check('seznam oprav dat: každá má textové id a je funkcí, převod cpanel je v něm', [
+    count(array_filter(array_keys($df_list), 'is_string')), count(array_filter($df_list, fn ($f) => $f instanceof Closure)),
+    isset($df_list['cpanel-monitors-to-web']),
+], [count($df_list), count($df_list), true]);
+$df_pdo = new BkInstallFakePdo();
+$df_pdo->exec('CREATE TABLE r (id TEXT)');
+$df_fix = fn (string $id): Closure => static function (PDO $pdo) use ($id): void { $pdo->exec("INSERT INTO r VALUES ('{$id}')"); };
+$df_log = (string)tempnam(sys_get_temp_dir(), 'bk_fix_log');
+$df_log_prev = ini_set('error_log', $df_log);
+$df_first = bk_data_fixes_apply($df_pdo, ['a' => $df_fix('a'), 'b' => $df_fix('b')], []);
+$df_again = bk_data_fixes_apply($df_pdo, ['a' => $df_fix('a'), 'b' => $df_fix('b'), 'c' => $df_fix('c')], $df_first['applied']);
+$df_pdo->fail["INSERT INTO r VALUES ('e')"] = ['42S22', 1054];
+$df_failed = bk_data_fixes_apply($df_pdo, ['d' => $df_fix('d'), 'e' => $df_fix('e'), 'f' => $df_fix('f')], ['a', 'b', 'c']);
+ini_set('error_log', (string)$df_log_prev);
+$df_logged = (string)file_get_contents($df_log);
+@unlink($df_log);
+check('opravy dat: každá proběhne jednou a záznam drží jejich id v pořadí',
+    [$df_first, $df_again], [['applied' => ['a', 'b'], 'error' => null], ['applied' => ['a', 'b', 'c'], 'error' => null]]);
+check('opravy dat: chybná se nezapíše, ty za ní přesto proběhnou a chyba se vrátí', [
+    $df_failed['applied'], $df_failed['error'] instanceof PDOException, $df_pdo->query('SELECT id FROM r')->fetchAll(PDO::FETCH_COLUMN),
+], [['a', 'b', 'c', 'd', 'f'], true, ['a', 'b', 'c', 'd', 'f']]);
+check_true('a do logu jde s id a textem databáze', str_contains($df_logged, '[db] data fix e failed: SQLSTATE[42S22]'));
+
+// The type cpanel is retired (D7): a cpanel monitor becomes a web check of
+// its host, the address it had goes to cpanel_stats_url; other types stay.
+$df_cp = new BkInstallFakePdo();
+$df_cp->exec('CREATE TABLE monitors (id INTEGER PRIMARY KEY, type TEXT, target TEXT, cpanel_stats_url TEXT)');
+$df_cp->exec("INSERT INTO monitors VALUES (1, 'cpanel', 'https://hosting.example.test/cpanel_stats.php?key=k1', NULL),
+    (2, 'web', 'https://web.example.test', NULL), (3, 'cpanel', 'http://plain.example.test:2082/s.php', 'https://old.example.test/s.php')");
+$df_list['cpanel-monitors-to-web']($df_cp);
+check('oprava cpanel: web hostitele s adresou exportéru v cpanel_stats_url, jiný typ beze změny',
+    $df_cp->query('SELECT id, type, target, cpanel_stats_url FROM monitors ORDER BY id')->fetchAll(PDO::FETCH_NUM), [
+        [1, 'web', 'https://hosting.example.test', 'https://hosting.example.test/cpanel_stats.php?key=k1'],
+        [2, 'web', 'https://web.example.test', null],
+        [3, 'web', 'http://plain.example.test', 'http://plain.example.test:2082/s.php'],
+    ]);
+
+// Nothing serialises the list: a request running it at the same time can
+// give a monitor its asset between this run's SELECT and its UPDATE (here a
+// trigger on this run's INSERT). The monitor keeps that asset and the one
+// made here is deleted, so no asset is left without a monitor.
+$df_as = new BkInstallFakePdo();
+$df_as->exec('CREATE TABLE assets (id INTEGER PRIMARY KEY, name TEXT)');
+$df_as->exec('CREATE TABLE monitors (id INTEGER PRIMARY KEY, name TEXT, asset_id INTEGER)');
+$df_as->exec("INSERT INTO monitors VALUES (1, 'web', NULL), (2, 'db', NULL)");
+$df_as->exec("INSERT INTO assets VALUES (900, 'web (other request)')");
+$df_as->exec('CREATE TRIGGER other_request AFTER INSERT ON assets BEGIN
+    UPDATE monitors SET asset_id = 900 WHERE id = 1 AND asset_id IS NULL; END');
+$df_list['one-asset-per-monitor']($df_as);
+check('oprava assetů: monitor si nechá asset souběžného běhu, nový se smaže, žádný nezůstane bez monitoru', [
+    $df_as->query('SELECT m.id, a.name FROM monitors m JOIN assets a ON a.id = m.asset_id ORDER BY m.id')->fetchAll(PDO::FETCH_NUM),
+    (int)$df_as->query('SELECT COUNT(*) FROM assets WHERE id NOT IN (SELECT asset_id FROM monitors WHERE asset_id IS NOT NULL)')->fetchColumn(),
+], [[[1, 'web (other request)'], [2, 'db']], 0]);
+
 // The Cloudflare relabel only rewrites data. Like the named foreign key, its
-// error is logged and holds no version back: counted as a failed step, a
-// checked_from that is not utf8mb4 (1253 on the COLLATE) kept the version
-// behind for good, although every schema step was done.
-bk_test_load_functions(__DIR__ . '/../db.php', ['bk_cf_fix_location_history']);
+// error is logged and fails nothing: counted as a failed step, a checked_from
+// that is not utf8mb4 (1253 on the COLLATE) kept the version behind for good,
+// although every schema step was done. It counts as run.
 $mg_cf = new BkInstallFakePdo();
 $mg_cf->fail = ['COLLATE utf8mb4_bin' => ['42000', 1253]];
 $mg_log = (string)tempnam(sys_get_temp_dir(), 'bk_migr_log');
 $mg_log_prev = ini_set('error_log', $mg_log);
-$mg_cf_failed = bk_schema_migrate($mg_cf, ['Cloudflare location history' => $mg_steps['Cloudflare location history']]);
+$mg_cf_run = bk_data_fixes_apply($mg_cf, ['cloudflare-location-history' => $df_list['cloudflare-location-history']], []);
 ini_set('error_log', (string)$mg_log_prev);
 $mg_logged = (string)file_get_contents($mg_log);
 @unlink($mg_log);
-check('migrace: chyba přepisu míst Cloudflare jde do logu a verzi nedrží', [
-    $mg_cf_failed, str_contains($mg_logged, '[db] migration: the Cloudflare location history was not rewritten: SQLSTATE[42000]'),
-], [[], true]);
+check('oprava dat: chyba přepisu míst Cloudflare jde do logu a nic neshodí', [
+    $mg_cf_run, str_contains($mg_logged, '[db] data fix: the Cloudflare location history was not rewritten: SQLSTATE[42000]'),
+], [['applied' => ['cloudflare-location-history'], 'error' => null], true]);
 
 // A failed run is kept with its version and time (schema_migrations_failed),
 // and for 10 minutes no request runs the list again. A record for another
