@@ -139,6 +139,9 @@ CREATE TABLE IF NOT EXISTS `monitor_logs` (
   `error_message` TEXT DEFAULT NULL,
   `checked_from` VARCHAR(50) DEFAULT 'Main Server',
   `check_stages` TEXT DEFAULT NULL, -- JSON s rozpadem DNS/TCP/TLS/HTTP/body fází (jen u typu 'web'), viz check_http()
+  -- Kdo řádek zapsal: 'cron', 'heartbeat', 'agent', 'probe' (node_api.php);
+  -- NULL = starší řádek. Řádek sondy výpadek nepotvrdí, nerozdělí ani mu nedá důvod.
+  `source` VARCHAR(16) DEFAULT NULL,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
   INDEX (`checked_at`),
   INDEX (`monitor_id`, `checked_at`),

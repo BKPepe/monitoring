@@ -34,7 +34,7 @@ if (count(get_included_files()) === 1) {
  * fails every request that is due to migrate on the redeclaration.
  */
 function bk_schema_migrations_version(): string {
-    return '20261101r023';
+    return '20261101r024';
 }
 
 /**
@@ -755,6 +755,13 @@ function bk_schema_migrations(): array {
         // that minute: 1 / 0, NULL = the agent did not say. The agent has
         // sent the flag since 0.1.7; only last_details kept it until now.
         "ALTER TABLE vps_metrics ADD COLUMN speedtest_active TINYINT DEFAULT NULL",
+
+        // Who wrote a check row (20261101r024): 'cron', 'heartbeat', 'agent'
+        // or 'probe'. Older rows stay NULL and count everywhere as before; a
+        // probe's row (node_api.php) counts in availability, the history and
+        // the regions, but never confirms an outage, splits one or gives it
+        // its reason.
+        "ALTER TABLE monitor_logs ADD COLUMN source VARCHAR(16) DEFAULT NULL",
 
         // Last, on the finished schema: the data fixes this database has not
         // had yet (bk_data_fixes_run).

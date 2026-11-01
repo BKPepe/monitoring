@@ -6516,6 +6516,14 @@ check('migrace udělá z poškozené rychlosti 0.0148 neznámou a zdroj přepí�
 check('migrace nechá 0.5 být a maže jen poškozený sloupec', $speedtest_row('2026-09-02 05:00:00'), ['download_mbps' => 0.5, 'upload_mbps' => null, 'source' => 'turris']);
 check('zdravé měření migrace nezmění', $speedtest_row('2026-09-03 05:00:00'), ['download_mbps' => 940.25, 'upload_mbps' => 48.5, 'source' => 'turris']);
 
+// Who wrote a check row (20261101r024): an older database gains the column
+// on the next bump, and its rows stay without a source (they count as before).
+$pdo->exec("ALTER TABLE monitor_logs DROP COLUMN source");
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check('migrace doplní monitor_logs.source a staré řádky nechá bez zdroje',
+    [$column_exists('monitor_logs', 'source'), (int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE source IS NOT NULL")->fetchColumn()], [true, 0]);
+
 // Agent 0.1.9: a database from before the release gains the CPU column on the
 // next schema bump. Without it every report's metrics INSERT would fail.
 $pdo->exec("ALTER TABLE vps_metrics DROP COLUMN agent_prev_cpu_ms");
