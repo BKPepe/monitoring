@@ -518,15 +518,6 @@ const translations: Record<string, { cs: string; en: string }> = {
 
   // Banner
   'banner.load_failed': { cs: 'Stav infrastruktury se nepodařilo načíst', en: 'Failed to load infrastructure status' },
-  'banner.api_down_title': {
-    cs: 'Monitorovací API neodpovídá — zobrazená data mohou chybět nebo být zastaralá',
-    en: 'The monitoring API is not responding — data shown may be missing or stale',
-  },
-  'banner.api_down_help': {
-    cs: 'Co dělat: obnovte stránku (server mohl být chvíli přetížený). Pokud potíž trvá, zkontrolujte dostupnost /status na hostingu, běh cronu a chybový log PHP.',
-    en: 'What to do: reload the page (the server may have been briefly overloaded). If it persists, check that /status is reachable on the hosting, that cron is running, and the PHP error log.',
-  },
-  'banner.api_down_retry': { cs: 'Zkusit znovu', en: 'Try again' },
 
   // Dashboard
   'dashboard.loading_monitors': { cs: 'Načítám monitory…', en: 'Loading monitors…' },

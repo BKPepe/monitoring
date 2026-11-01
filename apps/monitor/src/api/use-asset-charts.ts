@@ -1,28 +1,6 @@
 import * as React from 'react';
-import { resolveSource, type SourceState } from './source';
+import { httpMetricsSource } from './http-source';
 import type { ChartData, PublicStatus, TimeRange, PublicStatusScope } from './types';
-
-/**
- * State of the data source for the whole app — the real `api.php`, or the mock.
- *
- * Also returns `isMock`, so the UI can warn the user that the numbers on
- * screen are not measured.
- */
-export function useSource(): SourceState | null {
-  const [state, setState] = React.useState<SourceState | null>(null);
-
-  React.useEffect(() => {
-    let active = true;
-    resolveSource().then((s) => {
-      if (active) setState(s);
-    });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  return state;
-}
 
 /** Inputs for the device charts. */
 export function useAssetCharts(monitorId: number, range: TimeRange) {
@@ -38,8 +16,8 @@ export function useAssetCharts(monitorId: number, range: TimeRange) {
     setData(null);
     setError(null);
 
-    resolveSource()
-      .then(({ source }) => source.getAssetCharts(monitorId, range))
+    httpMetricsSource
+      .getAssetCharts(monitorId, range)
       .then((result) => {
         if (active) setData(result);
       })
@@ -72,7 +50,7 @@ function fetchPublicStatusShared(scope: PublicStatusScope): Promise<PublicStatus
   if (hit && Date.now() - hit.timestamp < PUBLIC_STATUS_CACHE_MS) {
     return hit.promise;
   }
-  const promise = resolveSource().then(({ source }) => source.getPublicStatus(scope));
+  const promise = httpMetricsSource.getPublicStatus(scope);
   publicStatusCache.set(scope, { promise, timestamp: Date.now() });
   promise.catch(() => {
     // Errors are not cached - let the next call retry rather than replay the same failure.

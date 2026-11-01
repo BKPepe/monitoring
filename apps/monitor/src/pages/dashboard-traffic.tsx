@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { Activity, Gauge } from 'lucide-react';
-import { resolveSource } from '@/api/source';
+import { httpMetricsSource } from '@/api/http-source';
 import type { ChartData, MetricPoint } from '@/api/types';
 import { MetricChart } from '@/components/charts/metric-chart';
 import { RangePills } from '@/components/charts/range-pills';
@@ -56,8 +56,8 @@ export default function DashboardTraffic({
 
   React.useEffect(() => {
     let active = true;
-    resolveSource()
-      .then(({ source: api }) => api.getMetricSeries(source.id, source.metric, range))
+    httpMetricsSource
+      .getMetricSeries(source.id, source.metric, range)
       .then((res) => {
         if (!active) return;
         // Timestamps in ms and nulls kept: a silent hour is a gap, not a line.

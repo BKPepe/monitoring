@@ -1,13 +1,9 @@
 /**
  * The shape of data the charts expect.
  *
- * The single place defining the interface between the UI and the data source.
- * There are two implementations: `http-source.ts` (today's PHP `api.php`) and
- * `mock-source.ts` (which now just delegates to http-source; it generates no
- * invented data - via `isMock` the UI only reports the API was unreachable).
- *
- * The types match what `apps/status/api.php` really returns —
- * see `docs/api.md`.
+ * The single place defining the interface between the UI and `api.php`,
+ * which `http-source.ts` calls. The types match what `apps/status/api.php`
+ * really returns — see `docs/api.md`.
  */
 
 /**
@@ -374,30 +370,6 @@ export interface PublicStatus {
   avgLatencyMs: number | null;
   lastUpdated: string | null;
   nodes: { name: string; status: 'online' | 'warning' | 'offline'; latencyMs: number | null }[];
-}
-
-export interface MetricsSource {
-  /** Source name for the UI — the user should see whether the data is real. */
-  readonly name: 'api.php' | 'mock';
-  getAssetCharts(monitorId: number, range: TimeRange): Promise<ChartData[]>;
-  getPublicStatus(scope?: PublicStatusScope): Promise<PublicStatus>;
-  getMetricDetail(monitorId: number, metric: string): Promise<MetricDetail>;
-  /** @param previous The window immediately before this one, for comparison. */
-  getMetricSeries(
-    monitorId: number,
-    metric: string,
-    range: MetricRange,
-    previous?: boolean
-  ): Promise<MetricSeriesResponse>;
-  getMetricHeatmap(monitorId: number, metric: string, days: number): Promise<MetricHeatmapResponse>;
-  /** @param all Every comparison, not only the strongest few. */
-  getMetricCorrelations(
-    monitorId: number,
-    metric: string,
-    range: MetricRange,
-    all?: boolean
-  ): Promise<MetricCorrelationsResponse>;
-  getLinkTraffic(monitorId: number, days?: number): Promise<LinkTrafficResponse>;
 }
 
 /*

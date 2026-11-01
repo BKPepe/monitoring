@@ -58,7 +58,7 @@ import { StatBlock, breachTone } from '@/components/stat-block';
 import { metricSeverity, thresholdFor } from '@/lib/attention';
 import { trendDelta, type TrendDelta } from '@/lib/trend';
 import type { ChartData, FindingSource, LinkTrafficResponse, MetricPoint, RecommendationArea } from '@/api/types';
-import { resolveSource } from '@/api/source';
+import { httpMetricsSource } from '@/api/http-source';
 import { CollapsedTimeline } from '@/components/timeline';
 import type { TimelineEvent } from '@/data/model';
 import { useAssetCharts } from '@/api/use-asset-charts';
@@ -1872,8 +1872,8 @@ function LinkTrafficSection({ monitorId }: { monitorId: number }) {
   React.useEffect(() => {
     let active = true;
     setData(undefined);
-    resolveSource()
-      .then(({ source }) => source.getLinkTraffic(monitorId, 30))
+    httpMetricsSource
+      .getLinkTraffic(monitorId, 30)
       .then((r) => {
         if (active) setData(r);
       })

@@ -4,7 +4,7 @@ React SPA nasazená na `bloodkings.eu/app/`. Nahrazuje `apps/status/admin.php`
 a `index.php` — dashboard, infrastruktura, incidenty, reporty, SLA výkazy.
 
 Stav: **v produkci.** Data jdou výhradně z živého `apps/status/api.php`
-(mock zdroj byl odstraněn; `VITE_USE_MOCK` jen přepne banner o nedostupném API).
+(mock zdroj i přepínač `VITE_USE_MOCK` byly odstraněny).
 Aplikace je dvojjazyčná (CS/EN) a sdílí stavové barvy s landing page.
 
 ```bash
@@ -90,14 +90,14 @@ Tohle je **jediné místo**, kde je definovaný tvar dat pro grafy:
 
 ```
 src/api/
-├── types.ts           MetricPoint, MetricSeries, ChartData, MetricsSource
-├── mock-source.ts     dočasná implementace ← Sprint 5 ji nahradí http-source.ts
+├── types.ts           MetricPoint, MetricSeries, ChartData, ...
+├── http-source.ts     volání api.php pro grafy a souhrn (httpMetricsSource)
 └── use-asset-charts.ts hook, který komponenty používají
 ```
 
-Sprint 5 vymění implementaci `MetricsSource` za volání backendu. `types.ts`
-i všechny komponenty zůstanou beze změny — proto je i mock asynchronní
-(vrací `Promise` a má umělé zpoždění), aby se stavy načítání otestovaly už teď.
+Komponenty volají `httpMetricsSource` přímo, mezivrstva se zdrojem dat
+a sondou dostupnosti API je pryč. Selhání souhrnu ukáže banner na přehledu
+podle chyby samotného požadavku.
 
 Dvě rozhodnutí, která se do API musí promítnout:
 
@@ -133,8 +133,7 @@ kde se opravdu kreslí průběhy.
 
 ## Co Sprint 4 vědomě neřeší
 
-- **Napojení na API** — Sprint 5. Data z `mock-source.ts` jsou vymyšlená
-  a nesmí se dostat do produkce.
+- **Napojení na API** — hotové ve Sprintu 5, data jdou z živého `api.php`.
 - **Interaktivita grafů** — zoom, brush, porovnání, event markery, export
   PNG/CSV, fullscreen: Sprint 5. Moduly `DataZoom`, `MarkLine` a `MarkArea`
   jsou už zaregistrované, aby se pak nehledalo, proč se anotace tiše nekreslí.

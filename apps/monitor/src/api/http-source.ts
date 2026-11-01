@@ -11,7 +11,6 @@ import type {
   MetricPoint,
   MetricRange,
   MetricSeriesResponse,
-  MetricsSource,
   PublicStatus,
   TimeRange,
   PublicStatusScope,
@@ -129,9 +128,11 @@ function toPoints(raw: [number, number, number?][]): MetricPoint[] {
   return insertGaps(raw.map(([ts, value]) => ({ t: ts * 1000, v: value })));
 }
 
-export const httpMetricsSource: MetricsSource = {
-  name: 'api.php',
-
+/**
+ * The chart and summary reads, called directly. A "mock" source with the
+ * same methods used to stand in front of these and only delegated here.
+ */
+export const httpMetricsSource = {
   async getAssetCharts(monitorId: number, range: TimeRange): Promise<ChartData[]> {
     // monitorId is always the real monitors.id - api.php additionally accepts it
     // as asset_id too (WHERE id = ? OR asset_id = ?), so no ID re-mapping
@@ -226,6 +227,7 @@ export const httpMetricsSource: MetricsSource = {
     );
   },
 
+  /** @param previous The window immediately before this one, for comparison. */
   async getMetricSeries(
     monitorId: number,
     metric: string,
@@ -254,6 +256,7 @@ export const httpMetricsSource: MetricsSource = {
     return res;
   },
 
+  /** @param all Every comparison, not only the strongest few. */
   async getMetricCorrelations(
     monitorId: number,
     metric: string,

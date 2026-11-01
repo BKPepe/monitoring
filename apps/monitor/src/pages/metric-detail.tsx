@@ -31,7 +31,7 @@ import { metricTone } from '@/lib/metric-tone';
 import { trendDelta } from '@/lib/trend';
 import { MetricHelpIcon } from '@/components/metric-help-icon';
 import { ProcessCulprits } from '@/components/process-culprits';
-import { resolveSource } from '@/api/source';
+import { httpMetricsSource } from '@/api/http-source';
 import { appApi, type ChartAnnotation } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import type {
@@ -144,8 +144,8 @@ export function MetricDetailPage() {
     let active = true;
     setDetail(null);
     setError(null);
-    resolveSource()
-      .then(({ source }) => source.getMetricDetail(monId, metric))
+    httpMetricsSource
+      .getMetricDetail(monId, metric)
       .then((d) => {
         if (active) setDetail(d);
       })
@@ -160,8 +160,8 @@ export function MetricDetailPage() {
   React.useEffect(() => {
     let active = true;
     setSeries(null);
-    resolveSource()
-      .then(({ source }) => source.getMetricSeries(monId, metric, range))
+    httpMetricsSource
+      .getMetricSeries(monId, metric, range)
       .then((s) => {
         if (!active) return;
         setSeries(s);
@@ -185,8 +185,8 @@ export function MetricDetailPage() {
     let active = true;
     setHeatmap(null);
     setHeatmapFailed(false);
-    resolveSource()
-      .then(({ source }) => source.getMetricHeatmap(monId, metric, 30))
+    httpMetricsSource
+      .getMetricHeatmap(monId, metric, 30)
       .then((h) => {
         if (active) setHeatmap(h);
       })
@@ -206,8 +206,8 @@ export function MetricDetailPage() {
     let active = true;
     setCorr(null);
     setCorrAvailable(null);
-    resolveSource()
-      .then(({ source }) => source.getMetricCorrelations(monId, metric, range, corrAll))
+    httpMetricsSource
+      .getMetricCorrelations(monId, metric, range, corrAll)
       .then((c) => {
         if (!active) return;
         setCorr(c);
@@ -232,8 +232,8 @@ export function MetricDetailPage() {
     let active = true;
     setLinkPeriods(undefined);
     if (monitorType !== 'openwrt' || (metric !== 'net' && metric !== 'net_lte')) return;
-    resolveSource()
-      .then(({ source }) => source.getLinkTraffic(monId, 30))
+    httpMetricsSource
+      .getLinkTraffic(monId, 30)
       .then((lt) => {
         if (!active) return;
         const now = Date.now();
@@ -453,8 +453,8 @@ export function MetricDetailPage() {
     if (!comparable) return;
     let active = true;
     const key = compareKey;
-    resolveSource()
-      .then(({ source }) => source.getMetricSeries(monId, metric, range, true))
+    httpMetricsSource
+      .getMetricSeries(monId, metric, range, true)
       .then((s) => {
         if (active) setCompareState({ key, series: s });
       })
