@@ -1092,8 +1092,8 @@ if ($action === 'archive_monitor' || $action === 'unarchive_monitor') {
             $pdo->prepare("UPDATE monitors SET archived_at = NULL, status = 'unknown', last_status_change = NOW() WHERE id = ?")->execute([$am_id]);
         }
         $pdo->commit();
-        // Summaries cached with the monitor in (or out) are stale now.
-        $pdo->exec("DELETE FROM settings WHERE key_name IN ('websites_overview_cache', 'dashboard_insights_cache_cs', 'dashboard_insights_cache_en') OR key_name LIKE 'regions_cache_%' OR key_name LIKE 'findings\\_summary\\_%'");
+        // Every cached answer was computed with the monitor in (or out).
+        bk_kv_cache_clear($pdo);
         log_monitor_event($pdo, $am_id, $am['name'], $am['type'], $am_archive ? 'monitor_archived' : 'monitor_restored', $am_archive ? 'Monitor archivován' : 'Monitor obnoven z archivu');
         bk_audit_log($pdo, $am_archive ? 'monitor_archived' : 'monitor_restored', (string)$am['name'], 'monitor', $am_id);
         echo json_encode(['success' => true, 'archived' => $am_archive, 'incidentsClosed' => $am_closed], JSON_UNESCAPED_UNICODE);
@@ -2790,9 +2790,9 @@ if ($action === 'findings') {
     $fd_summary = ($_GET['summary'] ?? '') === '1';
     $fd_summary_key = $fd_monitor === 0 ? 'findings_summary_' . substr(md5((string)json_encode($fd_visible)), 0, 16) : null;
     if ($fd_summary && $fd_summary_key !== null) {
-        $fd_kept = json_decode((string)get_setting($fd_summary_key, ''), true);
-        if (is_array($fd_kept) && is_array($fd_kept['summary'] ?? null) && time() - (int)($fd_kept['at'] ?? 0) < 60) {
-            echo bk_json_safe($fd_kept['summary'] + ['cachedAt' => date('c', (int)$fd_kept['at'])]);
+        $fd_kept = bk_kv_cache_get($fd_summary_key);
+        if ($fd_kept !== null) {
+            echo bk_json_safe($fd_kept['data'] + ['cachedAt' => date('c', $fd_kept['at'])]);
             exit;
         }
     }
@@ -2977,14 +2977,14 @@ if ($action === 'findings') {
             $fd_cache_key = ($fd_monitor === 0 && $fd_visible === null)
                 ? ($GLOBALS['BK_LANG'] === 'en' ? 'dashboard_insights_cache_en' : 'dashboard_insights_cache_cs')
                 : null;
-            $fd_cached = bk_insights_cache_read($fd_cache_key);
+            $fd_cached = $fd_cache_key !== null ? bk_kv_cache_get($fd_cache_key) : null;
             if ($fd_cached !== null) {
-                $fd_insights = $fd_cached['insights'];
+                $fd_insights = $fd_cached['data'];
                 $fd_insights_at = $fd_cached['at'];
             } else {
                 $fd_insights = bk_collect_insights($pdo, $fd_rows);
                 if ($fd_cache_key !== null) {
-                    bk_insights_cache_write($pdo, $fd_cache_key, $fd_insights);
+                    bk_kv_cache_put($pdo, $fd_cache_key, $fd_insights);
                 }
             }
             $fd_by_id = [];
@@ -3043,11 +3043,7 @@ if ($action === 'findings') {
         // Kept only when complete: a source that failed must not be repeated
         // as the answer for a minute after it recovers.
         if ($fd_summary_key !== null && $fd_errors === []) {
-            try {
-                bk_setting_set($pdo, $fd_summary_key, json_encode(['at' => time(), 'summary' => $fd_summary_body], JSON_UNESCAPED_UNICODE));
-            } catch (Throwable $fd_e) {
-                error_log('[api.php action=findings] summary not kept: ' . $fd_e->getMessage());
-            }
+            bk_kv_cache_put($pdo, $fd_summary_key, $fd_summary_body);
         }
         if ($fd_summary) {
             echo bk_json_safe($fd_summary_body + ['cachedAt' => null]);
@@ -3093,10 +3089,10 @@ if ($action === 'health') {
         $hs_public = bk_public_view();
         $hs_payload = null;
         if ($hs_public) {
-            $hs_kept = json_decode((string)get_setting('health_cache_public', ''), true);
             // A kept answer of an older shape (before the named deductions)
             // is recomputed, not served for the rest of its minute.
-            if (is_array($hs_kept) && is_array($hs_kept['data']['network']['deductions'] ?? null) && time() - (int)($hs_kept['at'] ?? 0) < 60) {
+            $hs_kept = bk_kv_cache_get('health_cache_public', fn (array $data): bool => is_array($data['network']['deductions'] ?? null));
+            if ($hs_kept !== null) {
                 $hs_payload = $hs_kept['data'];
             }
         }
@@ -3122,11 +3118,7 @@ if ($action === 'health') {
                     $hs_payload['assets'][] = ['monitorId' => (int)$hs_row['id']] + $hs_h;
                 }
             } else {
-                try {
-                    bk_setting_set($pdo, 'health_cache_public', json_encode(['at' => time(), 'data' => $hs_payload], JSON_UNESCAPED_UNICODE));
-                } catch (Throwable $he) {
-                    error_log('[api.php action=health] cache not stored: ' . $he->getMessage());
-                }
+                bk_kv_cache_put($pdo, 'health_cache_public', $hs_payload);
             }
         }
         $hs_payload['network'] = bk_health_labelled($hs_payload['network']);
@@ -4463,13 +4455,10 @@ if ($action === 'regions') {
         // nebo lokalita Cloudflare - 10 minut stara odpoved je porad pravdiva,
         // a `cachedAt` to odpovedi priznava.
         $regions_cache_key = 'regions_cache_' . $days . 'd' . ($rg_public ? '_public' : '');
-        $cache_raw = $rg_cacheable ? get_setting($regions_cache_key, '') : '';
-        if ($cache_raw !== '') {
-            $cached = json_decode($cache_raw, true);
-            if (is_array($cached) && isset($cached['at'], $cached['data']) && time() - (int)$cached['at'] < 600) {
-                echo json_encode($rg_project($cached['data']), JSON_UNESCAPED_UNICODE);
-                exit;
-            }
+        $cached = $rg_cacheable ? bk_kv_cache_get($regions_cache_key) : null;
+        if ($cached !== null) {
+            echo json_encode($rg_project($cached['data']), JSON_UNESCAPED_UNICODE);
+            exit;
         }
 
         $stmt = $pdo->prepare("
@@ -4514,11 +4503,8 @@ if ($action === 'regions') {
         }
 
         $regions_payload = ['days' => $days, 'regions' => $regions, 'cachedAt' => date('c')];
-        try {
-            if ($rg_cacheable) bk_setting_set($pdo, $regions_cache_key, json_encode(['at' => time(), 'data' => $regions_payload], JSON_UNESCAPED_UNICODE));
-        } catch (Throwable $e) {
-            // Cache je optimalizace - kdyz se nezapise, odpoved stejne odejde.
-            error_log('[api.php action=' . $action . '] cache not stored: ' . $e->getMessage());
+        if ($rg_cacheable) {
+            bk_kv_cache_put($pdo, $regions_cache_key, $regions_payload);
         }
         echo json_encode($rg_project($regions_payload), JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
@@ -4567,13 +4553,10 @@ if ($action === 'websites_overview') {
         return $data;
     };
     try {
-        $cache_raw = get_setting('websites_overview_cache', '');
-        if ($cache_raw !== '') {
-            $cached = json_decode($cache_raw, true);
-            if (is_array($cached) && isset($cached['at'], $cached['data']) && time() - (int)$cached['at'] < 600) {
-                echo json_encode($wo_filter($cached['data']), JSON_UNESCAPED_UNICODE);
-                exit;
-            }
+        $cached = bk_kv_cache_get('websites_overview_cache');
+        if ($cached !== null) {
+            echo json_encode($wo_filter($cached['data']), JSON_UNESCAPED_UNICODE);
+            exit;
         }
 
         // Which monitors have anything measured, and since when. The
@@ -4635,12 +4618,7 @@ if ($action === 'websites_overview') {
             'slaGoal' => (float)get_setting('sla_goal_pct', '99.95'),
             'monitors' => $sla,
         ];
-        try {
-            bk_setting_set($pdo, 'websites_overview_cache', json_encode(['at' => time(), 'data' => $data], JSON_UNESCAPED_UNICODE));
-        } catch (Throwable $e) {
-            // The cache is an optimisation - if it fails to store, the endpoint just computes more often.
-            error_log('[api.php action=' . $action . '] cache not stored: ' . $e->getMessage());
-        }
+        bk_kv_cache_put($pdo, 'websites_overview_cache', $data);
         echo json_encode($wo_filter($data), JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         bk_api_error(500, 'Přehled SLA se nepodařilo sestavit.');
@@ -6856,7 +6834,7 @@ if ($action === 'router_recommendation_mute') {
         bk_audit_log($pdo, $rm_on ? 'router_rec_mute' : 'router_rec_unmute',
             $rm_key . ($rm_reason !== '' ? ': ' . $rm_reason : ''), 'monitor', $rm_monitor_id);
         // The bell's kept counts still hold the muted item.
-        $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'findings\\_summary\\_%'");
+        bk_kv_cache_clear($pdo, ['findings_summary_']);
         echo json_encode(['ok' => true, 'key' => $rm_key, 'muted' => $rm_on, 'mute' => $rm_mute],
             JSON_UNESCAPED_UNICODE);
     } catch (PDOException $e) {

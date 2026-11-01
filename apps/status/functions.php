@@ -1692,40 +1692,6 @@ function bk_collect_insights(PDO $pdo, array $monitors): array {
 }
 
 /**
- * The fleet-wide insights cache of the findings feed (5 minutes, one key per
- * language). The keys keep the name of the removed dashboard_insights action,
- * which filled them first. $key null = no cache for this viewer (a user's
- * view is computed fresh; the cache is the admin's fleet).
- * An entry written before the items carried a severity (no 'v' => 2) is
- * stale: serving it would drop the severity the feed sorts by.
- *
- * @return array{at:int,insights:list<array<string,mixed>>}|null
- */
-function bk_insights_cache_read(?string $key): ?array {
-    if ($key === null) {
-        return null;
-    }
-    $cached = json_decode((string)get_setting($key, ''), true);
-    if (!is_array($cached) || (int)($cached['v'] ?? 0) !== 2 || !is_array($cached['insights'] ?? null)
-        || time() - (int)($cached['at'] ?? 0) >= 300) {
-        return null;
-    }
-    return ['at' => (int)$cached['at'], 'insights' => $cached['insights']];
-}
-
-/**
- * @param list<array<string,mixed>> $items
- */
-function bk_insights_cache_write(PDO $pdo, string $key, array $items): void {
-    try {
-        bk_setting_set($pdo, $key, json_encode(['at' => time(), 'v' => 2, 'insights' => $items], JSON_UNESCAPED_UNICODE));
-    } catch (Throwable $e) {
-        // The cache is optional - the answer still goes out, the log says why it was not kept.
-        error_log('[insights] cache not stored: ' . $e->getMessage());
-    }
-}
-
-/**
  * A counter series as chart points of its increments, [[ts, delta], ...].
  *
  * The raw value of a cumulative counter is a lifetime total ("Firewall -

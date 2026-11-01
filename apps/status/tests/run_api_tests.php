@@ -1934,6 +1934,90 @@ try {
     }
 }
 
+// bk_kv_cache_get/put/clear: the five caches kept in settings, one envelope
+// ({at, data}), each with the lifetime BK_KV_CACHES gives it, and one clear.
+// They used to read, check and write their rows by hand, and the archive's
+// own list of keys had left health_cache_public out.
+$kv_rows = fn (): array => $pdo->query("SELECT key_name FROM settings
+    WHERE key_name LIKE 'findings%' OR key_name LIKE 'health%' OR key_name LIKE 'dashboard_insights%'
+       OR key_name LIKE 'regions%' OR key_name LIKE 'websites_overview%' OR key_name LIKE 'bk_test_kv%'
+    ORDER BY key_name")->fetchAll(PDO::FETCH_COLUMN);
+$kv_entry = fn (int $age, array $data): string => (string)json_encode(['at' => time() - $age, 'data' => $data]);
+try {
+    bk_kv_cache_clear($pdo);
+    bk_kv_cache_put($pdo, 'findings_summary_abc', ['total' => 3]);
+    $kv_put = bk_kv_cache_get('findings_summary_abc');
+    check('uložená položka cache se přečte i se svým časem',
+        [$kv_put['data'] ?? null, abs(($kv_put['at'] ?? 0) - time()) <= 1], [['total' => 3], true]);
+    // findings_summary_ lives 60 s, websites_overview_cache 600 s.
+    bk_setting_set($pdo, 'findings_summary_old', $kv_entry(60, ['total' => 1]));
+    bk_setting_set($pdo, 'findings_summary_young', $kv_entry(59, ['total' => 1]));
+    bk_setting_set($pdo, 'websites_overview_cache', $kv_entry(599, ['monitors' => []]));
+    check('položka stará jako životnost své cache se nepoužije, o sekundu mladší ano',
+        [bk_kv_cache_get('findings_summary_old'), bk_kv_cache_get('findings_summary_young')['data'] ?? null,
+            bk_kv_cache_get('websites_overview_cache')['data'] ?? null],
+        [null, ['total' => 1], ['monitors' => []]]);
+    // An answer kept in an older shape is computed again, not served.
+    bk_setting_set($pdo, 'dashboard_insights_cache_cs', (string)json_encode(['at' => time(), 'v' => 2, 'insights' => [['text' => 'x']]]));
+    bk_setting_set($pdo, 'dashboard_insights_cache_en', '{nečitelné');
+    bk_setting_set($pdo, 'health_cache_public', $kv_entry(0, ['network' => ['score' => 80]]));
+    check('starý tvar, nečitelný JSON a data, která volající odmítne, cache nevrátí', [
+        bk_kv_cache_get('dashboard_insights_cache_cs'), bk_kv_cache_get('dashboard_insights_cache_en'),
+        bk_kv_cache_get('health_cache_public', fn (array $d): bool => is_array($d['network']['deductions'] ?? null)),
+    ], [null, null, null]);
+
+    // A key or prefix of no listed cache is a mistake in the caller, not a miss.
+    $kv_refused = [];
+    foreach ([
+        fn () => bk_kv_cache_get('bk_test_kv_jina'),
+        fn () => bk_kv_cache_put($pdo, 'bk_test_kv_jina', ['a' => 1]),
+        fn () => bk_kv_cache_clear($pdo, ['regions_']),
+    ] as $kv_call) {
+        try {
+            $kv_call();
+            $kv_refused[] = false;
+        } catch (InvalidArgumentException $e) {
+            $kv_refused[] = true;
+        }
+    }
+    check('klíč ani prefix mimo BK_KV_CACHES cache nepřijme', $kv_refused, [true, true, true]);
+
+    // One cache by its prefix, from the table and from this request's
+    // snapshot. '_' is a character of the prefix there, not LIKE's wildcard.
+    bk_setting_set($pdo, 'findingsXsummaryXabc', 'jiný klíč');
+    bk_setting_set($pdo, 'regions_cache_7d', $kv_entry(0, ['regions' => []]));
+    bk_kv_cache_clear($pdo, ['findings_summary_']);
+    check('smazání podle prefixu vezme jen tu jednu cache, z tabulky i z paměti', [
+        $kv_rows(), array_key_exists('findings_summary_young', $GLOBALS['system_settings']),
+        array_key_exists('regions_cache_7d', $GLOBALS['system_settings']),
+    ], [['dashboard_insights_cache_cs', 'dashboard_insights_cache_en', 'findingsXsummaryXabc', 'health_cache_public',
+        'regions_cache_7d', 'websites_overview_cache'], false, true]);
+    bk_kv_cache_clear($pdo);
+    check('smazání bez prefixu vezme všech pět cache a nic jiného',
+        [$kv_rows(), array_key_exists('health_cache_public', $GLOBALS['system_settings'])], [['findingsXsummaryXabc'], false]);
+
+    // A write that fails is logged, and the caller's answer goes out anyway.
+    $kv_dead = new class ('mysql:') extends PDO {
+        public function __construct(string $dsn) {}
+        public function prepare(string $query, array $options = []): PDOStatement|false {
+            throw new PDOException('zápis selhal');
+        }
+    };
+    $kv_log = (string)tempnam(sys_get_temp_dir(), 'bk_kv_log');
+    $kv_log_prev = ini_set('error_log', $kv_log);
+    bk_kv_cache_put($kv_dead, 'regions_cache_30d', ['regions' => []]);
+    ini_set('error_log', (string)$kv_log_prev);
+    check('nezapsaná cache se zaloguje, nevyhodí a nic nepředstírá', [
+        str_contains((string)file_get_contents($kv_log), '[cache] regions_cache_30d not stored: zápis selhal'),
+        bk_kv_cache_get('regions_cache_30d'),
+    ], [true, null]);
+    @unlink($kv_log);
+} finally {
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'findingsXsummaryXabc'");
+    unset($GLOBALS['system_settings']['findingsXsummaryXabc']);
+    bk_kv_cache_clear($pdo);
+}
+
 
 // Settings load once at startup into the `$system_settings` global (db.php)
 // and get_setting() reads from there. A database write alone therefore changes
@@ -7932,10 +8016,8 @@ try {
 // =======================================================================
 $b6_items = fn (string $word): array => array_map(fn ($i) => ['monitorId' => 1, 'monitorName' => 'Testovací web',
     'kind' => 'trend', 'severity' => 'warning', 'text' => "{$word} {$i}", 'detail' => ''], range(1, 10));
-$b6_store = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
-// 'v' => 2: the cache format since the items carry a severity (C-12).
-$b6_store->execute(['dashboard_insights_cache_cs', json_encode(['at' => time(), 'v' => 2, 'insights' => $b6_items('Česky')], JSON_UNESCAPED_UNICODE)]);
-$b6_store->execute(['dashboard_insights_cache_en', json_encode(['at' => time(), 'v' => 2, 'insights' => $b6_items('English')], JSON_UNESCAPED_UNICODE)]);
+bk_kv_cache_put($pdo, 'dashboard_insights_cache_cs', $b6_items('Česky'));
+bk_kv_cache_put($pdo, 'dashboard_insights_cache_en', $b6_items('English'));
 // The feed sorts one device's findings of one severity by key, a hash of the text.
 $b6_titles = function (?array $answer): array {
     $titles = array_map(fn ($f) => (string)($f['title'] ?? ''),
@@ -9044,9 +9126,15 @@ try {
     check('N-3: počty souhlasí s plným seznamem', [$w2m_s['counts'] ?? null, $w2m_s['total'] ?? null], [$w2m_full['counts'] ?? -1, $w2m_full['total'] ?? -1]);
     [, $w2m_s2] = api_get_auth($base, 'action=findings&summary=1', $cookie_jar);
     check_true('N-3: druhý dotaz do minuty je z uložených počtů a přizná to', is_string($w2m_s2['cachedAt'] ?? null) && ($w2m_s2['counts'] ?? null) === ($w2m_s['counts'] ?? -1));
+    // The public health score is kept for a minute as well, and the archive's
+    // own list of keys used to leave it out.
+    api_get($base, 'action=health&scope=public&lang=cs');
+    $w2m_hc_kept = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM settings WHERE key_name = 'health_cache_public'")->fetchColumn();
+    check('N-3: veřejné skóre zdraví je v cache', $w2m_hc_kept(), 1);
     [$w2m_ac] = api_post($base, 'action=archive_monitor', ['id' => 199], $cookie_jar);
     check('N-3: archivace projde', $w2m_ac, 200);
     check('N-3: archivace smaže uložené počty', (int)$pdo->query("SELECT COUNT(*) FROM settings WHERE key_name LIKE 'findings\\_summary\\_%'")->fetchColumn(), 0);
+    check('N-3: i veřejné skóre zdraví, které monitor ještě počítalo', $w2m_hc_kept(), 0);
     api_post($base, 'action=unarchive_monitor', ['id' => 199], $cookie_jar);
     $pdo->exec("UPDATE monitors SET status = 'unknown', last_checked = NULL WHERE id = 199");
 

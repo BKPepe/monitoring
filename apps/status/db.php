@@ -176,6 +176,111 @@ function bk_database_unavailable(Throwable $e): never {
 }
 
 /**
+ * The caches kept in the settings table: key prefix => seconds an entry stays
+ * fresh. Each holds an answer computed from the monitors and their history,
+ * stored as {"at": unix time, "data": ...}:
+ *   findings_summary_<scope>     the bell's counts per viewer scope (findings)
+ *   health_cache_public          the public health score (health)
+ *   dashboard_insights_cache_cs  the fleet's insights per language (findings)
+ *   regions_cache_<n>d[_public]  the measuring locations of a window (regions)
+ *   websites_overview_cache      the SLA overview (websites_overview)
+ *
+ * The five used to read, check and write their rows by hand, and the archive
+ * cleared a list of keys of its own that had drifted (health_cache_public was
+ * not on it). bk_kv_cache_get/put/clear refuse a key of no cache listed here,
+ * so a new cache is one more line and a clear of all of them covers it.
+ *
+ * A const runs where it stands, so this one sits above the connection below:
+ * a data fix (the Cloudflare relabel in migrations.php) clears a cache
+ * before the rest of this file has run.
+ */
+const BK_KV_CACHES = [
+    'findings_summary_' => 60,
+    'health_cache_public' => 60,
+    'dashboard_insights_cache_' => 300,
+    'regions_cache_' => 600,
+    'websites_overview_cache' => 600,
+];
+
+/** The lifetime of the cache a key belongs to; a key of no listed cache throws. */
+function bk_kv_cache_ttl(string $key): int {
+    foreach (BK_KV_CACHES as $prefix => $ttl) {
+        if (str_starts_with($key, $prefix)) {
+            return $ttl;
+        }
+    }
+    throw new InvalidArgumentException("settings key {$key} belongs to no cache in BK_KV_CACHES");
+}
+
+/**
+ * A cache entry while it is fresh: null when there is none, it is as old as
+ * its cache's lifetime, it does not read as {at, data}, or $valid turns the
+ * data down (an answer kept in an older shape is computed again, not served).
+ *
+ * @param null|callable(array<mixed>): bool $valid
+ * @return array{at: int, data: array<mixed>}|null
+ */
+function bk_kv_cache_get(string $key, ?callable $valid = null): ?array {
+    $ttl = bk_kv_cache_ttl($key);
+    $entry = json_decode((string)get_setting($key, ''), true);
+    if (!is_array($entry) || !is_int($entry['at'] ?? null) || !is_array($entry['data'] ?? null)
+        || time() - $entry['at'] >= $ttl || ($valid !== null && !$valid($entry['data']))) {
+        return null;
+    }
+    return ['at' => $entry['at'], 'data' => $entry['data']];
+}
+
+/**
+ * Keeps $data as the cache entry of $key, stamped now. A write that fails is
+ * logged and the caller's answer goes out anyway: the cache only saves work.
+ *
+ * @param array<mixed> $data
+ */
+function bk_kv_cache_put(PDO $pdo, string $key, array $data): void {
+    bk_kv_cache_ttl($key);
+    try {
+        bk_setting_set($pdo, $key, json_encode(['at' => time(), 'data' => $data], JSON_UNESCAPED_UNICODE));
+    } catch (Throwable $e) {
+        error_log('[cache] ' . $key . ' not stored: ' . $e->getMessage());
+    }
+}
+
+/**
+ * Drops the cache entries of the given prefixes (keys of BK_KV_CACHES), or of
+ * every cache when none are given, from the table and from this request's
+ * snapshot. A failed delete throws: an answer the caller has just made stale
+ * would otherwise be served for the rest of its lifetime without a word.
+ *
+ * @param list<string>|null $prefixes
+ */
+function bk_kv_cache_clear(PDO $pdo, ?array $prefixes = null): void {
+    global $system_settings;
+    $prefixes ??= array_keys(BK_KV_CACHES);
+    $like = [];
+    foreach ($prefixes as $prefix) {
+        if (!array_key_exists($prefix, BK_KV_CACHES)) {
+            throw new InvalidArgumentException("{$prefix} is no cache prefix in BK_KV_CACHES");
+        }
+        // In LIKE '_' is any one character and '%' any run of them.
+        $like[] = strtr($prefix, ['!' => '!!', '_' => '!_', '%' => '!%']) . '%';
+    }
+    if ($like === []) {
+        return;
+    }
+    $pdo->prepare("DELETE FROM settings WHERE " . implode(' OR ', array_fill(0, count($like), "key_name LIKE ? ESCAPE '!'")))
+        ->execute($like);
+    if (is_array($system_settings)) {
+        foreach (array_keys($system_settings) as $key) {
+            foreach ($prefixes as $prefix) {
+                if (str_starts_with((string)$key, $prefix)) {
+                    unset($system_settings[$key]);
+                }
+            }
+        }
+    }
+}
+
+/**
  * A response time as monitor_logs.response_time stores it: whole
  * milliseconds, or NULL when nothing was measured.
  *

@@ -588,7 +588,9 @@ it, no alert is sent, open incidents are closed, waiting remote actions fail, it
 agent's reports are refused with 403 and `heartbeat.php` answers 410. A detail by
 id stays readable and `action=monitors&archived=1` lists the archive. Any write
 to an archived monitor answers 409. Restoring sets the state to `unknown` until
-the next check or report. Both are written to the audit log.
+the next check or report. Both clear every cached answer (findings counts,
+insights, the public health score, regions, the SLA overview), so none keeps
+the old set of monitors until it expires. Both are written to the audit log.
 
 ### `GET api.php?action=agent_install_info&monitor_id=`
 

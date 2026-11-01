@@ -898,7 +898,7 @@ function bk_cf_relabel_location_history(PDO $pdo): int {
     }
     if ($rows > 0) {
         // The regions answer is cached for ten minutes with the old labels in it.
-        $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'regions_cache_%'");
+        bk_kv_cache_clear($pdo, ['regions_cache_']);
         error_log("[db] Cloudflare Worker locations: {$rows} checks relabelled with their colo's country");
     }
     // The digest compares each region's latency with the last digest's by

@@ -579,7 +579,9 @@ upozornění neodejde, otevřené incidenty se uzavřou, čekající vzdálené 
 selžou, hlášení jeho agenta se odmítnou s 403 a `heartbeat.php` odpoví 410. Detail
 podle id zůstává čitelný a `action=monitors&archived=1` vypíše archiv. Každý zápis
 do archivovaného monitoru odpoví 409. Obnovení nastaví stav na `unknown` do příští
-kontroly nebo hlášení. Obojí se zapíše do auditu.
+kontroly nebo hlášení. Obojí smaže všechny odpovědi držené v cache (počty
+nálezů, postřehy, veřejné skóre zdraví, místa měření, přehled SLA), takže
+žádná nedrží starou sadu monitorů až do vypršení. Obojí se zapíše do auditu.
 
 ### `GET api.php?action=agent_install_info&monitor_id=`
 
