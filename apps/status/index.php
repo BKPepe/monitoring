@@ -119,7 +119,7 @@ if (($_GET['view'] ?? '') === 'metric') {
     }
     // A metric's charts belong to the users the monitor is assigned to, and admins.
     if (empty($_SESSION['admin_logged_in'])) {
-        header('Location: admin.php');
+        header('Location: ' . bk_setup_url());
         exit;
     }
     if ($vm_monitor === null || !bk_can_view_monitor($pdo, $vm_id)) {

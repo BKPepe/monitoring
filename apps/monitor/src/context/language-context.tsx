@@ -3715,8 +3715,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'sp.delete_confirm': { cs: 'Smazat stránku „{title}"?', en: 'Delete page "{title}"?' },
   'sp.empty_title': { cs: 'Zatím žádná status stránka', en: 'No status page yet' },
   'sp.empty_desc': {
-    cs: 'Hlavní přehled na /status/ funguje i bez toho. Vlastní stránka se hodí, když chcete zveřejnit jen část služeb — třeba pro zákazníky.',
-    en: 'The main overview at /status/ works regardless. A custom page helps when you want to publish only some services — for customers, for instance.',
+    cs: 'Hlavní přehled na /app/public funguje i bez toho. Vlastní stránka se hodí, když chcete zveřejnit jen část služeb — třeba pro zákazníky.',
+    en: 'The main overview at /app/public works regardless. A custom page helps when you want to publish only some services — for customers, for instance.',
   },
   'sp.public': { cs: 'Veřejná', en: 'Public' },
   'sp.hidden': { cs: 'Skrytá', en: 'Hidden' },
@@ -3731,8 +3731,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'sp.title_required': { cs: 'Zadejte název stránky.', en: 'Enter a page title.' },
   'sp.slug_placeholder': { cs: 'odvodí se z názvu', en: 'derived from the title' },
   'sp.slug_hint': {
-    cs: 'Použije se v adrese /status/?page=…. Bez vyplnění se vytvoří z názvu.',
-    en: 'Used in the /status/?page=… address. Left empty, it is generated from the title.',
+    cs: 'Použije se v adrese /app/public?page=…. Bez vyplnění se vytvoří z názvu.',
+    en: 'Used in the /app/public?page=… address. Left empty, it is generated from the title.',
   },
   'sp.monitors_hint': {
     cs: 'Nevyberete-li nic, stránka ukáže všechny veřejné monitory. Neveřejný monitor stránka nezobrazí, zveřejnit ho jde v jeho nastavení.',

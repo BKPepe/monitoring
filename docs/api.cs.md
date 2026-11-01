@@ -382,7 +382,8 @@ Položka o vyřešení vzniká jen tehdy, když je `resolved_at` opravdu vyplně
 U probíhajícího incidentu se nedopočítává z „teď".
 
 Kanál je odkazovaný z hlavičky status stránky (`<link rel="alternate">`), takže
-ho čtečky najdou samy.
+ho čtečky najdou samy. Jeho `<link>`, kanálu i každé položky, je tahle status
+stránka: `/app/public`, u kanálu stránky s `?page=slug`.
 
 ### Eskalace nepřevzatých výpadků
 

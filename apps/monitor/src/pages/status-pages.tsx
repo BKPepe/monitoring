@@ -220,7 +220,7 @@ export function StatusPagesPage() {
           title={t('sp.empty_title', 'Zatím žádná status stránka')}
           hint={t(
             'sp.empty_desc',
-            'Hlavní přehled na /status/ funguje i bez toho. Vlastní stránka se hodí, když chcete zveřejnit jen část služeb — třeba pro zákazníky.'
+            'Hlavní přehled na /app/public funguje i bez toho. Vlastní stránka se hodí, když chcete zveřejnit jen část služeb — třeba pro zákazníky.'
           )}
         />
       ) : (
@@ -399,7 +399,7 @@ function PageDialog({
               placeholder={t('sp.slug_placeholder', 'odvodí se z názvu')}
             />
             <span className="text-muted-foreground mt-1 block text-2xs">
-              {t('sp.slug_hint', 'Použije se v adrese stránky (?page=…). Bez vyplnění se vytvoří z názvu.')}
+              {t('sp.slug_hint', 'Použije se v adrese /app/public?page=…. Bez vyplnění se vytvoří z názvu.')}
             </span>
           </label>
 

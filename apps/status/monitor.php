@@ -32,7 +32,7 @@ if ($monitor_id <= 0) {
 // Checked before the lookup, so an id of someone else's monitor answers like
 // one that does not exist.
 if (empty($_SESSION['admin_logged_in'])) {
-    header('Location: admin.php');
+    header('Location: ' . bk_setup_url());
     exit;
 }
 if (!bk_can_view_monitor($pdo, $monitor_id)) {

@@ -1121,6 +1121,13 @@ $pdo->exec("UPDATE monitors SET is_public = NULL WHERE id = 2");
 [$hl_user_code] = $page_get('/health.php?format=json', $jar3);
 check('diagnostika schématu běžnému uživateli zůstane zavřená', $hl_user_code, 403);
 
+// Signing in happens in /app (D1): a legacy page asked for without a session
+// sends the visitor to /app/setup, as api.php's loginUrl does, not admin.php.
+foreach (['/monitor.php?id=1' => 'detail monitoru', '/index.php?view=metric&monitor=1&metric=cpu' => 'detail metriky'] as $lg_path => $lg_label) {
+    [$lg_code, $lg_head] = bk_raw_request($base . $lg_path);
+    check("{$lg_label} bez přihlášení vede na přihlášení v /app", [$lg_code, preg_match('/^location:\s*\/app\/setup\s*$/mi', $lg_head)], [302, 1]);
+}
+
 // The role lived in the session: a demoted or deleted admin kept every right.
 [$da_code] = api_post($base, 'action=save_user', ['username' => 'druhy_admin', 'email' => 'druhy@example.com', 'role' => 'admin', 'password' => 'DruhyAdmin123!'], $cookie_jar);
 check('admin založí druhého admina', $da_code, 200);
@@ -1713,6 +1720,13 @@ check_true('RSS je platné XML', $rss_xml !== false);
 if ($rss_xml !== false) {
     check_true('kanál má titulek', isset($rss_xml->channel->title) && (string)$rss_xml->channel->title !== '');
     check_true('kanál má odkaz na sebe (atom:self)', str_contains($rss_body, 'rel="self"'));
+    // The status page is /app/public; the legacy index.php goes with D1.
+    check('kanál odkazuje na stavovou stránku v /app', (string)$rss_xml->channel->link, $base . '/app/public');
+    $rss_item_links = [];
+    foreach ($rss_xml->channel->item as $item) {
+        $rss_item_links[] = (string)$item->link;
+    }
+    check('a položky na ni také', array_values(array_unique($rss_item_links)), [$base . '/app/public']);
 
     $guids = [];
     $titles = [];
@@ -1778,7 +1792,18 @@ if (!empty($cookie_jar)) {
     $pub_code = (int)curl_getinfo($pub_ch, CURLINFO_RESPONSE_CODE);
     check('RSS veřejné stránky vrací 200', $pub_code, 200);
     check_true('RSS veřejné stránky nese název stránky', str_contains($pub_body, 'Veřejná pro RSS'));
+    check_true('a odkazuje na tu stránku v /app', str_contains($pub_body, '<link>' . $base . '/app/public?page=verejna-rss</link>'));
 }
+
+// An install under a subdirectory links to the /app next to its /status.
+// The test server serves the root only, so the feed runs in a child. Its
+// Host is the server's own name, so bk_link_origin() takes it.
+$rss_sub_out = [];
+exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('$_SERVER["SCRIPT_NAME"] = "/monitoring/status/rss.php";'
+    . '$_SERVER["HTTP_HOST"] = "example.test"; $_SERVER["SERVER_NAME"] = "example.test"; require ' . var_export($root . '/rss.php', true) . ';') . ' 2>&1', $rss_sub_out);
+check('instalace v podadresáři: kanál odkazuje na /app vedle svého /status',
+    preg_match('~<link>([^<]*)</link>~', implode("\n", $rss_sub_out), $rss_sub_m) ? $rss_sub_m[1] : implode("\n", $rss_sub_out),
+    'http://example.test/monitoring/app/public');
 
 // =======================================================================
 // 10. Escalation - the safety net for an alert nobody saw
@@ -5863,15 +5888,23 @@ if (isset($cookie_jar)) {
     // site_url as the old label asked for it - the URL of the status page.
     // The link is built from its origin, so it cannot lose /status.
     $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('site_url', 'https://bloodkings.eu/status') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+    // A new server of the week, so its link is in the e-mail too.
+    $pdo->exec("INSERT INTO monitor_events (monitor_id, monitor_name, monitor_type, event_type, description, occurred_at)
+                VALUES (1, 'Nový server digestu', 'web', 'monitor_added', 'test', NOW())");
     $ch = curl_init($base . '/api.php?action=digest_preview&period=weekly');
     curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIEJAR => $cookie_jar,
         CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_TIMEOUT => 30]);
     $dg_html = (string)curl_exec($ch);
     $pdo->exec("DELETE FROM settings WHERE key_name = 'site_url'");
+    $pdo->exec("DELETE FROM monitor_events WHERE monitor_name = 'Nový server digestu'");
     check_true('Digest: e-mail má sekci Routery', str_contains($dg_html, 'Routery'));
-    check_true('Digest: a v ní jméno routeru i s odkazem na jeho stránku',
+    // The pages are in /app (D1); the legacy index.php?expand=N goes away.
+    check_true('Digest: a v ní jméno routeru i s odkazem na jeho stránku v /app',
         str_contains($dg_html, 'Router bez metrik')
-        && str_contains($dg_html, 'href="https://bloodkings.eu/status/index.php?expand=2"'));
+        && str_contains($dg_html, 'href="https://bloodkings.eu/app/infrastructure/2"'));
+    check_true('Digest: nový server odkazuje na svou stránku v /app',
+        str_contains($dg_html, 'Nový server digestu') && str_contains($dg_html, 'href="https://bloodkings.eu/app/infrastructure/1"'));
+    check_false('Digest: žádný odkaz nevede na starou index.php', str_contains($dg_html, 'index.php'));
     check_true('Digest: položka je vidět i s tím, co se naměřilo a co s tím',
         str_contains($dg_html, 'Plný oddíl') && str_contains($dg_html, 'Uvolněte místo'));
     check_true('Digest: fakta o disku jsou v e-mailu, ne poplach',

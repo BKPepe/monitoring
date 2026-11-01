@@ -184,7 +184,9 @@ $base = bk_rss_base_url();
 // 'site_name', so the feed was always named by the generic fallback.
 $site_name = get_setting('site_title', '');
 $channel_title = ($site_name !== '' ? $site_name : t('rss_default_site')) . ' - ' . ($page_title ?? t('rss_channel_suffix'));
-$channel_link = $base . '/' . ($slug !== '' ? '?page=' . rawurlencode($slug) : '');
+// The status page the feed belongs to is /app/public next to this
+// directory, not the legacy index.php.
+$channel_link = bk_link_origin() . bk_app_url('/public') . ($slug !== '' ? '?page=' . rawurlencode($slug) : '');
 $self_link = $base . '/rss.php' . ($slug !== '' ? '?page=' . rawurlencode($slug) : '');
 $channel_desc = $page_description ?: t('rss_channel_description');
 

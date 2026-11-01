@@ -14894,7 +14894,7 @@ function render_digest_html($data) {
         foreach ($data['new_servers'] as $s) {
             $ns_label = htmlspecialchars($s['name']) . ' <span style="color:#888896;">(' . htmlspecialchars($s['type']) . ')</span>';
             if ($site_origin !== '' && !empty($s['id'])) {
-                $ns_label = '<a href="' . htmlspecialchars($site_origin . '/status/index.php?expand=' . (int)$s['id']) . '" style="color:#1ec773; text-decoration: underline;">' . $ns_label . '</a>';
+                $ns_label = '<a href="' . htmlspecialchars($site_origin . '/app/infrastructure/' . (int)$s['id']) . '" style="color:#1ec773; text-decoration: underline;">' . $ns_label . '</a>';
             }
             $ns_html .= '<div style="color:#1ec773; font-size:13px; padding:3px 0;">+ ' . $ns_label . '</div>';
         }
@@ -14986,7 +14986,7 @@ function render_digest_html($data) {
         foreach ($data['routers'] as $router) {
             $rt_name = htmlspecialchars((string)$router['name']);
             if ($rt_origin !== '') {
-                $rt_name = '<a href="' . htmlspecialchars($rt_origin . '/status/index.php?expand=' . (int)$router['id'])
+                $rt_name = '<a href="' . htmlspecialchars($rt_origin . '/app/infrastructure/' . (int)$router['id'])
                     . '" style="color:#e1e1e6; text-decoration:none;">' . $rt_name . '</a>';
             }
             $rt_html .= '<div style="padding:10px 0; border-bottom:1px solid #22222c;">'

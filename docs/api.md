@@ -387,7 +387,8 @@ The resolution item only exists when `resolved_at` is actually set. For an
 ongoing incident it is not computed from "now".
 
 The feed is linked from the status page head (`<link rel="alternate">`), so
-readers find it on their own.
+readers find it on their own. Its `<link>`, the channel's and each item's,
+is that status page: `/app/public`, with `?page=slug` for a page's feed.
 
 ### Escalation of unacknowledged outages
 

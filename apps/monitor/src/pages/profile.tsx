@@ -70,7 +70,9 @@ export function ProfilePage() {
           </p>
         </div>
         <Button variant="primary" size="sm" asChild>
-          <a href={resolveUrl(session?.loginUrl ?? 'admin.php')}>{t('settings.go_to_login', 'Přejít na přihlášení')}</a>
+          <a href={resolveUrl(session?.loginUrl ?? '/app/setup')}>
+            {t('settings.go_to_login', 'Přejít na přihlášení')}
+          </a>
         </Button>
       </Panel>
     );

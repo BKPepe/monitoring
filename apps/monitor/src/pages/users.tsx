@@ -47,7 +47,7 @@ export function UsersPage() {
     return <LoadingState label={t('users.loading', 'Načítám…')} size="page" />;
   }
 
-  if (!session?.authenticated) return <LoginRequired loginUrl={session?.loginUrl ?? 'admin.php'} />;
+  if (!session?.authenticated) return <LoginRequired loginUrl={session?.loginUrl ?? '/app/setup'} />;
   if (!isAdmin) return <AdminRequired />;
 
   return (

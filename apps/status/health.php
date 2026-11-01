@@ -230,7 +230,7 @@ try {
     <div style="margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap;">
         <a href="health.php" class="btn btn-secondary btn-sm"><i class="fas fa-rotate"></i> Zkontrolovat znovu</a>
         <a href="health.php?format=json" class="btn btn-secondary btn-sm"><i class="fas fa-code"></i> JSON výstup</a>
-        <a href="admin.php" class="btn btn-secondary btn-sm"><i class="fas fa-arrow-left"></i> Zpět do adminu</a>
+        <a href="<?php echo htmlspecialchars(bk_app_url('/')); ?>" class="btn btn-secondary btn-sm"><i class="fas fa-arrow-left"></i> Zpět do aplikace</a>
     </div>
 
 </div>
