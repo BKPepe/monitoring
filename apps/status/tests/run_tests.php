@@ -1841,7 +1841,7 @@ check('uvolnění o 5 bodů',
     [$fs_types($fs_hold), $fs_types($fs_free), $fs_free['events'][0]['status']],
     [[], ['fs_freed'], 'storage_recovered']);
 
-// The same reset the hdd alert does at agent_api.php:458 - an admin who
+// The same reset the hdd alert does in bk_agent_report() - an admin who
 // lowers the limit must be able to be warned again.
 $fs_thr = bk_fs_alert_eval($fs_one(95.0), $fs_2['state'], 80.0, $fs_now + 300);
 check('změna limitu resetuje', [$fs_types($fs_thr), $fs_thr['state']['/srv']['streak']], [[], 1]);

@@ -3172,6 +3172,259 @@ try {
     $sm_cleanup();
 }
 
+// --- cron's check loop, one monitor at a time (bk_cron_check_monitor) -----
+//
+// Nothing in a suite ran cron.php, so these used to be regexes over its
+// text: a rename broke them and wrong behaviour with the same text passed.
+// The loop body is a function now and runs here on the real database, with
+// the check and the sender replaced: $cm_check answers per attempt and
+// counts the attempts, $cm_notes records what would have been sent.
+require_once $root . '/lang.php';
+require_once $root . '/cron_check.php';
+$cm_ids = '950, 951, 952, 953, 954, 955, 956, 957, 958';
+$cm_cleanup = function () use ($pdo, $cm_ids): void {
+    $pdo->exec("DELETE FROM incident_updates WHERE incident_id IN (SELECT id FROM incidents WHERE monitor_id IN ({$cm_ids}))");
+    foreach (['incidents', 'notification_log', 'monitor_logs', 'monitor_events', 'vps_metrics'] as $cm_table) {
+        $pdo->exec("DELETE FROM {$cm_table} WHERE monitor_id IN ({$cm_ids})");
+    }
+    $pdo->exec("DELETE FROM monitors WHERE id IN ({$cm_ids})");
+};
+$cm_cleanup();
+$cm_location = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'cron_location'")->fetchColumn();
+bk_setting_set($pdo, 'cron_location', 'Testovací cron');
+$cm_notes = [];
+$cm_notify = function (PDO $p, array $m, string $status, $message = '') use (&$cm_notes): void {
+    $cm_notes[] = [(int)$m['id'], $status];
+};
+$cm_calls = 0;
+/** A check that answers $answers[attempt]; it never touches the network. */
+$cm_check = function (array $answers) use (&$cm_calls): callable {
+    return function (array $m, int $attempt) use ($answers, &$cm_calls): ?array {
+        $cm_calls++;
+        return $answers[$attempt] ?? null;
+    };
+};
+$cm_run = function (int $id, ?callable $check, ?array $row = null, ?callable $notify = null) use ($pdo, $cm_notify, &$cm_notes, &$cm_calls): string {
+    $cm_notes = [];
+    $cm_calls = 0;
+    $row ??= $pdo->query("SELECT * FROM monitors WHERE id = {$id}")->fetch();
+    ob_start();
+    try {
+        bk_cron_check_monitor($pdo, $row, $check, $notify ?? $cm_notify);
+    } finally {
+        $out = (string)ob_get_clean();
+    }
+    return $out;
+};
+/** last_details as the agent writes them; null clears them. */
+$cm_set_details = function (int $id, ?array $details) use ($pdo): void {
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?")
+        ->execute([$details === null ? null : json_encode($details, JSON_UNESCAPED_UNICODE), $id]);
+};
+$cm_details = fn (int $id): array => json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = {$id}")->fetchColumn(), true) ?: [];
+$cm_status = fn (int $id): string => (string)$pdo->query("SELECT status FROM monitors WHERE id = {$id}")->fetchColumn();
+$cm_last_log = fn (int $id) => $pdo->query("SELECT status, response_time, error_message, checked_from, check_stages FROM monitor_logs WHERE monitor_id = {$id} ORDER BY id DESC LIMIT 1")->fetch();
+$cm_up = fn (?float $ms, array $extra = []): array => ['status' => 'up', 'response_time' => $ms, 'error' => null] + $extra;
+$cm_down = fn (string $error): array => ['status' => 'down', 'response_time' => null, 'error' => $error];
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, port, status, category) VALUES
+        (950, 'Cron port', 'port', 'cron-port.test', 8080, 'down', 'Test'),
+        (951, 'Cron hra', 'minecraft', 'cron-mc.test', 25565, 'up', 'Test'),
+        (952, 'Cron web', 'web', 'https://cron-web.test', 443, 'up', 'Test'),
+        (953, 'Cron hosting', 'web', 'https://cron-hosting.test', NULL, 'up', 'Test'),
+        (954, 'Cron DNS', 'dns', 'cron-dns.test', 53, 'up', 'Test')");
+
+    // The measured time reaches monitor_logs as whole ms, at least 1 (bk_response_ms).
+    $out = $cm_run(950, $cm_check([1 => $cm_up(0.4)]));
+    check('cron: odezva pod 1 ms se zapíše jako 1 ms, s místem cronu', $cm_last_log(950),
+        ['status' => 'up', 'response_time' => 1, 'error_message' => null, 'checked_from' => 'Testovací cron', 'check_stages' => null]);
+    check('cron: změna down -> up se ohlásí a stav se zapíše', [$cm_notes, $cm_status(950)], [[[950, 'up']], 'up']);
+    check_true('cron: a vypíše změnu do svého logu', str_contains($out, 'ZMĚNA STAVU -> UP'));
+    $cm_run(950, $cm_check([1 => $cm_up(null)]));
+    check('cron: neměřená odezva zůstane NULL', array_key_exists('response_time', $cm_last_log(950) ?: []) ? $cm_last_log(950)['response_time'] : 'chybí', null);
+    check('cron: řádek kontroly nese zdroj cron', $pdo->query("SELECT source FROM monitor_logs WHERE monitor_id = 950 ORDER BY id DESC LIMIT 1")->fetchColumn(), 'cron');
+    check('cron: beze změny stavu se nic neposílá', $cm_notes, []);
+
+    // One failed attempt is retried at once; a blip that passes the retry is up.
+    $cm_run(950, $cm_check([1 => $cm_down('Spojení odmítnuto'), 2 => $cm_up(12.0)]));
+    check('cron: neúspěch se hned zopakuje a druhý pokus platí', [$cm_calls, $cm_status(950), $cm_notes, $cm_last_log(950)['status'] ?? null],
+        [2, 'up', [], 'up']);
+    $cm_run(950, $cm_check([1 => $cm_down('Spojení odmítnuto'), 2 => $cm_down('Spojení odmítnuto')]));
+    check('cron: dva neúspěchy za sebou jsou výpadek', [$cm_calls, $cm_status(950), $cm_notes], [2, 'down', [[950, 'down']]]);
+    check('cron: v historii je chyba kontroly', $cm_last_log(950)['error_message'] ?? null, 'Spojení odmítnuto');
+
+    // The three fresh reads of last_details. First: the list cron read at
+    // the start of the run is minutes old, and an agent report since then
+    // says the agent is alive - no silence alert from the stale copy.
+    $pdo->exec("UPDATE monitors SET status = 'up', agent_key = 'cron-latch-key' WHERE id = 950");
+    $cm_set_details(950, ['agent_last_seen' => time() - 7200]);
+    $cm_stale = $pdo->query("SELECT * FROM monitors WHERE id = 950")->fetch();
+    $cm_set_details(950, ['agent_last_seen' => time() - 30, 'agent_note' => 'z hlášení']);
+    $cm_run(950, $cm_check([1 => $cm_up(5.0)]), $cm_stale);
+    check('cron: zastaralý seznam monitorů nehlásí mlčení agenta, který se mezitím ozval', $cm_notes, []);
+    check('cron: a nepřepíše novější detaily', $cm_details(950)['agent_note'] ?? null, 'z hlášení');
+
+    // The agent-silence latch is written once and survives the rest of the
+    // run: a stale copy written back re-sent the alert every minute.
+    $cm_set_details(950, ['agent_last_seen' => time() - 7200]);
+    $cm_run(950, $cm_check([1 => $cm_up(5.0)]));
+    check('cron: mlčící agent se ohlásí', $cm_notes, [[950, 'agent_offline']]);
+    $cm_run(950, $cm_check([1 => $cm_up(5.0)]));
+    check('cron: a podruhé už ne (pojistka přežila zápis detailů)', [$cm_notes, !empty($cm_details(950)['agent_alert_sent'])], [[], true]);
+    check('cron: událost odpojení je jedna', (int)$pdo->query("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 950 AND event_type = 'agent_disconnected'")->fetchColumn(), 1);
+    $pdo->exec("UPDATE monitors SET agent_key = NULL, last_details = NULL WHERE id = 950");
+
+    // Second: a report lands while the check runs. Merged into, not undone.
+    $cm_mid_report = function (array $m, int $attempt) use ($cm_set_details, $cm_up): array {
+        $cm_set_details(951, ['agent_note' => 'během kontroly', 'ts3_clients_online' => 3]);
+        return $cm_up(20.0, ['players_online' => 4, 'players_max' => 20, 'version' => '1.21']);
+    };
+    $cm_run(951, $cm_mid_report);
+    $cm_d = $cm_details(951);
+    check('cron: hlášení agenta během kontroly zůstane ve sloučených detailech',
+        [$cm_d['agent_note'] ?? null, $cm_d['players_online'] ?? null, $cm_d['players_max'] ?? null], ['během kontroly', 4, 20]);
+    check_true('cron: a detaily nesou otisk verze cronu', isset($cm_d['cron_version']));
+    check('cron: počet hráčů jde do historie', (int)$pdo->query("SELECT ts_clients_online FROM vps_metrics WHERE monitor_id = 951 ORDER BY id DESC LIMIT 1")->fetchColumn(), 4);
+    // Third: the latency alert takes seconds to send and a report can land
+    // meanwhile. Only the latency latch goes onto a fresh read.
+    $pdo->exec("UPDATE monitors SET latency_threshold_ms = 100, latency_threshold_mins = 5, last_details = NULL WHERE id = 950");
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 950");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+        (950, 'up', 500, DATE_SUB(NOW(), INTERVAL 2 MINUTE)), (950, 'up', 450, DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
+    $cm_slow_notify = function (PDO $p, array $m, string $status, $message = '') use ($cm_set_details, $cm_notify): void {
+        $cm_notify($p, $m, $status, $message);
+        if ($status === 'latency_degraded') {
+            $cm_set_details(950, ['agent_note' => 'během alertu']);
+        }
+    };
+    $out = $cm_run(950, $cm_check([1 => $cm_up(480.0)]), null, $cm_slow_notify);
+    check('cron: trvale pomalá odezva se ohlásí', $cm_notes, [[950, 'latency_degraded']]);
+    check('cron: pojistka latence se zapíše na čerstvé detaily', [$cm_details(950)['agent_note'] ?? null, $cm_details(950)['latency_alert_sent'] ?? null],
+        ['během alertu', true]);
+    check_true('cron: a vypíše to', str_contains($out, 'ODEZVA -> DEGRADED'));
+    $cm_run(950, $cm_check([1 => $cm_up(480.0)]));
+    check('cron: zpomalení se neohlašuje znovu', $cm_notes, []);
+    // A remote probe's times are measured from elsewhere: they are not the
+    // window. Above, the rows without a source counted, as they always did.
+    $cm_set_details(950, null);
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 950");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, source) VALUES
+        (950, 'up', 500, DATE_SUB(NOW(), INTERVAL 2 MINUTE), 'probe'), (950, 'up', 450, DATE_SUB(NOW(), INTERVAL 1 MINUTE), 'probe')");
+    $cm_run(950, $cm_check([1 => $cm_up(480.0)]));
+    check('cron: pomalé odezvy sondy do okna latence nepatří (jediná kontrola cronu nestačí)', $cm_notes, []);
+    $pdo->exec("UPDATE monitors SET latency_threshold_ms = NULL WHERE id = 950");
+
+    // alert_confirm_failures = 2: a probe's 'down' is no check of cron's and
+    // does not start the streak; an old row without a source still does.
+    $cm_confirm = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'alert_confirm_failures'")->fetchColumn();
+    bk_setting_set($pdo, 'alert_confirm_failures', '2');
+    try {
+        $pdo->exec("UPDATE monitors SET status = 'up' WHERE id = 950");
+        $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 950");
+        $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, source) VALUES (950, 'down', 'Timeout ze sondy', 'probe')");
+        $out = $cm_run(950, $cm_check([1 => $cm_down('Spojení odmítnuto'), 2 => $cm_down('Spojení odmítnuto')]));
+        check('cron: down sondy výpadek nepotvrdí', [$cm_status(950), $cm_notes, str_contains($out, 'výpadek nepotvrzen (1/2)')], ['up', [], true]);
+        $cm_run(950, $cm_check([1 => $cm_down('Spojení odmítnuto'), 2 => $cm_down('Spojení odmítnuto')]));
+        check('cron: druhý neúspěch cronu ano', [$cm_status(950), $cm_notes], ['down', [[950, 'down']]]);
+        $pdo->exec("UPDATE monitors SET status = 'up' WHERE id = 950");
+        $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 950");
+        $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message) VALUES (950, 'down', 'Starý řádek')");
+        $cm_run(950, $cm_check([1 => $cm_down('Spojení odmítnuto'), 2 => $cm_down('Spojení odmítnuto')]));
+        check('cron: starý řádek bez zdroje se do řady počítá jako dřív', [$cm_status(950), $cm_notes], ['down', [[950, 'down']]]);
+    } finally {
+        if ($cm_confirm === false) {
+            $pdo->exec("DELETE FROM settings WHERE key_name = 'alert_confirm_failures'");
+            unset($GLOBALS['system_settings']['alert_confirm_failures']);
+        } else {
+            bk_setting_set($pdo, 'alert_confirm_failures', (string)$cm_confirm);
+        }
+    }
+
+    // Every other row the loop writes names its writer too: the maintenance
+    // window, a silent agent_service and a silent VPS agent are cron's, a
+    // heartbeat monitor's row is 'heartbeat'. Ids of their own, outside
+    // $cm_ids and cleared here, so 955-958 stay free for later cases.
+    $cm_src_ids = '964, 965, 966, 967';
+    $cm_src_clean = function () use ($pdo, $cm_src_ids): void {
+        foreach (['incidents', 'notification_log', 'monitor_logs', 'monitor_events'] as $cm_table) {
+            $pdo->exec("DELETE FROM {$cm_table} WHERE monitor_id IN ({$cm_src_ids})");
+        }
+        $pdo->exec("DELETE FROM monitors WHERE id IN ({$cm_src_ids})");
+    };
+    $cm_src_clean();
+    $cm_offline = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'agent_offline_timeout'")->fetchColumn();
+    bk_setting_set($pdo, 'agent_offline_timeout', '10');
+    try {
+        $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, maintenance, created_at, last_checked, heartbeat_interval, last_heartbeat) VALUES
+            (964, 'Cron údržba', 'web', 'https://cron-maint.test', 'up', 'Test', 1, NOW(), NULL, NULL, NULL),
+            (965, 'Cron služba agenta', 'agent_service', 'cron-svc.test', 'up', 'Test', 0, DATE_SUB(NOW(), INTERVAL 2 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY), NULL, NULL),
+            (966, 'Cron heartbeat', 'heartbeat', '', 'up', 'Test', 0, DATE_SUB(NOW(), INTERVAL 2 DAY), NULL, 60, DATE_SUB(NOW(), INTERVAL 2 HOUR)),
+            (967, 'Cron VPS', 'vps', 'cron-vps.test', 'up', 'Test', 0, DATE_SUB(NOW(), INTERVAL 2 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY), NULL, NULL)");
+        foreach ([964, 965, 966, 967] as $cm_src_id) {
+            $cm_run($cm_src_id, $cm_check([]));
+        }
+        check('cron: údržba, mlčící služba agenta, heartbeat a mlčící VPS nesou svůj zdroj',
+            $pdo->query("SELECT monitor_id, CONCAT(status, ' ', source) FROM monitor_logs WHERE monitor_id IN (964, 965, 966, 967) ORDER BY monitor_id")->fetchAll(PDO::FETCH_KEY_PAIR),
+            [964 => 'maintenance cron', 965 => 'unknown cron', 966 => 'down heartbeat', 967 => 'down cron']);
+    } finally {
+        $cm_src_clean();
+        if ($cm_offline === false) {
+            $pdo->exec("DELETE FROM settings WHERE key_name = 'agent_offline_timeout'");
+            unset($GLOBALS['system_settings']['agent_offline_timeout']);
+        } else {
+            bk_setting_set($pdo, 'agent_offline_timeout', (string)$cm_offline);
+        }
+    }
+
+    // The agent fallback: a game server the hosting cannot reach is up when
+    // the agent on the same machine saw its port a few minutes ago.
+    $cm_set_details(951, ['agent_last_seen' => time() - 60, 'ports' => [22, 25565],
+        'ts3_clients_online' => 3]);
+    $cm_run(951, $cm_check([1 => $cm_down('Timeout'), 2 => $cm_down('Timeout')]));
+    $cm_d = $cm_details(951);
+    check('cron: záloha přes agenta drží hru nahoře a říká proč',
+        [$cm_status(951), $cm_last_log(951)['error_message'] ?? null, $cm_d['api_fallback'] ?? null, $cm_d['last_error'] ?? null, $cm_d['ports'] ?? null],
+        ['up', 'Používá se záložní API (přímé TCP spojení selhalo)', true, 'Timeout', [22, 25565]]);
+    // ...never for a web: a site that serves no pages is down for visitors.
+    $cm_set_details(952, ['agent_last_seen' => time() - 60, 'ports' => [80, 443]]);
+    $cm_run(952, $cm_check([1 => $cm_down('HTTP 502'), 2 => $cm_down('HTTP 502')]));
+    check('cron: web záloha přes agenta nezachrání', [$cm_status(952), $cm_notes], ['down', [[952, 'down']]]);
+
+    // cPanel: a web monitor's cpanel_stats_url gives the exporter's figures,
+    // kept under cpanel_stats and as one metrics row. The web branch reaches
+    // the exporter over the network, so its two helpers get an answer here.
+    $cm_cp = ['status' => 'up', 'disk' => ['percent' => 41.5], 'memory' => ['percent' => 63.0], 'processes' => 12];
+    check('cron: cPanel detaily mají sedm klíčů exportéru', bk_cpanel_stats_details($cm_cp),
+        ['disk' => ['percent' => 41.5], 'memory' => ['percent' => 63.0], 'processes' => 12, 'database' => null, 'bandwidth' => null,
+            'postgresql' => null, 'cpu' => null]);
+    bk_cpanel_metrics_insert($pdo, 953, $cm_cp);
+    check('cron: a neměřené CPU je v historii NULL, ne nula',
+        array_map(fn ($v) => $v === null ? null : (float)$v,
+            $pdo->query("SELECT cpu_usage, ram_usage, hdd_usage FROM vps_metrics WHERE monitor_id = 953 ORDER BY id DESC LIMIT 1")->fetch()),
+        ['cpu_usage' => null, 'ram_usage' => 63.0, 'hdd_usage' => 41.5]);
+
+    // A type without an active check writes nothing to the history.
+    $out = $cm_run(954, null);
+    check('cron: typ bez aktivní kontroly nic nezapíše do historie', [(int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE monitor_id = 954")->fetchColumn(),
+        str_contains($out, "SKIP (typ 'dns'")], [0, true]);
+
+    // Both attempts of a web check carry the keyword: one function runs them.
+    $cm_web = ['type' => 'web', 'target' => $base . '/api.php?action=public_status', 'port' => null, 'timeout' => 5];
+    $cm_kw_missing = bk_cron_active_check($cm_web + ['body_keyword' => 'bk-slovo-ktere-tam-neni']);
+    check_true('cron: kontrola webu dostane klíčové slovo (chybí -> down)',
+        ($cm_kw_missing['status'] ?? null) === 'down' && str_contains((string)($cm_kw_missing['error'] ?? ''), 'bk-slovo-ktere-tam-neni'));
+    check('cron: a se slovem, které na stránce je, je web nahoře',
+        bk_cron_active_check($cm_web + ['body_keyword' => 'status'])['status'] ?? null, 'up');
+} finally {
+    if ($cm_location === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'cron_location'");
+        unset($GLOBALS['system_settings']['cron_location']);
+    } else {
+        bk_setting_set($pdo, 'cron_location', (string)$cm_location);
+    }
+    $cm_cleanup();
+}
+
 // --- last_details is a 64 KB TEXT column ----------------------------------
 //
 // Twelve pass-through lists of ~6.6 KB each (every one under the 8 KB
@@ -8899,11 +9152,11 @@ foreach ($ac_files as $ac_name => $ac_type) {
 // bk_agent_num/int($data, 'key') or one variable assigned from exactly one
 // key. Composite values ($swap ?? $ow_swap_pct, band totals, WAN steps) count
 // their keys as stored, but are not compared value by value.
-$ac_api_src = (string)file_get_contents($root . '/agent_api.php');
+$ac_api_src = (string)file_get_contents($root . '/agent_report.php');
 $ac_col_of = [];
 $ac_stored = [];
 $ac_cols = [];
-preg_match('/\$metric_row = \[(.*?)\n        \];/s', $ac_api_src, $ac_row_m);
+preg_match('/\$metric_row = \[(.*?)\n            \];/s', $ac_api_src, $ac_row_m);
 preg_match_all("/^\s*'([a-z0-9_]+)' => (.+),\s*$/m", $ac_row_m[1] ?? '', $ac_rows, PREG_SET_ORDER);
 foreach ($ac_rows as [, $ac_col, $ac_expr]) {
     $ac_cols[] = $ac_col;

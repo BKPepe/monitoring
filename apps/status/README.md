@@ -8,8 +8,10 @@ An open-source, ultra-fast server and service status monitoring application buil
 * `index.php` - Public status dashboard with responsive dark glassmorphic design.
 * `admin.php` - Admin control panel for monitor CRUD, 2FA setup, webhooks, and system configuration.
 * `cron.php` - Active probing runner executed via server CLI cron.
+* `cron_check.php` - `bk_cron_check_monitor()`, cron's check of one monitor, and the active checks it runs.
 * `node_api.php` - API endpoint for remote probes that measure from other locations.
 * `agent_api.php` - Ingestion API for VPS and OpenWrt system telemetry agents.
+* `agent_report.php` - `bk_agent_report()`, what `agent_api.php` does with an agent's full report once its key named a monitor.
 * `agent.sh` / `agent.py` - Native Bash and Python telemetry agents for Linux hosts.
 * `agent_openwrt.sh` - Lightweight OpenWrt router agent with Wi-Fi, conntrack, and signed Remote Actions.
 * `agent.ps1` - PowerShell telemetry agent for Windows hosts.

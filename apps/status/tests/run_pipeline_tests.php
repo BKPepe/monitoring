@@ -408,7 +408,7 @@ if (function_exists('bk_latency_score')) {
 // nej zahodil. Chyba se pozna az rucnim hledanim - v UI vypada chybejici
 // udaj stejne jako "zatim nezmereno". Tenhle test cte pravidla propousteni
 // primo ze zdroje a overuje je na modelovych datech.
-$agent_src = file_get_contents(__DIR__ . '/../agent_api.php');
+$agent_src = file_get_contents(__DIR__ . '/../agent_report.php');
 
 check_true(
     'agent_api propousti neznama pole',
@@ -553,71 +553,21 @@ check('bez odeslaneho alertu se navrat nehlasi', $decide([90, 85], 500, false), 
 // Prah presne na hranici: rovnost neni prekroceni.
 check('hodnota rovna prahu neni zpomaleni', $decide([500, 500], 500, false), 'ok');
 
-// --- cron: an alert fires once, and a failed check stays failed ------------
-// The agent-silence latch was written to the database while the loop kept a
-// stale copy of last_details and wrote that back later, so every run re-sent
-// the alert. These guard the order of operations, which no pure test can see.
+// cron's loop body is bk_cron_check_monitor() now: the latch, the fresh
+// reads of last_details, the response time it logs, the agent fallback and
+// the keyword of both attempts run on a real database in run_api_tests.php.
 $cron_src = file_get_contents(__DIR__ . '/../cron.php');
-check_true('cron po zápisu pojistky aktualizuje svou kopii last_details',
-    (bool)preg_match('/\$stmt_up_agent->execute\(\[\$new_details, \$id\]\);\s*(?:\/\/[^\n]*\n\s*)*\$monitor\[\'last_details\'\] = \$new_details;/', $cron_src));
-// The fresh reads only help where they sit: at the start of the monitor, after
-// the check and the agent fallback but before the merge, and after the latency
-// alert is sent but before its write. Order is checked, not just the count.
-$fresh_positions = [];
-$offset = 0;
-while (($pos = strpos($cron_src, '$stmt_fresh_details->execute([$id]);', $offset)) !== false) {
-    $fresh_positions[] = $pos;
-    $offset = $pos + 1;
-}
-check('cron čte last_details čerstvě na třech místech', count($fresh_positions), 3);
-$cron_before = fn(string $needle, int $pos) => ($p = strpos($cron_src, $needle)) !== false && $pos < $p;
-$cron_after = fn(string $needle, int $pos) => ($p = strpos($cron_src, $needle)) !== false && $pos > $p;
-check_true('první čtení je před pojistkou mlčícího agenta',
-    isset($fresh_positions[0]) && $cron_before('$details_arr[\'agent_alert_sent\'] = true;', $fresh_positions[0]));
-check_true('druhé čtení je po záloze přes agenta a před sloučením detailů',
-    isset($fresh_positions[1]) && $cron_after('if (bk_agent_backup_says_up(', $fresh_positions[1])
-    && $cron_before('// Merge old details', $fresh_positions[1]));
-check_true('třetí čtení je po alertu latence a před jeho zápisem',
-    isset($fresh_positions[2]) && $cron_after('trigger_notifications($pdo, $monitor, \'latency_\'', $fresh_positions[2])
-    && $cron_before('$stmt_lat->execute(', $fresh_positions[2]));
 
-// The response time a check measured reaches monitor_logs as whole ms, at
-// least 1: a sub-millisecond answer went in as 0, which every reader skips as
-// unmeasured. Nothing runs cron.php here, so the assignment is checked.
-preg_match_all('/\$response_time = ([^;]+);/', $cron_src, $rt_assign);
-check('cron bere odezvu pro monitor_logs jen přes bk_response_ms', $rt_assign[1], ["bk_response_ms(\$check_result['response_time'])"]);
-check_true('a právě ji zapíše do historie',
-    str_contains($cron_src, '$stmt_log->execute([$id, $new_status, $response_time, $error_msg, $loc, $check_stages_json]);'));
-
-// Who wrote a row (r024): every INSERT of cron.php names its source, and
-// nothing runs cron.php here, so the statements are read. A heartbeat
-// monitor's row is 'heartbeat', every other row cron writes is 'cron'.
-preg_match_all('/INSERT INTO monitor_logs \(([^)]*)\) VALUES \(([^)]*)\)/', $cron_src, $src_ins, PREG_SET_ORDER);
-check('každý zápis cronu do monitor_logs nese zdroj: 4× cron, 1× heartbeat',
-    array_map(fn ($m) => str_ends_with(trim($m[1]), 'source') ? substr(trim($m[2]), strrpos(trim($m[2]), ',') + 1) : 'chybí', $src_ins),
-    [" 'cron'", " 'cron'", " 'heartbeat'", " 'cron'", " 'cron'"]);
-// The alert_confirm_failures streak is cron's own: a probe's row neither
-// adds to it nor breaks it, a row from before r024 still does.
-check_true('řada pro alert_confirm_failures vynechá řádky sondy',
-    (bool)preg_match('/SELECT status FROM monitor_logs\s+WHERE monitor_id = \? AND \(source IS NULL OR source <> \'probe\'\)\s+ORDER BY id DESC LIMIT "/', $cron_src));
+// Who wrote a row (r024): node_api.php names its rows 'probe' itself and
+// takes no source from the request. cron's rows run in run_api_tests.php.
 $na_src = file_get_contents(__DIR__ . '/../node_api.php');
 check('node_api zapisuje řádek jako sondu, zdroj z požadavku nebere',
     preg_match_all("/INSERT INTO monitor_logs \(monitor_id, status, response_time, error_message, checked_from, source\) VALUES \(\?, \?, \?, \?, \?, 'probe'\)/", $na_src), 1);
 
-// The call itself is matched - the helper's name also appears in comments.
-check_true('záloha přes agenta rozhoduje voláním bk_agent_backup_says_up',
-    (bool)preg_match('/if \(bk_agent_backup_says_up\(\(string\)\$type, \$details_decoded, \$monitor, time\(\)\)\) \{/', $cron_src));
-check_false('záloha přes agenta nemá vlastní pravidla portů webu',
-    (bool)preg_match('/in_array\((80|443),/', $cron_src));
-check_true('záloha zapisuje jen svůj rozdíl, ne starou kopii detailů',
-    str_contains($cron_src, '$details = json_encode($fallback_details') && !str_contains($cron_src, 'json_encode($details_decoded'));
-
-// Both branches of check_http must RETURN the verdict, and cron must hand it the keyword.
+// Both branches of check_http must RETURN the verdict.
 $fn_src = file_get_contents(__DIR__ . '/../functions.php');
 check('check_http vrací verdikt bk_http_verdict v cURL i náhradní větvi',
     preg_match_all('/\$verdict = bk_http_verdict\([^;]*\$body_keyword\);\s*return array_merge\(\[\s*\'status\' => \$verdict\[\'status\'\],\s*\'response_time\' => \$duration,\s*\'error\' => \$verdict\[\'error\'\]/', $fn_src), 2);
-check('cron předává klíčové slovo první kontrole i opakování',
-    substr_count($cron_src, 'check_http($target, $timeout, $monitor[\'body_keyword\'] ?? null)'), 2);
 check_false('SMS neřeže chybovou zprávu po bajtech',
     (bool)preg_match('/substr\(\$error_msg, 0,/', $fn_src));
 

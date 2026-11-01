@@ -11428,7 +11428,7 @@ function bk_fs_alert_eval($filesystems, $fs_state, float $threshold, ?int $now =
         $sent = !empty($prev['sent']);
         // The admin lowering the limit must be able to alert again, and raising
         // it must not leave a stale "full" latch behind - the same reset the
-        // hdd alert does at agent_api.php:458.
+        // hdd alert does in bk_agent_report().
         if (isset($prev['threshold']) && (float)$prev['threshold'] !== $threshold) {
             $streak = 0;
             $sent = false;

@@ -39,7 +39,8 @@ foreach ($agent_sources as $file) {
     $agent_src .= "\n" . file_get_contents($file);
 }
 
-$api_src = file_get_contents($root . '/agent_api.php');
+// The endpoint and the report handler it calls (bk_agent_report).
+$api_src = file_get_contents($root . '/agent_api.php') . "\n" . file_get_contents($root . '/agent_report.php');
 $fn_src = file_get_contents($root . '/functions.php');
 
 if ($agent_src === '' || $api_src === false || $fn_src === false) {
@@ -65,7 +66,7 @@ $read = array_flip(array_merge($read_matches[1] ?? [], $helper_reads[1] ?? []));
 
 // Keys that end up in a metrics table column.
 $stored = [];
-if (preg_match('/\$metric_row = \[(.*?)\n        \];/s', $api_src, $row_match)) {
+if (preg_match('/\$metric_row = \[(.*?)\n            \];/s', $api_src, $row_match)) {
     preg_match_all("/bk_agent_(?:num|int)\(\\\$data, '([a-z_0-9]+)'\)/", $row_match[1], $direct);
     foreach ($direct[1] ?? [] as $k) {
         $stored[$k] = true;
@@ -90,7 +91,7 @@ if (preg_match('/\$metric_row = \[(.*?)\n        \];/s', $api_src, $row_match)) 
 }
 
 if (empty($stored)) {
-    fwrite(STDERR, "V agent_api.php se nepodařilo najít \$metric_row - změnil se zápis metrik?\n");
+    fwrite(STDERR, "V agent_report.php se nepodařilo najít \$metric_row - změnil se zápis metrik?\n");
     exit(1);
 }
 
@@ -165,7 +166,7 @@ if ($problems) {
     foreach ($problems as $p) {
         fwrite(STDERR, "  {$p}\n");
     }
-    fwrite(STDERR, "\nBuď hodnotu doplňte do \$metric_row v agent_api.php (a do sloupců,\n");
+    fwrite(STDERR, "\nBuď hodnotu doplňte do \$metric_row v agent_report.php (a do sloupců,\n");
     fwrite(STDERR, "migrace a mapy metrik), nebo ji zapište do seznamu \$not_metrics\n");
     fwrite(STDERR, "v tomhle skriptu i s důvodem, proč časovou řadou není.\n");
     exit(1);
