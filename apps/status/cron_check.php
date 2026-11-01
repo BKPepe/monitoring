@@ -78,7 +78,14 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
                 $error_msg_agent = bk_agent_label((string)$type) . " monitoru '{$name}' nehlásí žádná data déle než {$offline_timeout_mins} minut. "
                     . "Poslední hlášení: {$last_seen_str} (před {$mins_since} min). "
                     . bk_agent_silence_hint((string)$type);
-                $notify($pdo, $monitor, 'agent_offline', $error_msg_agent);
+                // A router or server is its agent: unless its monitor is down
+                // already, the same silence takes it down further below, and
+                // that 'down' is the one notice and the one incident (R211).
+                // For any other type the agent is an extra, and this is the
+                // only word that it went quiet.
+                if (($type !== 'vps' && $type !== 'openwrt') || $old_status === 'down') {
+                    $notify($pdo, $monitor, 'agent_offline', $error_msg_agent);
+                }
                 log_monitor_event($pdo, $id, $name, $type, 'agent_disconnected', "Agent přestal hlásit data (poslední hlášení před {$mins_since} min)");
             }
         }
@@ -106,31 +113,16 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
 
     if (is_in_maintenance($monitor)) {
         echo "Údržba (přeskakuji)\n";
-        $new_status = 'maintenance';
-        
         $loc = get_setting('ip_loc_local', '');
         if (empty($loc)) {
             $loc = 'Main Server';
         }
-        
-        $m_desc = $monitor['maintenance_description'] ?: 'Plánovaná údržba';
-        $m_end = $monitor['maintenance_end'] ? ' (do ' . date('d.m.Y H:i', strtotime($monitor['maintenance_end'])) . ')' : '';
-        $log_msg = $m_desc . $m_end;
-        
-        // Nothing was checked, so nothing was measured: NULL, not a 0 ms point
-        // in every latency chart for the length of the window.
-        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, 'maintenance', NULL, ?, ?, 'cron')");
-        $stmt_log->execute([$id, $log_msg, $loc]);
-        
-        if ($old_status !== 'maintenance') {
-            $stmt_up = $pdo->prepare("UPDATE monitors SET status = 'maintenance', last_checked = NOW(), last_status_change = NOW(), last_details = NULL WHERE id = ?");
-            $stmt_up->execute([$id]);
-            
-            // Send the maintenance-start notification
-            $notify($pdo, $monitor, 'maintenance', $log_msg);
-        } else {
-            $stmt_up = $pdo->prepare("UPDATE monitors SET last_checked = NOW() WHERE id = ?");
-            $stmt_up->execute([$id]);
+        // The window's row, and on entering it the switch and its one notice.
+        // last_details stays: entering a window used to set it to NULL, which
+        // dropped every alert latch, so wan_lost went out again (R212).
+        $state = bk_apply_check_result($pdo, $monitor, 'maintenance', null, null, 'cron', ['checked_from' => $loc]);
+        foreach ($state['notify'] as [$n_status, $n_message]) {
+            $notify($pdo, $monitor, $n_status, $n_message);
         }
         return;
     }
@@ -142,10 +134,10 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
     if ($type === 'agent_service') {
         $last_checked_ts = $monitor['last_checked'] ? strtotime($monitor['last_checked']) : 0;
         if ($offline_secs !== null && (time() - $last_checked_ts) > $offline_secs && $monitor['status'] !== 'unknown') {
-            $stmt_up = $pdo->prepare("UPDATE monitors SET status = 'unknown', last_status_change = NOW() WHERE id = ?");
-            $stmt_up->execute([$id]);
-            $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, 'unknown', NULL, ?, 'Agent', 'cron')");
-            $stmt_log->execute([$id, 'Zdrojový agent přestal posílat výsledky kontroly - stav služby není známý.']);
+            // Nothing was measured: last_checked keeps the agent's last result.
+            bk_apply_check_result($pdo, $monitor, 'unknown', null,
+                'Zdrojový agent přestal posílat výsledky kontroly - stav služby není známý.', 'cron',
+                ['checked_from' => 'Agent', 'measured' => false]);
             echo "UNKNOWN (agent-side kontrola bez čerstvých výsledků)\n";
         } else {
             echo "OK (kontrolu provádí agent)\n";
@@ -173,31 +165,14 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
             'lastMessage' => $monitor['heartbeat_last_message'] ?? null,
         ];
 
-        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, ?, NULL, ?, ?, 'heartbeat')");
-        $stmt_log->execute([$id, $new_status, $hb['error'], 'Heartbeat']);
-
-        $hb_details_json = json_encode($hb_details, JSON_UNESCAPED_UNICODE);
-
-        if ($old_status !== $new_status) {
-            $stmt_up = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW(), last_details = ? WHERE id = ?");
-            $stmt_up->execute([$new_status, $hb_details_json, $id]);
-
-            // 'unknown' is not an event worth waking a human for - it only means
-            // the job has not reported yet. Notifications go out for up/down,
-            // minus the end of a quiet maintenance window (same rule as the
-            // active checks below - heartbeats used to mail everyone).
-            $hb_maint_to_up = ($old_status === 'maintenance' && $new_status === 'up');
-            if (($new_status === 'up' || $new_status === 'down')
-                && bk_should_notify_status_change((string)$old_status, $new_status,
-                    $hb_maint_to_up ? bk_has_open_incident($pdo, (int)$id) : false)) {
-                $notify($pdo, $monitor, $new_status, $hb['error']);
-            }
-            echo "ZMĚNA STAVU -> " . strtoupper($new_status) . " (" . ($hb['error'] ?? 'signál dorazil včas') . ")\n";
-        } else {
-            $stmt_up = $pdo->prepare("UPDATE monitors SET last_checked = NOW(), last_details = ? WHERE id = ?");
-            $stmt_up->execute([$hb_details_json, $id]);
-            echo strtoupper($new_status) . " (" . ($hb['error'] ?? 'signál dorazil včas') . ")\n";
+        // The grace is the heartbeat's tolerance: no confirmation on top.
+        $state = bk_apply_check_result($pdo, $monitor, $new_status, null, $hb['error'], 'heartbeat',
+            ['checked_from' => 'Heartbeat', 'details' => json_encode($hb_details, JSON_UNESCAPED_UNICODE)]);
+        foreach ($state['notify'] as [$n_status, $n_message]) {
+            $notify($pdo, $monitor, $n_status, $n_message);
         }
+        echo ($state['changed'] ? "ZMĚNA STAVU -> " : '') . strtoupper($new_status)
+            . " (" . ($hb['error'] ?? 'signál dorazil včas') . ")\n";
         return;
     }
 
@@ -235,16 +210,12 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
                 $error_msg = bk_agent_label((string)$type) . " neodpovídá déle než {$offline_timeout_mins} minut (poslední hlášení: {$last_report_str}). "
                     . bk_agent_silence_hint((string)$type);
                 
-                // Update monitoru
-                $stmt_up = $pdo->prepare("UPDATE monitors SET status = ?, last_status_change = NOW() WHERE id = ?");
-                $stmt_up->execute([$new_status, $id]);
-                
-                // Log
-                $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, error_message, source) VALUES (?, ?, ?, 'cron')");
-                $stmt_log->execute([$id, $new_status, $error_msg]);
-                
-                // Send the notification
-                $notify($pdo, $monitor, $new_status, $error_msg);
+                // Its own timeout is the tolerance: no confirmation on top, and
+                // nothing was measured, so last_checked keeps the last report.
+                $state = bk_apply_check_result($pdo, $monitor, $new_status, null, $error_msg, 'cron', ['measured' => false]);
+                foreach ($state['notify'] as [$n_status, $n_message]) {
+                    $notify($pdo, $monitor, $n_status, $n_message);
+                }
                 echo "DOWN (Agent neodpovídá)\n";
             } else {
                 echo "OK (Agent je aktivní)\n";
@@ -558,66 +529,22 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
     $check_stages_json = (in_array($type, ['web', 'teamspeak'], true) && isset($check_result['check_stages']))
         ? json_encode($check_result['check_stages'], JSON_UNESCAPED_UNICODE)
         : null;
-    $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, check_stages, source) VALUES (?, ?, ?, ?, ?, ?, 'cron')");
-    // The log always records what was MEASURED. Confirmation below decides
-    // only when the monitor's state follows - a suppressed failure that never
-    // appeared in the history would be a lie by omission.
-    $stmt_log->execute([$id, $new_status, $response_time, $error_msg, $loc, $check_stages_json]);
-
-    // Outage confirmation: with alert_confirm_failures = N, a monitor goes down
-    // only after N consecutive failures. One failed check is one failed check -
-    // a retried connection, a slow DNS answer, a dropped packet - and alerting
-    // on the first one is how a monitoring system teaches people to ignore it.
-    // The streak is cron's own: a remote probe's row (source 'probe', from
-    // node_api.php) neither adds to it nor breaks it. A row from before
-    // schema r024 has no source and still counts.
-    $confirm_required = max(1, (int)get_setting('alert_confirm_failures', '1'));
-    if ($new_status === 'down' && $old_status !== 'down' && $confirm_required > 1) {
-        $stmt_recent = $pdo->prepare("
-            SELECT status FROM monitor_logs
-            WHERE monitor_id = ? AND (source IS NULL OR source <> 'probe')
-            ORDER BY id DESC LIMIT " . ($confirm_required + 1)
-        );
-        $stmt_recent->execute([$id]);
-        $consecutive = 0;
-        foreach ($stmt_recent->fetchAll(PDO::FETCH_COLUMN) as $recent_status) {
-            if ($recent_status !== 'down') {
-                break;
-            }
-            $consecutive++;
-        }
-        if (!bk_down_is_confirmed($consecutive, $confirm_required)) {
-            echo "výpadek nepotvrzen ({$consecutive}/{$confirm_required})... ";
-            // The state stays where it was, so no notification goes out and the
-            // status page does not flap. The failing check is already logged.
-            $new_status = $old_status;
-        }
+    $state = bk_apply_check_result($pdo, $monitor, $new_status, $response_time, $error_msg, 'cron',
+        ['checked_from' => $loc, 'check_stages' => $check_stages_json, 'details' => $details, 'confirm' => true]);
+    if ($state['unconfirmed'] !== null) {
+        echo "výpadek nepotvrzen ({$state['unconfirmed'][0]}/{$state['unconfirmed'][1]})... ";
     }
-    
+    $new_status = $state['status'];
     $rt_text = $response_time === null ? 'neměřeno' : "{$response_time}ms";
-
-    // Detect a status change
-    if ($old_status !== $new_status) {
-        // Store the new status and the change time
-        $stmt_up = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW(), last_details = ? WHERE id = ?");
-        $stmt_up->execute([$new_status, $details, $id]);
-        
-        // Send the status-change notifications. Coming back UP after a planned
-        // window is not a recovery from an outage, so it gets no "back online"
-        // alert - unless an incident is still open, which means the outage
-        // started BEFORE the window and its record must close.
-        $maint_to_up = ($old_status === 'maintenance' && $new_status === 'up');
-        if (bk_should_notify_status_change((string)$old_status, $new_status,
-                $maint_to_up ? bk_has_open_incident($pdo, (int)$id) : false)) {
-            $notify($pdo, $monitor, $new_status, $error_msg);
-            echo "ZMĚNA STAVU -> " . strtoupper($new_status) . " (Odezva: {$rt_text})\n";
-        } else {
-            echo "ÚDRŽBA UKONČENA -> UP (bez notifikace, Odezva: {$rt_text})\n";
-        }
+    foreach ($state['notify'] as [$n_status, $n_message]) {
+        $notify($pdo, $monitor, $n_status, $n_message);
+    }
+    if ($state['notify'] !== []) {
+        echo "ZMĚNA STAVU -> " . strtoupper($new_status) . " (Odezva: {$rt_text})\n";
+    } elseif ($state['changed']) {
+        // Up after a planned window or after 'unknown', with no incident open.
+        echo "ZMĚNA STAVU -> " . strtoupper($new_status) . " (bez notifikace, Odezva: {$rt_text})\n";
     } else {
-        // Only update the last-check time
-        $stmt_up = $pdo->prepare("UPDATE monitors SET last_checked = NOW(), last_details = ? WHERE id = ?");
-        $stmt_up->execute([$details, $id]);
         echo strtoupper($new_status) . " (Odezva: {$rt_text})\n";
     }
 

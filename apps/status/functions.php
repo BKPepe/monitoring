@@ -3854,14 +3854,21 @@ function bk_pagerduty_dedup_key(int $monitor_id, string $status): string {
 }
 
 /**
- * Whether a status change is worth telling humans about. The single silent
- * case is the end of a planned window with no incident open: the window was
- * announced, so "back online" is noise. If an incident IS open the outage
- * started before the window - that transition is a real recovery and must go
- * through the normal path, which is also what closes the incident.
+ * Whether a status change is worth telling humans about: the one table every
+ * writer of a check result uses (bk_apply_check_result).
+ *
+ * - 'unknown' wakes nobody: it only says that nothing has reported yet.
+ * - 'up' after a planned window, or after 'unknown' (a new monitor's first
+ *   check, an agent that comes back), is no recovery and stays silent -
+ *   unless an incident is open: the outage started before, the recovery is
+ *   real, and the notice is what closes the incident.
+ * - Everything else is told: an outage, a recovery, entering a window.
  */
 function bk_should_notify_status_change(string $old_status, string $new_status, bool $has_open_incident): bool {
-    if ($old_status === 'maintenance' && $new_status === 'up') {
+    if ($old_status === $new_status || $new_status === 'unknown') {
+        return false;
+    }
+    if ($new_status === 'up' && in_array($old_status, ['maintenance', 'unknown'], true)) {
         return $has_open_incident;
     }
     return true;
@@ -3899,6 +3906,132 @@ function bk_has_open_incident(PDO $pdo, int $monitor_id): bool {
  */
 function bk_down_is_confirmed(int $consecutive, int $required): bool {
     return $consecutive >= max(1, $required);
+}
+
+/**
+ * The one writer of a check result: cron's active checks, the heartbeat,
+ * an agent's report and its agent-side service checks all end here, so the
+ * five things every result needs happen the same way in the same order.
+ *
+ * 1. Maintenance. cron owns a window: it logs the window's row and switches
+ *    the state, and entering the window is announced once. A result from
+ *    anywhere else is dropped while the window runs (no row, no state), so
+ *    the announcement does not depend on who comes first; the details it
+ *    carries (an agent's metrics) are still stored.
+ * 2. The log row, with its source ('cron', 'heartbeat', 'agent').
+ * 3. Confirmation (alert_confirm_failures), only where $opts['confirm'] asks
+ *    for it: active checks and agent-side services. A heartbeat has its grace
+ *    and a silent agent its timeout; neither waits for a second failure.
+ * 4. The monitor's state, last_status_change on a change, last_checked when
+ *    something was measured and last_details when the caller has them.
+ * 5. Which notices are due (bk_should_notify_status_change). They are
+ *    returned, never sent: agent_api sends after its commit.
+ *
+ * $opts: checked_from (null = the column's default), check_stages (JSON),
+ * details (last_details to store; absent = untouched), confirm (bool),
+ * measured (false = nothing was measured - a silent agent - so last_checked
+ * keeps the time of the last real data).
+ *
+ * @return array{status: string, logged: bool, changed: bool,
+ *               unconfirmed: ?array{0: int, 1: int}, notify: list<array{0: string, 1: ?string}>}
+ */
+function bk_apply_check_result(PDO $pdo, array $monitor, string $status, ?int $response_time, ?string $error,
+                               string $source, array $opts = []): array {
+    $id = (int)$monitor['id'];
+    $old_status = (string)($monitor['status'] ?? 'unknown');
+    $details_given = array_key_exists('details', $opts);
+    $measured = $opts['measured'] ?? true;
+    $check_stages = $opts['check_stages'] ?? null;
+
+    if (is_in_maintenance($monitor)) {
+        if ($source !== 'cron') {
+            if ($details_given) {
+                $pdo->prepare("UPDATE monitors SET last_checked = NOW(), last_details = ? WHERE id = ?")
+                    ->execute([$opts['details'], $id]);
+            }
+            return ['status' => $old_status, 'logged' => false, 'changed' => false, 'unconfirmed' => null, 'notify' => []];
+        }
+        // Nothing was checked, so nothing was measured: NULL, not a 0 ms point
+        // in every latency chart for the length of the window.
+        $status = 'maintenance';
+        $response_time = null;
+        $check_stages = null;
+        $error = ($monitor['maintenance_description'] ?: 'Plánovaná údržba')
+            . ($monitor['maintenance_end'] ? ' (do ' . date('d.m.Y H:i', strtotime($monitor['maintenance_end'])) . ')' : '');
+    }
+
+    // The log always records what was MEASURED. Confirmation below decides
+    // only when the monitor's state follows - a suppressed failure that never
+    // appeared in the history would be a lie by omission.
+    $cols = ['monitor_id' => $id, 'status' => $status, 'response_time' => $response_time, 'error_message' => $error];
+    if (($opts['checked_from'] ?? null) !== null) {
+        $cols['checked_from'] = $opts['checked_from'];
+    }
+    if ($check_stages !== null) {
+        $cols['check_stages'] = $check_stages;
+    }
+    $cols['source'] = $source;
+    $pdo->prepare("INSERT INTO monitor_logs (" . implode(', ', array_keys($cols)) . ")"
+        . " VALUES (?" . str_repeat(', ?', count($cols) - 1) . ")")->execute(array_values($cols));
+
+    // Outage confirmation: with alert_confirm_failures = N, a monitor goes down
+    // only after N consecutive failures. One failed check is one failed check -
+    // a retried connection, a slow DNS answer, a dropped packet - and alerting
+    // on the first one is how a monitoring system teaches people to ignore it.
+    // A remote probe's row (node_api.php) is no check of cron's: its 'down'
+    // does not add to the streak and its 'up' does not break it.
+    $new_status = $status;
+    $unconfirmed = null;
+    $confirm_required = max(1, (int)get_setting('alert_confirm_failures', '1'));
+    if (!empty($opts['confirm']) && $status === 'down' && $old_status !== 'down' && $confirm_required > 1) {
+        $stmt_recent = $pdo->prepare("
+            SELECT status FROM monitor_logs
+            WHERE monitor_id = ? AND (source IS NULL OR source <> 'probe') ORDER BY id DESC LIMIT " . ($confirm_required + 1)
+        );
+        $stmt_recent->execute([$id]);
+        $consecutive = 0;
+        foreach ($stmt_recent->fetchAll(PDO::FETCH_COLUMN) as $recent_status) {
+            if ($recent_status !== 'down') {
+                break;
+            }
+            $consecutive++;
+        }
+        if (!bk_down_is_confirmed($consecutive, $confirm_required)) {
+            // The state stays where it was, so no notification goes out and the
+            // status page does not flap. The failing check is already logged.
+            $new_status = $old_status;
+            $unconfirmed = [$consecutive, $confirm_required];
+        }
+    }
+
+    $changed = $new_status !== $old_status;
+    $set = [];
+    $args = [];
+    if ($changed) {
+        $set[] = 'status = ?';
+        $args[] = $new_status;
+        $set[] = 'last_status_change = NOW()';
+    }
+    if ($measured) {
+        $set[] = 'last_checked = NOW()';
+    }
+    if ($details_given) {
+        $set[] = 'last_details = ?';
+        $args[] = $opts['details'];
+    }
+    if ($set) {
+        $args[] = $id;
+        $pdo->prepare("UPDATE monitors SET " . implode(', ', $set) . " WHERE id = ?")->execute($args);
+    }
+
+    $notify = [];
+    // The incident is looked up only for the two changes that depend on it.
+    $needs_incident = $new_status === 'up' && in_array($old_status, ['maintenance', 'unknown'], true);
+    if ($changed && bk_should_notify_status_change($old_status, $new_status,
+            $needs_incident && bk_has_open_incident($pdo, $id))) {
+        $notify[] = [$new_status, $error];
+    }
+    return ['status' => $new_status, 'logged' => true, 'changed' => $changed, 'unconfirmed' => $unconfirmed, 'notify' => $notify];
 }
 
 function bk_pagerduty_action(string $status): ?string {
@@ -16474,39 +16607,18 @@ function bk_get_interface_traffic_stats($pdo, $monitor_id) {
  * maintenance, when the result is dropped on purpose.
  */
 function bk_apply_agent_service_result($pdo, array $svc_monitor, bool $running, string $detail): bool {
-    // During maintenance cron owns the status: it writes 'maintenance' and its
-    // log row every minute. Writing the agent's 'up'/'down' here made cron see
-    // a change on its next run and announce the maintenance again, every minute,
-    // with a DOWN alert in between whenever the service was stopped for it.
-    if (is_in_maintenance($svc_monitor)) {
-        return false;
-    }
-    $new_status = $running ? 'up' : 'down';
-    $old_status = $svc_monitor['status'] ?? 'unknown';
     $error_msg = $running ? null : ($detail !== '' ? $detail : 'Agent hlásí, že služba neběží.');
-
-    if ($old_status !== $new_status) {
-        $stmt = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW() WHERE id = ?");
-        $stmt->execute([$new_status, $svc_monitor['id']]);
-        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, ?, NULL, ?, 'Agent', 'agent')");
-        $stmt_log->execute([$svc_monitor['id'], $new_status, $error_msg]);
-        // Notify only on real up/down transitions; the first result's
-        // 'unknown' -> 'up' need not wake anyone. Up after a planned window
-        // follows cron's rule: quiet, unless an incident is still open - the
-        // outage started before the window, and notifying is what closes it.
-        $maint_to_up = ($old_status === 'maintenance' && $new_status === 'up');
-        if (in_array($old_status, ['up', 'down'], true) || $new_status === 'down'
-            || ($maint_to_up && bk_should_notify_status_change((string)$old_status, $new_status,
-                bk_has_open_incident($pdo, (int)$svc_monitor['id'])))) {
-            trigger_notifications($pdo, $svc_monitor, $new_status, (string)$error_msg);
-        }
-    } else {
-        $stmt = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW() WHERE id = ?");
-        $stmt->execute([$new_status, $svc_monitor['id']]);
-        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, ?, NULL, ?, 'Agent', 'agent')");
-        $stmt_log->execute([$svc_monitor['id'], $new_status, $error_msg]);
+    // During maintenance cron owns the status: it writes 'maintenance' and its
+    // log row every minute, and the one writer drops this result. Writing it
+    // made cron see a change on its next run and announce the maintenance
+    // again, every minute, with a DOWN alert in between. A result is checked
+    // like cron's own: a 'down' waits for alert_confirm_failures.
+    $state = bk_apply_check_result($pdo, $svc_monitor, $running ? 'up' : 'down', null, $error_msg, 'agent',
+        ['checked_from' => 'Agent', 'confirm' => true]);
+    foreach ($state['notify'] as [$n_status, $n_message]) {
+        trigger_notifications($pdo, $svc_monitor, $n_status, (string)$n_message);
     }
-    return true;
+    return $state['logged'];
 }
 
 /**

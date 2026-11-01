@@ -805,6 +805,15 @@ check_true('výpadek během údržby se hlásí', bk_should_notify_status_change
 check_true('běžný výpadek se hlásí', bk_should_notify_status_change('up', 'down', false));
 check_true('běžné obnovení se hlásí', bk_should_notify_status_change('down', 'up', false));
 check_true('začátek údržby se hlásí', bk_should_notify_status_change('up', 'maintenance', false));
+// One table for every writer (owner, 30 Oct). The first check of a new
+// monitor, or an agent that comes back, is no recovery - unless an incident
+// is open: then the notice is what closes it (R160, R162).
+check_false('první kontrola nového monitoru (unknown -> up) mlčí', bk_should_notify_status_change('unknown', 'up', false));
+check_true('unknown -> up s otevřeným incidentem je obnovení', bk_should_notify_status_change('unknown', 'up', true));
+check_true('unknown -> down se hlásí', bk_should_notify_status_change('unknown', 'down', false));
+check_false('neznámý stav nikoho nebudí', bk_should_notify_status_change('up', 'unknown', true));
+check_false('beze změny stavu se nic nehlásí', bk_should_notify_status_change('down', 'down', true));
+check_true('obnovení z varování se hlásí', bk_should_notify_status_change('warning', 'up', false));
 
 // --- SSL expiry warning latch (bk_ssl_alert_due) -------------------------------
 $now = 1_800_000_000;

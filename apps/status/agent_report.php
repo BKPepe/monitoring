@@ -236,7 +236,6 @@ function bk_agent_report(PDO $pdo, array $data, array $monitor, string $base_url
     $ow_clock_skew_s = $ow_agent_time === null ? null : abs($bk_now - $ow_agent_time);
 
     $monitor_id = $monitor['id'];
-    $old_status = $monitor['status'];
 
     // Auto-fill the target for purely agent-based types (vps/openwrt) - admin.php
     // does not require one for them, because it either has no network meaning (vps)
@@ -275,14 +274,6 @@ function bk_agent_report(PDO $pdo, array $data, array $monitor, string $base_url
     } else {
         $new_status = 'up';
         $error_msg = null;
-    }
-
-    // Override the status while maintenance is active
-    if (is_in_maintenance($monitor)) {
-        $new_status = 'maintenance';
-        $m_desc = $monitor['maintenance_description'] ?: 'Plánovaná údržba';
-        $m_end = $monitor['maintenance_end'] ? ' (do ' . date('d.m.Y H:i', strtotime($monitor['maintenance_end'])) . ')' : '';
-        $error_msg = $m_desc . $m_end;
     }
 
     // Alerts are collected here and sent only after the commit. Sending them from
@@ -1357,30 +1348,14 @@ function bk_agent_report(PDO $pdo, array $data, array $monitor, string $base_url
             // (bk_response_ms). vps_metrics.wan_latency_ms keeps the exact value.
             $ping_ms = bk_response_ms($data['wan_latency_ms'] ?? null);
 
-            // Write the regular check log
-            $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, source) VALUES (?, ?, ?, ?, 'agent')");
-            $stmt_log->execute([$monitor_id, $new_status, $ping_ms, $error_msg]);
-        
-            // Check for a status change
-            if ($old_status !== $new_status) {
-                $stmt_update = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW(), last_details = ? WHERE id = ?");
-                $stmt_update->execute([$new_status, $details, $monitor_id]);
-            
-                // Status change - trigger notifications (unless in maintenance).
-                // Coming back UP after a planned window is not an outage recovery,
-                // so it gets no "back online" alert - unless an incident is still
-                // open, which means the outage predates the window and the record
-                // has to close.
-                $bk_maint_to_up = ($old_status === 'maintenance' && $new_status === 'up');
-                if ($new_status !== 'maintenance'
-                    && bk_should_notify_status_change((string)$old_status, $new_status,
-                        $bk_maint_to_up ? bk_has_open_incident($pdo, (int)$monitor_id) : false)) {
-                    $bk_pending_notifications[] = [$new_status, $error_msg ?: 'Server opět komunikuje.'];
-                }
-            } else {
-                // Only update the last-check time and metrics
-                $stmt_update = $pdo->prepare("UPDATE monitors SET last_checked = NOW(), last_details = ? WHERE id = ?");
-                $stmt_update->execute([$details, $monitor_id]);
+            // The report's verdict goes through the one writer. While a
+            // maintenance window runs it is dropped (cron logs the window and
+            // announces it once, whichever comes first) and only the details
+            // are stored. No confirmation: a missing process is named by the
+            // agent itself, as it always was. The notices wait for the commit.
+            $bk_state = bk_apply_check_result($pdo, $monitor, $new_status, $ping_ms, $error_msg, 'agent', ['details' => $details]);
+            foreach ($bk_state['notify'] as [$bk_notify_status, $bk_notify_message]) {
+                $bk_pending_notifications[] = [$bk_notify_status, $bk_notify_message ?: 'Server opět komunikuje.'];
             }
         } else {
             // For other monitor types just store the load data (status is driven by the network check in cron)

@@ -3181,13 +3181,14 @@ try {
 // counts the attempts, $cm_notes records what would have been sent.
 require_once $root . '/lang.php';
 require_once $root . '/cron_check.php';
-$cm_ids = '950, 951, 952, 953, 954, 955, 956, 957, 958';
+$cm_ids = '950, 951, 952, 953, 954, 955, 956, 957, 958, 959, 961, 962, 963';
 $cm_cleanup = function () use ($pdo, $cm_ids): void {
     $pdo->exec("DELETE FROM incident_updates WHERE incident_id IN (SELECT id FROM incidents WHERE monitor_id IN ({$cm_ids}))");
     foreach (['incidents', 'notification_log', 'monitor_logs', 'monitor_events', 'vps_metrics'] as $cm_table) {
         $pdo->exec("DELETE FROM {$cm_table} WHERE monitor_id IN ({$cm_ids})");
     }
     $pdo->exec("DELETE FROM monitors WHERE id IN ({$cm_ids})");
+    $pdo->exec("DELETE FROM assets WHERE id = 961");
 };
 $cm_cleanup();
 $cm_location = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'cron_location'")->fetchColumn();
@@ -3415,6 +3416,170 @@ try {
         ($cm_kw_missing['status'] ?? null) === 'down' && str_contains((string)($cm_kw_missing['error'] ?? ''), 'bk-slovo-ktere-tam-neni'));
     check('cron: a se slovem, které na stránce je, je web nahoře',
         bk_cron_active_check($cm_web + ['body_keyword' => 'status'])['status'] ?? null, 'up');
+    // --- One writer of a check result (bk_apply_check_result) ---------------
+    // Every writer below goes through it: cron's active check, the window,
+    // the heartbeat, a silent agent, agent_service and an agent's report.
+    // The owner's rules of 30 Oct: unknown -> up and maintenance -> up are
+    // silent unless an incident is open; alert_confirm_failures holds active
+    // checks and agent_service, not a heartbeat or a silent agent; a router
+    // that goes quiet is one event, its monitor's 'down'.
+    $cm_confirm = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'alert_confirm_failures'")->fetchColumn();
+    $cm_incident = function (int $id) use ($pdo): void {
+        $pdo->prepare("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('Výpadek', 'major', 'investigating', ?)")->execute([$id]);
+    };
+    $cm_incidents = fn (int $id): array => $pdo->query("SELECT status FROM incidents WHERE monitor_id = {$id} ORDER BY id")->fetchAll(PDO::FETCH_COLUMN);
+    $cm_sent = fn (int $id): int => (int)$pdo->query("SELECT COUNT(*) FROM notification_log WHERE monitor_id = {$id}")->fetchColumn();
+    $cm_row = fn (int $id): array => $pdo->query("SELECT status, response_time, error_message, checked_from, source FROM monitor_logs WHERE monitor_id = {$id} ORDER BY id DESC LIMIT 1")->fetch() ?: [];
+    $cm_rows = fn (int $id): int => (int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE monitor_id = {$id}")->fetchColumn();
+    $cm_checked = fn (int $id): ?string => $pdo->query("SELECT last_checked FROM monitors WHERE id = {$id}")->fetchColumn() ?: null;
+    $cm_report = function (string $key, array $extra = []) use ($base): int {
+        [$code] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'],
+            (string)json_encode($extra + ['agent_key' => $key, 'cpu' => 5.0, 'ram' => 30.0, 'hdd' => 40.0]));
+        return $code;
+    };
+    $cm_service = function (bool $running) use ($base): array {
+        [$code, , $body] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode([
+            'agent_key' => 'cm-router-key', 'service_check_results' => [['monitor_id' => 962, 'running' => $running,
+                'detail' => $running ? '' : "Agent nehlásí proces 'kresd'."]]]));
+        return [$code, json_decode((string)$body, true)['applied'] ?? null];
+    };
+    $pdo->exec("INSERT INTO assets (id, name) VALUES (961, 'Router se službou')");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, port, status, category, asset_id, agent_key) VALUES
+        (955, 'Nový port', 'port', 'cron-new.test', 8081, 'unknown', 'Test', NULL, NULL),
+        (956, 'Záloha', 'heartbeat', '', NULL, 'unknown', 'Test', NULL, NULL),
+        (957, 'Server, který zmlkl', 'vps', 'cron-vps.test', NULL, 'up', 'Test', NULL, 'cm-vps-key'),
+        (958, 'Port do údržby', 'port', 'cron-maint.test', 8082, 'maintenance', 'Test', NULL, NULL),
+        (959, 'Služba bez agenta', 'agent_service', 'mosquitto', 1883, 'up', 'Test', NULL, NULL),
+        (961, 'Router', 'openwrt', 'cm-router.test', NULL, 'up', 'Test', 961, 'cm-router-key'),
+        (962, 'Resolver', 'agent_service', 'kresd', 53, 'up', 'Test', 961, NULL),
+        (963, 'Server s procesy', 'vps', 'cm-server.test', NULL, 'unknown', 'Test', NULL, 'cm-server-key')");
+    try {
+        // unknown -> up: a new monitor's first check is no recovery (R160).
+        $out = $cm_run(955, $cm_check([1 => $cm_up(15.0)]));
+        check('zapisovatel: první kontrola nového monitoru je tichá', [$cm_status(955), $cm_notes, str_contains($out, 'bez notifikace')],
+            ['up', [], true]);
+        $pdo->exec("UPDATE monitors SET status = 'unknown' WHERE id = 955");
+        $cm_incident(955);
+        $cm_run(955, $cm_check([1 => $cm_up(15.0)]));
+        check('zapisovatel: s otevřeným incidentem je unknown -> up obnova a ohlásí se', $cm_notes, [[955, 'up']]);
+        // maintenance -> up: the end of a window is no recovery either.
+        $cm_run(958, $cm_check([1 => $cm_up(9.0)]));
+        check('zapisovatel: konec údržby bez incidentu je tichý', [$cm_status(958), $cm_notes], ['up', []]);
+        $pdo->exec("UPDATE monitors SET status = 'maintenance' WHERE id = 958");
+        $cm_incident(958);
+        $cm_run(958, $cm_check([1 => $cm_up(9.0)]));
+        check('zapisovatel: s incidentem otevřeným před oknem se konec údržby ohlásí', $cm_notes, [[958, 'up']]);
+
+        // Entering a window: cron's row, the switch, one notice, and the
+        // alert latches survive (last_details used to be set to NULL: R212).
+        $pdo->exec("UPDATE monitors SET status = 'up', maintenance = 1, maintenance_description = 'Výměna disku' WHERE id = 958");
+        $cm_set_details(958, ['wan_alert_sent' => true, 'latency_alert_sent' => true]);
+        $cm_run(958, $cm_check([1 => $cm_up(9.0)]));
+        check('zapisovatel: vstup do údržby se ohlásí jednou, bez kontroly', [$cm_status(958), $cm_notes, $cm_calls],
+            ['maintenance', [[958, 'maintenance']], 0]);
+        check('zapisovatel: řádek okna je cronu, bez odezvy', [$cm_row(958)['status'] ?? null, array_key_exists('response_time', $cm_row(958)) ? $cm_row(958)['response_time'] : 'chybí',
+            $cm_row(958)['error_message'] ?? null, $cm_row(958)['source'] ?? null], ['maintenance', null, 'Výměna disku', 'cron']);
+        check('zapisovatel: pojistky alertů vstup do údržby přežijí (R212)', $cm_details(958), ['wan_alert_sent' => true, 'latency_alert_sent' => true]);
+        $cm_run(958, $cm_check([1 => $cm_up(9.0)]));
+        check('zapisovatel: další minuta okna jen zapíše řádek', [$cm_notes, $cm_rows(958) >= 2], [[], true]);
+        $pdo->exec("UPDATE monitors SET maintenance = 0 WHERE id = 958");
+
+        bk_setting_set($pdo, 'alert_confirm_failures', '2');
+        // A heartbeat's grace is its tolerance: no confirmation on top, and
+        // its first signal is no recovery.
+        $pdo->prepare("UPDATE monitors SET heartbeat_interval = 3600, heartbeat_grace = 300, last_heartbeat = ? WHERE id = 956")
+            ->execute([date('Y-m-d H:i:s', time() - 60)]);
+        $cm_run(956, null);
+        check('heartbeat: první signál je tichý a řádek nese zdroj heartbeat',
+            [$cm_status(956), $cm_notes, $cm_row(956)['source'] ?? null, $cm_row(956)['checked_from'] ?? null], ['up', [], 'heartbeat', 'Heartbeat']);
+        $pdo->prepare("UPDATE monitors SET last_heartbeat = ? WHERE id = 956")->execute([date('Y-m-d H:i:s', time() - 7200)]);
+        $cm_run(956, null);
+        check('heartbeat: zmeškaný signál je výpadek hned, bez potvrzování', [$cm_status(956), $cm_notes], ['down', [[956, 'down']]]);
+
+        // A router or server that goes quiet is one event: its monitor's
+        // 'down', with no agent_offline beside it (R211) and no confirmation.
+        $pdo->exec("UPDATE monitors SET last_checked = '2026-10-01 12:00:00' WHERE id = 957");
+        $cm_set_details(957, ['agent_last_seen' => time() - 7200]);
+        $cm_run(957, null);
+        check('mlčící server: jedno oznámení (down), žádné agent_offline vedle', [$cm_status(957), $cm_notes], ['down', [[957, 'down']]]);
+        check('mlčící server: událost odpojení i pojistka zůstávají',
+            [(int)$pdo->query("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 957 AND event_type = 'agent_disconnected'")->fetchColumn(),
+                $cm_details(957)['agent_alert_sent'] ?? null], [1, true]);
+        check('mlčící server: řádek cronu a čas kontroly zůstane z posledního hlášení',
+            [$cm_row(957)['status'] ?? null, $cm_row(957)['source'] ?? null, $cm_checked(957)], ['down', 'cron', '2026-10-01 12:00:00']);
+        $cm_run(957, null);
+        check('mlčící server: a podruhé nic', $cm_notes, []);
+        // Down already (a missing process) when its agent goes quiet: the
+        // silence takes nothing down, so agent_offline is its one notice.
+        $cm_set_details(957, ['agent_last_seen' => time() - 7200]);
+        $cm_run(957, null);
+        check('server už dole: zmlknutí agenta se ohlásí jako agent_offline, bez druhého down', [$cm_status(957), $cm_notes],
+            ['down', [[957, 'agent_offline']]]);
+        // Quiet in a window: no agent_offline either, as the 'down' it
+        // stands for waits for the window's end and is the one notice then.
+        $pdo->exec("UPDATE monitors SET status = 'maintenance', maintenance = 1 WHERE id = 957");
+        $cm_set_details(957, ['agent_last_seen' => time() - 7200]);
+        $cm_run(957, null);
+        check('mlčící server v údržbě: nic se neohlásí, pojistka se nastaví', [$cm_status(957), $cm_notes, $cm_details(957)['agent_alert_sent'] ?? null],
+            ['maintenance', [], true]);
+        $pdo->exec("UPDATE monitors SET maintenance = 0 WHERE id = 957");
+        $cm_run(957, null);
+        check('mlčící server po údržbě: jedno oznámení (down), žádné agent_offline', [$cm_status(957), $cm_notes], ['down', [[957, 'down']]]);
+
+        // An agent-side service with no fresh result is unknown: nobody is
+        // woken, and last_checked keeps the agent's last result.
+        $pdo->exec("UPDATE monitors SET last_checked = DATE_SUB(NOW(), INTERVAL 2 HOUR) WHERE id = 959");
+        $cm_959_checked = $cm_checked(959);
+        $cm_run(959, null);
+        check('služba bez výsledků: unknown potichu, řádek cronu, čas kontroly beze změny',
+            [$cm_status(959), $cm_notes, $cm_row(959)['source'] ?? null, $cm_row(959)['checked_from'] ?? null, $cm_checked(959)],
+            ['unknown', [], 'cron', 'Agent', $cm_959_checked]);
+
+        // agent_service results over the wire: alert_confirm_failures holds
+        // them too, and a notice really goes out and closes the incident.
+        check('agent_service: první neúspěch se zapíše, stav čeká na potvrzení', [$cm_service(false), $cm_status(962), $cm_row(962)['status'] ?? null,
+            $cm_row(962)['source'] ?? null, $cm_incidents(962)], [[200, 1], 'up', 'down', 'agent', []]);
+        $cm_service(false);
+        check('agent_service: druhý potvrdí výpadek a otevře incident', [$cm_status(962), $cm_incidents(962)], ['down', ['investigating']]);
+        // The agent went quiet meanwhile and cron set 'unknown' (R162): the
+        // service's return still closes the open incident.
+        $pdo->exec("UPDATE monitors SET status = 'unknown' WHERE id = 962");
+        $cm_service(true);
+        check('agent_service: návrat z unknown s otevřeným incidentem ho uzavře (R162)', [$cm_status(962), $cm_incidents(962)], ['up', ['resolved']]);
+        $pdo->exec("UPDATE monitors SET status = 'unknown' WHERE id = 962");
+        $cm_962_sent = $cm_sent(962);
+        $cm_service(true);
+        check('agent_service: bez incidentu je návrat z unknown tichý', [$cm_status(962), $cm_sent(962) - $cm_962_sent], ['up', 0]);
+
+        // An agent's report: its row says 'agent', its first 'up' is silent
+        // (R160), and a missing process is down at once, as it always was.
+        $cm_963_sent = $cm_sent(963);
+        check('hlášení agenta: první up je tiché a řádek nese zdroj agent', [$cm_report('cm-server-key'), $cm_status(963), $cm_row(963)['source'] ?? null,
+            $cm_sent(963) - $cm_963_sent, $cm_incidents(963)], [200, 'up', 'agent', 0, []]);
+        $pdo->exec("UPDATE monitors SET monitored_processes = 'nginx' WHERE id = 963");
+        $cm_report('cm-server-key', ['processes' => ['sshd']]);
+        check('hlášení agenta: chybějící proces je výpadek hned (bez potvrzování) a otevře incident',
+            [$cm_status(963), $cm_incidents(963)], ['down', ['investigating']]);
+        $pdo->exec("UPDATE monitors SET status = 'unknown' WHERE id = 963");
+        $cm_report('cm-server-key', ['processes' => ['sshd', 'nginx']]);
+        check('hlášení agenta: návrat z unknown s otevřeným incidentem ho uzavře', [$cm_status(963), $cm_incidents(963)], ['up', ['resolved']]);
+        // In a window the report's verdict is dropped and only its metrics
+        // are kept; cron announces the window, whoever comes first (R110).
+        $pdo->exec("UPDATE monitors SET maintenance = 1 WHERE id = 963");
+        $cm_963_rows = $cm_rows(963);
+        $cm_report('cm-server-key', ['cpu' => 42.0, 'processes' => ['sshd']]);
+        check('hlášení agenta v údržbě: stav ani historie se nemění, metriky ano',
+            [$cm_status(963), $cm_rows(963) - $cm_963_rows, $cm_details(963)['cpu'] ?? null, $cm_incidents(963)], ['up', 0, 42, ['resolved']]);
+        $cm_run(963, null);
+        check('hlášení agenta v údržbě: údržbu ohlásí cron, jednou', [$cm_status(963), $cm_notes], ['maintenance', [[963, 'maintenance']]]);
+    } finally {
+        if ($cm_confirm === false) {
+            $pdo->exec("DELETE FROM settings WHERE key_name = 'alert_confirm_failures'");
+            unset($GLOBALS['system_settings']['alert_confirm_failures']);
+        } else {
+            bk_setting_set($pdo, 'alert_confirm_failures', (string)$cm_confirm);
+        }
+    }
 } finally {
     if ($cm_location === false) {
         $pdo->exec("DELETE FROM settings WHERE key_name = 'cron_location'");
