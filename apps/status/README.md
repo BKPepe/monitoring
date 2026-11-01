@@ -15,7 +15,7 @@ An open-source, ultra-fast server and service status monitoring application buil
 * `agent_openwrt.sh` - Lightweight OpenWrt router agent with Wi-Fi, conntrack, and signed Remote Actions.
 * `agent.ps1` - PowerShell telemetry agent for Windows hosts.
 * `badge.php` - Dynamic vector SVG badge generator (`badge.php?id=12&type=status|uptime`).
-* `widget.php` - Compact iFrame status card for embedding on external websites.
+* `widget.php` - Deprecated alias: a 302 to the 30-day availability badge (`api.php?action=badge&type=uptime`).
 * `report.php` - SLA report generator (HTML/CSV format).
 * `db.php` - PDO database connection initializer; runs the migrations when the schema version changes.
 * `migrations.php` - The schema migrations: one ordered list and the runner that applies it.
@@ -125,7 +125,6 @@ powershell.exe -ExecutionPolicy Bypass -File C:\bloodkings\agent.ps1
 ## 6. Integrations & Exporters
 * **Prometheus Exporter**: Endpoint `/status/metrics.php?token=YOUR_TOKEN` exposes metrics for Grafana and Prometheus scrapers.
 * **SVG Badges**: Embed shields.io vector status badges in READMEs: `<img src="https://your-server.com/status/badge.php?id=12&type=status">`
-* **iFrame Card**: Embed live status cards: `<iframe src="https://your-server.com/status/widget.php?id=12"></iframe>`
 * **Notifications**: Configure Pushover, PagerDuty, Discord, Telegram, Slack, Webhooks, or SMTP Email alerts in `admin.php`.
 
 ---

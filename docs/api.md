@@ -111,11 +111,10 @@ choice, `NULL` (never chosen) follows the type, so every monitor created by the
 app, an import or an agent's first report gets the same default.
 
 Everything anonymous covers only this set: the public view of the actions
-above, the fleet `badge`, `rss.php`, the legacy `/status/` page and
-`widget.php`. A monitor outside it answers like a missing one there - the
-`badge` with its `monitor_id` is 404 unless the caller is signed in and may see
-it - because the badge and the widget print its name. Incidents tied to no
-monitor stay public.
+above, the fleet `badge`, `rss.php` and the legacy `/status/` page. A monitor
+outside it answers like a missing one there - the `badge` with its
+`monitor_id` is 404 unless the caller is signed in and may see it - because
+the badge prints its name. Incidents tied to no monitor stay public.
 
 ### What an anonymous visitor sees
 
@@ -1235,7 +1234,7 @@ a probe's `down` can give it.
 |---|---|---|---|
 | `metrics.php?token=…` | Prometheus text 0.0.4 | token | Scraping by an external Prometheus; disabled when no token is set. The token may also be sent as an `Authorization: Bearer` header |
 | `badge.php?id=&type=` | 302 | public | Deprecated alias - redirects to `action=badge` (old README embeds keep working) |
-| `widget.php?id=` | HTML | public | Compact embed via iframe |
+| `widget.php?id=` | 302 | public | Deprecated alias - redirects to `action=badge&type=uptime`, the 30-day availability its HTML card headlined. The card's iframe never showed on another site (`X-Frame-Options: SAMEORIGIN`); an `<img>` of the badge does |
 | `health.php` | JSON | admin or CLI | Database schema completeness check, and that config.php prints nothing. `schema_version` fails while the stored version is not the one db.php expects: a migration step failed for real (the check names it, and db.php runs the list again 10 minutes after each failed run), migrations.php is missing, or an upload is half done |
 | `cron.php[?key=…]` | text | CLI or `cron_key` | Data collection; from the web only with the key |
 

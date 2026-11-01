@@ -1,79 +1,20 @@
 <?php
 /**
- * Compact iFrame Embed Widget (Blood Kings Status Monitoring)
- * Volání: widget.php?id=12
+ * Deprecated alias - the embeddable status lives in api.php?action=badge,
+ * as badge.php's does (owner decision D4).
+ *
+ * This file printed an HTML card with a status vocabulary of its own: an
+ * unknown or degraded monitor read as green "V PROVOZU" (R9). /status sends
+ * X-Frame-Options SAMEORIGIN, so a foreign site's iframe of it stayed empty
+ * anyway (R90); an <img> of the badge shows. Old addresses
+ * (`widget.php?id=12`) get the badge of the card's headline figure, the
+ * 30-day availability, through a 302. A monitor that is missing or off the
+ * public page answers 404 there, as it does to the badge.
  */
-
-require_once __DIR__ . '/bootstrap.php';
-
-$mid = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$monitor = null;
-if ($mid > 0) {
-    $stmt = $pdo->prepare("SELECT * FROM monitors WHERE id = ? AND archived_at IS NULL LIMIT 1");
-    $stmt->execute([$mid]);
-    $monitor = $stmt->fetch();
+$q = ['action' => 'badge'];
+if (isset($_GET['id'])) {
+    $q['monitor_id'] = (int)$_GET['id'];
 }
-
-// Only a monitor on the public page (W1-G3): the widget is anonymous and prints
-// the name, so a server or the home router answers like a missing id.
-if ($monitor && !in_array($mid, bk_public_monitor_ids($pdo), true)) {
-    $monitor = null;
-}
-
-if (!$monitor) {
-    echo '<div style="color:#fff;background:#0b0c10;padding:1rem;font-family:sans-serif;">Monitor nenalezen.</div>';
-    exit;
-}
-
-$status = $monitor['status'];
-
-// Dřív se tu volala calculate_uptime(), která v kódu vůbec neexistovala -
-// widget proto vracel fatální chybu pro každý existující monitor.
-$uptime = bk_uptime_30d($pdo, $mid);
-$details = bk_monitor_details($monitor);
-// Nezmerena odezva zustava null; sablona nize ukaze pomlcku.
-$resp = $details['response_time'] ?? null;
-
-$dot_color = '#2ec4b6';
-$status_label = 'V PROVOZU';
-if ($status === 'down') {
-    $dot_color = '#e61e2a';
-    $status_label = 'VÝPADEK';
-} elseif ($status === 'maintenance') {
-    $dot_color = '#ffb703';
-    $status_label = 'ÚDRŽBA';
-}
-?>
-<!DOCTYPE html>
-<html lang="cs">
-<head>
-    <meta charset="UTF-8">
-    <title><?php echo htmlspecialchars($monitor['name']); ?> - Status</title>
-    <style>
-        body { margin: 0; padding: 0; background: transparent; font-family: 'Inter', system-ui, sans-serif; }
-        .widget-card { background: rgba(16, 18, 22, 0.95); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 0.75rem 1rem; color: #fff; width: 100%; box-sizing: border-box; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-        .info { display: flex; align-items: center; gap: 0.6rem; }
-        .dot { width: 10px; height: 10px; border-radius: 50%; background: <?php echo $dot_color; ?>; box-shadow: 0 0 8px <?php echo $dot_color; ?>; flex-shrink: 0; }
-        .title { font-size: 0.88rem; font-weight: 600; color: #fff; text-decoration: none; }
-        .subtitle { font-size: 0.7rem; color: #888; margin-top: 0.1rem; }
-        .stat { text-align: right; }
-        .val { font-size: 0.95rem; font-weight: bold; font-family: monospace; color: <?php echo $dot_color; ?>; }
-        .label { font-size: 0.65rem; color: #666; text-transform: uppercase; }
-    </style>
-</head>
-<body>
-    <div class="widget-card">
-        <div class="info">
-            <div class="dot"></div>
-            <div>
-                <div class="title"><?php echo htmlspecialchars($monitor['name']); ?></div>
-                <div class="subtitle"><?php echo $status_label; ?> • <?php echo bk_num($resp, ' ms'); ?></div>
-            </div>
-        </div>
-        <div class="stat">
-            <div class="val"><?php echo $uptime === null ? '—' : number_format(bk_uptime_pct_round($uptime, 2), 2, ',', ' ') . '%'; ?></div>
-            <div class="label">30d Uptime</div>
-        </div>
-    </div>
-</body>
-</html>
+$q['type'] = 'uptime';
+header('Location: api.php?' . http_build_query($q), true, 302);
+exit;

@@ -110,10 +110,10 @@ nezvoleno) se řídí typem, takže každý monitor založený aplikací, import
 prvním hlášením agenta dostane stejné výchozí nastavení.
 
 Všechno anonymní pokrývá jen tuto sadu: veřejný pohled akcí výš, odznak
-flotily (`badge`), `rss.php`, starou stránku `/status/` i `widget.php`. Monitor
-mimo ni tam odpoví jako neexistující - `badge` s jeho `monitor_id` je 404,
-pokud volající není přihlášený a nesmí ho vidět - protože odznak i widget
-tisknou jeho jméno. Incidenty nenavázané na žádný monitor zůstávají veřejné.
+flotily (`badge`), `rss.php` a starou stránku `/status/`. Monitor mimo ni tam
+odpoví jako neexistující - `badge` s jeho `monitor_id` je 404, pokud volající
+není přihlášený a nesmí ho vidět - protože odznak tiskne jeho jméno. Incidenty
+nenavázané na žádný monitor zůstávají veřejné.
 
 ### Co vidí nepřihlášený návštěvník
 
@@ -1209,7 +1209,7 @@ výpadku, který potvrdil cron; `down` sondy ho dát může.
 |---|---|---|---|
 | `metrics.php?token=…` | Prometheus text 0.0.4 | token | Scrapování externím Prometheem; bez nastaveného tokenu je vypnutý. Token lze poslat i hlavičkou `Authorization: Bearer` |
 | `badge.php?id=&type=` | 302 | veřejné | Zastaralý alias - přesměruje na `action=badge` (staré README embedy fungují dál) |
-| `widget.php?id=` | HTML | veřejné | Kompaktní vložení přes iframe |
+| `widget.php?id=` | 302 | veřejné | Zastaralý alias - přesměruje na `action=badge&type=uptime`, tedy na dostupnost za 30 dní, kterou jeho HTML karta nesla jako hlavní číslo. Iframe karty se na cizím webu nikdy neukázal (`X-Frame-Options: SAMEORIGIN`); `<img>` odznaku ano |
 | `health.php` | JSON | admin nebo CLI | Kontrola úplnosti schématu databáze a toho, že config.php nic nevypisuje. `schema_version` neprojde, dokud uložená verze není ta, kterou čeká db.php: krok migrace skutečně selhal (kontrola ho jmenuje a db.php seznam spustí znovu 10 minut po každém neúspěšném běhu), chybí migrations.php, nebo je nahrání v půlce |
 | `cron.php[?key=…]` | text | CLI nebo `cron_key` | Sběr dat; z webu jen s klíčem |
 

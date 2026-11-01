@@ -531,6 +531,13 @@ curl_close($ch_alias);
 check('badge.php přesměrovává', $alias_code, 302);
 check_true('alias míří na action=badge s parametry', str_contains($alias_loc, 'action=badge') && str_contains($alias_loc, 'monitor_id=1') && str_contains($alias_loc, 'type=uptime'));
 
+// widget.php is one too (D4): its HTML card headlined the 30-day
+// availability, so an old embed gets that badge.
+[$wdg_code, $wdg_head, $wdg_body] = bk_raw_request($base . '/widget.php?id=1');
+check('widget.php přesměruje na odznak dostupnosti monitoru', [
+    $wdg_code, preg_match('/^location:\s*(\S+)/mi', $wdg_head, $wdg_m) ? $wdg_m[1] : null, $wdg_body,
+], [302, 'api.php?action=badge&monitor_id=1&type=uptime', '']);
+
 // =======================================================================
 // 2. public_status - the basis of the public page and the widget
 // =======================================================================
@@ -6854,8 +6861,11 @@ try {
     check('odznak skrytého routeru je pro návštěvníka 404', $g3_bdg, 404);
     [$g3_bdg_admin] = api_get_auth($base, 'action=badge&monitor_id=2', $cookie_jar);
     check('přihlášenému adminovi se ukáže', $g3_bdg_admin, 200);
-    [, , $g3_widget] = bk_raw_request($base . '/widget.php?id=2');
-    check_true('widget skrytého routeru: monitor nenalezen', str_contains($g3_widget, 'Monitor nenalezen'));
+    [$g3_wdg_code, $g3_wdg_head] = bk_raw_request($base . '/widget.php?id=2');
+    [$g3_wdg_target] = api_get($base, 'action=badge&monitor_id=2&type=uptime');
+    check('widget skrytého routeru vede na odznak, který je pro návštěvníka 404', [
+        $g3_wdg_code, str_contains($g3_wdg_head, 'monitor_id=2&type=uptime'), $g3_wdg_target,
+    ], [302, true, 404]);
     [, , $g3_rss] = bk_raw_request($base . '/rss.php');
     check_false('RSS skrytý router nejmenuje', str_contains($g3_rss, 'Router bez metrik'));
     @unlink($root . '/cache/dashboard_agg.json');
@@ -7110,9 +7120,6 @@ try {
     [, , $fs_badge] = api_get($base, 'action=badge&monitor_id=189&type=uptime');
     check_true('odznak dostupnosti: 99.99 %, ne 100.00 % (dostal ' . json_encode(preg_match('/[0-9.]+ %/', $fs_badge, $fs_m) ? $fs_m[0] : $fs_badge) . ')',
         str_contains($fs_badge, '99.99 %') && !str_contains($fs_badge, '100.00 %'));
-
-    $fs_widget = $fs_page('/widget.php?id=189');
-    check_true('widget: 99,99 %, ne 100,00 %', str_contains($fs_widget, '99,99%') && !str_contains($fs_widget, '100,00%'));
 
     $fs_index = $fs_page('/index.php');
     $fs_card = preg_match('/id="monitor-item-189".*?(?=id="monitor-item-|$)/s', $fs_index, $fs_m) ? $fs_m[0] : '';
@@ -7961,7 +7968,7 @@ foreach ($dd_pages as $dd_path => $dd_label) {
     check_true("databáze dole, {$dd_label}: značková stránka 503", str_contains($dd_body, 'CHYBA 503') && str_contains($dd_body, 'Blood Kings Monitoring'));
 }
 // A program asking a page for JSON gets JSON, not HTML it cannot parse.
-[$dd_code, $dd_head, $dd_body] = bk_raw_request($base . '/widget.php?id=1', array_merge($dd_down, ['Accept: application/json']));
+[$dd_code, $dd_head, $dd_body] = bk_raw_request($base . '/index.php', array_merge($dd_down, ['Accept: application/json']));
 check('databáze dole, stránka s Accept JSON: JSON', json_decode($dd_body, true), ['error' => 'database_unavailable']);
 foreach (array_merge(array_keys($dd_machine), array_keys($dd_pages)) as $dd_path) {
     [, , $dd_body] = bk_raw_request($base . '/' . $dd_path, $dd_down);

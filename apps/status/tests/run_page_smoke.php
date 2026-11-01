@@ -44,13 +44,18 @@ $pages = [
     // monitors belong to users; an anonymous visitor is sent to the login.
     "/monitor.php?id={$monitor_id}" => ['detail monitoru (bez přihlášení na login)', [302]],
     '/report.php' => ['SLA report (bez přihlášení na login)', [302]],
-    "/widget.php?id={$monitor_id}" => ['embed widget', [200]],
     // badge.php je od konsolidace 302 alias na api.php?action=badge -
     // both the redirect AND the target action are checked (right below).
     "/badge.php?id={$monitor_id}" => ['odznak (alias, stav)', [302]],
     "/badge.php?id={$monitor_id}&type=uptime" => ['odznak (alias, dostupnost)', [302]],
-    '/widget.php?id=999999' => ['widget s neexistujícím id', [200]],
     '/badge.php?id=999999' => ['odznak s neexistujícím id (alias)', [302]],
+    // widget.php too (D4), to the availability badge of its monitor. The
+    // quality gate runs this test against production in parallel with the
+    // deploy, where widget.php can still be the HTML card of before: its 200
+    // passes, and a redirect has to go exactly here.
+    "/widget.php?id={$monitor_id}" => ['widget (alias, dostupnost)', [200, 302],
+        $base . "/api.php?action=badge&monitor_id={$monitor_id}&type=uptime"],
+    '/widget.php?id=999999' => ['widget s neexistujícím id (alias)', [200, 302], $base . '/api.php?action=badge&monitor_id=999999&type=uptime'],
     '/api.php?action=badge' => ['odznak (API, flotila)', [200]],
     "/api.php?action=badge&monitor_id={$monitor_id}&type=uptime" => ['odznak (API, dostupnost)', [200]],
     '/api.php?action=badge&monitor_id=999999' => ['odznak API s neexistujícím id', [404]],
