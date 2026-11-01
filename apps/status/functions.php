@@ -19934,6 +19934,23 @@ function bk_refuse_archived_write(PDO $pdo, int $monitor_id): void {
     }
 }
 
+/**
+ * Removes a device (assets row) that no monitor belongs to any more.
+ *
+ * A monitor gets a device of its own when it is created, and only admin.php
+ * could rename or delete one. /app never shows a device's name - a card is
+ * named after its monitor - so it has no controls for it either: a device
+ * lives as long as its monitors do. An archived monitor still belongs to its
+ * device, so restoring it finds the device where it was.
+ */
+function bk_asset_drop_if_empty(PDO $pdo, ?int $asset_id): void {
+    if ($asset_id === null || $asset_id <= 0) {
+        return;
+    }
+    $pdo->prepare("DELETE FROM assets WHERE id = ? AND NOT EXISTS (SELECT 1 FROM monitors WHERE asset_id = ?)")
+        ->execute([$asset_id, $asset_id]);
+}
+
 /** An agent of an archived monitor: its report is refused, not stored. */
 function bk_agent_refuse_archived(): void {
     http_response_code(403);

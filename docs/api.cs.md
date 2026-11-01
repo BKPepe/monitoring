@@ -560,7 +560,8 @@ Vybrané parametry:
 
 `asset_id` jmenuje existující zařízení; id, které v `assets` nemá řádek, je `400`.
 `null` nebo vynechané `asset_id` dá novému monitoru (`id: 0`) vlastní zařízení
-a upravovaný monitor od jeho zařízení odpojí.
+a upravovaný monitor od jeho zařízení odpojí. Zařízení, které úprava nechá bez
+monitorů, se smaže, stejně jako u `delete_monitor`.
 
 Hesla (`sq_password`, `rcon_password`) se přepíší jen při zadání nové hodnoty -
 prázdné pole uložené heslo nesmaže. Heartbeat token se při editaci
@@ -568,7 +569,10 @@ prázdné pole uložené heslo nesmaže. Heartbeat token se při editaci
 
 ### `POST api.php?action=delete_monitor`
 
-**Admin.** Tělo `{"id": 12}`.
+**Admin.** Tělo `{"id": 12}`. Zařízení monitoru (jeho řádek v `assets`) zmizí
+s ním, když k němu už nepatří žádný jiný monitor; archivovaný se počítá. Zařízení
+žije, dokud má monitory: aplikace jeho jméno nikde neukazuje, a tak ho nemá čím
+přejmenovat ani smazat.
 
 ### `POST api.php?action=archive_monitor` / `unarchive_monitor`
 

@@ -929,6 +929,11 @@ if ($action === 'save_monitor') {
             if ($new_asset_name !== '') {
                 $asset_id = bk_asset_create($pdo, $new_asset_name);
             }
+            // The device it leaves (detached, or moved to new_asset_name) goes
+            // when nothing else belongs to it, as with delete_monitor.
+            $stmt_prev_asset = $pdo->prepare("SELECT asset_id FROM monitors WHERE id = ?");
+            $stmt_prev_asset->execute([$id]);
+            $prev_asset_id = $stmt_prev_asset->fetchColumn();
             // Passwords (ServerQuery, RCON) are overwritten only when the administrator
             // typed a new value - an empty edit-form field must not erase a stored password.
             $stmt = $pdo->prepare("
@@ -940,6 +945,9 @@ if ($action === 'save_monitor') {
             // v curl prikazu na svem stroji a zmena by ji tise odstrihla.
             $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $mon_discord, $mon_slack, $mon_tg_token, $mon_tg_chat, $id]);
             $mon_save_switches($id);
+            if ($prev_asset_id !== false && $prev_asset_id !== null && (int)$prev_asset_id !== $asset_id) {
+                bk_asset_drop_if_empty($pdo, (int)$prev_asset_id);
+            }
             $pdo->commit();
             echo json_encode(['success' => true, 'id' => $id, 'message' => 'Monitor úspěšně upraven'], JSON_UNESCAPED_UNICODE);
         } else {
@@ -1044,14 +1052,27 @@ if ($action === 'delete_monitor') {
     $del_id = (int)($input['id'] ?? 0);
     if ($del_id > 0) {
         try {
+            $stmt_del_asset = $pdo->prepare("SELECT asset_id FROM monitors WHERE id = ?");
+            $stmt_del_asset->execute([$del_id]);
+            $del_asset_id = $stmt_del_asset->fetchColumn();
+            $pdo->beginTransaction();
             // Explicitly, not only through the foreign key: an install whose table
             // was created without it must not keep access rows pointing at a
             // monitor id that a new monitor could later reuse.
             $pdo->prepare("DELETE FROM monitor_users WHERE monitor_id = ?")->execute([$del_id]);
             $stmt = $pdo->prepare("DELETE FROM monitors WHERE id = ?");
             $stmt->execute([$del_id]);
+            // Its device goes with the last monitor on it; nothing in /app
+            // could delete the empty one later.
+            if ($del_asset_id !== false && $del_asset_id !== null) {
+                bk_asset_drop_if_empty($pdo, (int)$del_asset_id);
+            }
+            $pdo->commit();
             echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
         } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
             bk_api_fail('delete_monitor_failed', 500, $e, 'Monitor se nepodařilo smazat.');
         }
     } else {

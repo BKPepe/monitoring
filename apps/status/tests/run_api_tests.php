@@ -1582,6 +1582,92 @@ if (!empty($cookie_jar)) {
 }
 
 // =======================================================================
+// 7d. A device lives as long as its monitors (D1)
+// =======================================================================
+//
+// Only admin.php could delete a device, by hand: every monitor deleted in
+// /app left its device behind, empty, for good. /app never shows a device's
+// name, so the device now goes with its last monitor - an archived one
+// still counts, so restoring it finds the device where it was.
+if (!empty($cookie_jar)) {
+    $as_monitors = [];
+    $as_assets = [];
+    $as_device = function (int $id) use ($pdo): ?int {
+        $asset = $pdo->query("SELECT asset_id FROM monitors WHERE id = {$id}")->fetchColumn();
+        return $asset === false || $asset === null ? null : (int)$asset;
+    };
+    $as_exists = fn (?int $asset): bool => $asset !== null
+        && (int)$pdo->query("SELECT COUNT(*) FROM assets WHERE id = {$asset}")->fetchColumn() === 1;
+    $as_new = function (string $name, ?int $asset = null) use ($base, $cookie_jar, &$as_monitors): int {
+        [, $res] = api_post($base, 'action=save_monitor', [
+            'id' => 0, 'name' => $name, 'type' => 'web', 'target' => 'https://example.com/as', 'asset_id' => $asset,
+        ], $cookie_jar);
+        $as_monitors[] = (int)($res['id'] ?? 0);
+        return (int)($res['id'] ?? 0);
+    };
+    try {
+        $as_one = $as_new('Jediný monitor zařízení (test)');
+        $as_assets[] = $as_one_asset = $as_device($as_one);
+        check_true('nový monitor dostane vlastní zařízení', $as_exists($as_one_asset));
+        [$code] = api_post($base, 'action=delete_monitor', ['id' => $as_one], $cookie_jar);
+        check('smazání monitoru projde', $code, 200);
+        check_false('jeho zařízení, už prázdné, zmizí s ním', $as_exists($as_one_asset));
+
+        $as_first = $as_new('První monitor sdíleného zařízení (test)');
+        $as_assets[] = $as_shared = $as_device($as_first);
+        $as_second = $as_new('Druhý monitor sdíleného zařízení (test)', $as_shared);
+        check('druhý monitor stojí na stejném zařízení', $as_device($as_second), $as_shared);
+        api_post($base, 'action=archive_monitor', ['id' => $as_second], $cookie_jar);
+        api_post($base, 'action=delete_monitor', ['id' => $as_first], $cookie_jar);
+        check_true('zařízení s archivovaným monitorem zůstává', $as_exists($as_shared));
+        check('a archivovaný monitor na něm stojí dál', $as_device($as_second), $as_shared);
+        api_post($base, 'action=delete_monitor', ['id' => $as_second], $cookie_jar);
+        check_false('smazáním posledního (i archivovaného) monitoru zařízení zmizí', $as_exists($as_shared));
+
+        // A monitor moved off its device leaves an empty one too.
+        $as_moved = $as_new('Přesouvaný monitor (test)');
+        $as_assets[] = $as_old = $as_device($as_moved);
+        [$code] = api_post($base, 'action=save_monitor', [
+            'id' => $as_moved, 'name' => 'Přesouvaný monitor (test)', 'type' => 'web',
+            'target' => 'https://example.com/as', 'asset_id' => $as_old, 'new_asset_name' => 'Nové zařízení (test)',
+        ], $cookie_jar);
+        $as_assets[] = $as_moved_to = $as_device($as_moved);
+        check('přesun na nové zařízení projde', $code, 200);
+        check_true('monitor stojí na novém zařízení', $as_moved_to !== null && $as_moved_to !== $as_old && $as_exists($as_moved_to));
+        check_false('a opuštěné prázdné zařízení zmizí', $as_exists($as_old));
+        [$code] = api_post($base, 'action=save_monitor', [
+            'id' => $as_moved, 'name' => 'Přesouvaný monitor (test)', 'type' => 'web',
+            'target' => 'https://example.com/as', 'asset_id' => $as_moved_to,
+        ], $cookie_jar);
+        check('uložení na stejném zařízení projde', $code, 200);
+        check_true('a zařízení zůstane', $as_exists($as_moved_to));
+        api_post($base, 'action=save_monitor', [
+            'id' => $as_moved, 'name' => 'Přesouvaný monitor (test)', 'type' => 'web',
+            'target' => 'https://example.com/as', 'asset_id' => null,
+        ], $cookie_jar);
+        check('odpojený monitor nemá zařízení', $as_device($as_moved), null);
+        check_false('a zařízení, od kterého se odpojil, zmizí', $as_exists($as_moved_to));
+
+        // A refused save creates no device either.
+        [$code] = api_post($base, 'action=save_monitor', [
+            'id' => 0, 'name' => '', 'type' => 'web', 'target' => 'https://example.com/as', 'new_asset_name' => 'Odmítnuté zařízení (test)',
+        ], $cookie_jar);
+        check('uložení bez názvu je 400', $code, 400);
+        check('a nové zařízení nevznikne', (int)$pdo->query("SELECT COUNT(*) FROM assets WHERE name = 'Odmítnuté zařízení (test)'")->fetchColumn(), 0);
+    } finally {
+        $as_monitors = array_values(array_filter($as_monitors));
+        if ($as_monitors) {
+            $pdo->exec('DELETE FROM monitors WHERE id IN (' . implode(',', $as_monitors) . ')');
+        }
+        $as_assets = array_values(array_filter($as_assets));
+        if ($as_assets) {
+            $pdo->exec('DELETE FROM assets WHERE id IN (' . implode(',', $as_assets) . ')');
+        }
+        $pdo->exec("DELETE FROM assets WHERE name = 'Odmítnuté zařízení (test)'");
+    }
+}
+
+// =======================================================================
 // 8. Heartbeat - the whole flow from creation through the signal to evaluation
 // =======================================================================
 //

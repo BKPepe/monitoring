@@ -568,7 +568,8 @@ Selected parameters:
 
 `asset_id` names an existing device; an id with no row in `assets` is `400`.
 `null` or a left-out `asset_id` gives a new monitor (`id: 0`) a device of its
-own, and detaches an edited monitor from its device.
+own, and detaches an edited monitor from its device. A device the edit leaves
+without monitors is removed, as with `delete_monitor`.
 
 Passwords (`sq_password`, `rcon_password`) are only overwritten when a new value
 is supplied - an empty field does not erase a stored password. The heartbeat
@@ -577,7 +578,10 @@ command.
 
 ### `POST api.php?action=delete_monitor`
 
-**Admin.** Body `{"id": 12}`.
+**Admin.** Body `{"id": 12}`. The monitor's device (its `assets` row) goes
+with it when no other monitor belongs to it; an archived one still does. A
+device lives as long as its monitors: the app never shows its name, so it has
+no controls to rename or delete one.
 
 ### `POST api.php?action=archive_monitor` / `unarchive_monitor`
 
