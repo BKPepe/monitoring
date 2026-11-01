@@ -43,7 +43,6 @@ $pages = [
     // The per-monitor detail needs a login and access to that monitor since
     // monitors belong to users; an anonymous visitor is sent to the login.
     "/monitor.php?id={$monitor_id}" => ['detail monitoru (bez přihlášení na login)', [302]],
-    '/report.php' => ['SLA report (bez přihlášení na login)', [302]],
     // badge.php je od konsolidace 302 alias na api.php?action=badge -
     // both the redirect AND the target action are checked (right below).
     "/badge.php?id={$monitor_id}" => ['odznak (alias, stav)', [302]],

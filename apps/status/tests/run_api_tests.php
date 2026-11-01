@@ -6745,37 +6745,6 @@ try {
     }
     check('dnešní den mlčícího routeru je výpadek', $b1_today['status'] ?? null, 'down');
     check_true('a popis říká, že agent mlčel (dostal ' . json_encode($b1_today['detail'] ?? null, JSON_UNESCAPED_UNICODE) . ')', str_contains((string)($b1_today['detail'] ?? ''), 'mlčel'));
-
-    // The monthly report (report.php) counts in time as well, and a month
-    // nobody measured says "bez dat" (W1-B3) - it used to say 100 % and
-    // "SLA splněno" for a month without a single check.
-    $b1_csv = function (int $year, int $month) use ($base, $cookie_jar): array {
-        $ch = curl_init($base . '/report.php?format=csv&year=' . $year . '&month=' . $month);
-        curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_TIMEOUT => 15]);
-        $raw = (string)curl_exec($ch);
-        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        $rows = [];
-        foreach (array_slice(explode("\n", trim($raw)), 1) as $line) {
-            $cols = str_getcsv($line, ',', '"', '\\');
-            $rows[(string)$cols[0]] = $cols;
-        }
-        return [$code, $rows, $raw];
-    };
-    [$b1_old_code, $b1_old, $b1_old_raw] = $b1_csv(2001, 1);
-    check('CSV report za měsíc bez dat vrací 200', $b1_old_code, 200);
-    check_false('CSV report neobsahuje hlášky PHP', str_contains($b1_old_raw, 'Deprecated') || str_contains($b1_old_raw, 'Warning'));
-    check_true('CSV report za měsíc bez dat má řádky monitorů', count($b1_old) >= 2);
-    check('měsíc bez jediné kontroly: dostupnost i SLA „bez dat“, ne 100 % a ANO',
-        array_values(array_unique(array_map(fn ($r) => ($r[7] ?? '?') . '|' . ($r[9] ?? '?'), $b1_old))), ['bez dat|bez dat']);
-    // The month four hours back: the silence began almost eight hours ago, so
-    // that month holds hours of it even on the 1st just after midnight, when
-    // this month would hold a minute.
-    $b1_month = time() - 4 * 3600;
-    [, $b1_now] = $b1_csv((int)date('Y', $b1_month), (int)date('n', $b1_month));
-    $b1_router_row = $b1_now['160'] ?? [];
-    check_true('report měsíce: mlčící router pod 100 % (dostal ' . json_encode($b1_router_row[7] ?? null) . ')', is_numeric($b1_router_row[7] ?? null) && (float)$b1_router_row[7] < 100);
-    check('report měsíce: SLA mlčícího routeru nesplněno', $b1_router_row[9] ?? null, 'NE');
-    check_true('report měsíce: výpadek v minutách je čas ticha, ne počet řádků (dostal ' . json_encode($b1_router_row[10] ?? null) . ')', is_numeric($b1_router_row[10] ?? null) && (int)$b1_router_row[10] > 1);
 } finally {
     $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (160, 161)");
     $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id IN (160, 161)");
@@ -7069,9 +7038,8 @@ try {
 
 // The rest of the places that print an availability. Five seconds of outage
 // in 30 days is 99.9998 % and one failed check among 20 001 is 99.995 %; the
-// badge, the widget, the legacy page, the monthly report, the SLA report's
-// mean, the regions, the asset SLA, the old monitor page and the e-mail
-// digest rounded both to 100. Only these two monitors are active meanwhile,
+// badge, the legacy page, the SLA report's mean, the regions, the asset SLA,
+// the old monitor page and the e-mail digest rounded both to 100. Only these two monitors are active meanwhile,
 // so the means and the digest contain nothing else.
 $fs_saved = $pdo->query("SELECT id, archived_at FROM monitors")->fetchAll();
 $pdo->exec("INSERT INTO assets (name) VALUES ('Stroj s pěti sekundami výpadku')");
@@ -7129,13 +7097,6 @@ try {
     check_true('stará stránka: SLA stroje 99.99 %, ne 100.00 %', str_contains($fs_index, '99.99% SLA') && !str_contains($fs_index, '100.00% SLA'));
     check_true('stará stránka: den s výpadkem v pásu „dostupnost 99,99 %“',
         str_contains($fs_index, 'dostupnost 99,99 %') && !str_contains($fs_index, 'dostupnost 100,00'));
-
-    $fs_month = '&year=' . date('Y', $fs_day) . '&month=' . date('n', $fs_day) . '&monitor_id=189';
-    $fs_csv = $fs_page('/report.php?format=csv' . $fs_month, $cookie_jar);
-    $fs_csv_row = str_getcsv((string)(explode("\n", trim($fs_csv))[1] ?? ''), ',', '"', '\\');
-    check('měsíční report CSV: 99.99, ne 100.00', $fs_csv_row[7] ?? null, '99.99');
-    $fs_report = $fs_page('/report.php?format=html' . $fs_month, $cookie_jar);
-    check_true('měsíční report: 99,99 %, ne 100,00 %', str_contains($fs_report, '99,99%') && !str_contains($fs_report, '100,00%'));
 
     [, $fs_sla] = api_get_auth($base, 'action=sla_report&days=30', $cookie_jar);
     check('SLA report: průměr 99,999, ne 100 (dostal ' . json_encode($fs_sla['overallUptime'] ?? null) . ')', $fs_sla['overallUptime'] ?? null, 99.999);

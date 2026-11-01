@@ -2860,63 +2860,6 @@ function bk_uptime_day_windows(PDO $pdo, array $monitor_ids, array $windows): ar
 }
 
 /**
- * Availability of each monitor over the calendar days [$first_day, $last_day]
- * (Y-m-d, both included), in time - the window of the monthly report.
- *
- * The same sources as bk_uptime_day_windows: finished days from the
- * uptime_daily rollup (it outlives the 30-day log retention, so last
- * quarter's report still has numbers), today live from the logs when the
- * range reaches it. Days after today are the future, not unmeasured time.
- *
- * @param list<int> $monitor_ids
- * @return array<int, array{up:int,down:int,warning:int,maintenance:int,unmeasured:int,silent:int,measured:int,outage:int,pct:?float,approxDays:int,days:int}>
- */
-function bk_uptime_between(PDO $pdo, array $monitor_ids, string $first_day, string $last_day): array {
-    $monitor_ids = array_values(array_unique(array_map('intval', $monitor_ids)));
-    $first = strtotime($first_day . ' 00:00:00');
-    $last = strtotime($last_day . ' 00:00:00');
-    if (!$monitor_ids || $first === false || $last === false || $last < $first) {
-        return [];
-    }
-    $now = time();
-    $today = strtotime(date('Y-m-d 00:00:00', $now));
-    $parts = [];
-    $approx = [];
-    $days = [];
-    if ($first < $today) {
-        $in = implode(',', array_fill(0, count($monitor_ids), '?'));
-        $stmt = $pdo->prepare("
-            SELECT monitor_id, checks_up, checks_down, checks_warning,
-                   secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured
-            FROM uptime_daily
-            WHERE monitor_id IN ({$in}) AND day >= ? AND day <= ? AND day < ?
-        ");
-        $stmt->execute(array_merge($monitor_ids, [date('Y-m-d', $first), date('Y-m-d', $last), date('Y-m-d', $today)]));
-        foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
-            $mid = (int)$row['monitor_id'];
-            $part = bk_uptime_daily_part($row);
-            $parts[$mid][] = $part;
-            $approx[$mid] = ($approx[$mid] ?? 0) + $part['approx'];
-            $days[$mid] = ($days[$mid] ?? 0) + 1;
-        }
-    }
-    if ($first <= $today && $last >= $today) {
-        foreach (bk_uptime_segments_for($pdo, $today, $now, $monitor_ids) as $mid => $seg) {
-            $live = bk_uptime_summary($seg['segments'], $seg['from'], $seg['to']);
-            if ($live['measured'] + $live['maintenance'] > 0) {
-                $parts[$mid][] = $live;
-                $days[$mid] = ($days[$mid] ?? 0) + 1;
-            }
-        }
-    }
-    $out = [];
-    foreach ($monitor_ids as $mid) {
-        $out[$mid] = bk_uptime_totals($parts[$mid] ?? []) + ['approxDays' => $approx[$mid] ?? 0, 'days' => $days[$mid] ?? 0];
-    }
-    return $out;
-}
-
-/**
  * Availability of one monitor over the last $days (today included), in time.
  * null = nothing measured in the window, never an invented 100.
  */

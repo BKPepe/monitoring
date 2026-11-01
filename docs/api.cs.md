@@ -641,8 +641,8 @@ ale verdikt nezhorší.
 Dostupnost bývala „řádky up / všechny řádky". Mlčící agent dostane od cronu
 jeden řádek `down` a pak nic, takže třídenní výpadek byl jeden řádek z tisíců
 a pořád ukazoval ~99,99 %. Každé číslo dostupnosti (`uptime_windows`,
-`daily_uptime`, `websites_overview`, `sla_report`, `public_status`, odznak,
-widget, měsíční `report.php` i e-mailový přehled) se teď počítá v čase:
+`daily_uptime`, `websites_overview`, `sla_report`, `public_status`, odznak
+i e-mailový přehled) se teď počítá v čase:
 
 - každý řádek kontroly platí do dalšího řádku, nejvýš 2,5 intervalu kontroly
   (interval se čte z vlastních řádků monitoru, 60-1800 s);

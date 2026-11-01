@@ -68,7 +68,7 @@ foreach (glob(__DIR__ . '/../*.php') ?: [] as $entry) {
 }
 check('functions.php načítá jen bootstrap.php, žádná stránka napřímo', $lib_users, ['bootstrap.php']);
 check('každá stránka a endpoint s funkcemi startuje přes bootstrap.php', $boot_users,
-    ['admin.php', 'agent_api.php', 'api.php', 'cron.php', 'index.php', 'monitor.php', 'node_api.php', 'report.php', 'rss.php']);
+    ['admin.php', 'agent_api.php', 'api.php', 'cron.php', 'index.php', 'monitor.php', 'node_api.php', 'rss.php']);
 // heartbeat.php and metrics.php need the database alone: neither may name a
 // function or a constant of the library. health.php loads db.php alone too,
 // but its HTML view prints BK_CDN_FONTAWESOME and its SRI, which only

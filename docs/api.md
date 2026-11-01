@@ -652,9 +652,8 @@ not had its first check yet ("waiting for first data") is counted in
 Availability used to be "up rows / all rows". A silent agent gets one `down`
 row from cron and then nothing, so a three-day blackout was one row among
 thousands and still read ~99.99 %. Every availability number (`uptime_windows`,
-`daily_uptime`, `websites_overview`, `sla_report`, `public_status`, the badge,
-the widget, the monthly `report.php` and the e-mail digest) is now computed in
-time:
+`daily_uptime`, `websites_overview`, `sla_report`, `public_status`, the badge
+and the e-mail digest) is now computed in time:
 
 - each check row stands for the time until the next row, at most 2.5 check
   intervals (the interval is read off the monitor's own rows, 60-1800 s);

@@ -16,7 +16,6 @@ An open-source, ultra-fast server and service status monitoring application buil
 * `agent.ps1` - PowerShell telemetry agent for Windows hosts.
 * `badge.php` - Dynamic vector SVG badge generator (`badge.php?id=12&type=status|uptime`).
 * `widget.php` - Deprecated alias: a 302 to the 30-day availability badge (`api.php?action=badge&type=uptime`).
-* `report.php` - SLA report generator (HTML/CSV format).
 * `db.php` - PDO database connection initializer; runs the migrations when the schema version changes.
 * `migrations.php` - The schema migrations: one ordered list and the runner that applies it.
 * `functions.php` - Core measurement library, alert routing (Pushover, PagerDuty, Telegram, Discord, Slack), and TOTP engine. It only defines functions; the tests require it without a database.
