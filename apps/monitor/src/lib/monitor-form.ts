@@ -51,6 +51,12 @@ export interface MonitorForm {
   sqPassword: string;
   /** A password is stored (it never travels back, only this flag). */
   sqPasswordSet: boolean;
+  /**
+   * TeamSpeak's voice port. It is stored in the target as host:voice_port
+   * (the port column holds the ServerQuery port), as admin.php stores it.
+   * Empty = none stored; the check then assumes 9987.
+   */
+  ts3VoicePort: string;
   ts3FiletransferPort: string;
   rconPort: string;
   rconPassword: string;
@@ -119,6 +125,8 @@ export interface MonitorPayload {
   heartbeat_grace: number | null;
   sq_username: string | null;
   sq_password: string | null;
+  /** TeamSpeak only; save_monitor writes the target as host:voice_port. */
+  teamspeak_voice_port?: number | null;
   ts3_filetransfer_port: number;
   rcon_port: number;
   rcon_password: string | null;
@@ -190,6 +198,9 @@ export function emptyMonitorForm(): MonitorForm {
     sqUsername: 'serveradmin',
     sqPassword: '',
     sqPasswordSet: false,
+    // Empty, not admin.php's 9987: a default nobody chose would replace a
+    // port typed into the target (save_monitor writes host:voice_port).
+    ts3VoicePort: '',
     ts3FiletransferPort: '30033',
     rconPort: '25575',
     rconPassword: '',
@@ -233,11 +244,15 @@ export function formFromMonitor(mon: ApiMonitor): MonitorForm {
   const rawT = mon.target || '';
   let target = rawT;
   let port = mon.port ? String(mon.port) : '';
+  let ts3VoicePort = '';
   // A host:port target is split for the two inputs; a URL keeps its colon.
   if (typeLower !== 'web' && !rawT.startsWith('http') && rawT.includes(':')) {
     const lastColon = rawT.lastIndexOf(':');
     target = rawT.slice(0, lastColon);
-    port = mon.port ? String(mon.port) : rawT.slice(lastColon + 1);
+    // TeamSpeak's is the voice port: moved into the ServerQuery port field,
+    // it was saved as the query port and the voice port was lost (R344).
+    if (typeLower === 'teamspeak') ts3VoicePort = rawT.slice(lastColon + 1);
+    else port = mon.port ? String(mon.port) : rawT.slice(lastColon + 1);
   }
 
   return {
@@ -266,6 +281,7 @@ export function formFromMonitor(mon: ApiMonitor): MonitorForm {
     sqUsername: mon.sqUsername ?? 'serveradmin',
     sqPassword: '',
     sqPasswordSet: mon.sqPasswordSet ?? false,
+    ts3VoicePort,
     ts3FiletransferPort: mon.ts3FiletransferPort != null ? String(mon.ts3FiletransferPort) : '30033',
     rconPort: mon.rconPort != null ? String(mon.rconPort) : '25575',
     rconPassword: '',
@@ -342,6 +358,9 @@ export function formToPayload(form: MonitorForm, id: number | null, assetId: num
       heartbeat && form.heartbeatGraceMins !== '' ? (parseInt(form.heartbeatGraceMins, 10) || 0) * 60 : null,
     sq_username: form.sqUsername || null,
     sq_password: form.sqPassword || null,
+    // TeamSpeak only, so every other type's body stays as it was. Empty is
+    // null: the target is saved as it is, without a voice port.
+    ...(form.type === 'teamspeak' ? { teamspeak_voice_port: parseInt(form.ts3VoicePort, 10) || null } : {}),
     ts3_filetransfer_port: form.ts3FiletransferPort ? parseInt(form.ts3FiletransferPort, 10) : 30033,
     rcon_port: form.rconPort ? parseInt(form.rconPort, 10) : 25575,
     rcon_password: form.rconPassword || null,

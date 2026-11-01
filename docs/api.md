@@ -555,6 +555,7 @@ Selected parameters:
 | `target` | everything except `vps`, `openwrt`, `heartbeat` | Required where it applies |
 | `body_keyword` | `web` | The response body must contain this string |
 | `cpanel_stats_url` | `web` | The hosting's `cpanel_stats.php` with its key; cron reads disk, memory and the rest from it next to the HTTP check |
+| `teamspeak_voice_port` | `teamspeak` | The voice port, 1-65535. The target is saved as `host:voice_port` (a port already in it is replaced); `port` stays the ServerQuery port. Left out or empty = the target as sent, and without a port in it the check assumes 9987. Out of range = `400` |
 | `heartbeat_interval` | `heartbeat` | **Seconds.** Required, minimum 60 |
 | `heartbeat_grace` | `heartbeat` | Seconds; `null` = checked exactly on the interval |
 | `latency_threshold_ms` | all | `null` = slowdown alerts disabled |

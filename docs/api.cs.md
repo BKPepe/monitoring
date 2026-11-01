@@ -547,6 +547,7 @@ Vybrané parametry:
 | `target` | vše kromě `vps`, `openwrt`, `heartbeat` | Povinný tam, kde platí |
 | `body_keyword` | `web` | Tělo odpovědi musí obsahovat tento řetězec |
 | `cpanel_stats_url` | `web` | `cpanel_stats.php` hostingu i s klíčem; cron z něj vedle HTTP kontroly čte disk, paměť a další |
+| `teamspeak_voice_port` | `teamspeak` | Hlasový port, 1-65535. Cíl se uloží jako `host:hlasový_port` (port, který už v cíli je, se nahradí); `port` zůstává ServerQuery port. Vynechaný nebo prázdný = cíl, jak přišel, a bez portu v něm kontrola počítá s 9987. Mimo rozsah = `400` |
 | `heartbeat_interval` | `heartbeat` | **Sekundy.** Povinný, minimum 60 |
 | `heartbeat_grace` | `heartbeat` | Sekundy; `null` = hlídá se přesně na interval |
 | `latency_threshold_ms` | vše | `null` = upozornění na zpomalení vypnuté |

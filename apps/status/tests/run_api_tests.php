@@ -1524,6 +1524,57 @@ if (!empty($cookie_jar)) {
 }
 
 // =======================================================================
+// 7c. TeamSpeak's voice port lives in the target as host:voice_port (R344)
+// =======================================================================
+//
+// admin.php stores it so and check_teamspeak reads it so; the port column is
+// the ServerQuery port. /app had no voice port field and saved the bare host,
+// so re-saving a monitor made in admin.php lost its voice port.
+if (!empty($cookie_jar)) {
+    $ts_id = 0;
+    $ts_asset = null;
+    $ts_save = function (array $extra) use ($base, $cookie_jar, &$ts_id, &$ts_asset): array {
+        return api_post($base, 'action=save_monitor', $extra + [
+            'id' => $ts_id, 'name' => 'Hlasový port (test)', 'type' => 'teamspeak', 'port' => 10011, 'asset_id' => $ts_asset,
+        ], $cookie_jar);
+    };
+    $ts_row = function () use ($pdo, &$ts_id): array {
+        return $pdo->query("SELECT target, port FROM monitors WHERE id = " . (int)$ts_id)->fetch() ?: [];
+    };
+    try {
+        [$code, $ts_res] = $ts_save(['target' => 'ts.example.test', 'teamspeak_voice_port' => 9988]);
+        $ts_id = (int)($ts_res['id'] ?? 0);
+        $ts_asset = (int)$pdo->query("SELECT asset_id FROM monitors WHERE id = {$ts_id}")->fetchColumn() ?: null;
+        check('TS3 s hlasovým portem se uloží', $code, 200);
+        check('hlasový port je v cíli', $ts_row()['target'] ?? null, 'ts.example.test:9988');
+        check('ServerQuery port zůstane ve sloupci port', (int)($ts_row()['port'] ?? 0), 10011);
+
+        $ts_save(['target' => 'ts.example.test', 'teamspeak_voice_port' => '9989']);
+        check('úprava hlasového portu přepíše ten v cíli', $ts_row()['target'] ?? null, 'ts.example.test:9989');
+        $ts_save(['target' => 'ts.example.test:9989', 'teamspeak_voice_port' => 9990]);
+        check('port už poslaný v cíli se nahradí, nepřidá druhý', $ts_row()['target'] ?? null, 'ts.example.test:9990');
+        $ts_save(['target' => 'ts.example.test:9990']);
+        check('klient bez hlasového portu uloží cíl, jak ho poslal', $ts_row()['target'] ?? null, 'ts.example.test:9990');
+
+        [$code] = $ts_save(['target' => 'ts.example.test', 'teamspeak_voice_port' => 70000]);
+        check('hlasový port mimo rozsah je 400', $code, 400);
+        check('a cíl zůstane, jak byl', $ts_row()['target'] ?? null, 'ts.example.test:9990');
+
+        $ts_save(['target' => 'ts.example.test', 'teamspeak_voice_port' => null]);
+        check('prázdný hlasový port uloží holého hostitele (kontrola počítá s 9987)', $ts_row()['target'] ?? null, 'ts.example.test');
+        $ts_save(['type' => 'port', 'target' => 'ts.example.test', 'teamspeak_voice_port' => 9988]);
+        check('jiný typ hlasový port nečte', $ts_row()['target'] ?? null, 'ts.example.test');
+    } finally {
+        if ($ts_id > 0) {
+            $pdo->exec("DELETE FROM monitors WHERE id = {$ts_id}");
+        }
+        if ($ts_asset !== null) {
+            $pdo->exec("DELETE FROM assets WHERE id = {$ts_asset}");
+        }
+    }
+}
+
+// =======================================================================
 // 8. Heartbeat - the whole flow from creation through the signal to evaluation
 // =======================================================================
 //

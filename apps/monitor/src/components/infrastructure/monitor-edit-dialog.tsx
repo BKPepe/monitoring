@@ -400,23 +400,53 @@ export function MonitorEditDialog({
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-muted-foreground mb-1">
-                        {t('infra.port_label', 'Port')}
+                        {form.type === 'teamspeak'
+                          ? t('infra.ts3_query_port', 'ServerQuery port')
+                          : t('infra.port_label', 'Port')}
                       </label>
                       <Input
                         value={form.port}
                         onChange={(e) => setField('port', e.target.value)}
-                        // A TCP port check without a port connects to 80 (cron.php).
+                        // What cron.php checks when the field is empty: a TCP port
+                        // check connects to 80, TeamSpeak asks ServerQuery on 10011.
                         placeholder={
                           form.type === 'minecraft'
                             ? '25565'
                             : form.type === 'teamspeak'
-                              ? '9987'
+                              ? '10011'
                               : form.type === 'port'
                                 ? '80'
                                 : '80 / 443'
                         }
                       />
                     </div>
+                  </div>
+                )}
+
+                {/* TeamSpeak's voice port goes into the target as host:port, as in
+                    admin.php; the field above is the ServerQuery port (R344). */}
+                {form.type === 'teamspeak' && (
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div>
+                      <label htmlFor="ts3-voice-port" className="block text-xs font-medium text-muted-foreground mb-1">
+                        {t('infra.ts3_voice_port', 'Hlasový port')}
+                      </label>
+                      <Input
+                        id="ts3-voice-port"
+                        type="number"
+                        min="1"
+                        max="65535"
+                        value={form.ts3VoicePort}
+                        onChange={(e) => setField('ts3VoicePort', e.target.value)}
+                        placeholder="9987"
+                      />
+                    </div>
+                    <p className="text-2xs text-muted-foreground self-end sm:col-span-2">
+                      {t(
+                        'infra.ts3_voice_port_hint',
+                        'Port, na který se připojují uživatelé v TS3 klientu. Vyplněný nahradí port zapsaný v cíli. Prázdné pole = cíl se uloží, jak je, a bez portu v něm kontrola počítá s 9987.'
+                      )}
+                    </p>
                   </div>
                 )}
 

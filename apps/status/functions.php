@@ -6844,8 +6844,8 @@ function bk_get_enabled_metrics($monitor, $pdo = null) {
  * nothing more is asked, and the steps that did not complete are null.
  * A use error leaves the status up with the answer as the detail; for 1024
  * (invalid serverID) serverlist adds whether the voice port is listed and
- * in what state. That port may only be the assumed 9987 (the /app form
- * stores the bare host), so it does not make the check down. Another
+ * in what state. That port may only be the assumed 9987 (a target saved
+ * without a voice port), so it does not make the check down. Another
  * virtual server is never selected - its name and counts would pass for
  * this one's.
  * The new things (login, channels, server groups, voice activity, ports) are

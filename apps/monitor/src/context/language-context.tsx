@@ -1237,6 +1237,12 @@ const translations: Record<string, { cs: string; en: string }> = {
   // In a form field a default makes sense - it hints what to fill in,
   // it is not a claim about a running server.
   'infra.ft_port': { cs: 'FileTransfer Port (výchozí 30033)', en: 'FileTransfer Port (default 30033)' },
+  'infra.ts3_query_port': { cs: 'ServerQuery port', en: 'ServerQuery port' },
+  'infra.ts3_voice_port': { cs: 'Hlasový port', en: 'Voice port' },
+  'infra.ts3_voice_port_hint': {
+    cs: 'Port, na který se připojují uživatelé v TS3 klientu. Vyplněný nahradí port zapsaný v cíli. Prázdné pole = cíl se uloží, jak je, a bez portu v něm kontrola počítá s 9987.',
+    en: 'The port users connect to in their TS3 client. Filled in, it replaces a port written in the target. Left empty, the target is saved as it is, and without a port in it the check assumes 9987.',
+  },
   'infra.rcon_settings': { cs: 'Minecraft RCON Příkazové Rozhraní', en: 'Minecraft RCON Command Interface' },
   'infra.rcon_port': { cs: 'RCON Port (výchozí 25575)', en: 'RCON Port (default 25575)' },
   'infra.rcon_password': { cs: 'RCON Heslo', en: 'RCON Password' },

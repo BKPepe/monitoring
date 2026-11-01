@@ -876,6 +876,22 @@ if ($action === 'save_monitor') {
         bk_api_error(400, 'Název a cíl jsou povinné údaje.');
     }
 
+    // TeamSpeak keeps its voice port in the target as host:voice_port (the
+    // port column is the ServerQuery port), the way admin.php stores it and
+    // check_teamspeak reads it. Sent, it replaces a port already in the
+    // target; left out or empty, the target is saved as sent and the check
+    // assumes 9987.
+    if ($type === 'teamspeak' && isset($input['teamspeak_voice_port']) && $input['teamspeak_voice_port'] !== '') {
+        $voice_port = filter_var($input['teamspeak_voice_port'], FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]);
+        if ($voice_port === false) {
+            bk_api_error(400, 'Hlasový port musí být číslo od 1 do 65535.');
+        }
+        if (substr_count($target, ':') === 1) {
+            $target = explode(':', $target)[0];
+        }
+        $target .= ':' . $voice_port;
+    }
+
     // Two switches of the dialog: on the public status page (W1-G3) and the
     // router's masked log lines (W1-C3). A key the request leaves out keeps
     // what is stored, so an older form cannot flip either of them by omission.

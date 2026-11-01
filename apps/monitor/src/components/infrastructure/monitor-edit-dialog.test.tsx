@@ -139,6 +139,28 @@ describe('Editor monitoru: úprava', () => {
     await waitFor(() => expect(calls.close).toHaveBeenCalledTimes(1), SAVE_WAIT);
   });
 
+  it('TS3 z admin.php si hlasový port nechá a ServerQuery port zůstane portem (R344)', async () => {
+    const saves = stubApi();
+    renderDialog({ monitor: monitor({ target: 'ts.example.test:9988', port: 10011 }) });
+    const voice = screen.getByLabelText('Hlasový port') as HTMLInputElement;
+    expect(voice.value).toBe('9988');
+    expect((screen.getByPlaceholderText('10011') as HTMLInputElement).value).toBe('10011');
+
+    save();
+    await waitFor(() => expect(saves).toHaveLength(1), SAVE_WAIT);
+    expect(saves[0]).toMatchObject({ target: 'ts.example.test', port: 10011, teamspeak_voice_port: 9988 });
+  });
+
+  it('změněný hlasový port se odešle', async () => {
+    const saves = stubApi();
+    renderDialog({ monitor: monitor({ target: 'ts.example.test:9988', port: 10011 }) });
+    fireEvent.change(screen.getByLabelText('Hlasový port'), { target: { value: '9999' } });
+
+    save();
+    await waitFor(() => expect(saves).toHaveLength(1), SAVE_WAIT);
+    expect(saves[0]).toMatchObject({ target: 'ts.example.test', teamspeak_voice_port: 9999 });
+  });
+
   it('heslo uložené na serveru ukáže nápovědu, neuložené jen tečky', () => {
     stubApi();
     renderDialog({ monitor: monitor({ sqPasswordSet: true }), tab: 'advanced' });
@@ -209,6 +231,19 @@ describe('Editor monitoru: nový monitor', () => {
     save();
     await waitFor(() => expect(saves).toHaveLength(1), SAVE_WAIT);
     expect(saves[0]).toMatchObject({ id: 0, name: 'SSH', type: 'port', target: 'host.example.test', port: 22 });
+  });
+
+  it('TS3: port zapsaný v cíli zůstane, prázdný hlasový port ho nepřepíše (R344)', async () => {
+    const saves = stubApi();
+    renderDialog({ monitor: null });
+    fireEvent.click(screen.getByRole('button', { name: /TeamSpeak 3/ }));
+    fireEvent.change(screen.getByPlaceholderText(/^Např\./), { target: { value: 'TS' } });
+    fireEvent.change(screen.getByPlaceholderText('ts.domain.cz'), { target: { value: 'ts.example.test:9988' } });
+    expect((screen.getByLabelText('Hlasový port') as HTMLInputElement).value).toBe('');
+
+    save();
+    await waitFor(() => expect(saves).toHaveLength(1), SAVE_WAIT);
+    expect(saves[0]).toMatchObject({ type: 'teamspeak', target: 'ts.example.test:9988', teamspeak_voice_port: null });
   });
 
   it('nový router zůstane otevřený na záložce agenta a další uložení upraví ten samý', async () => {

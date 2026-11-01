@@ -129,6 +129,16 @@ function configuredPayload(fields: Record<string, unknown>, switches: Record<str
 
 const saveBack = (mon: ApiMonitor) => formToPayload(formFromMonitor(mon), mon.id, mon.assetId);
 
+/** A TeamSpeak body: CONFIGURED's, with the voice port after sq_password. */
+function teamspeakPayload(fields: Record<string, unknown>, voicePort: number | null) {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(configuredPayload({ type: 'teamspeak', ...fields }))) {
+    out[key] = value;
+    if (key === 'sq_password') out.teamspeak_voice_port = voicePort;
+  }
+  return out;
+}
+
 /** The string, not just the values: the body is the same byte for byte. */
 function expectSameBody(actual: object, expected: object) {
   expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
@@ -142,7 +152,6 @@ describe('formFromMonitor -> formToPayload: an untouched edit saves back what is
 
   it.each([
     ['minecraft', 'mc.example.test:25565', 'mc.example.test', 25565],
-    ['teamspeak', 'ts.example.test', 'ts.example.test', null],
     ['vps', 'vps.example.test', 'vps.example.test', null],
     ['discord', '123456789', '123456789', null],
     ['port', 'host.example.test:2222', 'host.example.test', 2222],
@@ -152,6 +161,17 @@ describe('formFromMonitor -> formToPayload: an untouched edit saves back what is
   ])('%s', (type, target, savedTarget, savedPort) => {
     const mon = monitor({ ...CONFIGURED, type, target, category: 'Weby' });
     expectSameBody(saveBack(mon), configuredPayload({ type, target: savedTarget, port: savedPort }));
+  });
+
+  it('teamspeak: the voice port goes back next to the ServerQuery port (R344)', () => {
+    const mon = monitor({
+      ...CONFIGURED,
+      type: 'teamspeak',
+      target: 'ts.example.test:9988',
+      port: 10011,
+      category: 'Weby',
+    });
+    expectSameBody(saveBack(mon), teamspeakPayload({ target: 'ts.example.test', port: 10011 }, 9988));
   });
 
   it('openwrt: the log-lines switch the server sent goes back', () => {
@@ -212,6 +232,43 @@ describe('formFromMonitor: target and port', () => {
   it('lower-cases the type and reads a missing one as web', () => {
     expect(formFromMonitor(monitor({ type: 'WEB' })).type).toBe('web');
     expect(formFromMonitor(monitor({ type: '' })).type).toBe('web');
+  });
+});
+
+describe('TeamSpeak voice port (R344)', () => {
+  it('a monitor made in admin.php opens with its voice port, not in the query port field', () => {
+    expect(formFromMonitor(monitor({ type: 'teamspeak', target: 'ts.example.test:9988', port: 10011 }))).toMatchObject({
+      target: 'ts.example.test',
+      port: '10011',
+      ts3VoicePort: '9988',
+    });
+    // With no query port stored, the voice port used to become the query port.
+    expect(formFromMonitor(monitor({ type: 'teamspeak', target: 'ts.example.test:9987' }))).toMatchObject({
+      target: 'ts.example.test',
+      port: '',
+      ts3VoicePort: '9987',
+    });
+  });
+
+  it('a bare host has none: the field stays empty and null goes out', () => {
+    const mon = monitor({ ...CONFIGURED, type: 'teamspeak', target: 'ts.example.test', category: 'Weby' });
+    expect(formFromMonitor(mon).ts3VoicePort).toBe('');
+    expectSameBody(saveBack(mon), teamspeakPayload({ target: 'ts.example.test' }, null));
+  });
+
+  it('a new TeamSpeak monitor starts empty; other types send none', () => {
+    const form = emptyMonitorForm();
+    expect(form.ts3VoicePort).toBe('');
+    expect(formToPayload(form, null, null)).not.toHaveProperty('teamspeak_voice_port');
+    expect(formToPayload(withMonitorType(form, 'teamspeak'), null, null).teamspeak_voice_port).toBeNull();
+  });
+
+  it('a port typed into a new target is not replaced by a default nobody chose', () => {
+    const form = { ...withMonitorType(emptyMonitorForm(), 'teamspeak'), target: 'ts.example.test:9988' };
+    expect(formToPayload(form, null, null)).toMatchObject({
+      target: 'ts.example.test:9988',
+      teamspeak_voice_port: null,
+    });
   });
 });
 
