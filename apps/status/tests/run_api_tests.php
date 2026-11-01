@@ -8921,8 +8921,8 @@ try {
 
     // The deleted PHP node (node_client.php) sent 0 for a failed check; a
     // result that sends nothing used to be stored as 0 too. An 'up' result is
-    // timed after the answer arrived (the Worker, the GitHub Actions runner),
-    // so its 0 is an answer under 1 ms.
+    // timed after the answer arrived (the Cloudflare Worker), so its 0 is an
+    // answer under 1 ms.
     $rt_key = 'r2-' . bin2hex(random_bytes(8));
     $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('cron_key', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")->execute([$rt_key]);
     [$rt_node_code] = bk_raw_request($base . '/node_api.php?action=post_results&key=' . $rt_key, ['Content-Type: application/json'], json_encode([

@@ -18,8 +18,8 @@ export interface ProbeRegion {
 }
 
 /**
- * Every scheduled location runs every five minutes: cron.php (1-5 min), the
- * Cloudflare worker (*\/5) and the GitHub workflow (*\/5).
+ * Every scheduled location runs every five minutes: cron.php (1-5 min) and
+ * the Cloudflare worker (*\/5).
  */
 const PROBE_INTERVAL_MS = 5 * 60_000;
 

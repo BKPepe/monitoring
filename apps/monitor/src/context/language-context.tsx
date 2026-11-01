@@ -3745,8 +3745,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'regions.avg_latency': { cs: 'Průměrná odezva', en: 'Average latency' },
   'regions.failures': { cs: '{count} selhání', en: '{count} failures' },
   'regions.single_hint': {
-    cs: 'Kontroly běží z jednoho místa. Další měřicí uzel se přidá instalací node agenta — teprve pak má srovnání regionů smysl.',
-    en: 'Checks run from a single location. Add another probe by installing a node agent — only then does comparing regions mean anything.',
+    cs: 'Kontroly běží z jednoho místa. Další přidá sonda Cloudflare Worker z repozitáře agentů — teprve pak má srovnání regionů smysl.',
+    en: 'Checks run from a single location. The Cloudflare Worker probe from the agents repository adds another — only then does comparing regions mean anything.',
   },
   'search.placeholder': { cs: 'Hledat monitory, stránky…', en: 'Search monitors, pages…' },
   'search.no_results': { cs: 'Nic nenalezeno.', en: 'No results.' },

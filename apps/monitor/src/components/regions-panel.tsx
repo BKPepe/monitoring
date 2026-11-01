@@ -129,7 +129,7 @@ export function RegionsPanel() {
           <p className="text-muted-foreground text-2xs leading-relaxed">
             {t(
               'regions.single_hint',
-              'Kontroly běží z jednoho místa. Další měřicí uzel se přidá instalací node agenta — teprve pak má srovnání regionů smysl.'
+              'Kontroly běží z jednoho místa. Další přidá sonda Cloudflare Worker z repozitáře agentů — teprve pak má srovnání regionů smysl.'
             )}
           </p>
         )}

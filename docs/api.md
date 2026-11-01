@@ -1222,13 +1222,15 @@ reminder - is the message of the newest row in the monitor's current state.
 A probe's later `up` does not replace the reason of an outage cron confirmed;
 a probe's `down` can give it.
 
-> **Status (verified 15 Aug 2026):** measurements had long stopped coming from
-> a single place - `action=regions` reported eleven distinct locations. Besides
-> the main server in Frankfurt, a Cloudflare Worker and GitHub Actions runners
-> (Boydton, Phoenix, Chicago) measured too, so "the service is dead" could be
-> told apart from "our server cannot see it". The self-hosted PHP node
-> (`node_client.php`) is gone: nothing ran it, and it carried copies of the
-> checks of its own.
+> **Status:** measurements do not come from a single place. Besides the main
+> server, the Cloudflare Worker (`cloudflare-agent.js` in the agents
+> repository) posts here every five minutes from the Cloudflare location that
+> runs it, so "the service is dead" can be told apart from "our server cannot
+> see it". It is the one probe: the GitHub Actions probe (`monitor.yml`) was
+> removed on 30 Oct 2026, and the self-hosted PHP node (`node_client.php`) is
+> gone too - nothing ran it, and it carried copies of the checks of its own.
+> The GitHub probe's rows keep their locations until the logs are pruned
+> (30 days).
 
 ---
 

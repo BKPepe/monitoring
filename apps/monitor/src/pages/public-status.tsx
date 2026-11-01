@@ -292,7 +292,7 @@ export function PublicStatusPage() {
     // The real measurement locations - regions, not nodes. The first version
     // labelled the `nodes` list "measurement locations", but nodes are the
     // MONITORED SERVERS; verified against production, the locations live in
-    // action=regions (Frankfurt, Cloudflare POPs, GitHub runners).
+    // action=regions (Frankfurt, Cloudflare POPs).
     fetch('/status/api.php?action=regions&days=30&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {

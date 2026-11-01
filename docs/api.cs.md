@@ -1200,12 +1200,14 @@ diagnostika výpadků v administraci, denní připomínka - je zpráva nejnověj
 řádku v současném stavu monitoru. Pozdější `up` sondy nenahradí důvod
 výpadku, který potvrdil cron; `down` sondy ho dát může.
 
-> **Stav (ověřeno 15. 8. 2026):** měření z jednoho místa už dávno
-> nepocházela - `action=regions` hlásila jedenáct různých lokalit. Kromě
-> hlavního serveru ve Frankfurtu měřily Cloudflare Worker a běhy GitHub Actions
-> (Boydton, Phoenix, Chicago), takže „služba je mrtvá" od „náš server na ni
-> nevidí" odlišit šlo. Samostatný PHP uzel (`node_client.php`) je pryč: nikdo
-> ho nespouštěl a nesl si vlastní kopie kontrol.
+> **Stav:** měření nepocházejí z jednoho místa. Kromě hlavního serveru sem
+> každých pět minut posílá výsledky Cloudflare Worker (`cloudflare-agent.js`
+> v repozitáři agentů) z lokality Cloudflaru, kde zrovna běží, takže „služba je
+> mrtvá" od „náš server na ni nevidí" odlišit lze. Je to jediná sonda: sonda
+> GitHub Actions (`monitor.yml`) skončila 30. 10. 2026 a samostatný PHP uzel
+> (`node_client.php`) je pryč také - nikdo ho nespouštěl a nesl si vlastní
+> kopie kontrol. Řádky sondy GitHub si místo nechají, dokud logy nevyprší
+> (30 dní).
 
 ---
 
