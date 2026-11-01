@@ -237,6 +237,11 @@ export function MonitorEditDialog({
                         desc: t('infra.type_web_desc', 'Portál, TLS, cPanel stats'),
                       },
                       {
+                        id: 'port',
+                        label: `🔌 ${t('infra.type_port', 'TCP port')}`,
+                        desc: t('infra.type_port_desc', 'Spojení na libovolný port'),
+                      },
+                      {
                         id: 'minecraft',
                         label: `🎮 ${t('infra.type_minecraft', 'Minecraft Server')}`,
                         desc: t('infra.type_minecraft_desc', 'Java 25565 / RCON TPS'),
@@ -385,9 +390,11 @@ export function MonitorEditDialog({
                             ? 'mc.domain.cz'
                             : form.type === 'teamspeak'
                               ? 'ts.domain.cz'
-                              : form.type === 'openwrt'
-                                ? '192.168.1.1'
-                                : 'https://bloodkings.eu'
+                              : form.type === 'port'
+                                ? 'server.domain.cz'
+                                : form.type === 'openwrt'
+                                  ? '192.168.1.1'
+                                  : 'https://bloodkings.eu'
                         }
                       />
                     </div>
@@ -398,8 +405,15 @@ export function MonitorEditDialog({
                       <Input
                         value={form.port}
                         onChange={(e) => setField('port', e.target.value)}
+                        // A TCP port check without a port connects to 80 (cron.php).
                         placeholder={
-                          form.type === 'minecraft' ? '25565' : form.type === 'teamspeak' ? '9987' : '80 / 443'
+                          form.type === 'minecraft'
+                            ? '25565'
+                            : form.type === 'teamspeak'
+                              ? '9987'
+                              : form.type === 'port'
+                                ? '80'
+                                : '80 / 443'
                         }
                       />
                     </div>

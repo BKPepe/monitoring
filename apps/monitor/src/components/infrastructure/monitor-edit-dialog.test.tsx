@@ -197,6 +197,20 @@ describe('Editor monitoru: nový monitor', () => {
     });
   });
 
+  it('TCP port (R105) jde založit jako v admin.php: cíl a port zvlášť', async () => {
+    const saves = stubApi();
+    renderDialog({ monitor: null });
+    fireEvent.click(screen.getByRole('button', { name: /TCP port/ }));
+    fireEvent.change(screen.getByPlaceholderText(/^Např\./), { target: { value: 'SSH' } });
+    fireEvent.change(screen.getByPlaceholderText('server.domain.cz'), { target: { value: 'host.example.test' } });
+    // The placeholder is what cron.php connects to when the port is empty.
+    fireEvent.change(screen.getByPlaceholderText('80'), { target: { value: '22' } });
+
+    save();
+    await waitFor(() => expect(saves).toHaveLength(1), SAVE_WAIT);
+    expect(saves[0]).toMatchObject({ id: 0, name: 'SSH', type: 'port', target: 'host.example.test', port: 22 });
+  });
+
   it('nový router zůstane otevřený na záložce agenta a další uložení upraví ten samý', async () => {
     const saves = stubApi(7);
     const calls = renderDialog({ monitor: null });

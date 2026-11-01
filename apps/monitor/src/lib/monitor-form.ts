@@ -16,8 +16,8 @@ import type { ApiMonitor } from '@/api/app-api';
  */
 export interface MonitorForm {
   /**
-   * The stored type, lower-cased. The picker offers seven; a monitor of
-   * another type (port, dns, agent_service...) keeps and saves its own.
+   * The stored type, lower-cased. The picker offers eight; a monitor of
+   * another type (dns, agent_service...) keeps and saves its own.
    */
   type: string;
   name: string;

@@ -145,8 +145,8 @@ describe('formFromMonitor -> formToPayload: an untouched edit saves back what is
     ['teamspeak', 'ts.example.test', 'ts.example.test', null],
     ['vps', 'vps.example.test', 'vps.example.test', null],
     ['discord', '123456789', '123456789', null],
-    // Types the picker does not offer keep their own and save it back.
     ['port', 'host.example.test:2222', 'host.example.test', 2222],
+    // Types the picker does not offer keep their own and save it back.
     ['dns', 'ns.example.test', 'ns.example.test', null],
     ['agent_service', 'nginx', 'nginx', null],
   ])('%s', (type, target, savedTarget, savedPort) => {

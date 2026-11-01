@@ -1113,6 +1113,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'infra.type_label': { cs: 'Typ monitoringu / Služby', en: 'Monitoring / Service Type' },
   'infra.type_web': { cs: 'Web (HTTP/S)', en: 'Web (HTTP/S)' },
   'infra.type_web_desc': { cs: 'Portál, TLS, cPanel stats', en: 'Portal, TLS, cPanel stats' },
+  'infra.type_port': { cs: 'TCP port', en: 'TCP Port' },
+  'infra.type_port_desc': { cs: 'Spojení na libovolný port', en: 'A connection to any port' },
   'infra.type_minecraft': { cs: 'Minecraft Server', en: 'Minecraft Server' },
   'infra.type_minecraft_desc': { cs: 'Java 25565 / RCON TPS', en: 'Java 25565 / RCON TPS' },
   'infra.type_teamspeak': { cs: 'TeamSpeak 3', en: 'TeamSpeak 3' },
