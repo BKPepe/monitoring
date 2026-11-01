@@ -384,7 +384,7 @@ export function SettingsPage() {
                   placeholder="https://status.vasedomena.cz"
                   hint={t(
                     'settings.site_url_hint',
-                    'Adresa, na které běží /status i /app (např. https://bloodkings.eu). Vedou sem odkazy z e-mailů; cesta za doménou se ignoruje.'
+                    'Adresa, na které běží /status i /app (např. https://bloodkings.eu). Vedou sem odkazy z e-mailů, instalace agentů i RSS; cesta za doménou se ignoruje.'
                   )}
                 />
               </div>

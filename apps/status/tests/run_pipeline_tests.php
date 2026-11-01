@@ -1561,7 +1561,7 @@ if ($dr_pdo instanceof PDO) {
     // row the caller read.
     bk_test_load_functions(__DIR__ . '/../functions.php', [
         'bk_public_sub_notify', 'bk_public_monitor_ids', 'bk_monitor_is_public',
-        'bk_public_base_origin', 'bk_site_origin', 'bk_trusted_link_host',
+        'bk_link_origin', 'bk_site_origin', 'bk_trusted_link_host',
     ]);
     if (!defined('BK_PRIVATE_BY_DEFAULT_TYPES')
         && preg_match('/\nconst BK_PRIVATE_BY_DEFAULT_TYPES = [^;]+;/', (string)file_get_contents(__DIR__ . '/../functions.php'), $ps_const)) {
@@ -1619,6 +1619,39 @@ if ($dr_pdo instanceof PDO) {
     bk_public_sub_notify($ps_flaky, ['id' => 1, 'name' => 'Skrytý web'], 'down');
     check('chyba databáze: odběratelům nic, žádný odhad podle typu', count($GLOBALS['bk_test_mails']), 0);
     bk_public_monitor_ids($dr_pdo, true);
+
+    // --- 6b. Every absolute link starts at bk_link_origin() -----------------
+    // site_url first, else only a Host the server trusts. The reset link was
+    // built from the raw Host header: anyone may ask for a reset, so a forged
+    // Host mailed the victim a valid token on the attacker's address (R335).
+    bk_test_load_functions(__DIR__ . '/../functions.php', [
+        'bk_password_reset_request', 'bk_issue_password_reset_token', 'bk_audit_log',
+        'bk_client_ip', 'bk_client_user_agent', 'bk_ip_in_cidr',
+    ]);
+    $lo_server = $_SERVER;
+    $lo_settings = $GLOBALS['system_settings'];
+    $_SERVER['HTTP_HOST'] = 'evil.example';
+    $_SERVER['SERVER_NAME'] = 'status.example.cz';
+    unset($_SERVER['HTTPS'], $_SERVER['HTTP_X_FORWARDED_PROTO']);
+    $GLOBALS['system_settings']['site_url'] = '';
+    check('bez site_url: cizí Host ne, SERVER_NAME ano', bk_link_origin(), 'http://status.example.cz');
+    $_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
+    check('proxy, která ukončí TLS, dá https', bk_link_origin(), 'https://status.example.cz');
+    $GLOBALS['system_settings']['site_url'] = 'https://Bloodkings.example/status';
+    check('site_url má přednost a bere se jen jeho origin', bk_link_origin(), 'https://bloodkings.example');
+    $GLOBALS['system_settings']['site_url'] = '';
+    $lo_pdo = new PDO('sqlite::memory:');
+    $lo_pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $lo_pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT,
+        password_reset_token_hash TEXT, password_reset_expires TEXT)");
+    $lo_pdo->exec("INSERT INTO users (id, username, email) VALUES (1, 'obet', 'obet@example.com')");
+    $GLOBALS['bk_test_mails'] = [];
+    check_true('obnova hesla pro existující účet odejde', bk_password_reset_request($lo_pdo, 'obet@example.com', 'Status'));
+    $lo_body = (string)($GLOBALS['bk_test_mails'][0]['body'] ?? '');
+    check_true('odkaz pro obnovu hesla vede na SERVER_NAME, ne na podvržený Host',
+        str_contains($lo_body, 'https://status.example.cz/app/set-password?token=') && !str_contains($lo_body, 'evil.example'));
+    $_SERVER = $lo_server;
+    $GLOBALS['system_settings'] = $lo_settings;
 
     // --- 7. Each recipient reads only their own part -------------------------
     // The reminder was rendered once and went to every recipient: a user who

@@ -351,7 +351,9 @@ záloha by vypadala zdravě jen proto, že se cron spouští.
 
 **Admin.** Vrátí adresu k nastavení úlohy, aktuální stav a čas posledního
 signálu. Parametr `regenerate=1` vyrobí nový token - stará adresa tím okamžitě
-přestane platit.
+přestane platit. Jako každá absolutní adresa, kterou server vydává (e-maily,
+RSS, instalace a aktualizace agentů), začíná adresa na originu `site_url`,
+a dokud je prázdné, na hostu, kterému server věří.
 
 Token se vrací **jen tudy**. V běžném seznamu monitorů není: kdyby unikl, cizí
 člověk může heartbeat posílat za vás a monitor bude svítit zeleně, i když

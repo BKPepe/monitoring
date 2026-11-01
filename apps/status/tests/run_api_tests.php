@@ -1615,6 +1615,11 @@ $pdo->exec("UPDATE monitors SET is_public = NULL WHERE id = 2");
 [, , $rss_hidden_body] = bk_raw_request($base . '/rss.php');
 check_false('incident routeru mimo veřejnou stránku v kanálu není', str_contains($rss_hidden_body, 'incident-902-opened'));
 check_true('incident webu v kanálu zůstává', str_contains($rss_hidden_body, 'incident-901-opened'));
+// Readers and caches keep the feed, so its links must not follow a forged
+// Host: they start at bk_link_origin(), here the server's own name.
+[, , $rss_forged_body] = bk_raw_request($base . '/rss.php', ['Host: evil.example']);
+check_true('podvržený Host se do odkazů v RSS nedostane',
+    str_contains($rss_forged_body, '<link>http://127.0.0.1') && !str_contains($rss_forged_body, 'evil.example'));
 $rss_code = (int)curl_getinfo($rss_ch, CURLINFO_RESPONSE_CODE);
 $rss_ctype = (string)curl_getinfo($rss_ch, CURLINFO_CONTENT_TYPE);
 $rss_body = substr($rss_raw, curl_getinfo($rss_ch, CURLINFO_HEADER_SIZE));

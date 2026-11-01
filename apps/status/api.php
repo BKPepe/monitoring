@@ -7,6 +7,8 @@
 
 header('Content-Type: application/json; charset=utf-8');
 
+// The request's own origin, for CORS only. A link this API hands out is
+// built on bk_link_origin(), never on the Host header.
 $request_scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
 $host = $_SERVER['HTTP_HOST'] ?? 'bloodkings.eu';
 $default_origin = $request_scheme . '://' . $host;
@@ -982,10 +984,8 @@ if ($action === 'heartbeat_info') {
             $stmt_tok->execute([$hb['heartbeat_token'], $hb['id']]);
         }
 
-        $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $host = $_SERVER['HTTP_HOST'] ?? '';
         $base = dirname($_SERVER['SCRIPT_NAME'] ?? '/status/api.php');
-        $url = $host !== '' ? sprintf('%s://%s%s/heartbeat.php?token=%s', $scheme, $host, rtrim($base, '/'), $hb['heartbeat_token']) : null;
+        $url = sprintf('%s%s/heartbeat.php?token=%s', bk_link_origin(), rtrim($base, '/'), $hb['heartbeat_token']);
 
         $eval = bk_heartbeat_evaluate($hb);
 
@@ -993,8 +993,8 @@ if ($action === 'heartbeat_info') {
             'monitorId' => (int)$hb['id'],
             'name' => $hb['name'],
             'token' => $hb['heartbeat_token'],
-            // NULL when the address cannot be built (CLI context) - inventing a
-            // domain would hand the administrator a URL that leads nowhere.
+            // On bk_link_origin(), like every absolute link: the job keeps
+            // calling it long after this request, so not the request's Host.
             'url' => $url,
             'intervalSecs' => $hb['heartbeat_interval'] !== null ? (int)$hb['heartbeat_interval'] : null,
             'graceSecs' => $hb['heartbeat_grace'] !== null ? (int)$hb['heartbeat_grace'] : null,
@@ -1111,13 +1111,8 @@ if ($action === 'agent_install_info') {
             $ai['agent_key'] = bin2hex(random_bytes(16));
             $pdo->prepare("UPDATE monitors SET agent_key = ? WHERE id = ?")->execute([$ai['agent_key'], $ai_id]);
         }
-        $ai_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
-        $ai_host = (string)($_SERVER['HTTP_HOST'] ?? '');
-        if (!preg_match('/^[A-Za-z0-9.\-]+(:\d{1,5})?$/', $ai_host)) {
-            $ai_host = 'localhost';
-        }
         $ai_dir = rtrim(str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? '/status/api.php'))), '/');
-        $ai_base = ($ai_https ? 'https' : 'http') . '://' . $ai_host . $ai_dir;
+        $ai_base = bk_link_origin() . $ai_dir;
         bk_audit_log($pdo, 'agent_key_viewed', (string)$ai['name'], 'monitor', $ai_id);
         echo json_encode([
             'monitorId' => $ai_id,
@@ -6237,7 +6232,7 @@ if ($action === 'save_user' || $action === 'delete_user') {
         $su_assign($su_new_id);
         $pdo->commit();
         $su_token = bk_issue_password_reset_token($pdo, $su_new_id);
-        $su_link = $default_origin . '/app/set-password?token=' . $su_token;
+        $su_link = bk_link_origin() . '/app/set-password?token=' . $su_token;
         $su_site = get_setting('site_title', 'Blood Kings');
         $su_body = '<h1>Vítejte v ' . htmlspecialchars($su_site) . '</h1>'
             . '<p>Byl pro vás vytvořen účet <strong>' . htmlspecialchars($su_username) . '</strong>. Nastavte si prosím heslo kliknutím na odkaz níže (platnost 48 hodin):</p>'
@@ -7266,7 +7261,7 @@ if ($action === 'public_subscribe') {
             bk_api_error(429, 'Příliš mnoho pokusů. Zkuste to později.');
         }
         $ps_token = bk_public_sub_issue($pdo, $ps_email, $ps_lang, $ps_ip);
-        if ($ps_token !== null && !bk_public_sub_send_confirm($ps_email, $ps_lang, $ps_token, bk_public_base_origin())) {
+        if ($ps_token !== null && !bk_public_sub_send_confirm($ps_email, $ps_lang, $ps_token, bk_link_origin())) {
             // The operator needs to know delivery is broken; the visitor must
             // not, because the answer would identify them. See below.
             error_log('[public_subscribe] potvrzovací e-mail se nepodařilo odeslat');

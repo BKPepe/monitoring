@@ -685,6 +685,10 @@ check_true('prázdný Host spadne na SERVER_NAME', bk_trusted_link_host('', 'blo
 // Case-folding: a Host differing only in case must still match SERVER_NAME,
 // or the check could be dodged with BloodKings.EU.
 check('velikost písmen nerozhoduje', bk_trusted_link_host('BloodKings.EU', 'bloodkings.eu', $allow), 'bloodkings.eu');
+// The name before the colon matched, and in a link `bloodkings.eu:@` is a
+// user name: the browser would open evil.example. Only host[:port] passes.
+check('vlastní jméno s podvrženým zbytkem se zahodí', bk_trusted_link_host('bloodkings.eu:@evil.example', 'bloodkings.eu', $allow), 'bloodkings.eu');
+check('port z číslic projde', bk_trusted_link_host('bloodkings.eu:8443', 'bloodkings.eu', $allow), 'bloodkings.eu:8443');
 
 // --- Origin of the site_url setting (bk_site_origin) ------------------------
 //

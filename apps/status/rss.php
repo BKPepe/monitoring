@@ -29,12 +29,14 @@ function bk_xml(string $value): string {
     return htmlspecialchars($value, ENT_XML1 | ENT_QUOTES, 'UTF-8');
 }
 
-/** The absolute address of this instance (RSS must link fully, not relatively). */
+/**
+ * The absolute address of this instance (RSS must link fully, not relatively).
+ * On bk_link_origin(): readers and caches keep the feed, so a forged Host
+ * must not end up in its links.
+ */
 function bk_rss_base_url(): string {
-    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
     $dir = rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/status/rss.php'), '/');
-    return $scheme . '://' . $host . $dir;
+    return bk_link_origin() . $dir;
 }
 
 function bk_rss_not_found(): void {

@@ -751,8 +751,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
 
                     $raw_token = bk_issue_password_reset_token($pdo, $new_user_id);
                     // Novy uzivatel zacina v React aplikaci, ne ve stare administraci.
-                    $set_link = ((isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http')
-                        . '://' . ($_SERVER['HTTP_HOST'] ?? '') . '/app/set-password?token=' . $raw_token;
+                    $set_link = bk_link_origin() . '/app/set-password?token=' . $raw_token;
                     $site_title_mail = get_setting('site_title', 'Blood Kings');
                     $subject = 'Nastavení hesla - ' . $site_title_mail;
                     $body = '<h1>Vítejte v ' . htmlspecialchars($site_title_mail) . '</h1>'
@@ -1745,12 +1744,12 @@ $site_title = get_setting('site_title', 'Blood Kings');
                     <div class="settings-tab-panel active" id="agent-tab-python">
                         <ol style="margin-left: 1.25rem; font-size: 0.8rem; line-height: 1.7; color: var(--text-secondary);">
                             <li>Stáhněte Python agenta:<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.py <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.py', $_SERVER['REQUEST_URI']); ?></pre>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.py <?php echo bk_link_origin() . str_replace('admin.php', 'agent.py', $_SERVER['REQUEST_URI']); ?></pre>
                             </li>
                             <li>Nastavte konfiguraci (buď přímo v kódu, nebo pohodlněji vytvořením souboru <code>agent.cfg</code> ve stejné složce):<br>
                                 <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
                                     <strong>Obsah agent.cfg (doporučeno pro zachování při deployi):</strong><br>
-                                    API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
+                                    API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo bk_link_origin() . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
                                     AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key">KLIC</span>"<br>
                                     AUTO_UPDATE = "<span style="color: var(--color-green); font-family: monospace;">1</span>"
                                 </div>
@@ -1766,12 +1765,12 @@ $site_title = get_setting('site_title', 'Blood Kings');
                     <div class="settings-tab-panel" id="agent-tab-bash">
                         <ol style="margin-left: 1.25rem; font-size: 0.8rem; line-height: 1.7; color: var(--text-secondary);">
                             <li>Stáhněte Shell agenta (nevyžaduje Python):<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.sh <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.sh', $_SERVER['REQUEST_URI']); ?></pre>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.sh <?php echo bk_link_origin() . str_replace('admin.php', 'agent.sh', $_SERVER['REQUEST_URI']); ?></pre>
                             </li>
                             <li>Nastavte konfiguraci (buď přímo v kódu, nebo pohodlněji vytvořením souboru <code>agent.cfg</code> ve stejné složce):<br>
                                 <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
                                     <strong>Obsah agent.cfg (doporučeno pro zachování při deployi):</strong><br>
-                                    API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
+                                    API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo bk_link_origin() . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
                                     AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-sh">KLIC</span>"<br>
                                     AUTO_UPDATE = "<span style="color: var(--color-green); font-family: monospace;">1</span>"
                                 </div>
@@ -1787,11 +1786,11 @@ $site_title = get_setting('site_title', 'Blood Kings');
                     <div class="settings-tab-panel" id="agent-tab-powershell">
                         <ol style="margin-left: 1.25rem; font-size: 0.8rem; line-height: 1.7; color: var(--text-secondary);">
                             <li>Stáhněte Windows agenta (PowerShell 5.1+, bez závislostí):<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">Invoke-WebRequest -Uri "<?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.ps1', $_SERVER['REQUEST_URI']); ?>" -OutFile agent.ps1</pre>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">Invoke-WebRequest -Uri "<?php echo bk_link_origin() . str_replace('admin.php', 'agent.ps1', $_SERVER['REQUEST_URI']); ?>" -OutFile agent.ps1</pre>
                             </li>
                             <li>Nastavte konfiguraci vytvořením souboru <code>agent.cfg</code> ve stejné složce jako <code>agent.ps1</code>:<br>
                                 <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
-                                    API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
+                                    API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo bk_link_origin() . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
                                     AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-ps1">KLIC</span>"<br>
                                     AUTO_UPDATE = "<span style="color: var(--color-green); font-family: monospace;">1</span>"
                                 </div>
@@ -1808,12 +1807,12 @@ Register-ScheduledTask -TaskName "BloodKingsAgent" -Action $action -Trigger $tri
                     <div class="settings-tab-panel" id="agent-tab-docker">
                         <ol style="margin-left: 1.25rem; font-size: 0.8rem; line-height: 1.7; color: var(--text-secondary);">
                             <li>Stáhněte <code>agent.py</code> a <code>docker-compose.agent.yml</code> na server do jedné složky:<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.py <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent.py', $_SERVER['REQUEST_URI']); ?>
-wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'docker-compose.agent.yml', $_SERVER['REQUEST_URI']); ?></pre>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O agent.py <?php echo bk_link_origin() . str_replace('admin.php', 'agent.py', $_SERVER['REQUEST_URI']); ?>
+wget -O docker-compose.agent.yml <?php echo bk_link_origin() . str_replace('admin.php', 'docker-compose.agent.yml', $_SERVER['REQUEST_URI']); ?></pre>
                             </li>
                             <li>V <code>docker-compose.agent.yml</code> vyplňte proměnné prostředí:<br>
                                 <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
-                                    STATUS_API_URL: "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
+                                    STATUS_API_URL: "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo bk_link_origin() . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
                                     STATUS_AGENT_KEY: "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-docker">KLIC</span>"
                                 </div>
                             </li>
@@ -1829,12 +1828,12 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                         <p style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">Pro OpenWrt/TurrisOS routery - nevyžaduje Python ani bash, jen standardní BusyBox ash a <code>ubus</code> (tedy prakticky jakýkoli router s OpenWrt). Žádný přístup zvenčí není potřeba - router se sám ozývá ven.</p>
                         <ol style="margin-left: 1.25rem; font-size: 0.8rem; line-height: 1.7; color: var(--text-secondary);">
                             <li>Stáhněte OpenWrt agenta přímo na router (přes SSH):<br>
-                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O /root/agent_openwrt.sh <?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_openwrt.sh', $_SERVER['REQUEST_URI']); ?></pre>
+                                <pre style="background: rgba(0,0,0,0.4); padding: 0.65rem 0.75rem; border-radius: 6px; overflow-x: auto; font-family: monospace; font-size: 0.85rem; margin-top: 0.4rem; white-space: pre-wrap; word-break: break-all;">wget -O /root/agent_openwrt.sh <?php echo bk_link_origin() . str_replace('admin.php', 'agent_openwrt.sh', $_SERVER['REQUEST_URI']); ?></pre>
                                 Pokud router nemá SSL podporu ve <code>wget</code>, použijte <code>uclient-fetch</code> místo <code>wget</code>.
                             </li>
                             <li>Nastavte konfiguraci vytvořením souboru <code>/root/agent_openwrt.cfg</code>:<br>
                                 <div style="background: rgba(0,0,0,0.3); padding: 0.65rem 0.75rem; border-radius: 6px; font-size: 0.85rem; margin-top: 0.4rem; line-height: 1.6;">
-                                    API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
+                                    API_URL = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;"><?php echo bk_link_origin() . str_replace('admin.php', 'agent_api.php', $_SERVER['REQUEST_URI']); ?></span>"<br>
                                     AGENT_KEY = "<span style="color: var(--color-green); font-family: monospace; word-break: break-all;" id="agent-server-key-openwrt">KLIC</span>"<br>
                                     AUTO_UPDATE = "<span style="color: var(--color-green); font-family: monospace;">1</span>"
                                 </div>
@@ -1994,7 +1993,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
                                 <label for="cron_key">Cron Bezpečnostní Klíč (URL parametr ?key=...)</label>
                                 <input type="text" name="cron_key" id="cron_key" value="<?php echo htmlspecialchars(get_setting('cron_key')); ?>" class="form-control" placeholder="Např. secure123key">
                                 <small style="font-size: 0.75rem; color: var(--text-muted);">
-                                    Cron URL: <code><?php echo (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . str_replace('admin.php', 'cron.php', $_SERVER['REQUEST_URI']); ?><?php echo get_setting('cron_key') ? '?key='.get_setting('cron_key') : ''; ?></code>
+                                    Cron URL: <code><?php echo bk_link_origin() . str_replace('admin.php', 'cron.php', $_SERVER['REQUEST_URI']); ?><?php echo get_setting('cron_key') ? '?key='.get_setting('cron_key') : ''; ?></code>
                                 </small>
                             </div>
                         </div>
@@ -2459,8 +2458,7 @@ wget -O docker-compose.agent.yml <?php echo (isset($_SERVER['HTTPS']) && $_SERVE
         $stmt_hb_tok = $pdo->prepare("UPDATE monitors SET heartbeat_token = ? WHERE id = ?");
         $stmt_hb_tok->execute([$hb_token, $edit_monitor['id']]);
     }
-    $hb_scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-    $hb_url = $hb_scheme . '://' . ($_SERVER['HTTP_HOST'] ?? '') . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/status/admin.php'), '/') . '/heartbeat.php?token=' . $hb_token;
+    $hb_url = bk_link_origin() . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/status/admin.php'), '/') . '/heartbeat.php?token=' . $hb_token;
 ?>
                             <div style="margin-top: 1rem; padding: 0.75rem; border: 1px solid var(--border); border-radius: 6px;">
                                 <strong style="font-size: 0.85rem;">Adresa, na kterou se úloha hlásí</strong>

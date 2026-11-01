@@ -15482,7 +15482,7 @@ function bk_public_sub_notify(PDO $pdo, array $monitor, string $new_status): voi
     if (!$subs) {
         return;
     }
-    $base_origin = bk_public_base_origin();
+    $base_origin = bk_link_origin();
     $render = bk_render_per_lang(function () use ($monitor, $new_status, $base_origin) {
         $site = get_setting('site_title', 'Blood Kings Monitoring');
         $subject = sprintf(t($new_status === 'down' ? 'pubsub_down_subject' : 'pubsub_up_subject'), $monitor['name']);
@@ -15505,23 +15505,39 @@ function bk_public_sub_notify(PDO $pdo, array $monitor, string $new_status): voi
 }
 
 /**
- * Absolute origin for links in public mails - the configured site_url first.
+ * The origin of every absolute link this site hands out - in mail, on a
+ * page, to an agent or in the RSS feed: the configured site_url first.
  *
  * The fallback must NOT trust the client-controlled Host header. A confirmation
  * mail goes to an address the requester names, so `Host: evil.example` on an
- * anonymous public_subscribe would produce a legitimately-signed mail whose
- * "Confirm" button points at the attacker's site (phishing + token capture).
- * With no site_url configured we accept Host only when it is on an allowlist
- * (dev hosts by default, extendable via the BK_PUBLIC_LINK_HOSTS constant) or
- * matches the web server's own SERVER_NAME; anything else falls back to
- * SERVER_NAME, which the server config sets, not the request.
+ * anonymous public_subscribe or forgot_password would produce a legitimately
+ * signed mail whose button points at the attacker's site (phishing + token
+ * capture). With no site_url configured we accept Host only when it is on an
+ * allowlist (dev hosts by default, extendable via the BK_PUBLIC_LINK_HOSTS
+ * constant) or equals SERVER_NAME; anything else falls back to SERVER_NAME.
+ *
+ * That fallback keeps a forged Host out only where the server config sets
+ * SERVER_NAME itself: Apache with UseCanonicalName On, nginx's server_name.
+ * On Apache's default (UseCanonicalName Off) SERVER_NAME is the client's
+ * Host, so the equality passes any Host that reaches this vhost (a default
+ * vhost, a wildcard ServerAlias), and BK_PUBLIC_LINK_HOSTS cannot help: it
+ * adds trusted names, it takes none away. There only site_url protects the
+ * links, so set it.
+ *
+ * Only the OAuth redirect_uri keeps the request's own host
+ * (bk_oauth_redirect_uri): the provider compares it with the registered
+ * callback, so a forged Host there only fails that sign-in.
  */
-function bk_public_base_origin(): string {
+function bk_link_origin(): string {
     $configured = bk_site_origin((string)get_setting('site_url', ''));
     if ($configured !== '') {
         return $configured;
     }
-    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    // The same test as the session cookie's (db.php): a proxy that ends TLS
+    // says so in X-Forwarded-Proto. Only "https" changes anything.
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || strtolower((string)($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '')) === 'https';
+    $scheme = $https ? 'https' : 'http';
     $allow = array_filter(array_map(
         'trim',
         explode(',', defined('BK_PUBLIC_LINK_HOSTS') ? (string)BK_PUBLIC_LINK_HOSTS : 'localhost,127.0.0.1')
@@ -15558,12 +15574,16 @@ function bk_site_origin(string $site_url): string {
 }
 
 /**
- * Decides which host may appear in a link inside mail to a third party.
+ * Decides which host may appear in a link this site hands out (mail to a
+ * third party above all).
  *
  * Pure and side-effect free so the trust rule can be tested directly. The
- * client-supplied Host is honoured only when it matches the server's own
- * SERVER_NAME or an explicit allowlist; otherwise SERVER_NAME wins. This is
- * what stops `Host: evil.example` from poisoning a confirmation link.
+ * client-supplied Host is honoured only when it matches $server_name or an
+ * explicit allowlist; otherwise $server_name wins. That stops
+ * `Host: evil.example` from poisoning a confirmation link only while
+ * $server_name is the server's own name: on Apache with UseCanonicalName
+ * Off (the default) SERVER_NAME is the client's Host, and any well-formed
+ * Host passes. bk_link_origin() asks here only when site_url is empty.
  *
  * @param string[] $allow lowercased hostnames (no port) that may be trusted
  */
@@ -15571,7 +15591,10 @@ function bk_trusted_link_host(string $http_host, string $server_name, array $all
     $host = strtolower(trim($http_host));
     $server_name = strtolower(trim($server_name)) ?: 'localhost';
     $host_no_port = explode(':', $host)[0];
-    if ($host !== '' && ($host_no_port === $server_name || in_array($host_no_port, $allow, true))) {
+    // Only host[:port]. `bloodkings.eu:@evil.example` passed the name test,
+    // and in a link the part before the @ is a user name, not the host.
+    if (preg_match('/^[a-z0-9.\-]+(:\d{1,5})?$/', $host) === 1
+        && ($host_no_port === $server_name || in_array($host_no_port, $allow, true))) {
         return $host;
     }
     return $server_name;
@@ -15916,8 +15939,9 @@ function bk_issue_password_reset_token($pdo, $user_id, $ttl_seconds = 172800) {
  * in api.php at all. The user got a 200, the app said "instructions sent",
  * and no e-mail ever arrived.
  *
- * The link always points to admin.php even when the request runs through
- * api.php: the password-setup page is served by the admin.
+ * The link points to /app/set-password on bk_link_origin(). It was built
+ * from the request's Host, and anyone may ask for a reset: a forged Host
+ * mailed the victim a valid token on the attacker's address (R335).
  *
  * @return bool Whether the e-mail matched an existing account. The caller MUST
  *              NOT reveal it - otherwise the form can probe who is registered.
@@ -15940,8 +15964,7 @@ function bk_password_reset_request(PDO $pdo, string $email, string $site_title):
 
     // The link points into the React app. The old admin.php?action=set_password
     // address keeps working for e-mails already sent.
-    $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
-    $set_link = $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? '') . '/app/set-password?token=' . $raw_token;
+    $set_link = bk_link_origin() . '/app/set-password?token=' . $raw_token;
 
     $subject = 'Obnovení hesla - ' . $site_title;
     $body = '<h1>Obnovení hesla</h1>'

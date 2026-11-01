@@ -1123,9 +1123,9 @@ $portal_url = trim(get_setting('portal_url'));
                                                     $confidence_score = round($region_consensus, 2);
                                                 }
                                             }
-                                            $agent_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']) . "/agent.py";
+                                            $agent_url = bk_link_origin() . dirname($_SERVER['SCRIPT_NAME']) . "/agent.py";
                                             $agent_url = str_replace('\\', '/', $agent_url); // Normalize paths for Windows/Mac
-                                            $agent_sh_url = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? "https" : "http") . "://$_SERVER[HTTP_HOST]" . dirname($_SERVER['SCRIPT_NAME']) . "/agent.sh";
+                                            $agent_sh_url = bk_link_origin() . dirname($_SERVER['SCRIPT_NAME']) . "/agent.sh";
                                             $agent_sh_url = str_replace('\\', '/', $agent_sh_url); // Normalize paths for Windows/Mac
                                             ?>
 

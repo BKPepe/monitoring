@@ -1671,8 +1671,7 @@ try {
         $latest_version = bk_get_agent_latest_version($agent_type);
         if ($latest_version !== null) {
             $agent_file = __DIR__ . '/' . $agent_files[$agent_type];
-            $scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-            $base_url = $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/'), '/');
+            $base_url = bk_link_origin() . rtrim(dirname($_SERVER['SCRIPT_NAME'] ?? '/'), '/');
 
             $response_payload['latest_version'] = $latest_version;
             $response_payload['update_available'] = ($client_version !== $latest_version);

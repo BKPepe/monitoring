@@ -356,7 +356,9 @@ backup would look healthy just because the cron is running.
 
 **Admin.** Returns the URL to configure in the job, the current state and the
 time of the last signal. `regenerate=1` produces a new token - the old URL stops
-working immediately.
+working immediately. Like every absolute address the server hands out (mail,
+RSS, agent install and update), the URL starts at the origin of `site_url`, or
+at a Host the server trusts while that setting is empty.
 
 The token is returned **only here**. It is not in the regular monitor listing:
 if it leaked, a stranger could send heartbeats on your behalf and the monitor

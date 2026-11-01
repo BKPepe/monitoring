@@ -2122,8 +2122,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Public Status Page URL (no trailing slash)',
   },
   'settings.site_url_hint': {
-    cs: 'Adresa, na které běží /status i /app (např. https://bloodkings.eu). Vedou sem odkazy z e-mailů; cesta za doménou se ignoruje.',
-    en: 'The address that serves /status and /app (e.g. https://bloodkings.eu). Links in emails lead here; any path after the domain is ignored.',
+    cs: 'Adresa, na které běží /status i /app (např. https://bloodkings.eu). Vedou sem odkazy z e-mailů, instalace agentů i RSS; cesta za doménou se ignoruje.',
+    en: 'The address that serves /status and /app (e.g. https://bloodkings.eu). Links in emails, agent installs and RSS lead here; any path after the domain is ignored.',
   },
   'settings.cron_key_label': {
     cs: 'Cron Bezpečnostní Klíč (URL parametr ?key=...)',
