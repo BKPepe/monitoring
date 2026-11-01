@@ -32,3 +32,10 @@ parameters:
             # Written by the deploy workflow, absent in a checkout.
             - apps/status/version.php (?)
             - apps/status/config.php (?)
+    # Jobs of the default 20 files made three jobs of the 49 backend files,
+    # and PHPStan gives a worker two jobs at least: one worker analysed the
+    # whole backend, 1.96 GB of its 2G on 1 Nov 2026, and a fresh run of the
+    # next change crashed on the limit. Jobs of five files spread it over
+    # several workers.
+    parallel:
+        jobSize: 5
