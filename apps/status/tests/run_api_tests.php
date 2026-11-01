@@ -797,7 +797,7 @@ foreach ([
     'convert_to_agent_check', 'clear_monitor_history', 'redetect_location',
     'toggle_maintenance', 'test_notification', 'save_settings',
     'generate_metrics_token', 'incident_action', 'create_incident',
-    'save_preset', 'delete_preset', 'assign_preset', 'save_status_page',
+    'save_preset', 'delete_preset', 'save_status_page',
     'delete_status_page', 'send_digest', 'save_user', 'delete_user',
     'router_recommendation_mute', 'wan_settings_save', 'delete_public_subscriber',
     'save_annotation', 'delete_annotation',
@@ -7317,10 +7317,12 @@ try {
 }
 
 // =======================================================================
-// Insights: paged, no cap of eight, one cache per language (W1-B6).
+// Insights in the findings feed: no cap of eight, one cache per language
+// (W1-B6).
 //
 // The Insights page reads the server's findings. The list stopped at eight,
 // and one cache served whichever language filled it first to everybody.
+// The dashboard_insights action that read the cache first is gone (D8).
 // =======================================================================
 $b6_items = fn (string $word): array => array_map(fn ($i) => ['monitorId' => 1, 'monitorName' => 'Testovací web',
     'kind' => 'trend', 'severity' => 'warning', 'text' => "{$word} {$i}", 'detail' => ''], range(1, 10));
@@ -7328,21 +7330,25 @@ $b6_store = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?,
 // 'v' => 2: the cache format since the items carry a severity (C-12).
 $b6_store->execute(['dashboard_insights_cache_cs', json_encode(['at' => time(), 'v' => 2, 'insights' => $b6_items('Česky')], JSON_UNESCAPED_UNICODE)]);
 $b6_store->execute(['dashboard_insights_cache_en', json_encode(['at' => time(), 'v' => 2, 'insights' => $b6_items('English')], JSON_UNESCAPED_UNICODE)]);
+// The feed sorts one device's findings of one severity by key, a hash of the text.
+$b6_titles = function (?array $answer): array {
+    $titles = array_map(fn ($f) => (string)($f['title'] ?? ''),
+        array_values(array_filter($answer['findings'] ?? [], fn ($f) => ($f['source'] ?? '') === 'insight')));
+    sort($titles, SORT_NATURAL);
+    return $titles;
+};
 try {
-    [, $b6_all] = api_get_auth($base, 'action=dashboard_insights&limit=100&lang=cs', $cookie_jar);
-    check('postřehy: všech deset, žádný strop osmi', count($b6_all['insights'] ?? []), 10);
-    check('a celkový počet', $b6_all['total'] ?? null, 10);
-    [, $b6_page] = api_get_auth($base, 'action=dashboard_insights&limit=3&offset=3&lang=cs', $cookie_jar);
-    check('druhá stránka po třech začíná čtvrtým', array_column($b6_page['insights'] ?? [], 'text'), ['Česky 4', 'Česky 5', 'Česky 6']);
-    check('a řekne svůj posun', $b6_page['offset'] ?? null, 3);
-    [, $b6_default] = api_get_auth($base, 'action=dashboard_insights&lang=cs', $cookie_jar);
-    check('přehled bez parametrů dostane čtyři jako dřív', count($b6_default['insights'] ?? []), 4);
-    [, $b6_en] = api_get_auth($base, 'action=dashboard_insights&limit=1&lang=en', $cookie_jar);
-    check('anglicky se čte anglická cache', $b6_en['insights'][0]['text'] ?? null, 'English 1');
-    [, $b6_cs] = api_get_auth($base, 'action=dashboard_insights&limit=1&lang=cs', $cookie_jar);
-    check('česky česká', $b6_cs['insights'][0]['text'] ?? null, 'Česky 1');
+    [, $b6_cs] = api_get_auth($base, 'action=findings&limit=500&lang=cs', $cookie_jar);
+    check('postřehy ve zjištěních: všech deset z české cache, žádný strop osmi', $b6_titles($b6_cs),
+        array_map(fn ($i) => "Česky {$i}", range(1, 10)));
+    [, $b6_en] = api_get_auth($base, 'action=findings&limit=500&lang=en', $cookie_jar);
+    check('anglicky se čte anglická cache', $b6_titles($b6_en), array_map(fn ($i) => "English {$i}", range(1, 10)));
     [, $b6_wo] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
     check('přehled webů nese mez upozornění na certifikát', $b6_wo['sslAlertDays'] ?? null, 14);
+    // Neither D8 action has a caller in the app; both are unknown now.
+    [$b6_gone] = api_get_auth($base, 'action=dashboard_insights&lang=cs', $cookie_jar);
+    [$b6_assign] = api_post($base, 'action=assign_preset', ['presetId' => 0, 'monitorIds' => [1]], $cookie_jar);
+    check('dashboard_insights a assign_preset jsou neznámé akce', [$b6_gone, $b6_assign], [400, 400]);
 } finally {
     $pdo->exec("DELETE FROM settings WHERE key_name IN ('dashboard_insights_cache_cs', 'dashboard_insights_cache_en')");
 }

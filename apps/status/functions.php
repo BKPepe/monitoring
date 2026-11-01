@@ -1660,9 +1660,9 @@ function bk_insight_severity(array $insight): string {
 
 /**
  * Forecasts, anomalies and network notes of the given monitors, worded in
- * the request's language - what dashboard_insights lists and the findings
- * feed (C-12) folds in. Network notes and anomalies first, long-term trends
- * last. Each item carries the feed's severity (bk_insight_severity).
+ * the request's language - what the findings feed (C-12) folds in. Network
+ * notes and anomalies first, long-term trends last. Each item carries the
+ * feed's severity (bk_insight_severity).
  *
  * @param list<array<string,mixed>> $monitors rows of monitors (SELECT *)
  * @return list<array{monitorId:int,monitorName:string,kind:string,severity:string,text:string,detail:string}>
@@ -1694,9 +1694,10 @@ function bk_collect_insights(PDO $pdo, array $monitors): array {
 }
 
 /**
- * The fleet-wide insights cache (5 minutes, one key per language), shared by
- * dashboard_insights and the findings feed. $key null = no cache for this
- * viewer (a user's view is computed fresh; the cache is the admin's fleet).
+ * The fleet-wide insights cache of the findings feed (5 minutes, one key per
+ * language). The keys keep the name of the removed dashboard_insights action,
+ * which filled them first. $key null = no cache for this viewer (a user's
+ * view is computed fresh; the cache is the admin's fleet).
  * An entry written before the items carried a severity (no 'v' => 2) is
  * stale: serving it would drop the severity the feed sorts by.
  *

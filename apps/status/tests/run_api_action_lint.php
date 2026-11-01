@@ -99,8 +99,6 @@ $files = array_filter(array_merge(
  * gets a caller, or whose action is gone, fails too, so the list cannot rot.
  */
 $no_caller_ok = [
-    'assign_preset' => 'D8: removed once the owner has checked the access log for callers outside the repo',
-    'dashboard_insights' => 'D8: removed once the owner has checked the access log for callers outside the repo',
     'audit_logs' => 'only tests call it since the app reads user_audit_log; retiring it (R57) is an owner decision',
 ];
 

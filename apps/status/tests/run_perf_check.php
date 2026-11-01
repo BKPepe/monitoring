@@ -22,7 +22,7 @@ $budgets = [
     'monitors' => 1.20,           // volá KAŽDÁ stránka aplikace jako první
     'public_status' => 1.00,
     // Measured without a login, so only what anonymous visitors really get:
-    // dashboard_insights and audit_logs need an account since monitors belong
+    // findings and audit_logs need an account since monitors belong
     // to users, and timing a 401 would guard nothing.
     'daily_uptime' => 1.20,
     'events' => 1.20,

@@ -188,7 +188,7 @@ $al_dir = sys_get_temp_dir() . '/bk_action_lint_' . bin2hex(random_bytes(4));
 $al_files = [
     'apps/status/tests/run_api_action_lint.php' => (string)file_get_contents(__DIR__ . '/run_api_action_lint.php'),
     'apps/status/api.php' => "<?php\nif (\$action === 'shown' || \$action === 'listed' || \$action === 'doc_only') {}\n"
-        . "if (\$action === 'assign_preset' || \$action === 'dashboard_insights' || \$action === 'audit_logs') {}\n",
+        . "if (\$action === 'audit_logs') {}\n",
     'apps/monitor/src/row.ts' => "/** One row of `api.php?action=doc_only`. */\n"
         . "export type Row = { id: number }; // from api.php?action=doc_only\n"
         . "/* api.php?action=doc_only\n   over two lines */\n"

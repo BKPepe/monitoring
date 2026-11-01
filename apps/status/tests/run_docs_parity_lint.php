@@ -144,6 +144,22 @@ foreach (['api.md' => $en, 'api.cs.md' => $cs] as $doc_name => $doc_text) {
     }
 }
 
+// The codes action=findings puts in sourceErrors are part of its answer as
+// much as the actions are: each one api.php sends is named in both docs. A
+// code left named after a removed action is then caught too.
+preg_match_all("/\\\$fd_errors\\[\\] = \\[[^\\]]*'error' => '([a-z_]+)'/", $api, $source_error_hits);
+$source_error_codes = array_values(array_unique($source_error_hits[1] ?? []));
+if ($source_error_codes === []) {
+    $problems[] = 'v api.php se nenašel žádný kód sourceErrors z action=findings - změnil se způsob zápisu?';
+}
+foreach (['api.md' => $en, 'api.cs.md' => $cs] as $doc_name => $doc_text) {
+    foreach ($source_error_codes as $code) {
+        if (!str_contains($doc_text, "`{$code}`")) {
+            $problems[] = sprintf('api.php posílá v sourceErrors kód %s, ale %s ho neuvádí', $code, $doc_name);
+        }
+    }
+}
+
 $en_shape = bk_doc_heading_shape($en);
 $cs_shape = bk_doc_heading_shape($cs);
 if ($en_shape !== $cs_shape) {

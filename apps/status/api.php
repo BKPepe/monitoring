@@ -188,7 +188,7 @@ $bk_post_only_actions = [
     'trigger_remote_action', 'convert_to_agent_check', 'save_settings', 'test_notification', 'toggle_maintenance',
     'clear_monitor_history', 'redetect_location',
     'generate_metrics_token', 'incident_action', 'create_incident',
-    'save_preset', 'delete_preset', 'assign_preset',
+    'save_preset', 'delete_preset',
     'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable', 'totp_recovery_regenerate',
     'save_status_page', 'delete_status_page', 'send_digest', 'save_subscriptions',
     'save_annotation', 'delete_annotation', 'save_user', 'delete_user',
@@ -2704,60 +2704,6 @@ if ($action === 'monitor_insights') {
     exit;
 }
 
-// 2c1c. Aggregated insights for the dashboard (mockup: the "System Insights" row).
-// Reuses the same per-monitor builders as monitor_insights - forecast
-// (disk/RAM regression), latency anomalies and network insights - just
-// collected across all monitors. An empty array is a legitimate answer: no
-// invented "all good" cards are generated.
-if ($action === 'dashboard_insights') {
-    bk_require_login();
-    // A user's insights come from their monitors only, computed fresh: the cache
-    // is the admin's fleet-wide top list and must not leak into a user's view.
-    $di_visible = bk_visible_monitor_ids($pdo);
-    [$di_scope, $di_scope_params] = bk_list_scope_sql($pdo, $di_visible, 'id');
-    try {
-        // Paged (W1-B6): the dashboard asks for its four, the Insights page
-        // pages through all of them. The list used to stop at eight, so the
-        // ninth finding existed nowhere in the app.
-        $limit = min(200, max(1, (int)($_GET['limit'] ?? 4)));
-        $offset = max(0, (int)($_GET['offset'] ?? 0));
-
-        // The analyses run over every monitor's history (regression, baselines,
-        // rolling windows) - single-digit seconds on shared hosting, and the
-        // dashboard waited for it on every load. The result is therefore
-        // cached for 5 minutes; the data changes on the scale of minutes anyway.
-        // One cache per language: the texts are worded in the request's
-        // language (t()), and a single key served whichever language filled it
-        // first to everybody for five minutes.
-        $cache_key = $GLOBALS['BK_LANG'] === 'en' ? 'dashboard_insights_cache_en' : 'dashboard_insights_cache_cs';
-        $cached = bk_insights_cache_read($di_visible === null ? $cache_key : null);
-        if ($cached !== null) {
-            echo json_encode([
-                'insights' => array_slice($cached['insights'], $offset, $limit),
-                'total' => count($cached['insights']),
-                'offset' => $offset,
-                'cachedAt' => (int)$cached['at'],
-            ], JSON_UNESCAPED_UNICODE);
-            exit;
-        }
-
-        $stmt = $pdo->prepare("SELECT * FROM monitors WHERE type NOT IN ('node', 'probe') AND {$di_scope} ORDER BY id ASC");
-        $stmt->execute($di_scope_params);
-        $items = bk_collect_insights($pdo, $stmt->fetchAll());
-        if ($di_visible === null) {
-            bk_insights_cache_write($pdo, $cache_key, $items);
-        }
-        echo json_encode([
-            'insights' => array_slice($items, $offset, $limit),
-            'total' => count($items),
-            'offset' => $offset,
-        ], JSON_UNESCAPED_UNICODE);
-    } catch (Throwable $e) {
-        bk_api_fail('dashboard_insights_unavailable', 500, $e, 'Nepodařilo se sestavit postřehy.');
-    }
-    exit;
-}
-
 // C-12. One findings feed.
 //
 // Five advice systems disagreed: the dashboard's attention list (built in the
@@ -3001,7 +2947,7 @@ if ($action === 'findings') {
             }
         } catch (Throwable $fd_e) {
             error_log('[api.php action=findings] insights: ' . $fd_e->getMessage());
-            $fd_errors[] = ['source' => 'insight', 'monitorId' => null, 'error' => 'dashboard_insights_unavailable'];
+            $fd_errors[] = ['source' => 'insight', 'monitorId' => null, 'error' => 'insights_unavailable'];
         }
 
         // Critical first, then the cause before its symptoms (a status before
@@ -3831,7 +3777,7 @@ if ($action === 'presets') {
     exit;
 }
 
-if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'assign_preset') {
+if ($action === 'save_preset' || $action === 'delete_preset') {
     bk_require_admin();
     $input = json_decode(file_get_contents('php://input'), true) ?: [];
 
@@ -3880,28 +3826,14 @@ if ($action === 'save_preset' || $action === 'delete_preset' || $action === 'ass
             exit;
         }
 
-        if ($action === 'delete_preset') {
-            $id = (int)($input['id'] ?? 0);
-            // Monitors merely lose the preset and return to their own settings -
-            // deleting a preset must not take anyone's monitoring down.
-            $pdo->prepare("UPDATE monitors SET preset_id = NULL WHERE preset_id = ?")->execute([$id]);
-            $pdo->prepare("DELETE FROM metric_presets WHERE id = ?")->execute([$id]);
-            bk_audit_log($pdo, 'preset_deleted', "Preset #{$id} smazán", 'preset', $id);
-            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
-            exit;
-        }
-
-        // assign_preset: assign to one or more monitors (0 = remove)
-        $preset_id = (int)($input['presetId'] ?? 0);
-        $monitor_ids = array_values(array_filter(array_map('intval', (array)($input['monitorIds'] ?? []))));
-        if (empty($monitor_ids)) {
-            bk_api_error(400, 'Nebyl vybrán žádný monitor.');
-        }
-        $placeholders = implode(',', array_fill(0, count($monitor_ids), '?'));
-        $stmt = $pdo->prepare("UPDATE monitors SET preset_id = ? WHERE id IN ({$placeholders})");
-        $stmt->execute(array_merge([$preset_id > 0 ? $preset_id : null], $monitor_ids));
-        bk_audit_log($pdo, 'preset_assigned', "Preset #{$preset_id} přiřazen " . count($monitor_ids) . " monitorům", 'preset', $preset_id);
-        echo json_encode(['success' => true, 'updated' => count($monitor_ids)], JSON_UNESCAPED_UNICODE);
+        // delete_preset
+        $id = (int)($input['id'] ?? 0);
+        // Monitors merely lose the preset and return to their own settings -
+        // deleting a preset must not take anyone's monitoring down.
+        $pdo->prepare("UPDATE monitors SET preset_id = NULL WHERE preset_id = ?")->execute([$id]);
+        $pdo->prepare("DELETE FROM metric_presets WHERE id = ?")->execute([$id]);
+        bk_audit_log($pdo, 'preset_deleted', "Preset #{$id} smazán", 'preset', $id);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         bk_api_error(500, 'Operaci s presetem se nepodařilo provést.');
     }
