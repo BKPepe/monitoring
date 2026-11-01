@@ -1362,7 +1362,22 @@ if ($logged_in) {
     // cpanel_stats.php authenticates by ?key= alone - the stored URL is a credential.
     $cp_url_before = $pdo->query("SELECT cpanel_stats_url FROM monitors WHERE id = 1")->fetchColumn();
     $pdo->exec("UPDATE monitors SET cpanel_stats_url = 'https://hosting.example/status/cpanel_stats.php?key=tajny-klic-123' WHERE id = 1");
+    $exp_rows = ['site_url' => 'https://export.example', 'pushover_user_key' => 'u-export-test',
+        'discord_webhook_url' => 'https://discord.example/api/webhooks/1/tajny-webhook',
+        'dashboard_insights_cache_cs' => '{"export":"cache"}', 'ip_loc_export_test' => 'Praha',
+        'cron_key' => 'cron-export-tajny-klic'];
+    $exp_before = $pdo->query("SELECT key_name, key_value FROM settings WHERE key_name IN ('" . implode("','", array_keys($exp_rows)) . "')")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $exp_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+    foreach ($exp_rows as $exp_k => $exp_v) {
+        $exp_set->execute([$exp_k, $exp_v]);
+    }
     [$code, , $raw_export] = api_get_auth($base, 'action=export_config', $cookie_jar);
+    $pdo->exec("DELETE FROM settings WHERE key_name IN ('" . implode("','", array_keys($exp_rows)) . "')");
+    foreach ($exp_before as $exp_k => $exp_v) {
+        $exp_set->execute([$exp_k, $exp_v]);
+    }
+    check_false('export nevydá webhook ani runtime řádky (cache, místo uzlu)',
+        str_contains($raw_export, 'tajny-webhook') || str_contains($raw_export, 'dashboard_insights_cache_cs') || str_contains($raw_export, 'ip_loc_export_test'));
     $pdo->prepare("UPDATE monitors SET cpanel_stats_url = ? WHERE id = 1")->execute([$cp_url_before === false ? null : $cp_url_before]);
     check_false('export nevydá klíč z adresy cPanel statistik', str_contains($raw_export, 'tajny-klic-123'));
     check_true('adresa cPanel statistik v exportu zůstane', str_contains($raw_export, 'hosting.example'));
@@ -1372,16 +1387,24 @@ if ($logged_in) {
     check_true('export obsahuje monitory', !empty($export['monitors']));
     check_true('export obsahuje nastavení', isset($export['settings']));
 
-    // A secret in a downloadable file is an instant leak - guarded because
-    // adding a new key with a password is all it takes, and without a test
-    // nobody would notice.
-    $leaked = [];
-    foreach (array_keys($export['settings'] ?? []) as $k) {
-        if (preg_match('/(pass|secret|token|key|hash|webhook)/i', $k)) {
-            $leaked[] = $k;
-        }
-    }
-    check('export neobsahuje tajemství', $leaked, []);
+    // A secret in a downloadable file is an instant leak. One rule decides it
+    // with the form's masking: the settings keys minus the secret ones. A
+    // name pattern decided it before, dropping site_url and pushover_user_key
+    // and keeping caches, per-user layouts and per-node location rows.
+    // db.php comes into this process further down; copies in the test namespace.
+    $exp_ns = bk_test_load_pinned($root . '/db.php', ['bk_settings_keys', 'bk_settings_secret_keys']);
+    $exp_keys = array_keys($export['settings'] ?? []);
+    check('export neobsahuje tajemství ani webhooky',
+        array_values(array_intersect($exp_keys, ($exp_ns . 'bk_settings_secret_keys')())), []);
+    check('export nese jen klíče nastavení',
+        array_values(array_diff($exp_keys, ($exp_ns . 'bk_settings_keys')())), []);
+    check('adresa webu a uživatel Pushoveru v exportu jsou',
+        [$export['settings']['site_url'] ?? 'chybí', $export['settings']['pushover_user_key'] ?? 'chybí'],
+        ['https://export.example', 'u-export-test']);
+    // The cron key is shown in full on the form, yet it authorises
+    // node_api.php, cron.php?key= and agent registration: never in the file.
+    check('export nenese cron klíč, ač ho formulář ukazuje celý',
+        [array_key_exists('cron_key', $export['settings'] ?? []), str_contains($raw_export, 'cron-export-tajny-klic')], [false, false]);
     check_false('export neobsahuje klíče agentů', str_contains($raw_export, 'agent_key'));
     check_false('export neobsahuje hesla ServerQuery', str_contains($raw_export, 'sq_password'));
 
@@ -4414,7 +4437,10 @@ if ($logged_in) {
 
     check('eskalace se uložila a přečetla', $s['escalation_enabled'] ?? null, '1');
     check('lhůta na převzetí se uložila', $s['escalation_after_mins'] ?? null, '20');
-    check('eskalační webhook se uložil', $s['escalation_webhook_url'] ?? null, 'https://discord.com/api/webhooks/test');
+    // A webhook URL is a credential: masked like a password, stored whole.
+    check('eskalační webhook se vrací maskovaný a uložil se celý',
+        [$s['escalation_webhook_url'] ?? null, $pdo->query("SELECT key_value FROM settings WHERE key_name = 'escalation_webhook_url'")->fetchColumn()],
+        ['••••••test', 'https://discord.com/api/webhooks/test']);
 
     // The heart of it: whatever can be saved must also be readable. If a key
     // dropped out of the read path again, the next save would erase it.

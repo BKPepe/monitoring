@@ -956,7 +956,7 @@ LTE zálohu; to číslo je skutečné, jen to není rychlost linky.
 
 | Endpoint | Přístup | Popis |
 |---|---|---|
-| `action=get_settings` / `save_settings` | admin | Globální nastavení. Klíč s dokumentovanou výchozí hodnotou (`bk_settings_defaults()` v db.php: přepínače upozornění, lhůty, cíl SLA, ...) se čte jako ta výchozí hodnota, dokud není uložený nebo je uložený prázdný, nikdy jako `''`. Přepínače (`agent_notifications_enabled`, `agent_notify_admin_only`, `daily_reminder_enabled`, `escalation_enabled`) berou přesně `'1'` nebo `'0'`: jiná hodnota, hlavně `''`, udělá z celého uložení 400, které nic nezapíše a vypíše klíče v `invalidKeys` |
+| `action=get_settings` / `save_settings` | admin | Globální nastavení. Klíč s dokumentovanou výchozí hodnotou (`bk_settings_defaults()` v db.php: přepínače upozornění, lhůty, cíl SLA, ...) se čte jako ta výchozí hodnota, dokud není uložený nebo je uložený prázdný, nikdy jako `''`. Tajemství (`bk_settings_secret_keys()`: hesla, tokeny, adresy webhooků) se čte jako `••••••` a jeho poslední čtyři znaky a takto maskovaná hodnota poslaná zpět se neuloží. Přepínače (`agent_notifications_enabled`, `agent_notify_admin_only`, `daily_reminder_enabled`, `escalation_enabled`) berou přesně `'1'` nebo `'0'`: jiná hodnota, hlavně `''`, udělá z celého uložení 400, které nic nezapíše a vypíše klíče v `invalidKeys` |
 | `action=test_notification` | admin | POST `{channel}` (email/discord/telegram/slack): pošle jednu skutečnou testovací zprávu s uloženým nastavením, vrací `{ok, message}` |
 | `action=notification_log&monitor_id=&kind=&channel=&ok=&delivery=&from=&to=&q=&before_id=&limit=&summary=1` | admin | Co se odeslalo, komu, kterým kanálem a jestli to prošlo. Řádek vzniká i u neúspěchu - to je ta zajímavější půlka. Od chvíle, kdy protokoluje přímo `send_email()`, jsou tu všechny druhy zpráv, ne jen výstrahy: `kind` je filtruje (`alert`, `daily_reminder`, `digest`, `invitation`, …), `channel` vybírá cestu, `ok=0` jen neúspěchy, `q` je část adresy příjemce. `from`/`to` berou datum i datum s časem; holé datum v `to` znamená celý ten den a hodnota, která se nedá přečíst, je 400, ne tiše širší odpověď. Stránkuje se kurzorem - vrácený `nextCursor` se pošle jako `before_id` - protože během čtení přibývají řádky a stránkování přes offset by jeden řádek zopakovalo a jiný přeskočilo. `kinds` a `channels` v odpovědi vypisují hodnoty z CELÉHO protokolu, takže filtr nikdy nevezme možnost, která by ho zrušila. `ok` znamená jen „neodmítnuto“. Co se ví víc, říká `delivery`: `sent` = poskytovatel potvrdil, že zprávu převzal (SMTP 250 s číslem ve frontě, „Message queued“ od CallMeBotu, 2xx webhooku; doručení do telefonu či schránky to nepotvrzuje), `failed` = odmítnuto nebo nedosažitelné, `unknown` = nikdo nic nepotvrdil (PHP `mail()` vrátilo true, CallMeBot 210, vypršení po odeslání požadavku), `skipped` = tichý den denní připomínky. `error` nese důvod u `failed` i `unknown`, `providerReply` vlastní slova poskytovatele bez textu zprávy, telefonních čísel a klíčů. Řádky starší než záznam výsledku mají `deliveryRecorded: false` a odvozené `delivery`, nikdy lepší, než co tehdy prokázaly: `ok=1` u WhatsAppu nebo u e-mailu bez SMTP se čte jako `unknown`. `delivery=failed,unknown` filtruje čárkami oddělený seznam těch čtyř hodnot; cokoli jiného je 400. `summary=1` přidá `last24h` a `last7d` (`total` pokusů bez přeskočených řádků, `sent`, `unknown`, `failed` a totéž po kanálech), rovněž přes celý protokol a nikdy zúžené filtry: živí pruh „něco neodešlo" a pruh, kterému filtr dokáže výpadek rozmluvit, je horší než žádný. Každá změna stavu se ukládá jako druh `alert`, obnovení nevyjímaje, proto řádek `alert` nese i `alertTone` (`good` = obnovení, `warn` = varování, `bad` = výpadek; stejná třída jako u e-mailové výstrahy, odvozená ze `status` při čtení, takže ji mají i starší řádky; u ostatních druhů `null`). Obsah zprávy se neukládá nikdy, řádky se mažou po 180 dnech |
 | `action=site_health` | admin | Chyby webu samotného, které žádná datová cesta nehlásí - pro varování na přehledu. `configOutput` je `null`, nebo co config.php vypsal při načtení: `bytes`, `where` (`before_open_tag` = text nebo BOM před `<?php`, `after_close_tag` = text za posledním `?>` nad rámec jednoho konce řádku, který PHP spolkne, `inside` = echo nebo zobrazené hlášení PHP) a `excerpt` (prvních 16 bajtů jako tisknutelné ASCII, řídicí bajty escapované, co vypadá jako heslo nebo token, zamaskované). db.php takové bajty ze všech odpovědí vynechává, takže API dál vrací čistý JSON, i když je soubor špatně; `health.php` po celou tu dobu neprojde kontrolou `config.php output`. `selfCheck` je `null` před prvním během cronu, jinak poslední kontrola vlastního veřejného API webu: každé 4 minuty (dokud selhává nebo se zotavuje, v každém běhu) cron přečte přes HTTP `action=public_status` z původu nastavení `site_url` plus `/status/api.php`, stejně jako /app, a chce 200 s JSON objektem s klíči `status`, `totalMonitors`, `downMonitors`, `uptimePercent`, `lastUpdated` a `nodes`; kontrolou neprojde ani výstup config.php (`configOutput` výše), protože do API už neproleze. Nese `state` (`ok`, `failed`, `recovering` po prvním úspěchu, který následuje po ohlášeném selhání, nebo `unconfigured`, když `site_url` chybí), `url`, `checkedAt`, `failures` za sebou, `since`, `reason` (například `2 bytes before the JSON: "Ah"`), `lastOkAt`, `alertAttemptAt` a `alertResult` (`sent`, `unknown`, `failed`, `no_channel`, nebo `null`, dokud první selhání čeká na druhé). Druhé selhání za sebou se jednou ohlásí všem administrátorům e-mailem a WhatsAppem a do sdílených kanálů Discord, Slack, Telegram a Pushover (druh `admin_notice`, stav `self_check_failed`, každý pokus v protokolu odchozích zpráv s vlastním výsledkem); upozornění, které žádný kanál nepřevzal, se zkusí znovu za hodinu, a obnova (`self_check_restored`) se ohlásí jen po ohlášeném selhání, až kontrola projde dvakrát za sebou. Trvalé HTTP 403 obvykle znamená, že ochrana proti botům na proxy blokuje vlastní adresu hostingu |
@@ -973,7 +973,7 @@ LTE zálohu; to číslo je skutečné, jen to není rychlost linky.
 | `action=status_page&slug=` | veřejná, skrytá stránka admin | Jedna status stránka podle slugu pro veřejnou stránku: `title`, `description`, `monitorIds` (prázdné = všechny veřejné monitory) a `displayOptions` s doplněnými výchozími hodnotami. Skrytá stránka vrací každému kromě administrátora 404, stejně jako stránka, která neexistuje, takže slugy nejde zkoušet. Chybějící `slug` je 400; selhané čtení je `500 {"error": "status_page_unavailable"}`, nikdy 404 |
 | `action=dashboard_layout` | přihlášený | Pořadí a viditelnost dlaždic |
 | `action=users` | admin | Seznam uživatelů, každý účet se svými `monitorIds` |
-| `action=export_config` | admin | Export konfigurace bez tajemství |
+| `action=export_config` | admin | Export konfigurace bez tajemství, která stránka nastavení maskuje (viz níže) |
 | `action=generate_metrics_token` | admin | Token pro Prometheus exporter |
 | `action=upload_logo` | admin | Logo status stránky |
 | `action=send_digest&period=` | admin | Ruční odeslání souhrnu |
@@ -990,8 +990,13 @@ LTE zálohu; to číslo je skutečné, jen to není rychlost linky.
 | `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | přihlášený | Zapnutí dvoufázového ověření: tajemství žije v session, dokud ho kód nepotvrdí; potvrzení vrací deset jednorázových záložních kódů (ukládají se jen hashe, zobrazí se právě jednou); záložní kód funguje při přihlášení místo TOTP kódu a spotřebuje se; nová sada i vypnutí vyžadují heslo |
 | `action=set_password` | veřejné (jednorázový token) | Nastavení hesla z pozvánky nebo resetu; token se spotřebuje prvním úspěchem |
 
-`export_config` záměrně nevrací hesla, tokeny ani agent klíče - existuje na
-zálohu nastavení, ne na klonování přístupů.
+`export_config` záměrně nevrací hesla, tokeny, adresy webhooků ani agent
+klíče - existuje na zálohu nastavení, ne na klonování přístupů. Nastavení
+v něm jsou klíče `bk_settings_keys()` bez `bk_settings_secret_keys()`, tedy
+bez hodnot, které stránka nastavení maskuje; provozní řádky (cache, rozložení
+jednotlivých uživatelů, místa uzlů, `schema_version`) nastavení nejsou a do
+zálohy nepatří. Ani klíč cronu v ní není, i když ho stránka nastavení ukazuje
+celý: autorizuje `node_api.php`, `cron.php?key=` a registraci agentů (viz níže).
 
 Seznam klíčů nastavení žije na jediném místě (`bk_settings_keys()` v `db.php`)
 a `run_settings_parity_lint.php` hlídá, že se UI neptá na klíč, o kterém server
@@ -1026,9 +1031,11 @@ Jeho `status` je `executed` nebo `failed`, cokoli jiného se uloží jako
 jeho `agent_key`. Token je
 `agent_registration_token` z Nastavení. **Když je toto nastavení prázdné,
 přijme se místo něj klíč cronu (`cron_key`)** - flotila se tedy zaregistruje
-i jen s klíčem cronu a kdo má klíč cronu, může přidávat monitory. Instalátor
-dá každé čerstvé instalaci vlastní `cron_key`; když jsou prázdné oba,
-registrace se odmítne (403). Špatný token je 403.
+i jen s klíčem cronu a kdo má klíč cronu, může přidávat monitory. Kvůli tomu
+a kvůli `node_api.php` a `cron.php?key=` ho záloha konfigurace
+(`export_config`) vynechává. Instalátor dá každé čerstvé instalaci vlastní
+`cron_key`; když jsou prázdné oba, registrace se odmítne (403). Špatný token
+je 403.
 
 **Odpověď je cesta zpět k agentovi, ne jen potvrzení.**
 

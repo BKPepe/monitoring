@@ -835,8 +835,14 @@ function bk_settings_boolean_keys(): array {
 }
 
 /**
- * Keys whose value is masked when read, and whose masked value is ignored on
- * write (otherwise "Save all" would store the literal `••••••1234`).
+ * Keys whose value is masked when read, whose masked value is ignored on
+ * write (otherwise "Save all" would store the literal `••••••1234`), and
+ * that the configuration backup (api.php export_config) leaves out - one
+ * rule for both. The backup also leaves out cron_key, which the form shows
+ * in full (see export_config). A webhook URL and the Telegram bot token
+ * are credentials like the rest: whoever holds one posts as the site.
+ * tests/run_settings_parity_lint.php fails on a credential-looking key
+ * missing here.
  */
 function bk_settings_secret_keys(): array {
     return [
@@ -844,6 +850,7 @@ function bk_settings_secret_keys(): array {
         'oauth_github_client_secret', 'oauth_google_client_secret',
         'oauth_discord_client_secret', 'oauth_gitlab_client_secret',
         'pushover_api_token', 'pagerduty_routing_key', 'metrics_token',
-        'agent_registration_token',
+        'agent_registration_token', 'telegram_bot_token',
+        'discord_webhook_url', 'slack_webhook_url', 'escalation_webhook_url',
     ];
 }

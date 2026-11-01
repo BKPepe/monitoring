@@ -199,6 +199,27 @@ foreach (['schema.sql', 'migrations.php'] as $file) {
     }
 }
 
+// 7. A credential is a secret key. The settings form masks the list and the
+//    configuration export leaves it out (api.php export_config), so a new
+//    password, token or webhook key missing from it would sit in plain text
+//    in both. The name pattern the export used at run time is checked here:
+//    a key it matches is a secret or on the reviewed list below, of values
+//    the settings page shows in full and the backup keeps. The pattern took
+//    site_url and the Pushover user out of the backup. cron_key is shown in
+//    full too, but export_config subtracts it by name: it authorises
+//    node_api.php, cron.php?key= and agent registration.
+$shown_in_full = ['site_url', 'custom_logo_url', 'portal_url', 'pushover_user_key', 'cron_key'];
+foreach ($known as $key) {
+    if (preg_match('/(pass|secret|token|key|hash|credential|webhook|_url$|dsn)/i', $key)
+        && !in_array($key, $secrets, true) && !in_array($key, $shown_in_full, true)) {
+        $problems[] = sprintf('%s vypadá jako přihlašovací údaj, ale bk_settings_secret_keys() ho nezná'
+            . ' (veřejná hodnota patří na seznam $shown_in_full v tomto lintu)', $key);
+    }
+}
+foreach (array_diff($shown_in_full, array_diff($known, $secrets)) as $key) {
+    $problems[] = sprintf('$shown_in_full zná %s, ale ten není veřejný klíč nastavení', $key);
+}
+
 if ($problems) {
     fwrite(STDERR, "Nastavení se rozchází mezi UI a serverem:\n\n");
     foreach ($problems as $p) {

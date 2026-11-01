@@ -3934,13 +3934,16 @@ if ($action === 'check_stages') {
 // admin-only and only the monitors the page really contains are returned.
 // 2b2o. Export konfigurace (admin-only).
 //
-// Self-hosted nastroj na sdilenem hostingu: kdyz se ucet rusi nebo stehuje,
-// mel by si clovek odnest, co si nastavil - monitory, presety, status
-// stranky a nastaveni. Bez toho je jedina zaloha rucni vypis z phpMyAdminu.
+// A self-hosted tool on shared hosting: when the account closes or moves,
+// its owner should be able to take what they set up - monitors, presets,
+// status pages and settings. Without this the only backup is a manual dump
+// from phpMyAdmin.
 //
-// Zamerne se NEEXPORTUJI: hesla, tokeny, klice agentu ani namerena data.
-// Tajemstvi v souboru ke stazeni je uniku na pockani; historie merenі je
-// desitky MB a pro obnovu nastaveni k nicemu.
+// Deliberately NOT exported: passwords, tokens, agent keys, the cron key and
+// measured data. A secret in a downloadable file is a leak waiting to happen,
+// and the cron key is one: it authorises node_api.php, cron.php?key= and agent
+// registration. The measurement history is tens of MB and no use for
+// restoring settings.
 if ($action === 'export_config') {
     // Admin only: internal targets, notes, SMTP and SMS account identifiers.
     bk_require_admin();
@@ -3991,16 +3994,22 @@ if ($action === 'export_config') {
             $export['statusPages'] = null;
         }
 
-        // Nastaveni: vse krome tajemstvi. Radeji seznam zakazanych vzoru nez
-        // vycet povolenych - novy klic s heslem by se jinak v exportu objevil
-        // hned, jak ho nekdo prida.
-        $secret_pattern = '/(pass|secret|token|key|hash|credential|webhook|_url$|dsn)/i';
+        // The stored settings the form shows in full: bk_settings_keys()
+        // minus bk_settings_secret_keys(), the list the form masks. A name
+        // pattern decided this before, so site_url and pushover_user_key were
+        // left out while caches, per-user layouts and the per-node location
+        // rows went in. A new credential cannot slip through unmasked:
+        // run_settings_parity_lint.php fails on one missing from the list.
+        // The one exception is cron_key: the form shows it in full for the
+        // cron URL, but it authorises node_api.php, cron.php?key= and agent
+        // registration (while agent_registration_token is empty), so the
+        // backup file leaves it out.
+        $exp_keys = array_diff(bk_settings_keys(), bk_settings_secret_keys(), ['cron_key']);
         foreach ($pdo->query("SELECT key_name, key_value FROM settings ORDER BY key_name")->fetchAll() as $row) {
             $k = (string)$row['key_name'];
-            if (preg_match($secret_pattern, $k) || str_ends_with($k, '_cache')) {
-                continue;
+            if (in_array($k, $exp_keys, true)) {
+                $export['settings'][$k] = $row['key_value'];
             }
-            $export['settings'][$k] = $row['key_value'];
         }
 
         bk_audit_log($pdo, 'config_exported', 'Export konfigurace stažen', 'system', null);
