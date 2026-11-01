@@ -30,7 +30,7 @@ function check_false(string $name, bool $actual): void { check($name, $actual, f
  * Extracts a function from a source file and evaluates it.
  *
  * For files that cannot be loaded whole: db.php loads config.php and connects
- * on load, node_client.php runs as a script. functions.php is a library that
+ * on load. functions.php is a library that
  * run_tests.php and the API suite require. run_pipeline_tests.php still takes
  * copies of it: it puts stubs in place of three of its senders (send_email,
  * send_webhook_post, bk_callmebot_request), which a require would declare.

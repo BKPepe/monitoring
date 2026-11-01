@@ -19,7 +19,7 @@ require_once __DIR__ . '/../functions.php';
 // --- The loader itself: a name it cannot find stops the run -----------------
 // It used to skip such a name without a sound, so a renamed function took its
 // tests with it and the suite stayed green. It still takes the few functions
-// of db.php and node_client.php, files that cannot be loaded without effects.
+// of files that cannot be loaded without effects, such as db.php.
 $loader_error = null;
 try {
     bk_test_load_functions(__DIR__ . '/../db.php', ['bk_test_jmeno_ktere_neexistuje']);
@@ -927,20 +927,6 @@ check('nula u odpovědi, která přišla, je 1 ms; záporná ani nečíselná po
     [bk_response_ms(0, true), bk_response_ms('0', true), bk_response_ms(0.4, true), bk_response_ms(150, true),
      bk_response_ms(null, true), bk_response_ms(-2, true), bk_response_ms('null', true)],
     [1, 1, 1, 150, null, null, null]);
-// node_client.php runs on other hosts with its own copies of the checks (the
-// names clash with these, so only its helper is loaded), and node_api reads a
-// 0 on a failed check as unmeasured: no copy may round a duration to 0 either.
-bk_test_load_functions(__DIR__ . '/../node_client.php', ['elapsed_ms']);
-check_true('vzdálený uzel: odpověď za 0,3 ms je aspoň 1 ms, ne 0',
-    function_exists('elapsed_ms') && elapsed_ms(microtime(true) - 0.0003) >= 1);
-// The floor is for an answer that arrived, not for a clock that stepped back
-// during the check (NTP): that came out as 1 ms, the fastest point on the
-// chart for a check nobody timed. bk_response_ms() stores such a value as NULL.
-check('vzdálený uzel: záporná nebo nekonečná doba kontroly je neměřená, ne 1 ms',
-    function_exists('elapsed_ms') ? [elapsed_ms(microtime(true) + 0.5), elapsed_ms(INF), elapsed_ms(-INF), elapsed_ms(NAN)] : 'chybí',
-    [null, null, null, null]);
-check('vzdálený uzel nezaokrouhluje dobu kontroly jinde než v elapsed_ms',
-    preg_match_all('/(?<!\(int\))round\(\(microtime\(true\) - \$start\) \* 1000\)/', (string)file_get_contents(__DIR__ . '/../node_client.php')), 0);
 
 // --- monitors.last_details as an array (bk_monitor_details) ----------------
 // 44 readers decoded the column inline in idioms that disagreed on a missing

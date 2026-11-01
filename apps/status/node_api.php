@@ -24,8 +24,9 @@ require_once __DIR__ . '/bootstrap.php';
 
 // API key security check - no hardcoded fallback key.
 // An empty cron_key means the endpoint is switched off entirely (fail closed),
-// not that some publicly known default applies (a real hole, because the same
-// literal is published in node_client.php as the copy-paste default).
+// not that some publicly known default applies (a real hole: the PHP node
+// node_client.php, deleted since, published the same literal as its
+// copy-paste default).
 $node_key = trim((string)get_setting('cron_key', ''));
 $client_key = isset($_GET['key']) ? (string)$_GET['key'] : (isset($_SERVER['HTTP_X_NODE_KEY']) ? (string)$_SERVER['HTTP_X_NODE_KEY'] : '');
 
@@ -112,10 +113,10 @@ if ($action === 'post_results') {
         $mid = isset($res['id']) ? (int)$res['id'] : 0;
         $status = isset($res['status']) && is_string($res['status']) ? $res['status'] : '';
         // No value is NULL, not 0 ms, and so is a 0 on a failed check (what
-        // node_client.php sent there). The live senders, the Cloudflare Worker
-        // and the GitHub Actions runners, time an 'up' result only after the
-        // answer arrived, so a 0 there is an answer under 1 ms: 1 ms, as a
-        // measured 0.4 ms is (bk_response_ms).
+        // the deleted PHP node, node_client.php, sent there). The live
+        // senders, the Cloudflare Worker and the GitHub Actions runners, time
+        // an 'up' result only after the answer arrived, so a 0 there is an
+        // answer under 1 ms: 1 ms, as a measured 0.4 ms is (bk_response_ms).
         $response_time = bk_response_ms($res['response_time'] ?? null, $status === 'up');
         // Store NULL (not empty string) so incidents query works correctly
         $raw_error = isset($res['error']) ? trim((string)$res['error']) : '';

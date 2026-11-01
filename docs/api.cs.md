@@ -1194,12 +1194,12 @@ diagnostika výpadků v administraci, denní připomínka - je zpráva nejnověj
 řádku v současném stavu monitoru. Pozdější `up` sondy nenahradí důvod
 výpadku, který potvrdil cron; `down` sondy ho dát může.
 
-> **Stav (ověřeno 15. 8. 2026):** vlastní uzel přes `node_client.php` zatím
-> neběží, ale měření z jednoho místa už dávno nepocházejí - `action=regions`
-> hlásí jedenáct různých lokalit. Kromě hlavního serveru ve Frankfurtu měří
-> Cloudflare Worker a běhy GitHub Actions (Boydton, Phoenix, Chicago), takže
-> „služba je mrtvá" od „náš server na ni nevidí" odlišit lze. Vlastní uzel by
-> přidal další místo, není to ale díra v pokrytí.
+> **Stav (ověřeno 15. 8. 2026):** měření z jednoho místa už dávno
+> nepocházela - `action=regions` hlásila jedenáct různých lokalit. Kromě
+> hlavního serveru ve Frankfurtu měřily Cloudflare Worker a běhy GitHub Actions
+> (Boydton, Phoenix, Chicago), takže „služba je mrtvá" od „náš server na ni
+> nevidí" odlišit šlo. Samostatný PHP uzel (`node_client.php`) je pryč: nikdo
+> ho nespouštěl a nesl si vlastní kopie kontrol.
 
 ---
 

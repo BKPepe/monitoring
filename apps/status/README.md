@@ -8,8 +8,7 @@ An open-source, ultra-fast server and service status monitoring application buil
 * `index.php` - Public status dashboard with responsive dark glassmorphic design.
 * `admin.php` - Admin control panel for monitor CRUD, 2FA setup, webhooks, and system configuration.
 * `cron.php` - Active probing runner executed via server CLI cron.
-* `node_api.php` - API endpoint for distributed multi-location probing nodes.
-* `node_client.php` - Standalone client script deployed to remote hostings for regional probing.
+* `node_api.php` - API endpoint for remote probes that measure from other locations.
 * `agent_api.php` - Ingestion API for VPS and OpenWrt system telemetry agents.
 * `agent.sh` / `agent.py` - Native Bash and Python telemetry agents for Linux hosts.
 * `agent_openwrt.sh` - Lightweight OpenWrt router agent with Wi-Fi, conntrack, and signed Remote Actions.
@@ -65,17 +64,14 @@ installer's last step prints this line with the real path and PHP binary:
 
 ---
 
-## 4. Distributed Multi-Location Probing Nodes
-To measure uptime and latency from multiple global geographic locations (e.g. Frankfurt, New York, Prague):
-1. In `admin.php` -> **System Settings**, configure a secret **Cron / Node API Key**.
-2. Upload `node_client.php` to your secondary hosting location.
-3. Edit `node_client.php` header:
-   ```php
-   $central_api_url = 'https://monitoring.bloodkings.eu/status/node_api.php';
-   $node_key        = 'YourSecretAPIKey';
-   $node_location   = 'Frankfurt, DE';
-   ```
-4. Run `node_client.php` via cron on the secondary host. The main dashboard will group response times under the "Response from geographic nodes" grid.
+## 4. Remote Probes from Other Locations
+`node_api.php` takes measurements from outside the hosting, so "the service is
+dead" can be told apart from "our server cannot see it". The probe is the
+Cloudflare Worker in the agents repository (`cloudflare-agent.js`): it fetches
+the monitors with `action=get_monitors`, checks them from a Cloudflare location
+and posts the results with `action=post_results`. Both calls carry the
+**Cron / Node API Key** from `admin.php` -> **System Settings** (`cron_key`);
+with the key empty the endpoint answers 403. The protocol is in `docs/api.md`.
 
 ---
 

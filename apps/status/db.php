@@ -254,9 +254,10 @@ function bk_cf_fix_location_history(PDO $pdo): int {
  * checks were logged, so every reader skips it as unmeasured and the
  * measurement was gone. A positive value is therefore at least 1 ms. NULL, a
  * non-number or a negative value measured nothing: NULL. A bare 0 is NULL too
- * (node_client.php sent 0 for a failed check), unless the caller knows that
- * an answer arrived ($answered: a probe's 'up' result, timed only after the
- * answer came) - then it is an answer under 1 ms the sender truncated: 1 ms.
+ * (node_client.php, the PHP node since deleted, sent 0 for a failed check),
+ * unless the caller knows that an answer arrived ($answered: a probe's 'up'
+ * result, timed only after the answer came) - then it is an answer under
+ * 1 ms the sender truncated: 1 ms.
  */
 function bk_response_ms(mixed $ms, bool $answered = false): ?int {
     if (!is_numeric($ms)) {

@@ -1217,13 +1217,13 @@ reminder - is the message of the newest row in the monitor's current state.
 A probe's later `up` does not replace the reason of an outage cron confirmed;
 a probe's `down` can give it.
 
-> **Status (verified 15 Aug 2026):** no own node runs through `node_client.php`
-> yet, but measurements have long stopped coming from a single place -
-> `action=regions` reports eleven distinct locations. Besides the main server in
-> Frankfurt, a Cloudflare Worker and GitHub Actions runners (Boydton, Phoenix,
-> Chicago) measure too, so "the service is dead" can be told apart from "our
-> server cannot see it". An own node would add another location, but this is not
-> a gap in coverage.
+> **Status (verified 15 Aug 2026):** measurements had long stopped coming from
+> a single place - `action=regions` reported eleven distinct locations. Besides
+> the main server in Frankfurt, a Cloudflare Worker and GitHub Actions runners
+> (Boydton, Phoenix, Chicago) measured too, so "the service is dead" could be
+> told apart from "our server cannot see it". The self-hosted PHP node
+> (`node_client.php`) is gone: nothing ran it, and it carried copies of the
+> checks of its own.
 
 ---
 

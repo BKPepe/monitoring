@@ -157,8 +157,8 @@ sekce dostat před uživatele — tvrdila by závěry, které nikdo nespočítal
 
 ## Otevřené otázky pro backend
 
-1. **Kompatibilita s nasazenými agenty.** Pět implementací (`agent.sh`,
-   `agent.py`, `agent.ps1`, `agent_openwrt.sh`, `node_client.php`) posílá data
+1. **Kompatibilita s nasazenými agenty.** Čtyři implementace (`agent.sh`,
+   `agent.py`, `agent.ps1`, `agent_openwrt.sh`) posílají data
    na `agent_api.php`. Nový backend musí mluvit stejným protokolem, jinak při
    přepnutí odpadnou. Přepis je zároveň příležitost nahradit dnešní plain
    `agent_key` v JSON body HMAC podpisem — vzor už existuje u OpenWrt Remote
