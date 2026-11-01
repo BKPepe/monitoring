@@ -515,7 +515,6 @@ if ($action === 'monitors') {
             ORDER BY m.id ASC
         ");
         $stmt->execute($mon_scope_params);
-        $agent_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
         foreach ($stmt->fetchAll() as $r) {
             $details = bk_monitor_details($r);
             $details_by_id[(int)$r['id']] = $details;
@@ -571,9 +570,7 @@ if ($action === 'monitors') {
                 // to tell "active" from "was active once".
                 // agent_offline_timeout = 0 means the detection is off (cron says
                 // so too), so there is no verdict to give - null, not "silent".
-                'agentSilent' => ($agent_offline_secs > 0 && isset($details['agent_last_seen']))
-                    ? ((time() - (int)$details['agent_last_seen']) > $agent_offline_secs)
-                    : null,
+                'agentSilent' => bk_agent_is_silent($details),
                 // Announced maintenance is public by design - the legacy page
                 // prints the description and window in a public banner. Only
                 // while the flag is on; a stale description of a past window
@@ -589,7 +586,7 @@ if ($action === 'monitors') {
                 // Outages of data COLLECTION (not of the service) - the frontend MUST
                 // show them, silently dropping data is forbidden (see bk_get_collection_issues).
                 // Admin only: operational diagnostics, not public service status.
-                'collectionIssues' => $is_admin ? bk_get_collection_issues($r, $details, $agent_offline_secs) : [],
+                'collectionIssues' => $is_admin ? bk_get_collection_issues($r, $details) : [],
             ];
         }
     } catch (Throwable $e) {

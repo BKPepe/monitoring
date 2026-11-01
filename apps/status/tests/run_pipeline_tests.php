@@ -15,13 +15,14 @@ require_once __DIR__ . '/../lang.php';
 
 require_once __DIR__ . '/assert_helpers.php';
 bk_test_load_functions(__DIR__ . '/../functions.php', [
-    'bk_get_collection_issues', 'bk_disk_label', 'bk_ranged_int', 'bk_get_network_insights', 'bk_lte_backup_state', 'bk_wan_link_state', 'bk_with_email_lang', 'bk_enrich_threshold_tip',
+    'bk_get_collection_issues', 'bk_agent_is_silent', 'bk_agent_offline_secs', 'bk_disk_label', 'bk_ranged_int', 'bk_get_network_insights', 'bk_lte_backup_state', 'bk_wan_link_state', 'bk_with_email_lang', 'bk_enrich_threshold_tip',
     'bk_relative_time_label', 'bk_format_duration', 'bk_baseline_anomaly_from_stats',
     'bk_half_window_rate', 'bk_latency_score', 'bk_notification_kinds', 'bk_reports_24h_applies',
 ]);
 // Every check_* copy taken from functions.php below times its answer with
 // db.php's bk_response_ms(), which a functions.php extract does not carry.
-bk_test_load_functions(__DIR__ . '/../db.php', ['bk_response_ms']);
+// The agent-silence rule reads the offline timeout through get_setting().
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_response_ms', 'get_setting', 'bk_settings_defaults']);
 
 
 // =======================================================================
@@ -45,17 +46,52 @@ if (function_exists('bk_get_collection_issues')) {
     check('začátek výpadku se propaguje', $issues[0]['since'] ?? null, '2026-08-01T10:00:00+02:00');
 
     // A silent agent: reported only after the timeout expires, not sooner.
-    $fresh = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => time() - 60], 3000);
+    // The timeout is the setting's default here, 50 minutes.
+    $fresh = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => time() - 60]);
     check('čerstvý agent nehlásí problém', count($fresh), 0);
 
-    $stale = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => time() - 7200], 3000);
+    $stale = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => time() - 7200]);
     check_true('mlčící agent se hlásí',
         count(array_filter($stale, fn($i) => $i['type'] === 'agent_silent')) === 1);
 
     // A monitor that never had an agent must not report "the agent is silent".
-    $never = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => 0], 3000);
+    $never = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => 0]);
     check('monitor bez agenta nehlásí mlčení agenta',
         count(array_filter($never, fn($i) => $i['type'] === 'agent_silent')), 0);
+
+    // Timeout 0 switches the detection off. It used to make every agent
+    // that ever reported "silent" here - in the admin's banner and in the
+    // daily reminder - while cron and the app treated it as off.
+    $ci_saved = $GLOBALS['system_settings'] ?? null;
+    $GLOBALS['system_settings'] = ['agent_offline_timeout' => '0'];
+    check('vypnutá detekce: ani dva dny tichý agent se nehlásí',
+        count(array_filter(bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => time() - 172800]),
+            fn($i) => $i['type'] === 'agent_silent')), 0);
+    check('vypnutá detekce: verdikt o mlčení není', bk_agent_is_silent(['agent_last_seen' => time() - 172800]), null);
+    check('vypnutá detekce: žádné sekundy', bk_agent_offline_secs(), null);
+    $GLOBALS['system_settings'] = ['agent_offline_timeout' => '10'];
+    check('limit 10 minut: 11 minut ticha je mlčení, 9 ne',
+        [bk_agent_is_silent(['agent_last_seen' => 1000], 1000 + 660), bk_agent_is_silent(['agent_last_seen' => 1000], 1000 + 540)],
+        [true, false]);
+    check('nikdy nehlásil: verdikt o mlčení není', bk_agent_is_silent([], 5000), null);
+    $GLOBALS['system_settings'] = $ci_saved;
+
+    // An unreadable report counts until a readable one gets through: a record
+    // older than the last accepted report is stale. The guard reads
+    // agent_last_seen for every agent, silent or not.
+    $ci_warnings = [];
+    set_error_handler(function (int $no, string $msg) use (&$ci_warnings): bool {
+        $ci_warnings[] = $msg;
+        return true;
+    });
+    $ci_unreadable = fn(int $unreadable_ago): array => array_column(bk_get_collection_issues($healthy_monitor, [
+        'agent_last_seen' => time() - 60,
+        'report_unreadable' => ['at' => time() - $unreadable_ago, 'since' => time() - 3600, 'reason' => 'Syntax error'],
+    ]), 'type');
+    check('nečitelné hlášení starší než poslední čitelné se nehlásí', $ci_unreadable(3600), []);
+    check('novější nečitelné hlášení se hlásí', $ci_unreadable(30), ['report_unreadable']);
+    restore_error_handler();
+    check('a hodnocení nevyvolá žádné varování PHP', $ci_warnings, []);
 
     // Stopped checks - a paused monitor is a legitimate state, not a fault.
     $paused = bk_get_collection_issues(

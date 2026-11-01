@@ -97,9 +97,10 @@ foreach ($monitors as $monitor) {
     $monitor['last_details'] = $fresh_details;
     
     // Kontrola neaktivity VPS agenta (pokud je propojen)
-    // Timeout 0 = agent inactivity detection is fully disabled
-    $offline_timeout_mins = intval(get_setting('agent_offline_timeout', '50'));
-    if (!empty($monitor['agent_key']) && $offline_timeout_mins > 0) {
+    // null = timeout 0, agent inactivity detection is fully disabled
+    $offline_secs = bk_agent_offline_secs();
+    $offline_timeout_mins = $offline_secs !== null ? intdiv($offline_secs, 60) : 0;
+    if (!empty($monitor['agent_key']) && $offline_secs !== null) {
         $details_arr = bk_monitor_details($monitor);
         $agent_last_seen = $details_arr['agent_last_seen'] ?? 0;
 
@@ -107,9 +108,7 @@ foreach ($monitors as $monitor) {
             $seconds_since_report = time() - $agent_last_seen;
             $agent_alert_sent = $details_arr['agent_alert_sent'] ?? false;
 
-            $offline_timeout_secs = $offline_timeout_mins * 60;
-
-            if ($seconds_since_report > $offline_timeout_secs && !$agent_alert_sent) {
+            if (bk_agent_is_silent($details_arr) === true && !$agent_alert_sent) {
                 $details_arr['agent_alert_sent'] = true;
                 $new_details = json_encode($details_arr, JSON_UNESCAPED_UNICODE);
 
@@ -187,9 +186,8 @@ foreach ($monitors as $monitor) {
     // freshness here - when results stop arriving (the agent is silent), the
     // monitor must not keep its last colour forever. 'unknown' does not count into SLA.
     if ($type === 'agent_service') {
-        $offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
         $last_checked_ts = $monitor['last_checked'] ? strtotime($monitor['last_checked']) : 0;
-        if ($offline_secs > 0 && (time() - $last_checked_ts) > $offline_secs && $monitor['status'] !== 'unknown') {
+        if ($offline_secs !== null && (time() - $last_checked_ts) > $offline_secs && $monitor['status'] !== 'unknown') {
             $stmt_up = $pdo->prepare("UPDATE monitors SET status = 'unknown', last_status_change = NOW() WHERE id = ?");
             $stmt_up->execute([$id]);
             $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, 'unknown', NULL, ?, 'Agent', 'cron')");
@@ -262,7 +260,7 @@ foreach ($monitors as $monitor) {
     // push, no active network check happens here.
     if ($type === 'vps' || $type === 'openwrt') {
         // Timeout 0 = inactivity detection is off - the monitor stays in its last reported state
-        if ($offline_timeout_mins === 0) {
+        if ($offline_secs === null) {
             echo "OK (Detekce neaktivity vypnuta)\n";
         } elseif ($old_status !== 'down') {
             $details_arr = bk_monitor_details($monitor);
@@ -274,8 +272,7 @@ foreach ($monitors as $monitor) {
                 ?? ($monitor['last_checked'] ? strtotime($monitor['last_checked']) : null)
                 ?? (!empty($monitor['created_at']) ? strtotime($monitor['created_at']) : 0);
 
-            $offline_timeout_secs = $offline_timeout_mins * 60;
-            $timeout_threshold = time() - $offline_timeout_secs;
+            $timeout_threshold = time() - $offline_secs;
 
             if ($last_report < $timeout_threshold) {
                 // The agent is not responding

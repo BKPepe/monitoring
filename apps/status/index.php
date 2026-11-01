@@ -143,7 +143,6 @@ foreach ($monitors as $m) {
 // i ty bez jakéhokoli nainstalovaného agenta - takže "má agent_key" neznamená
 // "má nasazeného agenta". Počítáme proto jen monitory, u kterých se agent někdy
 // reálně ozval (agent_last_seen je vyplněné), ne jen ty s (nevyužitým) klíčem.
-$agent_offline_timeout_secs = max(0, (int)get_setting('agent_offline_timeout', '50')) * 60;
 $online_agents_count = 0;
 $total_agents_count = 0;
 foreach ($monitors as $m) {
@@ -153,7 +152,7 @@ foreach ($monitors as $m) {
     if ($last_seen <= 0) continue;
     $total_agents_count++;
     // Časový limit 0 = detekce neaktivity vypnuta - agent, který se kdy ozval, počítá jako online
-    if ($agent_offline_timeout_secs === 0 || (time() - (int)$last_seen) < $agent_offline_timeout_secs) {
+    if (bk_agent_is_silent($det) !== true) {
         $online_agents_count++;
     }
 }
@@ -531,10 +530,9 @@ $portal_url = trim(get_setting('portal_url'));
         // konfigurace (STATS_KEY, cesty k souborům), ne veřejný stav služeb.
         $bk_collection_rows = [];
         if ($is_admin) {
-            $bk_agent_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
             foreach ($monitors as $bk_ci_mon) {
                 $bk_ci_details = bk_monitor_details($bk_ci_mon);
-                foreach (bk_get_collection_issues($bk_ci_mon, $bk_ci_details, $bk_agent_offline_secs) as $bk_ci) {
+                foreach (bk_get_collection_issues($bk_ci_mon, $bk_ci_details) as $bk_ci) {
                     $bk_collection_rows[] = ['name' => $bk_ci_mon['name'], 'issue' => $bk_ci];
                 }
             }
@@ -760,7 +758,7 @@ $portal_url = trim(get_setting('portal_url'));
                             $has_live_agent = false;
                             if (!empty($monitor['agent_key'])) {
                                 $agent_last_seen = $details['agent_last_seen'] ?? 0;
-                                if ($agent_last_seen && ($agent_offline_timeout_secs === 0 || (time() - (int)$agent_last_seen) < $agent_offline_timeout_secs)) {
+                                if ($agent_last_seen && bk_agent_is_silent(is_array($details) ? $details : []) !== true) {
                                     $has_live_agent = true;
                                 }
                             }

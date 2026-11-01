@@ -3549,6 +3549,8 @@ check('bez tichého sběru zůstanou výpadky a incidenty',
 // bk_get_collection_issues(), which reads time() itself (it is shared with
 // the app and the public page). With a frozen "now" the fixtures would age
 // against the real clock and a suite that passed at nine would fail at noon.
+// It reads the agent offline timeout too, through db.php's get_setting().
+bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defaults']);
 $dr_now = time();
 $dr_at = fn (int $secs_ago): string => date('Y-m-d H:i:s', $dr_now - $secs_ago);
 $dr_monitor = fn (array $over): array => array_merge([
@@ -3559,7 +3561,7 @@ $dr_monitor = fn (array $over): array => array_merge([
 // The message texts come from lang/, so the selection runs inside the
 // e-mail language exactly as the cron does.
 $dr_select = fn (array $monitors, array $incidents = [], ?string $cron = null): array =>
-    bk_with_email_lang('cs', fn (): array => bk_daily_reminder_select($monitors, $incidents, $cron, 3000, 900, $dr_now));
+    bk_with_email_lang('cs', fn (): array => bk_daily_reminder_select($monitors, $incidents, $cron, 900, $dr_now));
 
 // Nothing wrong = nothing to send. Without this the reminder would arrive
 // every morning saying "all good" and be filtered within a week.
@@ -3613,6 +3615,13 @@ $dr_silent = $dr_select([$dr_monitor([
 check('mlčící agent se hlásí', count($dr_silent['silent']), 1);
 check('a NE mezi výpadky', count($dr_silent['outages']), 0);
 check('sekce zná svůj druh problému', $dr_silent['silent'][0]['issue'], 'agent_silent');
+// Timeout 0 switches the detection off: the reminder used to list every
+// agent that ever reported as silent, every morning.
+$GLOBALS['system_settings'] = ['agent_offline_timeout' => '0'];
+check('vypnutá detekce: připomínka mlčení agenta nehlásí', $dr_select([$dr_monitor([
+    'type' => 'vps', 'status' => 'up', 'details' => ['agent_last_seen' => $dr_now - 172800],
+])])['problem_count'], 0);
+unset($GLOBALS['system_settings']);
 
 // A heartbeat past interval + grace stopped reporting - the silent half.
 $dr_hb = $dr_select([$dr_monitor([
@@ -3705,7 +3714,7 @@ check('čerstvý běh zastaralý není',
 // a second number invented here: the e-mail and the app must not disagree
 // about whether collection is alive.
 check('hranice zastaralosti se řídí nastavením hlídače', bk_with_email_lang('cs', fn (): bool =>
-    bk_daily_reminder_select([$dr_monitor([])], [], $dr_at(1200), 3000, 1800, $dr_now)['cron']['stale']), false);
+    bk_daily_reminder_select([$dr_monitor([])], [], $dr_at(1200), 1800, $dr_now)['cron']['stale']), false);
 
 // --- Daily reminder: the once-a-day guard ---------------------------------
 // The router's cron runs every minute. Without the stamp the reminder would

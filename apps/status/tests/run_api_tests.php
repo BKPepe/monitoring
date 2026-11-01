@@ -419,6 +419,19 @@ foreach (($ag_data['monitors'] ?? []) as $m) {
     if ((int)$m['id'] === 2) $ag_row = $m;
 }
 check('agent po dvou hodinách mlčí', $ag_row['agentSilent'] ?? 'chybí', true);
+check_true('a výpadek sběru ho jmenuje', in_array('agent_silent', array_column($ag_row['collectionIssues'] ?? [], 'type'), true));
+// The collection banner (and the daily reminder) used to read 0 as "every
+// agent is silent", while agentSilent in the same row said "no verdict".
+$ag_set->execute(['0']);
+[, $ag_data] = api_get_auth($base, 'action=monitors', $cookie_jar);
+foreach (($ag_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 2) $ag_row = $m;
+}
+check('vypnutá detekce: dvě hodiny ticha nejsou mlčení ani výpadek sběru',
+    [array_key_exists('agentSilent', $ag_row ?? []) ? $ag_row['agentSilent'] : 'chybí',
+        in_array('agent_silent', array_column($ag_row['collectionIssues'] ?? [], 'type'), true)],
+    [null, false]);
+$ag_set->execute(['50']);
 $pdo->exec("UPDATE monitors SET last_details = NULL WHERE id = 2");
 
 // A recovery is an OK check whose immediately preceding check failed. The

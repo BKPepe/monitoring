@@ -75,5 +75,5 @@ export const APP_LABELS = {
   },
 } as const satisfies Record<string, { cs: string; en: string }>;
 
-/** The server's default for that setting (get_setting('agent_offline_timeout', '50') in cron.php). */
+/** The server's default for that setting (bk_settings_defaults() in db.php, read by bk_agent_offline_secs()). */
 export const AGENT_OFFLINE_DEFAULT_MINUTES = 50;

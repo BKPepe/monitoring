@@ -2695,7 +2695,7 @@ function bk_uptime_segments_for(PDO $pdo, int $from, int $to, ?array $monitor_id
 
     // agent_offline_timeout = 0 switches silence detection off; then silence
     // is not an outage here either, only unmeasured time.
-    $silence_detection = (int)get_setting('agent_offline_timeout', '50') > 0;
+    $silence_detection = bk_agent_offline_secs() !== null;
     $stmt_prev = $pdo->prepare("
         SELECT UNIX_TIMESTAMP(checked_at), status FROM monitor_logs
         WHERE monitor_id = ? AND checked_at < FROM_UNIXTIME(?)
@@ -8156,7 +8156,9 @@ function bk_daily_reminder_due(string $last_sent, int $hour, ?int $now = null): 
  *
  * Pure on purpose: rows in, verdict out. The decision whether anybody gets an
  * e-mail at all is then testable without a database; the reading is
- * bk_daily_reminder_collect()'s job.
+ * bk_daily_reminder_collect()'s job. The one setting it reads is the agent
+ * offline timeout, through bk_get_collection_issues(), so the e-mail and the
+ * app's banner judge a silent agent by the same rule.
  *
  * Two sections, never one. A silent agent is not an outage: nothing crashed,
  * the data simply stopped arriving - and that is the fault this whole feature
@@ -8172,7 +8174,6 @@ function bk_daily_reminder_due(string $last_sent, int $hour, ?int $now = null): 
  *                           with the last check)
  * @param array   $incidents open incidents nobody has acknowledged
  * @param ?string $last_cron_run  the `last_cron_run` setting, NULL = never
- * @param int     $agent_offline_timeout seconds of silence that make an agent silent
  * @param int     $cron_max_age  age at which a collection run counts as late
  * @param ?int    $now
  * @return array{outages: array, silent: array, incidents: array, cron: array, problem_count: int}
@@ -8181,7 +8182,6 @@ function bk_daily_reminder_select(
     array $monitors,
     array $incidents,
     ?string $last_cron_run,
-    int $agent_offline_timeout = 3000,
     int $cron_max_age = 900,
     ?int $now = null
 ): array {
@@ -8283,7 +8283,7 @@ function bk_daily_reminder_select(
 
         // The collection outages of this monitor - read from the same source
         // as the app's banner, so the e-mail cannot disagree with the screen.
-        foreach (bk_get_collection_issues($m, $details, $agent_offline_timeout) as $issue) {
+        foreach (bk_get_collection_issues($m, $details) as $issue) {
             $add_silent($id, $name, $type, (string)($issue['type'] ?? 'other'),
                 (string)($issue['message'] ?? ''), $age_of($issue['since'] ?? null));
         }
@@ -8403,17 +8403,13 @@ function bk_daily_reminder_collect(PDO $pdo, ?int $now = null): array {
     ");
     $incidents = $inc_stmt ? $inc_stmt->fetchAll(PDO::FETCH_ASSOC) : [];
 
-    // Minutes in the setting, seconds in the function - the same conversion
-    // the app and the public page make, so the three cannot disagree about
-    // which agent is silent.
-    $offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
     $last_cron = (string)get_setting('last_cron_run', '');
     // The watchdog's own limit, so the reminder and action=collection_health
     // cannot disagree about whether collection is still alive.
     $cron_max_age = max(60, (int)get_setting('collection_max_age_secs', '900'));
 
     return bk_daily_reminder_select($monitors, $incidents, $last_cron !== '' ? $last_cron : null,
-        $offline_secs, $cron_max_age, $now);
+        $cron_max_age, $now);
 }
 
 /**
@@ -13971,7 +13967,6 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $avg_latency = $overall['avg_latency'] !== null ? (int)round($overall['avg_latency']) : null;
 
     // --- Agents (only those that ever actually reported - same logic as index.php) ---
-    $offline_timeout_secs = max(0, (int)get_setting('agent_offline_timeout', '50')) * 60;
     $agent_count = 0;
     $stmt_agents = $pdo->query("SELECT last_details FROM monitors WHERE agent_key IS NOT NULL AND agent_key != '' AND archived_at IS NULL");
     while ($row = $stmt_agents->fetch()) {
@@ -19306,13 +19301,41 @@ function bk_router_rec_state_save(PDO $pdo, int $monitor_id, array $items, strin
 }
 
 /**
+ * How long an agent may stay quiet before it counts as silent, in seconds;
+ * null when agent_offline_timeout = 0 switched the detection off.
+ *
+ * Ten places read the setting and converted it themselves, and 0 meant
+ * three things: "off" in cron and the app, "every agent is silent" in
+ * bk_get_collection_issues() (so the daily reminder and the banner listed
+ * every agent that ever reported) and "inactive" in the legacy agent list.
+ */
+function bk_agent_offline_secs(): ?int {
+    $mins = (int)get_setting('agent_offline_timeout', '50');
+    return $mins > 0 ? $mins * 60 : null;
+}
+
+/**
+ * Whether an agent that has reported before has been quiet longer than the
+ * offline timeout. null is no verdict: the detection is off, or no agent
+ * ever reported for these details.
+ */
+function bk_agent_is_silent(array $details, ?int $now = null): ?bool {
+    $offline_secs = bk_agent_offline_secs();
+    $last_seen = (int)($details['agent_last_seen'] ?? 0);
+    if ($offline_secs === null || $last_seen <= 0) {
+        return null;
+    }
+    return (($now ?? time()) - $last_seen) > $offline_secs;
+}
+
+/**
  * Detection of data COLLECTION outages for one monitor - not outages of the service.
  * The principle (2026-08-05, after two weeks of invisibly dead cpanel collection):
  * when data stops being collected, the frontend must scream, not silently show nothing.
  * Returns items {type, message, since}; an empty array = collection healthy.
  * Shared between api.php (React SPA) and index.php (the public status page).
  */
-function bk_get_collection_issues(array $monitor_row, array $details, int $agent_offline_timeout_secs = 3000): array {
+function bk_get_collection_issues(array $monitor_row, array $details): array {
     $issues = [];
     $status = strtolower($monitor_row['status'] ?? '');
 
@@ -19328,9 +19351,11 @@ function bk_get_collection_issues(array $monitor_row, array $details, int $agent
     }
 
     // 2. The agent stopped reporting (agent_last_seen older than the offline
-    //    timeout). Only for monitors that ever had an agent - otherwise every web would scream.
+    //    timeout). Only for monitors that ever had an agent - otherwise every
+    //    web would scream - and never while the detection is switched off.
+    //    Step 8 compares against the same timestamp for every agent.
     $agent_last_seen = (int)($details['agent_last_seen'] ?? 0);
-    if ($agent_last_seen > 0 && (time() - $agent_last_seen) > $agent_offline_timeout_secs) {
+    if (bk_agent_is_silent($details) === true) {
         $issues[] = [
             'type' => 'agent_silent',
             'message' => sprintf(t('collection_issue_agent_silent'), round((time() - $agent_last_seen) / 60)),

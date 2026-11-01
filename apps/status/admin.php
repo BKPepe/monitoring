@@ -1315,11 +1315,10 @@ $site_title = get_setting('site_title', 'Blood Kings');
         // Operational diagnostics naming config files and every monitor: the administrator's only.
         if ($user_role === 'admin') {
         try {
-            $bk_adm_offline_secs = intval(get_setting('agent_offline_timeout', '50')) * 60;
             $bk_adm_stmt = $pdo->query("SELECT id, name, status, last_checked, last_details FROM monitors WHERE archived_at IS NULL");
             foreach ($bk_adm_stmt->fetchAll() as $bk_adm_mon) {
                 $bk_adm_details = bk_monitor_details($bk_adm_mon);
-                foreach (bk_get_collection_issues($bk_adm_mon, $bk_adm_details, $bk_adm_offline_secs) as $bk_adm_ci) {
+                foreach (bk_get_collection_issues($bk_adm_mon, $bk_adm_details) as $bk_adm_ci) {
                     $bk_adm_collection_rows[] = ['name' => $bk_adm_mon['name'], 'issue' => $bk_adm_ci];
                 }
             }
@@ -1486,10 +1485,8 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                                         $diff = time() - intval($agent_last_seen);
                                                         $mins = round($diff / 60);
                                                         
-                                                        $offline_timeout_mins = intval(get_setting('agent_offline_timeout', '50'));
-                                                        $offline_timeout_secs = $offline_timeout_mins * 60;
-                                                        
-                                                        if ($diff > $offline_timeout_secs) {
+                                                        // Timeout 0 switches the detection off: no agent is inactive then.
+                                                        if (bk_agent_is_silent($det) === true) {
                                                             $time_lbl = ($mins > 1440) ? round($mins / 1440) . ' dny' : ($mins > 60 ? round($mins / 60) . ' hod' : $mins . ' min');
                                                             echo "<span style='color: var(--color-red); font-size: 0.72rem; display: block; margin-top: 0.2rem; font-weight: bold;'><i class='fas fa-exclamation-triangle'></i> Agent neaktivní (před {$time_lbl}) - zkontrolujte agenta!</span>";
                                                         } else {
