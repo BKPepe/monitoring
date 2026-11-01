@@ -1,6 +1,15 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { AGENT_SOURCE_REPO, AgentVersionsIncomplete, NO_AGENT_VERSIONS, readAgentVersions } from './agent-versions';
+import {
+  WATCHDOG_TEST_TEXT,
+  probeWebhook,
+  runWatchdogCheck,
+  sendWatchdogAlert,
+  timingSafeEqual,
+  watchdogTick,
+  type WatchdogDeps,
+} from './watchdog';
 
 type Bindings = {
   GITHUB_TOKEN?: string;
@@ -447,261 +456,23 @@ app.get('/api/agents', async (c) => {
 });
 
 // ---------------------------------------------------------------------------
-// Hlídač sběru dat (dead man's switch)
+// The collection watchdog (dead man's switch): watchdog.ts
 // ---------------------------------------------------------------------------
-//
-// Celý monitoring běží z jednoho cronu na cPanelu. Když ten cron umře,
-// aplikace nespadne - bude dál ukazovat poslední známé stavy a vypadat
-// zdravě. Nikdo se nic nedozví, protože ten, kdo měl hlásit problémy,
-// je právě ten, kdo je mrtvý.
-//
-// Proto hlídač běží tady: jiný stroj, jiná síť, jiný poskytovatel. Ptá se
-// zvenku, jestli sběr dat ještě běží, a když ne, ozve se sám. Zároveň je to
-// druhé místo měření - měří dostupnost webu odjinud než z jeho vlastního
-// hostingu, takže jde rozlišit "služba je mrtvá" od "náš server na ni nevidí".
 
-const WATCHDOG_DEFAULT_TARGET = 'https://bloodkings.eu/status/api.php?action=collection_health';
-
-/** Jak dlouho se drží informace "už jsem hlásil", aby alert nechodil každých 5 minut. */
-const WATCHDOG_ALERT_TTL_SECONDS = 3600;
-
-interface WatchdogResult {
-  healthy: boolean;
-  /** Proč je zle; null, když je dobře. */
-  reason: string | null;
-  /** Doba odpovědi serveru měřená odsud - druhé místo měření. */
-  latencyMs: number | null;
-  lastRunAt: string | null;
-  ageSecs: number | null;
-  checkedAt: string;
-}
-
-async function runWatchdogCheck(env: Bindings): Promise<WatchdogResult> {
-  const target = env.WATCHDOG_TARGET_URL ?? WATCHDOG_DEFAULT_TARGET;
-  const startedAt = Date.now();
-  const checkedAt = new Date().toISOString();
-
-  let response: Response;
-  try {
-    response = await fetch(target, {
-      headers: { 'User-Agent': 'BloodKings-Monitoring-Watchdog' },
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch (err: any) {
-    // Nedosažitelný server je ta nejzávažnější varianta: nefunguje ani
-    // stránka, ne jenom sběr dat.
-    return {
-      healthy: false,
-      reason: `Status server neodpovídá: ${err?.message ?? 'neznámá chyba'}`,
-      latencyMs: null,
-      lastRunAt: null,
-      ageSecs: null,
-      checkedAt,
-    };
-  }
-
-  const latencyMs = Date.now() - startedAt;
-
-  if (!response.ok) {
-    return {
-      healthy: false,
-      reason: `Status server vrátil HTTP ${response.status}`,
-      latencyMs,
-      lastRunAt: null,
-      ageSecs: null,
-      checkedAt,
-    };
-  }
-
-  let payload: any;
-  try {
-    payload = await response.json();
-  } catch {
-    return {
-      healthy: false,
-      reason: 'Odpověď status serveru nejde přečíst jako JSON',
-      latencyMs,
-      lastRunAt: null,
-      ageSecs: null,
-      checkedAt,
-    };
-  }
-
-  const lastRunAt = typeof payload?.lastRunAt === 'string' ? payload.lastRunAt : null;
-  const ageSecs = typeof payload?.ageSecs === 'number' ? payload.ageSecs : null;
-
-  if (payload?.stale === true) {
-    // Rozlišujeme "nikdy neběžel" od "přestal běžet" - první znamená špatně
-    // nastavený cron, druhý spadlý server. Rada je pokaždé jiná.
-    const detail =
-      ageSecs === null
-        ? 'cron zatím neproběhl ani jednou'
-        : `poslední běh před ${Math.round(ageSecs / 60)} min (limit ${Math.round((payload?.maxAgeSecs ?? 0) / 60)} min)`;
-    return {
-      healthy: false,
-      reason: `Sběr dat stojí - ${detail}`,
-      latencyMs,
-      lastRunAt,
-      ageSecs,
-      checkedAt,
-    };
-  }
-
-  return { healthy: true, reason: null, latencyMs, lastRunAt, ageSecs, checkedAt };
-}
-
-/**
- * Paměť mezi běhy přes Cache API.
- *
- * Worker je bezstavový a KV by kvůli jednomu příznaku znamenalo další binding,
- * který musí někdo založit. Cache je per-datacentrum, takže při přesunu běhu
- * jinam se může alert zopakovat. U hlídače je to ta správná strana chyby:
- * horší než alert navíc je alert, který nedorazí.
- */
-const WATCHDOG_STATE_KEY = 'https://cache.local/watchdog-alerted';
-
-async function wasAlreadyAlerted(): Promise<boolean> {
-  try {
-    return (await caches.default.match(WATCHDOG_STATE_KEY)) !== undefined;
-  } catch {
-    return false;
-  }
-}
-
-async function rememberAlerted(alerted: boolean): Promise<void> {
-  try {
-    if (alerted) {
-      await caches.default.put(
-        WATCHDOG_STATE_KEY,
-        new Response('1', { headers: { 'Cache-Control': `max-age=${WATCHDOG_ALERT_TTL_SECONDS}` } })
-      );
-    } else {
-      await caches.default.delete(WATCHDOG_STATE_KEY);
-    }
-  } catch {
-    // Bez paměti hlídač pořád funguje, jen se může zopakovat.
-  }
-}
-
-/** Výsledek odeslání - `detail` nese důvod selhání, ne jen "nepovedlo se". */
-interface AlertSendResult {
-  ok: boolean;
-  detail: string | null;
-}
-
-async function sendWatchdogAlert(env: Bindings, text: string): Promise<AlertSendResult> {
-  const webhook = env.WATCHDOG_DISCORD_WEBHOOK;
-  if (!webhook) {
-    // Bez nastaveného kanálu hlídač mlčí - proto to hlásí do logu a přiznává
-    // to i na /api/watchdog. Tichý hlídač je horší než žádný: vypadá, že hlídá.
-    console.error('[watchdog] Není nastaven WATCHDOG_DISCORD_WEBHOOK, alert nemá kam odejít:', text);
-    return { ok: false, detail: 'WATCHDOG_DISCORD_WEBHOOK není nastaven' };
-  }
-
-  try {
-    const res = await fetch(webhook, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      console.error(`[watchdog] Discord odmítl webhook: HTTP ${res.status}`);
-      return { ok: false, detail: `Discord odmítl webhook: HTTP ${res.status}` };
-    }
-    return { ok: true, detail: null };
-  } catch (err: any) {
-    const message = err?.message ?? String(err);
-    console.error('[watchdog] Odeslání alertu selhalo:', message);
-    return { ok: false, detail: `Odeslání selhalo: ${message}` };
-  }
-}
-
-/**
- * Ověří, že webhook pořád existuje - bez odeslání zprávy.
- *
- * `alertChannelConfigured` říká jen tolik, že secret je neprázdný. Smazaný
- * kanál, přegenerovaný token nebo překlep v URL vypadají úplně stejně, takže
- * hlídač může měsíce hlásit "kanál nastaven" a přitom nemít kam alert poslat.
- * Discord na GET stejné adresy vrátí objekt webhooku, takže platnost jde
- * ověřit bez jediné zprávy do kanálu.
- *
- * Výsledek je `null`, když se to nedá zjistit (jiná služba než Discord,
- * výpadek sítě) - to je jiná informace než "neplatný" a nesmí se slít v jedno.
- */
-const WATCHDOG_PROBE_KEY = 'https://cache.local/watchdog-webhook-probe';
-const WATCHDOG_PROBE_TTL_SECONDS = 3600;
-
-async function probeWebhook(env: Bindings): Promise<{ valid: boolean | null; detail: string | null }> {
-  const webhook = env.WATCHDOG_DISCORD_WEBHOOK;
-  if (!webhook) return { valid: null, detail: null };
-
-  // Cache drží výsledek hodinu: bez ní by stačilo tlouct na /api/watchdog
-  // a worker by tím tloukl na Discord.
-  try {
-    const cached = await caches.default.match(WATCHDOG_PROBE_KEY);
-    if (cached) return await cached.json();
-  } catch {
-    // Cache je optimalizace, ne podmínka.
-  }
-
-  let result: { valid: boolean | null; detail: string | null };
-  try {
-    const res = await fetch(webhook, { method: 'GET', signal: AbortSignal.timeout(10_000) });
-    if (res.ok) {
-      result = { valid: true, detail: null };
-    } else if (res.status === 401 || res.status === 403 || res.status === 404) {
-      // Tyhle tři Discord vrací na smazaný nebo přepsaný webhook - to je
-      // tvrdá odpověď "sem alert nedorazí", ne dočasný výpadek.
-      result = {
-        valid: false,
-        detail: `Discord webhook neplatí (HTTP ${res.status}) - byl nejspíš smazán nebo přegenerován`,
-      };
-    } else {
-      result = { valid: null, detail: `Ověření nevyšlo (HTTP ${res.status}), platnost webhooku neznámá` };
-    }
-  } catch (err: any) {
-    result = { valid: null, detail: `Ověření nevyšlo: ${err?.message ?? err}` };
-  }
-
-  try {
-    await caches.default.put(
-      WATCHDOG_PROBE_KEY,
-      new Response(JSON.stringify(result), {
-        headers: { 'Content-Type': 'application/json', 'Cache-Control': `max-age=${WATCHDOG_PROBE_TTL_SECONDS}` },
-      })
-    );
-  } catch {
-    // Bez cache se jen ověřuje častěji.
-  }
-  return result;
-}
-
-async function watchdogTick(env: Bindings): Promise<WatchdogResult & { alertSent: boolean }> {
-  const result = await runWatchdogCheck(env);
-  const alreadyAlerted = await wasAlreadyAlerted();
-  let alertSent = false;
-
-  if (!result.healthy && !alreadyAlerted) {
-    alertSent = (
-      await sendWatchdogAlert(
-        env,
-        `🔴 **Monitoring nesbírá data**\n${result.reason}\n\nAplikace přitom dál zobrazuje poslední známé stavy, takže na první pohled vypadá v pořádku. Zkontrolujte cron úlohu na cPanelu.`
-      )
-    ).ok;
-    await rememberAlerted(true);
-  } else if (result.healthy && alreadyAlerted) {
-    alertSent = (await sendWatchdogAlert(env, '🟢 **Sběr dat zase běží** - cron se ozval v očekávaném intervalu.')).ok;
-    await rememberAlerted(false);
-  }
-
-  return { ...result, alertSent };
+/** The watchdog's fetch and cache: the Worker's own (watchdog.ts takes them as arguments). */
+function watchdogDeps(env: Bindings | undefined): WatchdogDeps {
+  return {
+    env: env ?? {},
+    fetch: (input, init) => fetch(input, init),
+    cache: typeof caches === 'undefined' ? null : caches.default,
+  };
 }
 
 // 7. GET /api/watchdog - stav hlídače na vyžádání.
 // Existuje proto, aby šlo ověřit, že hlídač funguje, bez čekání na výpadek.
 app.get('/api/watchdog', async (c) => {
-  const [result, probe] = await Promise.all([runWatchdogCheck(c.env), probeWebhook(c.env)]);
+  const deps = watchdogDeps(c.env);
+  const [result, probe] = await Promise.all([runWatchdogCheck(deps), probeWebhook(deps)]);
   return c.json(
     {
       ...result,
@@ -734,10 +505,7 @@ app.post('/api/watchdog/test', async (c) => {
     return c.json({ error: 'Nenalezeno.' }, 404);
   }
 
-  const sent = await sendWatchdogAlert(
-    c.env,
-    '🧪 **Zkouška hlídače** - tahle zpráva prošla stejnou cestou jako skutečný alert. Když ji vidíte, výpadek sběru dat se sem dostane taky.'
-  );
+  const sent = await sendWatchdogAlert(watchdogDeps(c.env), WATCHDOG_TEST_TEXT);
 
   return c.json(
     {
@@ -749,30 +517,12 @@ app.post('/api/watchdog/test', async (c) => {
   );
 });
 
-/**
- * Porovnání v konstantním čase.
- *
- * Naivní `===` skončí na prvním rozdílném znaku, takže délka odpovědi
- * prozrazuje, kolik znaků tokenu sedí, a token jde uhodnout znak po znaku.
- */
-function timingSafeEqual(a: string, b: string): boolean {
-  const bytesA = new TextEncoder().encode(a);
-  const bytesB = new TextEncoder().encode(b);
-  // Délky se porovnávají zvlášť; rozdílná délka je stejně vidět, ale samotné
-  // porovnání pak nesmí skončit dřív.
-  let diff = bytesA.length ^ bytesB.length;
-  for (let i = 0; i < Math.max(bytesA.length, bytesB.length); i++) {
-    diff |= (bytesA[i] ?? 0) ^ (bytesB[i] ?? 0);
-  }
-  return diff === 0;
-}
-
 export default {
   fetch: app.fetch,
   /** Cron trigger z wrangler.jsonc - jediné místo, které hlídače pravidelně spouští. */
   scheduled: async (_event: ScheduledController, env: Bindings, ctx: ExecutionContext) => {
     ctx.waitUntil(
-      watchdogTick(env).then((result) => {
+      watchdogTick(watchdogDeps(env)).then((result) => {
         console.log(
           `[watchdog] healthy=${result.healthy} latencyMs=${result.latencyMs ?? '-'} alertSent=${result.alertSent}` +
             (result.reason ? ` reason=${result.reason}` : '')
