@@ -33,13 +33,10 @@ if ($db_src === false || $migrations_src === false || $schema_src === false) {
     exit(1);
 }
 
-/** The table body in schema.sql - the column is searched there, not in the whole file. */
-function bk_schema_table_body(string $schema, string $table): ?string {
-    if (!preg_match('/CREATE TABLE IF NOT EXISTS `' . preg_quote($table, '/') . '`\s*\((.*?)\n\)\s*ENGINE/s', $schema, $m)) {
-        return null;
-    }
-    return $m[1];
-}
+// schema.sql's tables and columns, read the way health.php and cron read it.
+require_once __DIR__ . '/assert_helpers.php';
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_schema_parse']);
+$schema = bk_schema_parse($schema_src);
 
 $problems = [];
 
@@ -52,13 +49,13 @@ if ($col_matches === []) {
 
 $checked_columns = 0;
 foreach ($col_matches as [$_, $table, $column]) {
-    $body = bk_schema_table_body($schema_src, $table);
-    if ($body === null) {
+    if (!isset($schema[$table])) {
         // The table is handled by the check below - here it would be a second voice on the same thing.
         continue;
     }
     $checked_columns++;
-    if (!preg_match('/^\s*`' . preg_quote($column, '/') . '`\s/mi', $body)) {
+    // Column names compare without case, as MySQL names them.
+    if (!in_array(strtolower($column), array_map('strtolower', $schema[$table]), true)) {
         $problems[] = "sloupec {$table}.{$column} je v migracích, ale ne v schema.sql";
     }
 }
@@ -66,7 +63,7 @@ foreach ($col_matches as [$_, $table, $column]) {
 // --- 2. Tabulky ----------------------------------------------------------
 preg_match_all('/CREATE TABLE IF NOT EXISTS\s+`(\w+)`/i', $migrations_src, $tbl_matches);
 foreach (array_unique($tbl_matches[1] ?? []) as $table) {
-    if (!str_contains($schema_src, "CREATE TABLE IF NOT EXISTS `{$table}`")) {
+    if (!isset($schema[$table])) {
         $problems[] = "tabulka {$table} se zakládá v migracích, ale v schema.sql chybí";
     }
 }

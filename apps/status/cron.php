@@ -26,21 +26,22 @@ echo "Spouštím kontrolu monitorů... \n";
 $bk_cron_started = microtime(true);
 
 // --- Schema self-test (once a day) --- catches missing columns before an agent hits the error
+// Every table and column of schema.sql (bk_schema_missing), the same check
+// as health.php: a missing vps_metrics column fails every agent report's
+// metrics INSERT (ingest_dropped), and the hand-picked list kept here only
+// ever named the first and the last column of each block.
 $last_schema_check = get_setting('last_schema_check', '');
 if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 hours')) {
     try {
-        $required_cols = ['iowait_pct','inode_usage_pct','zombie_count','fork_rate','temperature_c','wifi_clients_total','wifi_clients_24g','wifi_6e_known_24g','conntrack_pct',
-            // Router release 20260920: one early, one late Wi-Fi column and the LAST column of the migration block.
-            'wifi_busy_5g','wifi_6e_unserved','clock_skew_s',
-            // Agent 0.1.9: without it every report's metrics INSERT fails (ingest_dropped).
-            'agent_prev_cpu_ms',
-            // 20260927r022: the first and the last column of that block, same reason.
-            'wan_rx_overrun','speedtest_active'];
-        $stmt_cols = $pdo->query("DESCRIBE vps_metrics");
-        $existing = array_column($stmt_cols->fetchAll(PDO::FETCH_ASSOC), 'Field');
-        $missing = array_diff($required_cols, $existing);
-        if (!empty($missing)) {
-            $warn = 'SCHEMA DRIFT: vps_metrics missing columns: ' . implode(', ', $missing) . '. Please update schema.sql.';
+        $schema_missing = bk_schema_missing($pdo);
+        if ($schema_missing === null) {
+            $warn = 'SCHEMA CHECK: schema.sql cannot be read or creates no table, the schema was not checked.';
+            error_log('[cron] ' . $warn);
+            echo "VAROVÁNÍ: $warn\n";
+        } elseif ($schema_missing['tables'] !== [] || $schema_missing['columns'] !== []) {
+            $warn = 'SCHEMA DRIFT: the database lacks what schema.sql defines - tables: '
+                . (implode(', ', $schema_missing['tables']) ?: 'none') . '; columns: '
+                . (implode(', ', $schema_missing['columns']) ?: 'none') . '.';
             error_log('[cron] ' . $warn);
             echo "VAROVÁNÍ: $warn\n";
         }

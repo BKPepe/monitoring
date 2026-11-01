@@ -1242,7 +1242,7 @@ dřív, i řádek sondy z té doby, dokud ho 30denní logy nesmažou.
 | `metrics.php?token=…` | Prometheus text 0.0.4 | token | Scrapování externím Prometheem; bez nastaveného tokenu je vypnutý. Token lze poslat i hlavičkou `Authorization: Bearer` |
 | `badge.php?id=&type=` | 302 | veřejné | Zastaralý alias - přesměruje na `action=badge` (staré README embedy fungují dál) |
 | `widget.php?id=` | 302 | veřejné | Zastaralý alias - přesměruje na `action=badge&type=uptime`, tedy na dostupnost za 30 dní, kterou jeho HTML karta nesla jako hlavní číslo. Iframe karty se na cizím webu nikdy neukázal (`X-Frame-Options: SAMEORIGIN`); `<img>` odznaku ano |
-| `health.php` | JSON | admin nebo CLI | Kontrola úplnosti schématu databáze a toho, že config.php nic nevypisuje. `schema_version` neprojde, dokud uložená verze není ta, kterou čeká db.php: krok migrace skutečně selhal (kontrola ho jmenuje a db.php seznam spustí znovu 10 minut po každém neúspěšném běhu), chybí migrations.php, nebo je nahrání v půlce |
+| `health.php` | JSON | admin nebo CLI | Kontrola úplnosti schématu databáze a toho, že config.php nic nevypisuje. `Schema tables` a `Schema columns` jmenují každou tabulku a sloupec ze schema.sql, které databázi chybí (denní samotest cronu zapíše do logu týž seznam); bez čitelného schema.sql neprojde ani jedna. `schema_version` neprojde, dokud uložená verze není ta, kterou čeká db.php: krok migrace skutečně selhal (kontrola ho jmenuje a db.php seznam spustí znovu 10 minut po každém neúspěšném běhu), chybí migrations.php, nebo je nahrání v půlce |
 | `cron.php[?key=…]` | text | CLI nebo `cron_key` | Sběr dat; z webu jen s klíčem |
 
 ---

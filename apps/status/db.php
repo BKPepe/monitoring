@@ -531,6 +531,61 @@ function bk_db_already_applied(PDOException $e, bool $rows = false): bool {
 }
 
 /**
+ * The tables a schema script creates and their columns, in file order:
+ * table => columns. KEY, INDEX and CONSTRAINT lines are no columns.
+ *
+ * The one reader of schema.sql: health.php and cron's daily self-test check
+ * the database against it (bk_schema_missing), the tests read it the same
+ * way. Each used to keep a list of its own - health.php 7 tables and 31
+ * columns, cron 15 columns - and health.php said "all OK" while production
+ * had no metric_annotations table (R280).
+ *
+ * @return array<string, list<string>>
+ */
+function bk_schema_parse(string $sql): array {
+    preg_match_all('/CREATE TABLE IF NOT EXISTS `(\w+)`\s*\((.*?)\n\)\s*ENGINE/s', $sql, $tables, PREG_SET_ORDER);
+    $schema = [];
+    foreach ($tables as [, $table, $body]) {
+        preg_match_all('/^\s*`(\w+)`\s/m', $body, $columns);
+        $schema[$table] = $columns[1];
+    }
+    return $schema;
+}
+
+/**
+ * What this database lacks of schema.sql: its missing tables, and the
+ * missing columns of the tables it has (as table.column). Columns compare
+ * without case, as MySQL names them. Null when schema.sql cannot be read or
+ * creates no table: a check against nothing would pass.
+ *
+ * @return array{tables: list<string>, columns: list<string>}|null
+ */
+function bk_schema_missing(PDO $pdo): ?array {
+    $expected = bk_schema_parse((string)@file_get_contents(__DIR__ . '/schema.sql'));
+    if ($expected === []) {
+        return null;
+    }
+    $present = [];
+    $stmt = $pdo->query("SELECT TABLE_NAME, COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE()");
+    foreach ($stmt->fetchAll(PDO::FETCH_NUM) as [$table, $column]) {
+        $present[(string)$table][strtolower((string)$column)] = true;
+    }
+    $missing = ['tables' => [], 'columns' => []];
+    foreach ($expected as $table => $columns) {
+        if (!isset($present[$table])) {
+            $missing['tables'][] = $table;
+            continue;
+        }
+        foreach ($columns as $column) {
+            if (!isset($present[$table][strtolower($column)])) {
+                $missing['columns'][] = $table . '.' . $column;
+            }
+        }
+    }
+    return $missing;
+}
+
+/**
  * The failed migration run stored for $version (settings key
  * schema_migrations_failed), or null when there is none for it: no record,
  * one for another version (a newer list may hold the fix, so it runs at

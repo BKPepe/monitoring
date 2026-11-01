@@ -1266,7 +1266,7 @@ it did, a probe's of that time included, until the 30-day logs prune it.
 | `metrics.php?token=…` | Prometheus text 0.0.4 | token | Scraping by an external Prometheus; disabled when no token is set. The token may also be sent as an `Authorization: Bearer` header |
 | `badge.php?id=&type=` | 302 | public | Deprecated alias - redirects to `action=badge` (old README embeds keep working) |
 | `widget.php?id=` | 302 | public | Deprecated alias - redirects to `action=badge&type=uptime`, the 30-day availability its HTML card headlined. The card's iframe never showed on another site (`X-Frame-Options: SAMEORIGIN`); an `<img>` of the badge does |
-| `health.php` | JSON | admin or CLI | Database schema completeness check, and that config.php prints nothing. `schema_version` fails while the stored version is not the one db.php expects: a migration step failed for real (the check names it, and db.php runs the list again 10 minutes after each failed run), migrations.php is missing, or an upload is half done |
+| `health.php` | JSON | admin or CLI | Database schema completeness check, and that config.php prints nothing. `Schema tables` and `Schema columns` name every table and column schema.sql creates that the database lacks (cron's daily self-test logs the same list); without a readable schema.sql both fail. `schema_version` fails while the stored version is not the one db.php expects: a migration step failed for real (the check names it, and db.php runs the list again 10 minutes after each failed run), migrations.php is missing, or an upload is half done |
 | `cron.php[?key=…]` | text | CLI or `cron_key` | Data collection; from the web only with the key |
 
 ---

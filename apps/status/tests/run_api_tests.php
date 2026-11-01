@@ -8407,6 +8407,39 @@ check('bez vadného řádku migrace doběhne, uloží verzi, záznam o selhání
 $me_check = $schema_health();
 check('a health.php verzi zase pustí', [$me_check['ok'] ?? null, $me_check['detail'] ?? null], [true, $schema_version_src]);
 
+// health.php and cron's daily self-test check the database against every
+// table and column of schema.sql (bk_schema_missing in db.php). Their own
+// hand-picked lists passed a database without metric_annotations (R280).
+$sm_health = function () use ($page_get, $cookie_jar): array {
+    [, $b] = $page_get('/health.php?format=json', $cookie_jar);
+    $out = [];
+    foreach (json_decode($b, true)['checks'] ?? [] as $c) {
+        if (in_array($c['name'] ?? '', ['Schema tables', 'Schema columns'], true)) {
+            $out[$c['name']] = [$c['ok'] ?? null, $c['detail'] ?? null];
+        }
+    }
+    return $out;
+};
+check('databáze ze schema.sql a migrací má všechno, co schema.sql zakládá', bk_schema_missing($pdo), ['tables' => [], 'columns' => []]);
+check('health.php: tabulky i sloupce schema.sql projdou', $sm_health(), [
+    'Schema tables' => [true, 'every table of schema.sql'],
+    'Schema columns' => [true, 'every column of schema.sql in the tables present'],
+]);
+$pdo->exec("RENAME TABLE metric_annotations TO bk_test_annotations_away");
+$pdo->exec("ALTER TABLE vps_metrics DROP COLUMN wan_oversize");
+try {
+    check('chybějící tabulku i sloupec schéma jmenuje', bk_schema_missing($pdo),
+        ['tables' => ['metric_annotations'], 'columns' => ['vps_metrics.wan_oversize']]);
+    check('health.php je jmenuje a neprojde', $sm_health(), [
+        'Schema tables' => [false, 'Missing: metric_annotations (schema.sql creates them)'],
+        'Schema columns' => [false, 'Missing: vps_metrics.wan_oversize (schema.sql defines them)'],
+    ]);
+} finally {
+    $pdo->exec("RENAME TABLE bk_test_annotations_away TO metric_annotations");
+    $pdo->exec("ALTER TABLE vps_metrics ADD COLUMN wan_oversize INT DEFAULT NULL");
+}
+check('vrácené schéma zase projde', bk_schema_missing($pdo), ['tables' => [], 'columns' => []]);
+
 // A duplicate row (1062) is "already there" only for the installer's seed
 // INSERTs. In the migrations only CREATE UNIQUE INDEX raises it, over rows
 // that break the index: two monitors with one heartbeat token leave the

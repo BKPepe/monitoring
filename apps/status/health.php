@@ -67,49 +67,30 @@ if ($db_driver !== 'pgsql' && $db_driver !== 'postgres') {
     }
 }
 
-// 2. Required tables
-$required_tables = ['monitors', 'monitor_logs', 'vps_metrics', 'settings', 'users', 'monitor_events', 'agent_actions'];
-$stmt = $pdo->query("SHOW TABLES");
-$existing_tables = $stmt->fetchAll(PDO::FETCH_COLUMN);
-
-foreach ($required_tables as $t) {
-    $exists = in_array($t, $existing_tables, true);
-    add_check($checks, $all_ok, "Table: $t", $exists, $exists ? '' : 'MISSING - import schema.sql');
-}
-
-// 3. Critical columns in vps_metrics (ty co agent_api.php INSERTuje)
-$required_metrics_cols = [
-    'monitor_id', 'cpu_usage', 'ram_usage', 'hdd_usage', 'net_usage',
-    'load_avg_1', 'load_avg_5', 'load_avg_15', 'cpu_steal', 'swap_usage',
-    'disk_io_read_kbps', 'disk_io_write_kbps', 'net_errors',
-    'ts_clients_online', 'ts_clients_max', 'ts_process_cpu', 'ts_process_ram',
-    'iowait_pct', 'inode_usage_pct', 'zombie_count', 'fork_rate', 'temperature_c',
-    'wifi_clients_total', 'conntrack_pct', 'net_ipv4_kbps', 'net_ipv6_kbps',
-];
-
+// 2. Tables and columns: every one schema.sql creates (bk_schema_missing).
+// Hand-picked lists here went stale and passed a database without
+// metric_annotations (R280). What is missing is named, not explained: a
+// migration still to run (schema_version below), one that was never written,
+// or a table dropped by hand all look the same from here.
 try {
-    $stmt = $pdo->query("DESCRIBE vps_metrics");
-    $existing_cols = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'Field');
-    $missing_cols = array_diff($required_metrics_cols, $existing_cols);
-    add_check($checks, $all_ok, 'vps_metrics columns', empty($missing_cols),
-        empty($missing_cols) ? count($existing_cols) . ' columns OK' : 'Missing: ' . implode(', ', $missing_cols));
+    $schema_missing = bk_schema_missing($pdo);
+    if ($schema_missing === null) {
+        add_check($checks, $all_ok, 'Schema tables', false, 'schema.sql cannot be read or creates no table - upload it');
+        add_check($checks, $all_ok, 'Schema columns', false, 'not checked without schema.sql');
+    } else {
+        add_check($checks, $all_ok, 'Schema tables', $schema_missing['tables'] === [], $schema_missing['tables'] === []
+            ? 'every table of schema.sql'
+            : 'Missing: ' . implode(', ', $schema_missing['tables']) . ' (schema.sql creates them)');
+        add_check($checks, $all_ok, 'Schema columns', $schema_missing['columns'] === [], $schema_missing['columns'] === []
+            ? 'every column of schema.sql in the tables present'
+            : 'Missing: ' . implode(', ', $schema_missing['columns']) . ' (schema.sql defines them)');
+    }
 } catch (PDOException $e) {
-    add_check($checks, $all_ok, 'vps_metrics columns', false, 'Cannot describe table: ' . $e->getMessage());
+    add_check($checks, $all_ok, 'Schema tables', false, 'Cannot read the schema: ' . $e->getMessage());
+    add_check($checks, $all_ok, 'Schema columns', false, 'not checked without the schema');
 }
 
-// 4. Critical columns in monitors
-$required_monitor_cols = ['agent_key', 'remote_actions_enabled', 'allowed_actions', 'asset_id', 'maintenance_description'];
-try {
-    $stmt = $pdo->query("DESCRIBE monitors");
-    $existing_cols = array_column($stmt->fetchAll(PDO::FETCH_ASSOC), 'Field');
-    $missing_cols = array_diff($required_monitor_cols, $existing_cols);
-    add_check($checks, $all_ok, 'monitors columns', empty($missing_cols),
-        empty($missing_cols) ? 'OK' : 'Missing: ' . implode(', ', $missing_cols));
-} catch (PDOException $e) {
-    add_check($checks, $all_ok, 'monitors columns', false, $e->getMessage());
-}
-
-// 5. schema_version: the one this db.php stores after its migrations. Any
+// 3. schema_version: the one this db.php stores after its migrations. Any
 // other value means they did not finish, though every request still works:
 // a step failed for real (db.php tries again 10 minutes later, the error log
 // names the cause), migrations.php is missing, or an upload is half done.
@@ -136,14 +117,14 @@ try {
     add_check($checks, $all_ok, 'schema_version', false, $e->getMessage());
 }
 
-// 6. Agent files exist
+// 4. Agent files exist
 $agent_files = ['agent.sh', 'agent.py', 'agent.ps1', 'agent_openwrt.sh'];
 foreach ($agent_files as $af) {
     $exists = file_exists(__DIR__ . '/' . $af);
     add_check($checks, $all_ok, "Agent file: $af", $exists, $exists ? '' : 'MISSING');
 }
 
-// 7. Writable check (error_log)
+// 5. Writable check (error_log)
 $log_ok = is_writable(ini_get('error_log') ?: '/tmp');
 add_check($checks, $all_ok, 'Error log writable', $log_ok, $log_ok ? ini_get('error_log') : 'Cannot write to error_log');
 

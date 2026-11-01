@@ -1497,15 +1497,48 @@ $reg_new = [
     'wan_rx_overrun', 'wan_rx_discard', 'wan_crc_errors', 'wan_mac_rx_errors', 'wan_refill_errors', 'wan_oversize',
 ];
 check('registr metrik: všech 31 metrik routeru v něm je', [count($reg_new), array_values(array_diff($reg_new, array_keys($reg)))], [31, []]);
-$reg_schema = (string)file_get_contents(__DIR__ . '/../schema.sql');
-preg_match('/CREATE TABLE IF NOT EXISTS `vps_metrics`\s*\((.*?)\n\)\s*ENGINE/s', $reg_schema, $reg_m);
-preg_match_all('/^\s*`(\w+)`\s/m', $reg_m[1] ?? '', $reg_cols);
+// schema.sql read as health.php and cron read it (db.php, bk_schema_parse).
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_schema_parse']);
+check('schéma: tabulky a sloupce v pořadí souboru, klíče, indexy ani omezení sloupci nejsou', bk_schema_parse(
+    "-- komentář\nCREATE TABLE IF NOT EXISTS `a` (\n  `id` INT AUTO_INCREMENT PRIMARY KEY,\n  `jmeno` VARCHAR(5) DEFAULT NULL, -- `x` uvnitř\n"
+    . "  KEY `idx_jmeno` (`jmeno`),\n  UNIQUE KEY `u` (`id`),\n  CONSTRAINT `fk` FOREIGN KEY (`id`) REFERENCES `b` (`id`)\n) ENGINE=InnoDB;\n\n"
+    . "CREATE TABLE IF NOT EXISTS `b` (\n  `id` INT\n) ENGINE=InnoDB;\nINSERT INTO `a` (`id`) VALUES (1);\n"),
+    ['a' => ['id', 'jmeno'], 'b' => ['id']]);
+check('schéma: text bez CREATE TABLE nedá žádnou tabulku', bk_schema_parse("SELECT 1;\n"), []);
+$schema_tables = bk_schema_parse((string)file_get_contents(__DIR__ . '/../schema.sql'));
+check('schéma: schema.sql dá každou svou tabulku, žádnou bez sloupců', [
+    count($schema_tables), array_keys(array_filter($schema_tables, fn ($cols) => $cols === [])),
+    in_array('metric_annotations', array_keys($schema_tables), true),
+], [preg_match_all('/CREATE TABLE IF NOT EXISTS/', (string)file_get_contents(__DIR__ . '/../schema.sql')), [], true]);
+// bk_schema_missing() from a copy of db.php in a folder of its own, against
+// what a database answers from information_schema. Without a schema.sql to
+// compare with it says so (null), and asks the database nothing.
+$sm_dir = sys_get_temp_dir() . '/bk_schema_missing_' . bin2hex(random_bytes(4));
+@mkdir($sm_dir);
+copy(__DIR__ . '/../db.php', $sm_dir . '/db.php');
+bk_test_load_functions($sm_dir . '/db.php', ['bk_schema_missing']);
+$sm_pdo = new class ('sqlite::memory:') extends PDO {
+    public int $queries = 0;
+    public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): PDOStatement|false {
+        $this->queries++;
+        // Columns come back in MySQL's own case, which may differ from the file's.
+        return parent::query("SELECT 'a' AS TABLE_NAME, 'ID' AS COLUMN_NAME UNION ALL SELECT 'c', 'id'");
+    }
+};
+$sm_none = bk_schema_missing($sm_pdo);
+file_put_contents($sm_dir . '/schema.sql', "CREATE TABLE IF NOT EXISTS `a` (\n  `id` INT,\n  `nova` INT\n) ENGINE=InnoDB;\n"
+    . "CREATE TABLE IF NOT EXISTS `b` (\n  `id` INT\n) ENGINE=InnoDB;\n");
+check('schéma: bez schema.sql není s čím srovnat (null, žádný dotaz), jinak chybějící tabulka a sloupec jménem',
+    [$sm_none, $sm_pdo->queries, bk_schema_missing($sm_pdo)], [null, 0, ['tables' => ['b'], 'columns' => ['a.nova']]]);
+@unlink($sm_dir . '/schema.sql');
+@unlink($sm_dir . '/db.php');
+@rmdir($sm_dir);
 $reg_bad_col = [];
 $reg_bad_only = [];
 $reg_long = [];
 foreach ($reg_new as $reg_key) {
     $reg_def = $reg[$reg_key] ?? [];
-    if (($reg_def['col'] ?? null) !== $reg_key || !in_array($reg_key, $reg_cols[1], true)) {
+    if (($reg_def['col'] ?? null) !== $reg_key || !in_array($reg_key, $schema_tables['vps_metrics'] ?? [], true)) {
         $reg_bad_col[] = $reg_key;
     }
     if (($reg_def['only'] ?? null) !== ['openwrt']) {
@@ -1540,12 +1573,7 @@ check('registr metrik: krokových metrik je přesně jedenáct', $reg_steps,
     $omnia = require __DIR__ . '/fixtures/omnia_router.php';
     $omnia_src = (string)file_get_contents(__DIR__ . '/fixtures/omnia_router.php');
     $omnia_p = $omnia['payload'];
-    $schema_sql = (string)file_get_contents(__DIR__ . '/../schema.sql');
-    $table_columns = function (string $table) use ($schema_sql): array {
-        preg_match('/CREATE TABLE IF NOT EXISTS `' . $table . '`\s*\((.*?)\n\)\s*ENGINE/s', $schema_sql, $m);
-        preg_match_all('/^\s*`(\w+)`\s/m', $m[1] ?? '', $cols);
-        return $cols[1];
-    };
+    $table_columns = fn (string $table): array => $schema_tables[$table] ?? [];
     $all_keys = function (array $a) use (&$all_keys): array {
         $keys = [];
         foreach ($a as $k => $v) {
