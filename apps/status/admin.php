@@ -288,13 +288,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
     // Asset (Phase 4) - fyzické/logické zařízení, ke kterému monitor patří.
     // Nové jméno v poli má přednost před výběrem z existujících (vytvoří nový
     // asset při ukládání - typicky "odpojení" monitoru do vlastní skupiny).
+    // The new device is made with the save below, not before the check that
+    // can still refuse it: a refused save left it behind, empty.
     $new_asset_name = trim($_POST['new_asset_name'] ?? '');
     $asset_id = !empty($_POST['asset_id']) ? (int)$_POST['asset_id'] : null;
-    if ($new_asset_name !== '') {
-        $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
-        $stmt_new_asset->execute([$new_asset_name]);
-        $asset_id = (int)$pdo->lastInsertId();
-    }
 
     $timeout = !empty($_POST['timeout']) ? intval($_POST['timeout']) : 5;
     $email_notifications = isset($_POST['email_notifications']) ? 1 : 0;
@@ -305,9 +302,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
     $maintenance_description = ($maintenance === 1 && !empty($_POST['maintenance_description'])) ? trim($_POST['maintenance_description']) : null;
     $maintenance_start = ($maintenance === 1 && !empty($_POST['maintenance_start'])) ? $_POST['maintenance_start'] : ($maintenance === 1 ? date('Y-m-d H:i:s') : null);
     $maintenance_end = ($maintenance === 1 && !empty($_POST['maintenance_end'])) ? $_POST['maintenance_end'] : null;
-    $cpu_threshold = !empty($_POST['cpu_threshold']) ? intval($_POST['cpu_threshold']) : 90;
-    $ram_threshold = !empty($_POST['ram_threshold']) ? intval($_POST['ram_threshold']) : 95;
-    $hdd_threshold = !empty($_POST['hdd_threshold']) ? intval($_POST['hdd_threshold']) : 90;
+    $cpu_threshold = !empty($_POST['cpu_threshold']) ? intval($_POST['cpu_threshold']) : BK_DEFAULT_THRESHOLDS['cpu'];
+    $ram_threshold = !empty($_POST['ram_threshold']) ? intval($_POST['ram_threshold']) : BK_DEFAULT_THRESHOLDS['ram'];
+    $hdd_threshold = !empty($_POST['hdd_threshold']) ? intval($_POST['hdd_threshold']) : BK_DEFAULT_THRESHOLDS['hdd'];
     $body_keyword = !empty($_POST['body_keyword']) && $type === 'web' ? trim($_POST['body_keyword']) : null;
 
     $cpanel_stats_url = !empty($_POST['cpanel_stats_url']) && $type === 'web' ? trim($_POST['cpanel_stats_url']) : null;
@@ -380,32 +377,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_monitor']) && $u
                 $asset_id = (int)$existing_row['asset_id'];
             }
 
+            // A new device and the move to it are one write.
+            $pdo->beginTransaction();
+            if ($new_asset_name !== '') {
+                $asset_id = bk_asset_create($pdo, $new_asset_name);
+            }
             $stmt = $pdo->prepare("
                 UPDATE monitors
                 SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, body_keyword = ?, sq_username = ?, sq_password = ?, ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = ?, remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?, heartbeat_interval = ?, heartbeat_grace = ?
                 WHERE id = ?
             ");
             $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $id]);
+            $pdo->commit();
             log_monitor_event($pdo, $id, $name, $type, 'config_changed', 'Nastavení monitoru bylo upraveno');
             bk_audit_log($pdo, 'monitor_updated', $name, 'monitor', $id);
             $success_msg = 'Monitor byl úspěšně upraven.';
         } else {
-            // Vytvoření nového monitoru - vygenerujeme agent_key pro všechny typy
-            $agent_key = bin2hex(random_bytes(16));
-            // Monitor nikdy nezůstává bez assetu - bez výběru/nového jména dostane
-            // vlastní 1:1 asset pojmenovaný po sobě (stejný fallback jako zpětná
-            // migrace v migrations.php pro monitory, co existovaly před Phase 4).
-            if ($asset_id === null) {
-                $stmt_auto_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
-                $stmt_auto_asset->execute([$name]);
-                $asset_id = (int)$pdo->lastInsertId();
-            }
-            $stmt = $pdo->prepare("
-                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions, asset_id, heartbeat_interval, heartbeat_grace, heartbeat_token)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ");
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $type === 'heartbeat' ? bk_heartbeat_generate_token() : null]);
-            $new_monitor_id = (int)$pdo->lastInsertId();
+            // A new monitor (bk_monitor_create): an agent_key for every type,
+            // and without a chosen or a new device one of its own named after
+            // it (as migrations.php gives monitors older than Phase 4), in one
+            // transaction with the monitor.
+            $created = bk_monitor_create($pdo, [
+                'name' => $name, 'type' => $type, 'target' => $target, 'port' => $port, 'category' => $category,
+                'timeout' => $timeout, 'email_notifications' => $email_notifications, 'sms_notifications' => $sms_notifications,
+                'notes' => $notes, 'maintenance' => $maintenance, 'monitored_processes' => $monitored_processes,
+                'maintenance_description' => $maintenance_description, 'maintenance_start' => $maintenance_start,
+                'maintenance_end' => $maintenance_end, 'cpanel_stats_url' => $cpanel_stats_url,
+                'cpu_threshold' => $cpu_threshold, 'ram_threshold' => $ram_threshold, 'hdd_threshold' => $hdd_threshold,
+                'body_keyword' => $body_keyword, 'sq_username' => $sq_username, 'sq_password' => $sq_password,
+                'ts3_filetransfer_port' => $ts3_filetransfer_port, 'enabled_metrics' => $enabled_metrics,
+                'rcon_port' => $rcon_port, 'rcon_password' => $rcon_password, 'remote_actions_enabled' => $remote_actions_enabled,
+                'allowed_actions' => $allowed_actions, 'heartbeat_interval' => $heartbeat_interval, 'heartbeat_grace' => $heartbeat_grace,
+            ], $new_asset_name !== '' ? null : $asset_id, $new_asset_name !== '' ? $new_asset_name : null);
+            $new_monitor_id = $created['id'];
             log_monitor_event($pdo, $new_monitor_id, $name, $type, 'monitor_added', "Přidán nový monitor ({$type})");
             bk_audit_log($pdo, 'monitor_created', $name, 'monitor', $new_monitor_id);
             $success_msg = 'Monitor byl úspěšně přidán.';
@@ -940,20 +944,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action_import_service
             $discovered_asset_id = (int)$src_asset_id;
         }
     }
-    if ($discovered_asset_id === null) {
-        $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
-        $stmt_new_asset->execute([$s_name]);
-        $discovered_asset_id = (int)$pdo->lastInsertId();
-    }
 
     if (!empty($s_name)) {
-        $agent_key = bin2hex(random_bytes(16));
-        $stmt = $pdo->prepare("
-            INSERT INTO monitors (name, type, target, port, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold, asset_id)
-            VALUES (?, ?, ?, ?, 'unknown', ?, 90, 90, 95, ?)
-        ");
-        $stmt->execute([$s_name, $s_type, $s_target, $s_port, $agent_key, $discovered_asset_id]);
-        $new_id = (int)$pdo->lastInsertId();
+        // Without the discovering monitor's device the service gets one of
+        // its own, with the monitor and only with it: an import without a
+        // name made an empty device. The limits are BK_DEFAULT_THRESHOLDS;
+        // this import stored RAM 90 and disk 95, swapped (R240).
+        $created = bk_monitor_create($pdo, ['name' => $s_name, 'type' => $s_type, 'target' => $s_target, 'port' => $s_port],
+            $discovered_asset_id);
+        $new_id = $created['id'];
         log_monitor_event($pdo, $new_id, $s_name, $s_type, 'monitor_added', "Importováno z automatické detekce služeb (Service Discovery)");
         bk_audit_log($pdo, 'monitor_created', $s_name . ' (Service Discovery)', 'monitor', $new_id);
         $success_msg = "Monitor '{$s_name}' byl úspěšně vytvořen z automatické detekce!";

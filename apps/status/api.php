@@ -788,12 +788,9 @@ if ($action === 'save_monitor') {
             bk_api_error(400, 'Zařízení (asset) ' . $asset_id . ' neexistuje.');
         }
     }
+    // A device of this name is made with the save below, not before the
+    // checks that can still refuse it: a refused save left it behind, empty.
     $new_asset_name = trim($input['new_asset_name'] ?? '');
-    if ($new_asset_name !== '') {
-        $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
-        $stmt_new_asset->execute([$new_asset_name]);
-        $asset_id = (int)$pdo->lastInsertId();
-    }
 
     $timeout = !empty($input['timeout']) ? (int)$input['timeout'] : 5;
     $email_notifications = isset($input['email_notifications']) ? ($input['email_notifications'] ? 1 : 0) : 1;
@@ -927,6 +924,11 @@ if ($action === 'save_monitor') {
 
     try {
         if ($id > 0) {
+            // A new device and the move to it are one write.
+            $pdo->beginTransaction();
+            if ($new_asset_name !== '') {
+                $asset_id = bk_asset_create($pdo, $new_asset_name);
+            }
             // Passwords (ServerQuery, RCON) are overwritten only when the administrator
             // typed a new value - an empty edit-form field must not erase a stored password.
             $stmt = $pdo->prepare("
@@ -938,27 +940,34 @@ if ($action === 'save_monitor') {
             // v curl prikazu na svem stroji a zmena by ji tise odstrihla.
             $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $mon_discord, $mon_slack, $mon_tg_token, $mon_tg_chat, $id]);
             $mon_save_switches($id);
+            $pdo->commit();
             echo json_encode(['success' => true, 'id' => $id, 'message' => 'Monitor úspěšně upraven'], JSON_UNESCAPED_UNICODE);
         } else {
-            $agent_key = bin2hex(random_bytes(16));
-            if ($asset_id === null) {
-                $stmt_auto_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
-                $stmt_auto_asset->execute([$name]);
-                $asset_id = (int)$pdo->lastInsertId();
-            }
-            $stmt = $pdo->prepare("
-                INSERT INTO monitors (name, type, target, port, category, timeout, email_notifications, sms_notifications, agent_key, status, notes, maintenance, monitored_processes, maintenance_description, maintenance_start, maintenance_end, cpanel_stats_url, cpu_threshold, ram_threshold, hdd_threshold, preset_id, latency_threshold_ms, latency_threshold_mins, body_keyword, sq_username, sq_password, ts3_filetransfer_port, enabled_metrics, rcon_port, rcon_password, remote_actions_enabled, allowed_actions, asset_id, heartbeat_interval, heartbeat_grace, heartbeat_token, discord_webhook_url, slack_webhook_url, telegram_bot_token, telegram_chat_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ");
-            // Token vznika jen u heartbeat monitoru - u ostatnich typu by to byl
-            // jen nepouzitelny tajny retezec navic v databazi.
-            $heartbeat_token = $type === 'heartbeat' ? bk_heartbeat_generate_token() : null;
-            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $agent_key, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $heartbeat_token, $mon_discord, $mon_slack, $mon_tg_token, $mon_tg_chat]);
-            $new_id = (int)$pdo->lastInsertId();
-            $mon_save_switches($new_id);
-            echo json_encode(['success' => true, 'id' => $new_id, 'message' => 'Monitor úspěšně vytvořen'], JSON_UNESCAPED_UNICODE);
+            // The device (a new one by that name, or one of its own named
+            // after the monitor), the agent_key, a heartbeat token and the
+            // switches the form sent go in with the row (bk_monitor_create).
+            $created = bk_monitor_create($pdo, [
+                'name' => $name, 'type' => $type, 'target' => $target, 'port' => $port, 'category' => $category,
+                'timeout' => $timeout, 'email_notifications' => $email_notifications, 'sms_notifications' => $sms_notifications,
+                'notes' => $notes, 'maintenance' => $maintenance, 'monitored_processes' => $monitored_processes,
+                'maintenance_description' => $maintenance_description, 'maintenance_start' => $maintenance_start,
+                'maintenance_end' => $maintenance_end, 'cpanel_stats_url' => $cpanel_stats_url,
+                'cpu_threshold' => $cpu_threshold, 'ram_threshold' => $ram_threshold, 'hdd_threshold' => $hdd_threshold,
+                'preset_id' => $preset_id, 'latency_threshold_ms' => $latency_threshold_ms,
+                'latency_threshold_mins' => $latency_threshold_mins, 'body_keyword' => $body_keyword,
+                'sq_username' => $sq_username, 'sq_password' => $sq_password, 'ts3_filetransfer_port' => $ts3_filetransfer_port,
+                'enabled_metrics' => $enabled_metrics, 'rcon_port' => $rcon_port, 'rcon_password' => $rcon_password,
+                'remote_actions_enabled' => $remote_actions_enabled, 'allowed_actions' => $allowed_actions,
+                'heartbeat_interval' => $heartbeat_interval, 'heartbeat_grace' => $heartbeat_grace,
+                'discord_webhook_url' => $mon_discord, 'slack_webhook_url' => $mon_slack,
+                'telegram_bot_token' => $mon_tg_token, 'telegram_chat_id' => $mon_tg_chat,
+            ] + $mon_switches, $new_asset_name !== '' ? null : $asset_id, $new_asset_name !== '' ? $new_asset_name : null);
+            echo json_encode(['success' => true, 'id' => $created['id'], 'message' => 'Monitor úspěšně vytvořen'], JSON_UNESCAPED_UNICODE);
         }
     } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
         // The PDO text named tables and columns; it goes to the log only.
         bk_api_fail('save_monitor_failed', 500, $e, 'Monitor se nepodařilo uložit.');
     }
@@ -1342,24 +1351,14 @@ if ($action === 'import_discovered_service') {
             bk_api_error(400, $target_error);
         }
 
-        if ($discovered_asset_id === null) {
-            $stmt_new_asset = $pdo->prepare("INSERT INTO assets (name) VALUES (?)");
-            $stmt_new_asset->execute([$s_name]);
-            $discovered_asset_id = (int)$pdo->lastInsertId();
-        }
-
-        $agent_key = bin2hex(random_bytes(16));
-        $stmt = $pdo->prepare("
-            INSERT INTO monitors (name, type, target, port, category, status, agent_key, cpu_threshold, ram_threshold, hdd_threshold, asset_id)
-            VALUES (?, ?, ?, ?, ?, 'unknown', ?, ?, ?, ?, ?)
-        ");
-        // RAM and disk were swapped here (90/95) against every other place.
-        $stmt->execute([$s_name, $s_type, $s_target, $s_port, $discovered_category, $agent_key,
-            BK_DEFAULT_THRESHOLDS['cpu'], BK_DEFAULT_THRESHOLDS['ram'], BK_DEFAULT_THRESHOLDS['hdd'], $discovered_asset_id]);
-        $new_id = (int)$pdo->lastInsertId();
+        // Without the discovering monitor's device the service gets one of
+        // its own, in one transaction with the monitor (bk_monitor_create).
+        $created = bk_monitor_create($pdo, ['name' => $s_name, 'type' => $s_type, 'target' => $s_target,
+            'port' => $s_port, 'category' => $discovered_category], $discovered_asset_id);
+        $new_id = $created['id'];
         log_monitor_event($pdo, $new_id, $s_name, $s_type, 'monitor_added', "Importováno z automatické detekce služeb (Service Discovery)");
         bk_audit_log($pdo, 'monitor_created', $s_name . ' (Service Discovery)', 'monitor', $new_id);
-        echo json_encode(['success' => true, 'id' => $new_id, 'assetId' => $discovered_asset_id], JSON_UNESCAPED_UNICODE);
+        echo json_encode(['success' => true, 'id' => $new_id, 'assetId' => $created['asset_id']], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         bk_api_fail('import_failed', 500, $e, 'Službu se nepodařilo importovat.');
     }

@@ -2018,6 +2018,134 @@ try {
     bk_kv_cache_clear($pdo);
 }
 
+// =======================================================================
+// bk_monitor_create(): one way to create a monitor on every path - its
+// device in the same transaction, an agent_key, BK_DEFAULT_THRESHOLDS. Five
+// INSERTs had columns and defaults of their own: admin.php's import stored
+// RAM 90 and disk 95 (R240), and a failed or refused save elsewhere left an
+// empty device behind.
+// =======================================================================
+$mc_assets = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM assets")->fetchColumn();
+$mc_row = function (int $id) use ($pdo): array {
+    $stmt = $pdo->prepare("SELECT m.status, m.agent_key, m.cpu_threshold, m.ram_threshold, m.hdd_threshold, m.heartbeat_token,
+        m.asset_id, m.is_public, a.name AS asset_name FROM monitors m LEFT JOIN assets a ON a.id = m.asset_id WHERE m.id = ?");
+    $stmt->execute([$id]);
+    return $stmt->fetch() ?: [];
+};
+$mc_limits = fn (array $r): array => [(int)($r['cpu_threshold'] ?? -1), (int)($r['ram_threshold'] ?? -1), (int)($r['hdd_threshold'] ?? -1)];
+$mc_admin_post = function (array $form) use ($base, $cookie_jar): int {
+    $ch = curl_init($base . '/admin.php');
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30, CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => http_build_query($form + ['csrf_token' => $GLOBALS['bk_test_csrf']]),
+        CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_COOKIEJAR => $cookie_jar]);
+    curl_exec($ch);
+    return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+};
+$mc_setup = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'setup_completed'")->fetchColumn();
+try {
+    $mc_web = bk_monitor_create($pdo, ['name' => 'MC web', 'type' => 'web', 'target' => 'https://mc.example.org']);
+    $mc_r = $mc_row($mc_web['id']);
+    check('nový monitor: unknown, klíč agenta, výchozí prahy a vlastní zařízení pojmenované po sobě', [
+        $mc_r['status'] ?? null, (bool)preg_match('/^[0-9a-f]{32}$/', (string)($mc_r['agent_key'] ?? '')),
+        ($mc_r['agent_key'] ?? null) === $mc_web['agent_key'], $mc_limits($mc_r),
+        array_key_exists('heartbeat_token', $mc_r) ? $mc_r['heartbeat_token'] : 'chybí',
+        $mc_r['asset_name'] ?? null, (int)($mc_r['asset_id'] ?? 0) === $mc_web['asset_id'],
+    ], ['unknown', true, true, [90, 95, 90], null, 'MC web', true]);
+    $mc_hb = bk_monitor_create($pdo, ['name' => 'MC heartbeat', 'type' => 'heartbeat', 'target' => '', 'heartbeat_interval' => 3600, 'cpu_threshold' => 70],
+        $mc_web['asset_id']);
+    $mc_r = $mc_row($mc_hb['id']);
+    check('heartbeat dostane token, zadané zařízení se použije a zadaný práh platí', [
+        (bool)preg_match('/^[0-9a-f]{48}$/', (string)($mc_r['heartbeat_token'] ?? '')), $mc_hb['asset_id'], $mc_limits($mc_r),
+    ], [true, $mc_web['asset_id'], [70, 95, 90]]);
+    $mc_named = bk_monitor_create($pdo, ['name' => 'MC jméno', 'type' => 'web', 'target' => 'https://mc2.example.org'], null, 'MC zařízení');
+    check('nové zařízení může nést jiné jméno než monitor', $mc_row($mc_named['id'])['asset_name'] ?? null, 'MC zařízení');
+
+    $mc_before = $mc_assets();
+    try {
+        bk_monitor_create($pdo, ['name' => 'MC zlý sloupec', 'type' => 'web', 'name) VALUES (1); --' => 1]);
+        $mc_refused = false;
+    } catch (InvalidArgumentException $e) {
+        $mc_refused = true;
+    }
+    check('jméno sloupce mimo [a-z0-9_] se odmítne dřív, než se cokoli zapíše', [$mc_refused, $mc_assets() - $mc_before], [true, 0]);
+
+    // A failed monitors INSERT takes its new device back, and leaves no
+    // transaction open behind it.
+    $pdo->exec("CREATE TRIGGER mc_create_fail BEFORE INSERT ON monitors FOR EACH ROW
+                BEGIN IF NEW.name LIKE 'MC selže%' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'mc test'; END IF; END");
+    $pdo->exec("CREATE TRIGGER mc_update_fail BEFORE UPDATE ON monitors FOR EACH ROW
+                BEGIN IF NEW.name = 'MC selže úprava' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'mc test'; END IF; END");
+    $mc_before = $mc_assets();
+    try {
+        bk_monitor_create($pdo, ['name' => 'MC selže', 'type' => 'web', 'target' => 'https://mc3.example.org']);
+        $mc_threw = false;
+    } catch (PDOException $e) {
+        $mc_threw = true;
+    }
+    check('nezdařený INSERT vyhodí výjimku a nové zařízení vezme zpět', [$mc_threw, $mc_assets() - $mc_before, $pdo->inTransaction()], [true, 0, false]);
+    // In the caller's transaction it is a part of that one.
+    $pdo->beginTransaction();
+    $mc_in = bk_monitor_create($pdo, ['name' => 'MC v transakci', 'type' => 'web', 'target' => 'https://mc4.example.org']);
+    $mc_open = $pdo->inTransaction();
+    $pdo->rollBack();
+    check('v transakci volajícího nic sám nepotvrdí', [
+        $mc_open, (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE id = {$mc_in['id']}")->fetchColumn(),
+        (int)$pdo->query("SELECT COUNT(*) FROM assets WHERE id = {$mc_in['asset_id']}")->fetchColumn(),
+    ], [true, 0, 0]);
+
+    // save_monitor: a refused save, a failed one and a failed edit leave no device behind.
+    $mc_before = $mc_assets();
+    [$mc_c1] = api_post($base, 'action=save_monitor', ['name' => 'MC heartbeat bez intervalu', 'type' => 'heartbeat', 'new_asset_name' => 'MC sirotek'], $cookie_jar);
+    [$mc_c2] = api_post($base, 'action=save_monitor', ['name' => 'MC selže přes API', 'type' => 'web', 'target' => 'https://mc5.example.org',
+        'new_asset_name' => 'MC sirotek'], $cookie_jar);
+    [$mc_c3] = api_post($base, 'action=save_monitor', ['id' => $mc_named['id'], 'name' => 'MC selže úprava', 'type' => 'web',
+        'target' => 'https://mc2.example.org', 'new_asset_name' => 'MC sirotek'], $cookie_jar);
+    check('odmítnuté, nezdařené i nezdařená úprava nenechají prázdné zařízení', [$mc_c1, $mc_c2, $mc_c3, $mc_assets() - $mc_before], [400, 500, 500, 0]);
+    [$mc_c4, $mc_saved] = api_post($base, 'action=save_monitor', ['name' => 'MC přes API', 'type' => 'web', 'target' => 'https://mc6.example.org',
+        'new_asset_name' => 'MC nové zařízení', 'is_public' => false], $cookie_jar);
+    $mc_r = $mc_row((int)($mc_saved['id'] ?? 0));
+    check('save_monitor: nové zařízení, výchozí prahy i přepínač jdou s řádkem', [$mc_c4, $mc_r['asset_name'] ?? null, $mc_limits($mc_r),
+        isset($mc_r['is_public']) ? (int)$mc_r['is_public'] : null], [200, 'MC nové zařízení', [90, 95, 90], 0]);
+    [$mc_c5] = api_post($base, 'action=save_monitor', ['id' => $mc_named['id'], 'name' => 'MC jméno', 'type' => 'web',
+        'target' => 'https://mc2.example.org', 'new_asset_name' => 'MC přesun'], $cookie_jar);
+    check('úprava s novým zařízením monitor do něj přesune', [$mc_c5, $mc_row($mc_named['id'])['asset_name'] ?? null], [200, 'MC přesun']);
+
+    // The discovery import without a discovering monitor: a device of its own.
+    [$mc_c6, $mc_imp] = api_post($base, 'action=import_discovered_service', ['name' => 'MC objevená služba', 'type' => 'web',
+        'target' => 'https://mc7.example.org'], $cookie_jar);
+    $mc_r = $mc_row((int)($mc_imp['id'] ?? 0));
+    check('import objevené služby: vlastní zařízení, výchozí prahy, assetId v odpovědi', [$mc_c6, $mc_r['asset_name'] ?? null, $mc_limits($mc_r),
+        (int)($mc_imp['assetId'] ?? 0) === (int)($mc_r['asset_id'] ?? -1)], [200, 'MC objevená služba', [90, 95, 90], true]);
+
+    // admin.php's import through its form: the limits are BK_DEFAULT_THRESHOLDS
+    // now (R240), and an import without a name makes no device.
+    $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('setup_completed', '1') ON DUPLICATE KEY UPDATE key_value = '1'");
+    $mc_c7 = $mc_admin_post(['action_import_service' => '1', 'service_name' => 'MC import z administrace', 'service_type' => 'port',
+        'service_port' => '8443', 'service_target' => 'mc8.example.org']);
+    $mc_r = $mc_row((int)$pdo->query("SELECT MAX(id) FROM monitors WHERE name = 'MC import z administrace'")->fetchColumn());
+    check('import v admin.php: RAM 95 a disk 90, ne prohozené, a vlastní zařízení', [$mc_c7, $mc_limits($mc_r), $mc_r['asset_name'] ?? null],
+        [200, [90, 95, 90], 'MC import z administrace']);
+    $mc_before = $mc_assets();
+    $mc_admin_post(['action_import_service' => '1', 'service_name' => '', 'service_type' => 'web']);
+    check('import v admin.php bez jména zařízení nezaloží', $mc_assets() - $mc_before, 0);
+} finally {
+    $pdo->exec("DROP TRIGGER IF EXISTS mc_create_fail");
+    $pdo->exec("DROP TRIGGER IF EXISTS mc_update_fail");
+    $mc_gone = $pdo->query("SELECT DISTINCT asset_id FROM monitors WHERE name LIKE 'MC %' AND asset_id IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
+    $pdo->exec("DELETE FROM monitors WHERE name LIKE 'MC %'");
+    $pdo->exec("DELETE FROM assets WHERE name LIKE 'MC %'");
+    // The digest of a later block lists the events by name.
+    $pdo->exec("DELETE FROM monitor_events WHERE monitor_name LIKE 'MC %'");
+    foreach ($mc_gone as $mc_asset) {
+        $pdo->prepare("DELETE FROM assets WHERE id = ? AND NOT EXISTS (SELECT 1 FROM monitors WHERE asset_id = ?)")->execute([$mc_asset, $mc_asset]);
+    }
+    if ($mc_setup === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'setup_completed'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'setup_completed'")->execute([$mc_setup]);
+    }
+}
+
 
 // Settings load once at startup into the `$system_settings` global (db.php)
 // and get_setting() reads from there. A database write alone therefore changes

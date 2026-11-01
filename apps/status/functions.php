@@ -6895,6 +6895,74 @@ function bk_effective_threshold(?array $preset, $monitor_value, string $key): ?i
  */
 const BK_DEFAULT_THRESHOLDS = ['cpu' => 90, 'ram' => 95, 'hdd' => 90];
 
+/** A new device (asset) named $name; returns its id. */
+function bk_asset_create(PDO $pdo, string $name): int {
+    $pdo->prepare("INSERT INTO assets (name) VALUES (?)")->execute([$name]);
+    return (int)$pdo->lastInsertId();
+}
+
+/**
+ * Creates a monitor the one way every path creates it: status 'unknown', an
+ * agent_key, a heartbeat token for a heartbeat monitor, the cpu/ram/hdd limits
+ * of BK_DEFAULT_THRESHOLDS where $fields sets none, and in $asset_id, or else
+ * in a device of its own named $asset_name or after the monitor. A column
+ * $fields leaves out keeps the table's default.
+ *
+ * The device and the monitor are one transaction, or part of the caller's
+ * when one is open: a failed monitors INSERT left an empty device behind on
+ * every path but the agent registration. Five sites wrote these rows, each
+ * with its own columns and defaults, and the admin.php import stored RAM 90
+ * and disk 95 the wrong way round (R240). An error rolls back and throws.
+ *
+ * @param array<string, scalar|null> $fields monitors column => value; name and type are required
+ * @return array{id: int, asset_id: int, agent_key: string}
+ */
+function bk_monitor_create(PDO $pdo, array $fields, ?int $asset_id = null, ?string $asset_name = null): array {
+    foreach (array_keys($fields) as $column) {
+        if (!preg_match('/^[a-z][a-z0-9_]*$/', (string)$column)) {
+            throw new InvalidArgumentException("bk_monitor_create: {$column} is no column name");
+        }
+    }
+    if (trim((string)($fields['name'] ?? '')) === '' || trim((string)($fields['type'] ?? '')) === '') {
+        throw new InvalidArgumentException('bk_monitor_create: a monitor needs a name and a type');
+    }
+    $fields['status'] = 'unknown';
+    $fields['agent_key'] = bin2hex(random_bytes(16));
+    if ($fields['type'] === 'heartbeat') {
+        $fields['heartbeat_token'] = bk_heartbeat_generate_token();
+    }
+    $fields += [
+        'cpu_threshold' => BK_DEFAULT_THRESHOLDS['cpu'],
+        'ram_threshold' => BK_DEFAULT_THRESHOLDS['ram'],
+        'hdd_threshold' => BK_DEFAULT_THRESHOLDS['hdd'],
+    ];
+
+    $own = !$pdo->inTransaction();
+    if ($own) {
+        $pdo->beginTransaction();
+    }
+    try {
+        $fields['asset_id'] = $asset_id ?? bk_asset_create($pdo, $asset_name ?? (string)$fields['name']);
+        $columns = array_keys($fields);
+        $pdo->prepare('INSERT INTO monitors (' . implode(', ', $columns) . ') VALUES ('
+            . implode(', ', array_fill(0, count($columns), '?')) . ')')->execute(array_values($fields));
+        $id = (int)$pdo->lastInsertId();
+        if ($own) {
+            $pdo->commit();
+        }
+    } catch (Throwable $e) {
+        if ($own && $pdo->inTransaction()) {
+            try {
+                $pdo->rollBack();
+            } catch (Throwable $re) {
+                error_log('[monitor] rollback after a failed create failed too: ' . $re->getMessage());
+            }
+        }
+        throw $e;
+    }
+    return ['id' => $id, 'asset_id' => (int)$fields['asset_id'], 'agent_key' => (string)$fields['agent_key']];
+}
+
 /**
  * Effective cpu/ram/hdd thresholds for a monitor - preset first, then the
  * monitor's own value, then null. Written together with
