@@ -8409,6 +8409,25 @@ try {
     [, $s3_ts] = api_get_auth($base, 'action=metric_series_batch&monitor_id=196&period=24h', $cookie_jar);
     check('C-3: sdílený sloupec nepřebere průměr jiné metriky', [$s3_avg($s3_ts, 'ts_clients'), $s3_avg($s3_ts, 'ts_process_cpu')], [6.0, 70.0]);
 
+    // --- R351: TeamSpeak's summary quotes the ring's score ------------------
+    // It quoted TeamSpeak's own area score, so the sentence and the ring next
+    // to it could show two different numbers for one server. An open
+    // incident costs the ring points, the area score none: here they differ.
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+                (196, 'up', 40, DATE_SUB(NOW(), INTERVAL 3 MINUTE)),
+                (196, 'up', 42, DATE_SUB(NOW(), INTERVAL 2 MINUTE)),
+                (196, 'up', 41, DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
+    $pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('W2 incident', 'minor', 'investigating', 196)");
+    [$ts_mi_code, $ts_mi] = api_get_auth($base, 'action=monitor_insights&monitor_id=196&lang=cs', $cookie_jar);
+    $ts_ring = $ts_mi['health']['score'] ?? null;
+    check_true('R351: TeamSpeak má skóre prstence jiné než staré skóre oblastí (dostal ' . json_encode([$ts_ring, $ts_mi['healthScore']['score'] ?? null]) . ')',
+        $ts_mi_code === 200 && is_int($ts_ring) && $ts_ring !== ($ts_mi['healthScore']['score'] ?? null));
+    check_true('R351: věta i stavová věta citují skóre prstence (dostal ' . json_encode([$ts_mi['summary'] ?? null, $ts_mi['healthScore']['score'] ?? null], JSON_UNESCAPED_UNICODE) . ')',
+        str_contains((string)($ts_mi['summary'] ?? ''), "({$ts_ring}/100)") && str_contains((string)($ts_mi['statusSentence'] ?? ''), "({$ts_ring}/100)"));
+    check_true('R351: staré healthScore pro starší klienty zůstává', is_array($ts_mi['healthScore'] ?? null));
+    [, $w2_web_mi] = api_get_auth($base, 'action=monitor_insights&monitor_id=193&lang=cs', $cookie_jar);
+    check_false('R351: jiný typ dál skóre do věty nedává', str_contains((string)($w2_web_mi['summary'] ?? ''), '/100)'));
+
     // --- charts-22: an English page gets English metric names ---------------
     [, $s3_en] = api_get_auth($base, 'action=metric_series_batch&monitor_id=193&period=24h&lang=en', $cookie_jar);
     check('charts-22: dávka anglicky', [$s3_en['series']['cpu']['label'] ?? null, $s3_en['series']['response_time']['label'] ?? null, $s3_en['series']['fw_accepted']['label'] ?? null],

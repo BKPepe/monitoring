@@ -2675,39 +2675,14 @@ if ($action === 'monitor_insights') {
             bk_get_network_insights($pdo, $monitor, $details)
         );
 
-        // The health score is currently computed only for TeamSpeak (build_teamspeak_health_areas) -
-        // the same limitation as on the public status page, not an accident here.
+        $is_teamspeak = strtolower($monitor['type'] ?? '') === 'teamspeak';
+        // TeamSpeak's own area score (build_teamspeak_health_areas), kept only
+        // as the `healthScore` field for older clients. Nothing here reads it.
         $health_score = null;
-        if (strtolower($monitor['type'] ?? '') === 'teamspeak') {
+        if ($is_teamspeak) {
             $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages, $details, $pdo);
             $health_score = bk_compute_health_score($health_areas);
         }
-
-        $timeline = bk_get_monitor_timeline($pdo, $monitor_id, 30);
-        // $pdo a $details navic: shrnuti si z nich dopocita, jak dlouho je
-        // metrika nad prahem a ktery proces za tim stoji.
-        $summary = bk_build_executive_summary(
-            $monitor,
-            $health_score,
-            $knowledge_tips,
-            $monitor_insights,
-            array_slice($timeline, 0, 5),
-            $pdo,
-            is_array($details) ? $details : []
-        );
-
-        // The asset page's "Souhrn stavu": the state and the pressure only,
-        // because the findings list right below it names every concern once.
-        $status_sentence = bk_build_executive_summary(
-            $monitor,
-            $health_score,
-            $knowledge_tips,
-            $monitor_insights,
-            [],
-            $pdo,
-            is_array($details) ? $details : [],
-            false
-        );
 
         // The health score 0-100 with its breakdown (N-1), from the monitor's
         // OWN stored details - not the enriched ones the tips read: those
@@ -2721,6 +2696,36 @@ if ($action === 'monitor_insights') {
         } catch (Throwable $he) {
             error_log('[api.php action=monitor_insights] health of ' . $monitor_id . ': ' . $he->getMessage());
         }
+        // TeamSpeak's sentence quotes a score, as it always has, but now the
+        // ring's: the area score above could print 40 next to a ring of 95.
+        // Other types keep a sentence without one.
+        $summary_score = ($is_teamspeak && $health !== null) ? ['score' => $health['score'] ?? null] : null;
+
+        $timeline = bk_get_monitor_timeline($pdo, $monitor_id, 30);
+        // $pdo a $details navic: shrnuti si z nich dopocita, jak dlouho je
+        // metrika nad prahem a ktery proces za tim stoji.
+        $summary = bk_build_executive_summary(
+            $monitor,
+            $summary_score,
+            $knowledge_tips,
+            $monitor_insights,
+            array_slice($timeline, 0, 5),
+            $pdo,
+            is_array($details) ? $details : []
+        );
+
+        // The asset page's "Souhrn stavu": the state and the pressure only,
+        // because the findings list right below it names every concern once.
+        $status_sentence = bk_build_executive_summary(
+            $monitor,
+            $summary_score,
+            $knowledge_tips,
+            $monitor_insights,
+            [],
+            $pdo,
+            is_array($details) ? $details : [],
+            false
+        );
 
         echo bk_json_safe([
             'summary' => $summary,
