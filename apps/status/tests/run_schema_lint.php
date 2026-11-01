@@ -10,11 +10,12 @@
  * (preset_id, latency_threshold_ms/mins, acknowledged_by/at, postmortem,
  * lte_rsrp) existed only in the migrations.
  *
- * Today it passes only by luck. The version in schema.sql is lower than
- * BK_SCHEMA_VERSION, so after an import the migrations run and add the missing
- * columns. But the moment someone "aligned" the versions - which the comment
- * at the top of schema.sql outright recommends - a fresh install would break at
- * runtime, on a query against a nonexistent column.
+ * It used to pass only by luck: schema.sql stored a version lower than
+ * BK_SCHEMA_VERSION, so after an import the migrations ran and added the
+ * missing columns, and the comment at the top of schema.sql recommended
+ * "aligning" the two. Now schema.sql stores no version at all; the installer
+ * stores one that is never BK_SCHEMA_VERSION, so the migrations always run
+ * once over a fresh import.
  *
  * Both directions are checked:
  *   1. Every column from `ALTER TABLE … ADD COLUMN` must also be in schema.sql.
@@ -72,17 +73,17 @@ foreach (array_unique($tbl_matches[1] ?? []) as $table) {
 
 // --- 3. Verze ------------------------------------------------------------
 //
-// Versions are deliberately NOT compared for equality. As long as schema.sql is
-// lower, migrations finish after an import and top up the rest - a safe
-// safety net. Only its presence is checked: without one, migrations would
-// run on every request.
-// schema.sql holds several versions (a seed-data row and an overwrite at the end).
-// The last one wins - ON DUPLICATE KEY UPDATE overwrites the previous - so it is
-// the one taken, otherwise the report would show a value that never applies.
-preg_match_all("/schema_version['\"]?,\s*'([0-9a-z]+)'/i", $schema_src, $sv_all);
-$schema_version = !empty($sv_all[1]) ? end($sv_all[1]) : null;
-if ($schema_version === null) {
-    $problems[] = 'schema.sql nenastavuje schema_version - migrace by běžely při každém requestu';
+// schema.sql stores no version: one written halfway through the file marked
+// a cut-off import as finished (R214), and one equal to BK_SCHEMA_VERSION
+// would skip the migrations that add what schema.sql lacks. The installer
+// stores its own after the whole import, never BK_SCHEMA_VERSION.
+$installer_src = (string)file_get_contents(__DIR__ . '/../installer.php');
+if (preg_match("/'schema_version'/", $schema_src)) {
+    $problems[] = 'schema.sql zapisuje schema_version - verzi ukládá až instalátor po celém importu';
+}
+if (!preg_match("/const BK_INSTALL_SCHEMA_VERSION = '([^']+)';/", $installer_src, $iv)
+    || !str_contains($installer_src, "bk_setting_set(\$pdo, 'schema_version', BK_INSTALL_SCHEMA_VERSION)")) {
+    $problems[] = 'installer.php po importu neuloží schema_version - migrace by běžely při každém requestu';
 }
 if (!preg_match("/BK_SCHEMA_VERSION',\s*'([0-9a-z]+)'/", $db_src, $bv)) {
     $problems[] = 'db.php nedefinuje BK_SCHEMA_VERSION';
@@ -93,6 +94,9 @@ if (!preg_match("/function bk_schema_migrations_version\(\): string \{\s*return 
     $problems[] = 'migrations.php neříká, pro kterou verzi je seznam (bk_schema_migrations_version)';
 } elseif (isset($bv[1]) && $mv[1] !== $bv[1]) {
     $problems[] = "migrations.php je pro verzi {$mv[1]}, db.php pro {$bv[1]} - seznam by nikdy neběžel";
+}
+if (isset($iv[1], $bv[1]) && $iv[1] === $bv[1]) {
+    $problems[] = 'instalátor ukládá BK_SCHEMA_VERSION - migrace by po importu nedoplnily, co schema.sql nemá';
 }
 
 if ($problems) {
@@ -106,9 +110,9 @@ if ($problems) {
 }
 
 printf(
-    "Schema lint: schema.sql odpovídá migracím (%d sloupců, verze %s / %s)\n",
+    "Schema lint: schema.sql odpovídá migracím (%d sloupců, verze po importu %s / %s)\n",
     $checked_columns,
-    $schema_version ?? '?',
+    $iv[1] ?? '?',
     $bv[1] ?? '?'
 );
 exit(0);

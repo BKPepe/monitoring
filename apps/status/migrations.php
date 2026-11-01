@@ -118,9 +118,6 @@ function bk_schema_migrations(): array {
             INDEX (occurred_at),
             INDEX (monitor_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
-        'sla_goal_pct default' => static function (PDO $pdo): void {
-            bk_setting_add_if_absent($pdo, 'sla_goal_pct', '99.95');
-        },
 
         // Deep TeamSpeak monitoring + Host/VPS layer (load average, CPU steal,
         // swap, disk I/O, network errors) and the TeamSpeak process/clients for history charts.
@@ -139,9 +136,6 @@ function bk_schema_migrations(): array {
         "ALTER TABLE monitors ADD COLUMN sq_username VARCHAR(100) DEFAULT NULL",
         "ALTER TABLE monitors ADD COLUMN sq_password VARCHAR(255) DEFAULT NULL",
         "ALTER TABLE monitors ADD COLUMN ts3_filetransfer_port INT DEFAULT NULL",
-        'ts3_latest_version default' => static function (PDO $pdo): void {
-            bk_setting_add_if_absent($pdo, 'ts3_latest_version', '');
-        },
 
         // Finishing the Level 2 Host layer (IO wait, inode usage, zombie
         // processes, fork rate, temperature). All optional/NULL, older agents

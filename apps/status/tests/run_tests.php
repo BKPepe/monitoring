@@ -4404,12 +4404,15 @@ check('SQL: středník v řetězci, v komentáři a v identifikátoru příkaz n
     bk_install_split_sql("-- a; b\nCREATE TABLE `x;y` (a INT); # c; d\nINSERT INTO t VALUES ('1;2', \"it''s; \\\\'x\", 'a\\'b;');\n/* e; f */ SELECT 1;"),
     ["CREATE TABLE `x;y` (a INT)", "INSERT INTO t VALUES ('1;2', \"it''s; \\\\'x\", 'a\\'b;')", 'SELECT 1']);
 check('SQL: "--" bez mezery není komentář (MySQL)', bk_install_split_sql("SELECT 1--2;"), ['SELECT 1--2']);
+check('SQL: komentář uvnitř příkazu zmizí, hodnoty zůstanou',
+    bk_install_split_sql("INSERT INTO t VALUES\n('a', '1'), -- první\n('b', '2');"), ["INSERT INTO t VALUES\n('a', '1'), \n('b', '2')"]);
 $in_schema = (string)file_get_contents(__DIR__ . '/../schema.sql');
 $in_statements = bk_install_split_sql($in_schema);
-check('schema.sql: každá tabulka a dva zápisy nastavení, nic navíc',
-    count($in_statements), preg_match_all('/CREATE TABLE IF NOT EXISTS/', $in_schema) + 2);
-check_true('schema.sql: vložené komentáře uvnitř INSERTu zmizí, hodnoty zůstanou',
-    str_contains($in_statements[array_key_last(array_filter($in_statements, fn ($s) => str_starts_with($s, 'INSERT INTO `settings`')))] ?? '', "('sms_gateway_type', 'twilio'),"));
+// Defaults live in bk_settings_defaults() and the installer stores the
+// version after the import: schema.sql is tables and nothing else.
+check('schema.sql: každá tabulka, žádný zápis nastavení',
+    [count($in_statements), array_values(array_filter($in_statements, fn ($s) => !str_starts_with($s, 'CREATE TABLE')))],
+    [preg_match_all('/CREATE TABLE IF NOT EXISTS/', $in_schema), []]);
 
 [$in_cfg, $in_err] = bk_install_validate(['host' => 'localhost', 'port' => '', 'database' => 'user_status', 'user' => 'user_bk', 'password' => '']);
 check('prázdný port = 3306, prázdné heslo projde', [$in_err, $in_cfg['port'] ?? null, $in_cfg['password'] ?? null], [null, 3306, '']);

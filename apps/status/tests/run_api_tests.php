@@ -266,9 +266,12 @@ function api_get_auth(string $base, string $query, string $jar): array {
 // a password only the installer knows. The suite installs itself the same way,
 // with a password generated for this run.
 check('schema.sql nezakládá žádný účet (žádné výchozí heslo)', (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn(), 0);
+// Nor a setting: every default comes from bk_settings_defaults(), which a
+// fresh and an upgraded install share.
+check('schema.sql nezapíše žádné nastavení', (int)$pdo->query("SELECT COUNT(*) FROM settings")->fetchColumn(), 0);
 [, $fresh_session] = api_get($base, 'action=session');
 check('čerstvá instalace hlásí installed=false', $fresh_session['installed'] ?? 'chybí', false);
-// schema.sql stores an older schema_version, so that first request ran every
+// schema.sql stores no schema_version, so that first request ran every
 // migration over a fresh schema: each one found its change already there,
 // none failed for real, and the version was stored.
 $schema_version_src = preg_match("/BK_SCHEMA_VERSION',\s*'([0-9a-z]+)'/", (string)file_get_contents($root . '/db.php'), $sv_m) ? $sv_m[1] : null;
@@ -1778,9 +1781,9 @@ $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 2");
 $pdo->exec("UPDATE monitors SET preset_id = NULL, cpu_threshold = 90, ram_threshold = 95 WHERE id = 2");
 $pdo->exec("DELETE FROM metric_presets WHERE id = 77");
 
-// bk_setting_set() and bk_setting_add_if_absent() replace the hand-written
-// settings upserts. The row must be what those upserts stored, NULL and ''
-// included, and get_setting() in the same request must see it: before, it
+// bk_setting_set() replaces the hand-written settings upserts. The row must
+// be what those upserts stored, NULL and '' included, and get_setting() in
+// the same request must see it: before, it
 // answered the value read at the start of the request (a cron run with an
 // empty ip_loc_local looked the location up again for every monitor).
 $sw_row = function (string $key) use ($pdo) {
@@ -1789,7 +1792,7 @@ $sw_row = function (string $key) use ($pdo) {
     $rows = $stmt->fetchAll(PDO::FETCH_COLUMN);
     return $rows === [] ? 'bez řádku' : $rows[0];
 };
-$sw_keys = ['bk_test_sw_old', 'bk_test_sw_new', 'bk_test_sw_seed_old', 'bk_test_sw_seed_new'];
+$sw_keys = ['bk_test_sw_old', 'bk_test_sw_new'];
 try {
     $sw_old = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
     $sw_same = [];
@@ -1825,30 +1828,8 @@ try {
     }
     check('nepovedený zápis vyhodí výjimku a v paměti nechá uloženou hodnotu',
         [$sw_threw, get_setting('bk_test_sw_new', 'výchozí'), $sw_row('bk_test_sw_new')], [true, 'uložená', 'uložená']);
-
-    // add_if_absent is the migrations' `ON DUPLICATE KEY UPDATE key_value = key_value`.
-    $sw_seed_old = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = key_value");
-    $sw_seed = [];
-    foreach (['výchozí', 'jiná', ''] as $sw_v) {
-        $sw_seed_old->execute(['bk_test_sw_seed_old', $sw_v]);
-        bk_setting_add_if_absent($pdo, 'bk_test_sw_seed_new', $sw_v);
-        $sw_seed[] = [$sw_row('bk_test_sw_seed_old'), $sw_row('bk_test_sw_seed_new'), get_setting('bk_test_sw_seed_new', 'chybí')];
-    }
-    check('výchozí hodnota se zapíše jen bez řádku, existující řádek ani paměť nepřepíše',
-        $sw_seed, [['výchozí', 'výchozí', 'výchozí'], ['výchozí', 'výchozí', 'výchozí'], ['výchozí', 'výchozí', 'výchozí']]);
-    $pdo->exec("UPDATE settings SET key_value = 'od jiného procesu' WHERE key_name = 'bk_test_sw_seed_new'");
-    bk_setting_add_if_absent($pdo, 'bk_test_sw_seed_new', 'výchozí');
-    check('existující řádek zůstane, i když ho paměť zná jinak',
-        [$sw_row('bk_test_sw_seed_new'), get_setting('bk_test_sw_seed_new', 'chybí')], ['od jiného procesu', 'výchozí']);
-    // A snapshot without the key (a migration runs before it is loaded) takes
-    // the row's value, not the seed the row turned down.
-    unset($GLOBALS['system_settings']['bk_test_sw_seed_new']);
-    bk_setting_add_if_absent($pdo, 'bk_test_sw_seed_new', 'výchozí');
-    check('paměť bez klíče převezme hodnotu existujícího řádku, ne výchozí',
-        [$sw_row('bk_test_sw_seed_new'), get_setting('bk_test_sw_seed_new', 'chybí'), $GLOBALS['system_settings']['bk_test_sw_seed_new'] ?? 'chybí'],
-        ['od jiného procesu', 'od jiného procesu', 'od jiného procesu']);
 } finally {
-    $pdo->prepare("DELETE FROM settings WHERE key_name IN (?, ?, ?, ?)")->execute($sw_keys);
+    $pdo->prepare("DELETE FROM settings WHERE key_name IN (?, ?)")->execute($sw_keys);
     foreach ($sw_keys as $sw_k) {
         unset($GLOBALS['system_settings'][$sw_k]);
     }
@@ -4509,6 +4490,12 @@ if ($logged_in) {
     [, $fi_legacy] = api_get_auth($base, 'action=get_settings', $cookie_jar);
     check('uložené prázdné upozornění z agentů se čte jako zapnuté', $fi_legacy['settings']['agent_notifications_enabled'] ?? null, '1');
     check('uložené prázdné "jen adminům" se čte jako zapnuté', $fi_legacy['settings']['agent_notify_admin_only'] ?? null, '1');
+    // SMTP had no default: an empty port reached the mailer as 0, and the
+    // forms showed SSL on 465 where the mailer used STARTTLS (R174).
+    $pdo->exec("REPLACE INTO settings (key_name, key_value) VALUES ('smtp_port', ''), ('smtp_secure', '')");
+    [, $fi_smtp] = api_get_auth($base, 'action=get_settings', $cookie_jar);
+    check('prázdný SMTP port a zabezpečení se čtou jako 587 a STARTTLS',
+        [$fi_smtp['settings']['smtp_port'] ?? null, $fi_smtp['settings']['smtp_secure'] ?? null], ['587', 'tls']);
 
     // An empty switch is refused as a whole: nothing of that save is written.
     $fi_host_before = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'smtp_host'")->fetchColumn();
@@ -9524,10 +9511,18 @@ try {
     check('v databázi jsou všechny tabulky ze schema.sql', (int)$in_tables->fetchColumn(), preg_match_all('/CREATE TABLE IF NOT EXISTS/', (string)file_get_contents($root . '/schema.sql')));
     $in_key = $pdo->query("SELECT key_value FROM `{$in_db}`.settings WHERE key_name = 'cron_key'")->fetchColumn();
     check_true('čerstvá instalace dostane vlastní cron klíč', is_string($in_key) && strlen($in_key) === 32);
+    // The version comes after the whole file, from the installer, and it is
+    // not the current one: the next request runs the migrations, which add
+    // what schema.sql lacks, and stores the real version.
+    check('po importu jen cron klíč a verze z instalátoru',
+        $pdo->query("SELECT key_name, key_value FROM `{$in_db}`.settings WHERE key_name <> 'cron_key' ORDER BY key_name")->fetchAll(PDO::FETCH_KEY_PAIR),
+        ['schema_version' => 'schema.sql']);
     [$c, $r] = api_post($base, 'action=install_import_schema', [], $in_jar, $in_csrf);
     check('druhý import nic nepřepíše', [$c, $r['imported'] ?? null, $r['alreadyImported'] ?? null], [200, false, true]);
     [$c, $s] = api_get($base, 'action=session');
     check('po importu API běží a nabídne první účet', [$c, $s['installed'] ?? 'chybí'], [200, false]);
+    check('první požadavek po importu doběhne migrace a uloží verzi',
+        $pdo->query("SELECT key_value FROM `{$in_db}`.settings WHERE key_name = 'schema_version'")->fetchColumn(), $schema_version_src);
     [$c, $cr] = api_get_auth($base, 'action=install_cron', $in_jar);
     check('cron řádek z __DIR__, každou minutu', [$c, $cr['script'] ?? null, $cr['schedule'] ?? null], [200, $root . '/cron.php', '* * * * *']);
     check_true('crontab řádek = plán + příkaz pro cPanel', ($cr['crontabLine'] ?? '') === '* * * * * ' . ($cr['command'] ?? '-'));

@@ -602,11 +602,11 @@ export function SettingsPage() {
                           label={t('settings.smtp_host_label', 'SMTP Server (Host)')}
                           placeholder="smtp.vasedomena.cz"
                         />
-                        <FieldInput ctx={fieldCtx} k="smtp_port" label="SMTP Port" placeholder="465" />
+                        <FieldInput ctx={fieldCtx} k="smtp_port" label="SMTP Port" placeholder="587" />
                         <div>
                           <label className={labelCls}>{t('settings.smtp_secure_label', 'SMTP Zabezpečení')}</label>
                           <select
-                            value={settings.smtp_secure ?? 'ssl'}
+                            value={settings.smtp_secure ?? 'tls'}
                             onChange={(e) => set('smtp_secure', e.target.value)}
                             className={selectCls}
                           >
@@ -1317,8 +1317,9 @@ function channelState(
       // An empty SMTP host is not "off": the server falls back to PHP mail().
       return locked('smtp_host') || has('smtp_host') ? 'set' : 'default';
     case 'sms':
-      // The gateway type alone is seeded ('twilio') on every install; only
-      // its credentials make the channel work (V-04).
+      // The gateway type alone says nothing: a fresh install has none, an
+      // older one still holds the 'twilio' row schema.sql used to seed.
+      // Only the credentials make the channel work (V-04).
       return (saved.sms_gateway_type ?? '').trim() === 'smsbrana'
         ? has('smsbrana_user', 'smsbrana_password')
           ? 'set'

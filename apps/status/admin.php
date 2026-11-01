@@ -2066,7 +2066,7 @@ wget -O docker-compose.agent.yml <?php echo bk_link_origin() . str_replace('admi
                             </div>
                             <div class="form-group">
                                 <label for="smtp_port">SMTP Port</label>
-                                <input type="text" name="smtp_port" id="smtp_port" value="<?php echo htmlspecialchars(get_setting('smtp_port', '465')); ?>" class="form-control" placeholder="465">
+                                <input type="text" name="smtp_port" id="smtp_port" value="<?php echo htmlspecialchars(get_setting('smtp_port', '587')); ?>" class="form-control" placeholder="587">
                             </div>
                         </div>
 
@@ -2078,7 +2078,7 @@ wget -O docker-compose.agent.yml <?php echo bk_link_origin() . str_replace('admi
                             <div class="form-group">
                                 <label for="smtp_secure">SMTP Zabezpečení</label>
                                 <select name="smtp_secure" id="smtp_secure" class="form-control">
-                                    <option value="ssl" <?php echo get_setting('smtp_secure', 'ssl') === 'ssl' ? 'selected' : ''; ?>>SSL (Port 465)</option>
+                                    <option value="ssl" <?php echo get_setting('smtp_secure', 'tls') === 'ssl' ? 'selected' : ''; ?>>SSL (Port 465)</option>
                                     <option value="tls" <?php echo get_setting('smtp_secure') === 'tls' ? 'selected' : ''; ?>>TLS (Port 587)</option>
                                     <option value="none" <?php echo get_setting('smtp_secure') === 'none' ? 'selected' : ''; ?>>Bez zabezpečení</option>
                                 </select>

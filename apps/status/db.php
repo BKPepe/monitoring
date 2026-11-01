@@ -745,30 +745,6 @@ function bk_setting_set(PDO $pdo, string $key, ?string $value): void {
 }
 
 /**
- * Stores a setting only when no row has its key yet (a default a migration
- * seeds). An existing row keeps its value, and so does its snapshot entry; a
- * snapshot without the key takes what the row holds, seed or not.
- */
-function bk_setting_add_if_absent(PDO $pdo, string $key, ?string $value): void {
-    global $system_settings;
-    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = key_value")
-        ->execute([$key, $value]);
-    if (!is_array($system_settings)) {
-        $system_settings = [];
-    }
-    if (!array_key_exists($key, $system_settings)) {
-        // The row may predate this call with another value (a migration runs
-        // before the snapshot is loaded), so the snapshot learns the row.
-        $stmt = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = ?");
-        $stmt->execute([$key]);
-        $row = $stmt->fetch(PDO::FETCH_NUM);
-        if ($row !== false) {
-            $system_settings[$key] = $row[0];
-        }
-    }
-}
-
-/**
  * The single list of system settings keys.
  *
  * It used to exist three times: in admin.php for writing, and in api.php
@@ -819,11 +795,19 @@ function bk_settings_keys(): array {
  * Only keys whose every get_setting() caller agrees on the default belong
  * here; tests/run_settings_parity_lint.php fails when a caller disagrees.
  * Keys with no default (credentials, URLs, the site title that each page
- * words differently) stay out and keep '' as "not configured".
+ * words differently, the SMS gateway whose '' is "no SMS") stay out and
+ * keep '' as "not configured".
+ *
+ * This is the only source: schema.sql seeds no row and no migration does,
+ * so a fresh install and an upgraded one hold the same rows.
  */
 function bk_settings_defaults(): array {
     return [
         'email_lang' => 'cs',
+        // Submission with STARTTLS. The mailer used 587/tls, the legacy form
+        // offered 465/ssl, and an empty port reached PHPMailer as 0 (R174).
+        'smtp_port' => '587',
+        'smtp_secure' => 'tls',
         'agent_offline_timeout' => '50',
         'agent_notifications_enabled' => '1',
         'agent_notify_admin_only' => '1',

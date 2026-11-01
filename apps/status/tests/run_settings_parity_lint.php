@@ -177,6 +177,28 @@ if (preg_match('/SWITCH_DEFAULTS[^=]*=\s*\{(.*?)\};/s', $tsx, $sm)) {
     $problems[] = 'settings.tsx nemá SWITCH_DEFAULTS - formulář neví, jak ukázat nikdy neuložený přepínač';
 }
 
+// 6. One source of defaults. schema.sql seeded 31 rows a fresh install had
+//    and an upgraded one never got, and its smtp_port said 587 where the
+//    legacy form said 465. Neither the schema nor a migration seeds a
+//    setting; a default belongs in bk_settings_defaults(). A migration may
+//    keep its own bookkeeping through bk_setting_set() (which data fixes
+//    ran, say), so only a settings key written there counts as a seed.
+$seedable = array_merge($known, array_keys($defaults));
+foreach (['schema.sql', 'migrations.php'] as $file) {
+    $src = (string)file_get_contents($root . '/' . $file);
+    if (preg_match('/INSERT\s+(?:IGNORE\s+)?INTO\s+`?settings`?|bk_setting_add_if_absent\(/i', $src)) {
+        $problems[] = sprintf('%s zapisuje do settings - výchozí hodnota patří do bk_settings_defaults()', $file);
+    }
+    $set_calls = preg_match_all('/bk_setting_set\(/', $src);
+    preg_match_all('/bk_setting_set\(\s*\$\w+\s*,\s*\'([a-z0-9_]+)\'/', $src, $set_keys);
+    if ($set_calls !== count($set_keys[1])) {
+        $problems[] = sprintf('%s volá bk_setting_set() s klíčem, který není řetězec - nejde ověřit, že nezapisuje nastavení', $file);
+    }
+    foreach (array_unique(array_intersect($set_keys[1], $seedable)) as $key) {
+        $problems[] = sprintf('%s zapisuje nastavení %s - výchozí hodnota patří do bk_settings_defaults()', $file, $key);
+    }
+}
+
 if ($problems) {
     fwrite(STDERR, "Nastavení se rozchází mezi UI a serverem:\n\n");
     foreach ($problems as $p) {

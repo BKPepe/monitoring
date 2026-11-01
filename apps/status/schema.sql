@@ -1,8 +1,11 @@
 -- SQL Schema pro Blood Kings Status Monitoring
 -- Vytvořte databázi a naimportujte tento soubor
 --
--- POZOR: Hodnota 'schema_version' na konci souboru musí odpovídat konstantě
--- BK_SCHEMA_VERSION v db.php. Při změně schématu aktualizujte obě místa.
+-- No settings row is written here, schema_version included. Every default
+-- lives in bk_settings_defaults() (db.php), which fresh and upgraded installs
+-- share. The installer stores schema_version once the whole file is in; the
+-- next request runs the migrations (migrations.php) over the fresh tables -
+-- they add a few indexes this file lacks - and stores BK_SCHEMA_VERSION.
 
 CREATE TABLE IF NOT EXISTS `users` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
@@ -311,55 +314,6 @@ CREATE TABLE IF NOT EXISTS `settings` (
 -- users table: /app/setup (api.php?action=setup) then creates the first
 -- administrator with a password the installer chooses, and that action is
 -- refused as soon as any account exists.
-
--- Výchozí nastavení
-
--- SMTP starts empty: an empty host means PHP mail(), and a fresh install must
--- not point its e-mail at the author's own mail server (Settings showed that
--- channel as configured on every new install).
-INSERT INTO `settings` (`key_name`, `key_value`) VALUES
-('smtp_host', ''),
-('smtp_port', '587'),
-('smtp_user', ''),
-('smtp_pass', ''),
-('smtp_secure', 'tls'),
-('sms_gateway_type', 'twilio'), -- 'twilio' nebo 'smsbrana'
-('twilio_sid', ''),
-('twilio_token', ''),
-('twilio_from', ''),
-('smsbrana_user', ''),
-('smsbrana_password', ''),
-('site_title', 'Blood Kings | Status Monitoring'),
--- Webhooky pro notifikace (Discord / Slack / Telegram)
-('discord_webhook_url', ''),
-('slack_webhook_url', ''),
-('telegram_bot_token', ''),
-('telegram_chat_id', ''),
--- GitHub SSO (OAuth)
-('oauth_github_client_id', ''),
-('oauth_github_client_secret', ''),
--- Vlastní branding veřejné stránky
-('custom_logo_url', ''),
-('custom_color_theme', ''),
-('custom_nav_links', ''),
-('portal_url', ''),
--- Prometheus exporter (metrics.php) - prázdný token = endpoint vypnutý
-('metrics_token', ''),
--- Cílová dostupnost pro měsíční digest (SLA vs Goal)
-('sla_goal_pct', '99.95'),
--- Ručně nastavená poslední známá verze TeamSpeak serveru (pro "Update Available"); prázdné = kontrola se přeskočí
-('ts3_latest_version', ''),
--- Token pro automatickou registraci nových agentů (agent_api.php?action=register)
-('agent_registration_token', ''),
--- Pushover & PagerDuty notifikace
-('pushover_user_key', ''),
-('pushover_api_token', ''),
-('pagerduty_routing_key', ''),
--- Hranice varování pro vypršení SSL certifikátu (ve dnech)
-('ssl_alert_days', '14'),
--- Verze schématu - musí odpovídat BK_SCHEMA_VERSION v db.php
-('schema_version', '20260730')
-ON DUPLICATE KEY UPDATE `key_name`=`key_name`;
 
 CREATE TABLE IF NOT EXISTS `metric_annotations` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
@@ -714,6 +668,3 @@ CREATE TABLE IF NOT EXISTS `status_pages` (
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY `uniq_status_page_slug` (`slug`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-INSERT INTO settings (key_name, key_value) VALUES ('schema_version', '20260731') ON DUPLICATE KEY UPDATE key_value = '20260731';
-

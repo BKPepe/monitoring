@@ -42,6 +42,15 @@ if (count(get_included_files()) === 1) {
 const BK_INSTALL_PASSWORD_PLACEHOLDER = '__DB_PASSWORD__';
 
 /**
+ * The schema_version stored once schema.sql is in. Never BK_SCHEMA_VERSION:
+ * schema.sql lacks some indexes the migrations add (the unique key on
+ * heartbeat_token among them), so the next request must still run the list
+ * over the fresh tables - db.php then stores the real version. Any other
+ * value would do; this one says where it came from.
+ */
+const BK_INSTALL_SCHEMA_VERSION = 'schema.sql';
+
+/**
  * JSON that is safe in any HTML context (see bk_json_safe() in functions.php,
  * which is not loaded here): the config text echoes what the caller typed.
  *
@@ -189,8 +198,9 @@ function bk_install_connect_error(Throwable $e): array {
 }
 
 /**
- * What the connected database holds: tables, whether schema.sql ran (its last
- * statement stores schema_version) and how many accounts exist.
+ * What the connected database holds: tables, whether schema.sql ran (the
+ * import stores schema_version after its last statement, and db.php after
+ * the migrations) and how many accounts exist.
  *
  * users is null when the count cannot be read for any reason other than a
  * missing table - and null locks the installer, so an error never opens it.
@@ -650,6 +660,9 @@ function bk_install_dispatch(string $action, ?PDO $pdo, string $dir): never {
                     ['statement' => $result['statement'] ?? null, 'driverCode' => $result['driverCode'] ?? null]);
             }
             bk_install_cron_key($pdo);
+            // Only now: schema.sql writes no row, so an import cut short is
+            // never taken for a finished one (R214).
+            bk_setting_set($pdo, 'schema_version', BK_INSTALL_SCHEMA_VERSION);
             bk_install_respond(200, ['imported' => true, 'statements' => $result['executed'],
                 'next' => bk_install_step(true, false, bk_install_inspect($pdo))]);
         }
