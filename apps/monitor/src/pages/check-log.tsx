@@ -142,6 +142,7 @@ export function CheckLogPage() {
         atIso: row.timeIso ?? null,
         severity: severityOf(row),
         kind: 'check' as const,
+        probe: row.source === 'probe',
         location: row.location ?? undefined,
         method: row.type ?? undefined,
         responseMs: typeof row.responseTime === 'number' ? row.responseTime : null,

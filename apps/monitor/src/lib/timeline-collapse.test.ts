@@ -71,6 +71,12 @@ describe('isRoutine a countAttention', () => {
   it('odznak počítá jen výpadky a varování', () => {
     expect(countAttention([ev('a', 'info'), ev('b', 'down'), ev('c', 'warning'), ev('d', 'up')])).toBe(2);
   });
+
+  it('kontrola vzdálené sondy je rutina a do odznaku nepatří, i když selhala (r024)', () => {
+    const probeDown = ev('Selhala kontrola vzdálené sondy', 'warning', { kind: 'check', probe: true });
+    expect(isRoutine(probeDown)).toBe(true);
+    expect(countAttention([ev('b', 'down'), probeDown])).toBe(1);
+  });
 });
 
 describe('repeatsTitle', () => {

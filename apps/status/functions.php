@@ -14075,6 +14075,9 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $agent_health = $stmt_agent_health->fetchAll();
 
     // --- SSL summary (the last check_stages per 'web' monitor in the window) ---
+    // The outer row must carry the stages too: a remote probe's row (no
+    // stages) logged in the same second as cron's joined in and counted as a
+    // checked site in the DNS health share.
     $stmt_ssl = $pdo->prepare("
         SELECT l.check_stages, m.name
         FROM monitor_logs l
@@ -14085,7 +14088,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
             GROUP BY monitor_id
         ) latest ON latest.monitor_id = l.monitor_id AND latest.max_at = l.checked_at
         JOIN monitors m ON m.id = l.monitor_id
-        WHERE m.type = 'web' AND m.archived_at IS NULL
+        WHERE m.type = 'web' AND m.archived_at IS NULL AND l.check_stages IS NOT NULL
     ");
     $stmt_ssl->execute([$days]);
     $ssl_rows = $stmt_ssl->fetchAll();
@@ -14477,8 +14480,8 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
         if ($worst_region === null || $r['uptime'] < $worst_region['uptime']) $worst_region = $r;
     }
 
-    // Incident heatmap by day of week (aggregated over the whole month), from
-    // the same rows as the incident count: a remote probe's are not one.
+    // Incident heatmap by day of week (aggregated over the whole month): like
+    // the incident count, a remote probe's 'down' rows are not one.
     $stmt_dow = $pdo->prepare("
         SELECT DAYOFWEEK(checked_at) as dow, COUNT(*) as cnt
         FROM monitor_logs

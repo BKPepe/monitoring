@@ -1224,7 +1224,12 @@ So `outageMinutes` can hold a probe's failure that `lastOutage` does not.
 The reason given for a status - a status finding's `detail` in
 `action=findings`, the administration's outage diagnostics, the daily
 reminder, an open outage card in `action=incidents` - is the message of the
-newest row in the monitor's current state that a probe did not write.
+newest row in the monitor's current state that a probe did not write. So is
+every "current" value read off the newest row: the response time in
+`action=monitors` and `metrics.php`, the HTTP code in
+`action=websites_overview` and the check stages behind the tips. A probe's
+failed check sends the time it waited (up to 8 s), which is no latency of the
+monitor.
 
 A row from before schema r024 has no `source` (NULL) and counts everywhere as
 it did, a probe's of that time included, until the 30-day logs prune it.

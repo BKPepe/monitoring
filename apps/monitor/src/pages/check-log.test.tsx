@@ -125,19 +125,26 @@ describe('Protokol kontrol (W2-6)', () => {
 });
 
 describe('Protokol kontrol: řádek vzdálené sondy (r024)', () => {
-  it('selhaná kontrola sondy není výpadek ani úspěch a nespojí se s výpadkem cronu', async () => {
-    const probe = { ...row(11, 1, 'E-shop', 26, 'down'), isDown: false, source: 'probe', location: 'Frankfurt' };
-    stub((url) =>
-      url.includes('action=events')
-        ? json({ events: [row(12, 1, 'E-shop', 27, 'up'), probe, ...EVENTS.slice(2)], statusChange: null })
-        : json({ monitors: [] })
-    );
+  it('selhaná kontrola sondy uprostřed výpadku ho nerozdělí a pod „Vše“ není výpadek ani úspěch', async () => {
+    const probe = { ...row(11, 1, 'E-shop', 24, 'down'), isDown: false, source: 'probe', location: 'Frankfurt' };
+    // Newest first, the probe's failed check between cron's outage rows.
+    const events = [
+      row(10, 1, 'E-shop', 30, 'up'),
+      row(8, 1, 'E-shop', 25, 'down'),
+      probe,
+      row(7, 1, 'E-shop', 24, 'down'),
+      row(6, 1, 'E-shop', 23, 'down'),
+    ];
+    stub((url) => (url.includes('action=events') ? json({ events, statusChange: null }) : json({ monitors: [] })));
     const { container } = renderPage();
 
-    expect((await screen.findAllByText('E-shop: Selhala kontrola vzdálené sondy')).length).toBeGreaterThan(0);
-    // The probe's row is a warning of its own: the three outage rows of cron
-    // still fold into one run, and nothing calls the probe's failure a pass.
+    // The timeline of changes leaves the probe's check out: cron's three
+    // outage rows stay one run instead of two pieces around it.
+    expect((await screen.findAllByText('E-shop: Výpadek')).length).toBeGreaterThan(0);
     expect(container.querySelector('[data-run]')?.getAttribute('data-run')).toBe('3');
+    expect(screen.queryByText('E-shop: Selhala kontrola vzdálené sondy')).toBeNull();
+
+    // Every row shows it as what it was: neither an outage nor a pass.
     fireEvent.click(screen.getByRole('button', { name: /^Vše/ }));
     expect(screen.getAllByText('E-shop: Selhala kontrola vzdálené sondy').length).toBeGreaterThan(0);
     expect(screen.getAllByText('E-shop: Kontrola v pořádku').length).toBe(1);

@@ -487,7 +487,8 @@ if ($action === 'monitors') {
     // The base list. response_time/cpu_usage/ram_usage/hdd_usage are NOT
     // columns of the monitors table (never were - confirmed live: "Unknown column
     // 'response_time'") - they are the latest measured values from monitor_logs
-    // (availability checks) and vps_metrics (agent reports), attached via
+    // (availability checks; cron's, not a remote probe's, whose failed check
+    // sends the time it waited) and vps_metrics (agent reports), attached via
     // subquery/join. This must NOT fail because of the extended fields below
     // (exactly that happened in production: one query for 20+ columns at once,
     // one schema mismatch = the whole monitor list gone, and the app with it).
@@ -502,6 +503,7 @@ if ($action === 'monitors') {
                    m.maintenance, m.maintenance_description, m.maintenance_start, m.maintenance_end, m.archived_at,
                    (SELECT l.response_time FROM monitor_logs l
                     WHERE l.monitor_id = m.id AND l.response_time > 0
+                      AND (l.source IS NULL OR l.source <> 'probe')
                     ORDER BY l.id DESC LIMIT 1) AS response_time,
                    vm.cpu_usage, vm.ram_usage, vm.hdd_usage
             FROM monitors m
@@ -4659,18 +4661,36 @@ if ($action === 'sla_report') {
         // 'maintenance' row, where that outage ended (the correlated subquery
         // runs only for monitors that ever went down). Neither is a remote
         // probe's row (source 'probe'), see the start below.
-        $stmt_out_all = $pdo->query("
-            SELECT l.monitor_id, l.id, l.checked_at, l.error_message,
-                   (SELECT u.checked_at FROM monitor_logs u
+        //
+        // The fleet-wide MAX(id) stays a read of idx_logs_cover_latency alone:
+        // source is in no index, so filtering it there would look up every
+        // kept 'down' row of every monitor on every report. Only a monitor
+        // whose latest 'down' is a probe's gets a second lookup, backwards on
+        // that index from its newest 'down' to the first that is not a probe's.
+        $sla_out_end = "(SELECT u.checked_at FROM monitor_logs u
                     WHERE u.monitor_id = l.monitor_id AND u.status IN ('up', 'maintenance') AND u.id > l.id
                       AND (u.source IS NULL OR u.source <> 'probe')
-                    ORDER BY u.id ASC LIMIT 1) AS end_at
+                    ORDER BY u.id ASC LIMIT 1) AS end_at";
+        $stmt_out_all = $pdo->query("
+            SELECT l.monitor_id, l.id, l.checked_at, l.error_message, l.source, {$sla_out_end}
             FROM monitor_logs l
-            JOIN (SELECT monitor_id, MAX(id) AS max_id FROM monitor_logs
-                  WHERE status = 'down' AND (source IS NULL OR source <> 'probe') GROUP BY monitor_id) ld
+            JOIN (SELECT monitor_id, MAX(id) AS max_id FROM monitor_logs WHERE status = 'down' GROUP BY monitor_id) ld
               ON ld.max_id = l.id
         ");
+        $stmt_out_own = $pdo->prepare("
+            SELECT l.monitor_id, l.id, l.checked_at, l.error_message, l.source, {$sla_out_end}
+            FROM monitor_logs l FORCE INDEX (idx_logs_cover_latency)
+            WHERE l.monitor_id = ? AND l.status = 'down' AND (l.source IS NULL OR l.source <> 'probe')
+            ORDER BY l.checked_at DESC LIMIT 1
+        ");
         foreach ($stmt_out_all->fetchAll() as $orow) {
+            if (($orow['source'] ?? null) === 'probe') {
+                $stmt_out_own->execute([(int)$orow['monitor_id']]);
+                $orow = $stmt_out_own->fetch();
+                if (!is_array($orow)) {
+                    continue;
+                }
+            }
             $sla_outage_by_mid[(int)$orow['monitor_id']] = $orow;
         }
         // When that outage STARTED: cron writes a row on every check, so the
@@ -4683,7 +4703,7 @@ if ($action === 'sla_report') {
         // split it. A maintenance window bounds it the way availability counts
         // it (maintenance time is outside the percentage and the outage
         // minutes): a window's rows end an outage and are not one, but a
-        // 'down' row logged inside a window (a remote probe's 503) is an
+        // 'down' row logged inside a window is an
         // outage until the window's next row, as it is in availability. The
         // incident stays open over a window and closes at the next 'up'.
         // Unlike availability, the outage is cron's: a remote probe's row

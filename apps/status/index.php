@@ -949,7 +949,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                     echo '<span style="color: var(--color-green);">' . htmlspecialchars(t('resp_online')) . '</span>';
                                                 } else {
                                                     // Zobrazíme odezvu z posledního logu
-                                                    $stmt_last_log = $pdo->prepare("SELECT response_time FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 1");
+                                                    $stmt_last_log = $pdo->prepare("SELECT response_time FROM monitor_logs WHERE monitor_id = ? AND (source IS NULL OR source <> 'probe') ORDER BY checked_at DESC LIMIT 1");
                                                     $stmt_last_log->execute([$mid]);
                                                     $last_log = $stmt_last_log->fetch();
                                                     if ($last_log && $last_log['response_time'] > 0) {

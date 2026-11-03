@@ -80,3 +80,23 @@ describe('SlaDetail – poslední výpadek (R143)', () => {
     expect(screen.getByText('MTTR (doba obnovení)').nextElementSibling?.textContent).toBe('2 h');
   });
 });
+
+describe('SlaDetail – minuty výpadku bez potvrzeného výpadku (r024)', () => {
+  const none = (outageMinutes: number): MonitorSla => ({
+    ...item({ start: '', end: null, durationSec: null, reason: '', resolved: true }, null),
+    currentStatus: 'up',
+    outageMinutes,
+    lastOutage: null,
+  });
+
+  it('minuty výpadku jen ze sondy nebo mlčení agenta: neříká „žádný výpadek“ vedle nich', () => {
+    renderCs(none(12));
+    expect(screen.getByText(/Žádný potvrzený výpadek za posledních 30 dní/)).toBeTruthy();
+    expect(screen.queryByText('Žádný výpadek za posledních 30 dní.')).toBeNull();
+  });
+
+  it('bez minut výpadku zůstává „žádný výpadek“', () => {
+    renderCs(none(0));
+    expect(screen.getByText('Žádný výpadek za posledních 30 dní.')).toBeTruthy();
+  });
+});

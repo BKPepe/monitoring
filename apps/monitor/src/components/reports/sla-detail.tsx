@@ -168,6 +168,18 @@ export function SlaDetail({ item, days }: { item: MonitorSla; days: number }) {
             {item.lastOutage.reason}
           </p>
         </div>
+      ) : item.outageMinutes > 0 ? (
+        // Availability counts time no outage stands for: a remote probe's
+        // failed checks (which never start one) and an agent's silence. "No
+        // outage" next to outage minutes read as a contradiction.
+        <p className="text-muted-foreground flex items-center gap-1.5">
+          <CircleCheck aria-hidden="true" className="size-3.5" />
+          {t(
+            'reports.no_confirmed_outage',
+            { days },
+            `Žádný potvrzený výpadek za posledních ${days} dní. Minuty výpadku v dostupnosti jsou z neúspěšných kontrol vzdálené sondy nebo z mlčení agenta.`
+          )}
+        </p>
       ) : (
         <p className="text-muted-foreground flex items-center gap-1.5">
           <CircleCheck aria-hidden="true" className="size-3.5" />

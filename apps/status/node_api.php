@@ -122,8 +122,11 @@ if ($action === 'post_results') {
         $raw_error = isset($res['error']) ? trim((string)$res['error']) : '';
         $error_message = !empty($raw_error) ? $raw_error : null;
 
-        // A result without a status is not a measurement.
-        if ($mid <= 0 || $status === '') continue;
+        // A result without a status is not a measurement, and a probe
+        // measures only 'up' or 'down' (all the Worker sends): a probe's
+        // 'warning' would reach the public failure list, its 'maintenance' or
+        // 'unknown' would turn availability seconds into time nobody measured.
+        if ($mid <= 0 || !in_array($status, ['up', 'down'], true)) continue;
 
         try {
             $stmt_old = $pdo->prepare("SELECT archived_at, maintenance, maintenance_start, maintenance_end FROM monitors WHERE id = ?");

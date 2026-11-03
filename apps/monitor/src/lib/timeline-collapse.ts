@@ -12,14 +12,19 @@ import type { TimelineEvent } from '@/data/model';
 export type TimelineItem =
   { kind: 'event'; event: TimelineEvent } | { kind: 'run'; key: string; events: TimelineEvent[] };
 
-/** A routine pass of the check log: the thing a timeline of changes leaves out. */
+/**
+ * A routine pass of the check log, or a remote probe's check: the things a
+ * timeline of changes leaves out. A probe's failed check is a measurement
+ * from another place, not a change - left in, it cut every run of cron's
+ * outage rows at the probe's five-minute beat.
+ */
 export function isRoutine(event: TimelineEvent): boolean {
-  return event.kind === 'check' && event.severity === 'info';
+  return event.kind === 'check' && (event.severity === 'info' || event.probe === true);
 }
 
-/** Events that need a look - the number a tab badge shows (an OK check is not news). */
+/** Events that need a look - the number a tab badge shows (an OK check is not news, nor a probe's check). */
 export function countAttention(events: readonly TimelineEvent[]): number {
-  return events.filter((e) => e.severity === 'down' || e.severity === 'warning').length;
+  return events.filter((e) => (e.severity === 'down' || e.severity === 'warning') && e.probe !== true).length;
 }
 
 const normalise = (text: string) =>

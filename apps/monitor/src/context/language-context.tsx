@@ -1716,6 +1716,10 @@ const translations: Record<string, { cs: string; en: string }> = {
   'reports.ongoing_badge': { cs: 'Probíhá', en: 'Ongoing' },
   'reports.reason_label': { cs: 'Důvod:', en: 'Reason:' },
   'reports.no_outage_30d': { cs: 'Žádný výpadek za posledních {days} dní.', en: 'No outage in the last {days} days.' },
+  'reports.no_confirmed_outage': {
+    cs: 'Žádný potvrzený výpadek za posledních {days} dní. Minuty výpadku v dostupnosti jsou z neúspěšných kontrol vzdálené sondy nebo z mlčení agenta.',
+    en: 'No confirmed outage in the last {days} days. The outage minutes in availability come from failed remote probe checks or a silent agent.',
+  },
   'reports.view_detail': { cs: 'Otevřít detail', en: 'View Detail' },
   'reports.prometheus_btn': { cs: 'Otevřít Prometheus výstup', en: 'Open Prometheus Output' },
   'reports.copy_url': { cs: 'Kopírovat URL metrik', en: 'Copy Metrics URL' },

@@ -75,11 +75,13 @@ try {
     $response_times = [];
     // The latest response per monitor: looked up via the (monitor_id, id) index,
     // not by aggregating MAX(id) over the whole log table - that grew with
-    // history and would eventually slow Prometheus scrapes to seconds.
+    // history and would eventually slow Prometheus scrapes to seconds. It is
+    // cron's latest, not a remote probe's (source 'probe'): a probe measures
+    // from another place, and its failed check sends the time it waited.
     $stmt_rt = $pdo->query("
         SELECT m.id AS monitor_id,
                (SELECT l.response_time FROM monitor_logs l
-                WHERE l.monitor_id = m.id
+                WHERE l.monitor_id = m.id AND (l.source IS NULL OR l.source <> 'probe')
                 ORDER BY l.id DESC LIMIT 1) AS response_time
         FROM monitors m
         WHERE m.archived_at IS NULL

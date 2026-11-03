@@ -57,6 +57,13 @@ export interface TimelineEvent {
    * (C-10) hides routine passes by default.
    */
   kind?: 'check';
+  /**
+   * A remote probe's check (monitor_logs.source 'probe'): a measurement from
+   * another place, never a change of the monitor's state, which cron owns.
+   * The timeline of changes leaves it out, so it does not cut cron's run of
+   * outage rows in two; "Vše" shows it where it fell.
+   */
+  probe?: boolean;
   /** Which outage a check belongs to; a collapsed run never crosses it. */
   episode?: string | null;
   /**

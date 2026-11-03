@@ -1203,7 +1203,10 @@ výpadku. Počet incidentů a největší incident v přehledu ji také vynechaj
 Důvod uvedený u stavu - `detail` zjištění o stavu v `action=findings`,
 diagnostika výpadků v administraci, denní připomínka, karta probíhajícího
 výpadku v `action=incidents` - je zpráva nejnovějšího řádku v současném stavu
-monitoru, který nezapsala sonda.
+monitoru, který nezapsala sonda. Stejně tak každá „aktuální“ hodnota
+z nejnovějšího řádku: odezva v `action=monitors` a `metrics.php`, kód HTTP
+v `action=websites_overview` a fáze kontroly za tipy. Neúspěšná kontrola sondy
+posílá dobu, kterou čekala (až 8 s), a to žádná odezva monitoru není.
 
 Řádek z doby před schématem r024 `source` nemá (NULL) a počítá se všude jako
 dřív, i řádek sondy z té doby, dokud ho 30denní logy nesmažou.

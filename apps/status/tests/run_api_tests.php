@@ -8043,6 +8043,33 @@ try {
     }
     check('karta probíhajícího výpadku má důvod cronu, ne sondy', $src_card['reason'] ?? 'chybí', 'HTTP 503');
 
+    // The administration's outage diagnostics (legacy admin.php) too.
+    $src_admin = $fs_page('/admin.php', $cookie_jar);
+    check('diagnostika v administraci: důvod cronu, ne novějšího down sondy',
+        preg_match('~<i class="fas fa-server"></i> Web se sondou uprostřed výpadku</strong>.*?Zjištěný problém:</strong> <code>([^<]*)</code>~su', $src_admin, $src_m) ? $src_m[1] : 'chybí', 'HTTP 503');
+
+    // 1452 recovered: cron's 'up' is the recovery and ends the outage, the
+    // probe's 'up' before it is neither, and the probe's later 'down' starts
+    // nothing.
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, last_checked, last_status_change)
+                VALUES (1452, 'Web obnovený cronem', 'web', 'https://example.com/obnova', 'up', 'Test',
+                        NOW(), DATE_SUB(NOW(), INTERVAL 5 MINUTE))");
+    foreach ([
+        ['down', null, 'HTTP 503', 'Praha', 'cron', 600],
+        ['up', 80, null, 'Frankfurt', 'probe', 400],
+        ['up', 110, null, 'Praha', 'cron', 300],
+        ['down', null, 'Timeout after 8000ms', 'Frankfurt', 'probe', 100],
+    ] as $src_r) {
+        $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source, checked_at)
+                       VALUES (1452, ?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? SECOND))")->execute($src_r);
+    }
+    $src_cron_up = $pdo->query("SELECT checked_at FROM monitor_logs WHERE monitor_id = 1452 AND source = 'cron' AND status = 'up'")->fetchColumn();
+    [, $src_ev2] = api_get_auth($base, 'action=events&monitor_id=1452&limit=50', $cookie_jar);
+    check('obnovení je OK cronu po jeho výpadku, OK sondy před ním není; výpadek končí OK cronu',
+        array_map(fn ($e) => [$e['source'] ?? null, $e['rawStatus'] ?? null, $e['isRecovery'] ?? null, $e['outageEnd'] ?? null], $src_ev2['events'] ?? []),
+        [['probe', 'down', false, null], ['cron', 'up', true, null], ['probe', 'up', false, null],
+         ['cron', 'down', false, $src_cron_up === false ? 'chybí' : date('d.m.Y H:i:s', strtotime((string)$src_cron_up))]]);
+
     [, $src_mi] = api_get_auth($base, 'action=monitor_insights&monitor_id=1451&lang=cs', $cookie_jar);
     check('časová osa monitoru: jen změny cronu, OK sondy uprostřed výpadek nerozdělí',
         array_values(array_map(fn ($e) => $e['type'], array_filter($src_mi['timeline'] ?? [], fn ($e) => str_starts_with((string)($e['type'] ?? ''), 'status_')))),
@@ -8057,18 +8084,21 @@ try {
     bk_raw_request($base . '/node_api.php?action=post_results&key=' . rawurlencode($src_key),
         ['Content-Type: application/json'], json_encode(['location' => 'Testovací uzel', 'results' => [
             ['id' => 1451, 'status' => 'up', 'response_time' => 70, 'source' => 'cron'],
+            ['id' => 1451, 'status' => 'warning', 'error' => 'Pomalá odezva'],
+            ['id' => 1451, 'status' => 'maintenance'],
+            ['id' => 1451, 'status' => 'unknown'],
         ]]));
-    check('node_api uloží řádek jako sondu, i když výsledek tvrdí něco jiného',
-        $pdo->query("SELECT source FROM monitor_logs WHERE monitor_id = 1451 AND checked_from = 'Testovací uzel'")->fetchAll(PDO::FETCH_COLUMN),
-        ['probe']);
+    check('node_api uloží řádek jako sondu, i když výsledek tvrdí něco jiného; sonda měří jen up a down',
+        $pdo->query("SELECT status, source FROM monitor_logs WHERE monitor_id = 1451 AND checked_from = 'Testovací uzel'")->fetchAll(PDO::FETCH_NUM),
+        [['up', 'probe']]);
     if ($src_prev_key === false) {
         $pdo->exec("DELETE FROM settings WHERE key_name = 'cron_key'");
     } else {
         $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'cron_key'")->execute([$src_prev_key]);
     }
 } finally {
-    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 1451");
-    $pdo->exec("DELETE FROM monitors WHERE id = 1451");
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (1451, 1452)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (1451, 1452)");
 }
 
 // =======================================================================
@@ -9162,7 +9192,9 @@ try {
     $r143_run(1433, 'down', 90, 31);
     $r143_run(1433, 'warning', 30, 0);
     // cron and a remote probe both log a monitor, so an 'up' and a 'down' can
-    // share a second; the id says which came first. 1434: the outage's first
+    // share a second; the id says which came first. These rows have no source,
+    // as every row from before schema r024 (a probe's then included), so they
+    // all count; the r024 block above has a probe's row skipped. 1434: the outage's first
     // down row is written after the 'up' in that second, and it counts.
     $r143_run(1434, 'up', 180, 121);
     $r143_run(1434, 'down', 121, 61);
@@ -9182,8 +9214,10 @@ try {
     $r143_run(1436, 'up', 60, 0);
     // No outage of its own: an hour of maintenance in which a remote probe
     // logged the planned work's 503 every five minutes, 20 s after cron's
-    // row. Each such 'down' is down until cron's next row, 40 s, which is
-    // what availability counts - not one outage across the whole window.
+    // row (from before r024: no source, so it counts; node_api has since
+    // stopped logging in a window). Each such 'down' is down until cron's
+    // next row, 40 s, which is what availability counts - not one outage
+    // across the whole window.
     $r143_probe = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at)
                                  VALUES (?, 'down', NULL, 'HTTP 503', DATE_SUB(?, INTERVAL ? SECOND))");
     $r143_run(1437, 'up', 180, 121);

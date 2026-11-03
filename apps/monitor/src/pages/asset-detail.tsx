@@ -400,8 +400,10 @@ export function AssetDetailPage() {
                   ? 'up'
                   : 'info',
             resolution: e.isDown ? 'Open' : e.isRecovery ? 'Resolved' : 'Info',
-            // One row of the check log: a routine pass hides behind "Vše" (C-10).
+            // One row of the check log: a routine pass hides behind "Vše" (C-10),
+            // and so does a remote probe's check.
             kind: 'check',
+            probe: e.source === 'probe',
             location: e.location,
             method: e.type,
             responseMs: typeof e.responseTime === 'number' ? e.responseTime : null,
