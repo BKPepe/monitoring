@@ -166,7 +166,7 @@ foreach ($monitors as $monitor) {
         
         // Nothing was checked, so nothing was measured: NULL, not a 0 ms point
         // in every latency chart for the length of the window.
-        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, 'maintenance', NULL, ?, ?)");
+        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, 'maintenance', NULL, ?, ?, 'cron')");
         $stmt_log->execute([$id, $log_msg, $loc]);
         
         if ($old_status !== 'maintenance') {
@@ -192,7 +192,7 @@ foreach ($monitors as $monitor) {
         if ($offline_secs > 0 && (time() - $last_checked_ts) > $offline_secs && $monitor['status'] !== 'unknown') {
             $stmt_up = $pdo->prepare("UPDATE monitors SET status = 'unknown', last_status_change = NOW() WHERE id = ?");
             $stmt_up->execute([$id]);
-            $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, 'unknown', NULL, ?, 'Agent')");
+            $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, 'unknown', NULL, ?, 'Agent', 'cron')");
             $stmt_log->execute([$id, 'Zdrojový agent přestal posílat výsledky kontroly - stav služby není známý.']);
             echo "UNKNOWN (agent-side kontrola bez čerstvých výsledků)\n";
         } else {
@@ -221,7 +221,7 @@ foreach ($monitors as $monitor) {
             'lastMessage' => $monitor['heartbeat_last_message'] ?? null,
         ];
 
-        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, NULL, ?, ?)");
+        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, ?, NULL, ?, ?, 'heartbeat')");
         $stmt_log->execute([$id, $new_status, $hb['error'], 'Heartbeat']);
 
         $hb_details_json = json_encode($hb_details, JSON_UNESCAPED_UNICODE);
@@ -289,7 +289,7 @@ foreach ($monitors as $monitor) {
                 $stmt_up->execute([$new_status, $id]);
                 
                 // Log
-                $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, error_message) VALUES (?, ?, ?)");
+                $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, error_message, source) VALUES (?, ?, ?, 'cron')");
                 $stmt_log->execute([$id, $new_status, $error_msg]);
                 
                 // Send the notification
@@ -672,7 +672,7 @@ foreach ($monitors as $monitor) {
     $check_stages_json = (in_array($type, ['web', 'teamspeak'], true) && isset($check_result['check_stages']))
         ? json_encode($check_result['check_stages'], JSON_UNESCAPED_UNICODE)
         : null;
-    $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, check_stages) VALUES (?, ?, ?, ?, ?, ?)");
+    $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, check_stages, source) VALUES (?, ?, ?, ?, ?, ?, 'cron')");
     // The log always records what was MEASURED. Confirmation below decides
     // only when the monitor's state follows - a suppressed failure that never
     // appeared in the history would be a lie by omission.

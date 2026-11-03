@@ -1506,7 +1506,7 @@ try {
         $ping_ms = bk_response_ms($data['wan_latency_ms'] ?? null);
 
         // Write the regular check log
-        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (?, ?, ?, ?)");
+        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, source) VALUES (?, ?, ?, ?, 'agent')");
         $stmt_log->execute([$monitor_id, $new_status, $ping_ms, $error_msg]);
         
         // Check for a status change

@@ -163,7 +163,7 @@ if ($action === 'post_results') {
             // A status's reason (findings, the admin diagnostics, the daily
             // reminder) is the newest row in the monitor's current state, so
             // a probe's 'up' never stands in for an outage's reason.
-            $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, ?, ?, ?)");
+            $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, ?, ?, ?, ?, 'probe')");
             $stmt_log->execute([$mid, $status, $response_time, $error_message, $node_location]);
 
             $success_count++;

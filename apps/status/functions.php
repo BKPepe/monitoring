@@ -16432,7 +16432,7 @@ function bk_apply_agent_service_result($pdo, array $svc_monitor, bool $running, 
     if ($old_status !== $new_status) {
         $stmt = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW(), last_status_change = NOW() WHERE id = ?");
         $stmt->execute([$new_status, $svc_monitor['id']]);
-        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, NULL, ?, 'Agent')");
+        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, ?, NULL, ?, 'Agent', 'agent')");
         $stmt_log->execute([$svc_monitor['id'], $new_status, $error_msg]);
         // Notify only on real up/down transitions; the first result's
         // 'unknown' -> 'up' need not wake anyone. Up after a planned window
@@ -16447,7 +16447,7 @@ function bk_apply_agent_service_result($pdo, array $svc_monitor, bool $running, 
     } else {
         $stmt = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = NOW() WHERE id = ?");
         $stmt->execute([$new_status, $svc_monitor['id']]);
-        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from) VALUES (?, ?, NULL, ?, 'Agent')");
+        $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, ?, NULL, ?, 'Agent', 'agent')");
         $stmt_log->execute([$svc_monitor['id'], $new_status, $error_msg]);
     }
     return true;
