@@ -13958,9 +13958,11 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     // 'probe'), which confirms no outage; its rows still count in the checks
     // above. A query of its own: source is in no index, and in the one above
     // it would turn the read of idx_logs_regions into a read of every row of
-    // the period, fleet-wide. Here only the 'down' rows are looked up.
+    // the period, fleet-wide. Here only the 'down' rows are looked up - on
+    // idx_logs_regions, forced: left alone, MySQL 8.4 scanned the whole table
+    // (1.04 M rows against 3,168 index reads on a month of 20 monitors).
     $stmt_incidents = $pdo->prepare("
-        SELECT COUNT(*) FROM monitor_logs
+        SELECT COUNT(*) FROM monitor_logs FORCE INDEX (idx_logs_regions)
         WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND status = 'down'
           AND (source IS NULL OR source <> 'probe') AND {$dg_active}
     ");
@@ -14481,10 +14483,11 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
     }
 
     // Incident heatmap by day of week (aggregated over the whole month): like
-    // the incident count, a remote probe's 'down' rows are not one.
+    // the incident count, a remote probe's 'down' rows are not one, and like
+    // it the index is forced (the planner took a full table scan).
     $stmt_dow = $pdo->prepare("
         SELECT DAYOFWEEK(checked_at) as dow, COUNT(*) as cnt
-        FROM monitor_logs
+        FROM monitor_logs FORCE INDEX (idx_logs_regions)
         WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND status = 'down'
           AND (source IS NULL OR source <> 'probe')
         GROUP BY DAYOFWEEK(checked_at)

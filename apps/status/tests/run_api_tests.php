@@ -7984,7 +7984,8 @@ try {
 // measurement. It counts in availability and the history, but it confirms no
 // outage, splits none and gives none its reason. Monitor 1451: cron found it
 // down 30 minutes ago and still has it down; the probe, from another place,
-// logged a 'down' in the very second of the change (written first, so it
+// logged a 'down' ten minutes before cron's (which would start the outage
+// early), a 'down' in the very second of the change (written first, so it
 // would win the tie), an 'up' in the middle of cron's outage, a later
 // 'down' of its own and the newest row of all, an 'up'.
 // =======================================================================
@@ -7996,6 +7997,7 @@ try {
                               VALUES (1451, ?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? SECOND))");
     foreach ([
         ['up', 120, null, 'Praha', 'cron', 3600],
+        ['down', null, 'Probe early', 'Frankfurt', 'probe', 2400],
         ['down', null, 'Probe timeout', 'Frankfurt', 'probe', 1800],
         ['down', null, 'HTTP 503', 'Praha', 'cron', 1800],
         ['up', 95, null, 'Frankfurt', 'probe', 1200],
@@ -8016,10 +8018,10 @@ try {
     $src_events = $src_ev['events'] ?? [];
     check('v historii zůstávají všechny řádky, i sondy, a každý říká, kdo ho zapsal',
         array_map(fn ($e) => [$e['rawStatus'] ?? null, $e['source'] ?? null], $src_events),
-        [['up', 'probe'], ['down', 'probe'], ['down', 'cron'], ['up', 'probe'], ['down', 'cron'], ['down', 'probe'], ['up', 'cron']]);
+        [['up', 'probe'], ['down', 'probe'], ['down', 'cron'], ['up', 'probe'], ['down', 'cron'], ['down', 'probe'], ['down', 'probe'], ['up', 'cron']]);
     check('down sondy není výpadek: isDown false a bez konce; down cronu je výpadek, který OK sondy neukončí',
         array_map(fn ($e) => [$e['isDown'] ?? null, $e['outageEnd'] ?? null, $e['isRecovery'] ?? null], $src_events),
-        [[false, null, false], [false, null, false], [true, null, false], [false, null, false], [true, null, false], [false, null, false], [false, null, false]]);
+        [[false, null, false], [false, null, false], [true, null, false], [false, null, false], [true, null, false], [false, null, false], [false, null, false], [false, null, false]]);
 
     [$src_sla_code, $src_sla] = api_get_auth($base, 'action=sla_report&days=7', $cookie_jar);
     $src_row = array_column($src_sla['monitors'] ?? [], null, 'id')[1451] ?? [];
@@ -8028,7 +8030,7 @@ try {
         [$src_sla_code, $src_out['start'] ?? null, array_key_exists('end', $src_out) ? $src_out['end'] : 'chybí', $src_out['resolved'] ?? null, $src_out['reason'] ?? null],
         [200, $src_cron_start === false ? 'chybí' : date('d.m.Y H:i:s', strtotime((string)$src_cron_start)), null, false, 'HTTP 503']);
     check('sla_report: v dostupnosti se řádky sondy počítají dál',
-        [$src_row['upChecks'] ?? null, $src_row['downChecks'] ?? null], [3, 4]);
+        [$src_row['upChecks'] ?? null, $src_row['downChecks'] ?? null], [3, 5]);
 
     [, $src_f] = api_get_auth($base, 'action=findings&monitor_id=1451&lang=cs', $cookie_jar);
     $src_down = array_column($src_f['findings'] ?? [], null, 'key')['status:1451:status_down'] ?? [];
@@ -8050,7 +8052,7 @@ try {
 
     // 1452 recovered: cron's 'up' is the recovery and ends the outage, the
     // probe's 'up' before it is neither, and the probe's later 'down' starts
-    // nothing.
+    // nothing: cron's next 'up' after it is no recovery and ends no outage.
     $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, last_checked, last_status_change)
                 VALUES (1452, 'Web obnovený cronem', 'web', 'https://example.com/obnova', 'up', 'Test',
                         NOW(), DATE_SUB(NOW(), INTERVAL 5 MINUTE))");
@@ -8058,17 +8060,29 @@ try {
         ['down', null, 'HTTP 503', 'Praha', 'cron', 600],
         ['up', 80, null, 'Frankfurt', 'probe', 400],
         ['up', 110, null, 'Praha', 'cron', 300],
-        ['down', null, 'Timeout after 8000ms', 'Frankfurt', 'probe', 100],
+        ['down', null, 'Timeout after 8000ms', 'Frankfurt', 'probe', 200],
+        ['up', 105, null, 'Praha', 'cron', 100],
     ] as $src_r) {
         $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source, checked_at)
                        VALUES (1452, ?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? SECOND))")->execute($src_r);
     }
-    $src_cron_up = $pdo->query("SELECT checked_at FROM monitor_logs WHERE monitor_id = 1452 AND source = 'cron' AND status = 'up'")->fetchColumn();
+    $src_cron_up = $pdo->query("SELECT checked_at FROM monitor_logs WHERE monitor_id = 1452 AND source = 'cron' AND status = 'up' ORDER BY id LIMIT 1")->fetchColumn();
+    $src_cron_down = $pdo->query("SELECT checked_at FROM monitor_logs WHERE monitor_id = 1452 AND source = 'cron' AND status = 'down'")->fetchColumn();
+    $src_fmt = fn ($at): string => $at === false ? 'chybí' : date('d.m.Y H:i:s', strtotime((string)$at));
     [, $src_ev2] = api_get_auth($base, 'action=events&monitor_id=1452&limit=50', $cookie_jar);
     check('obnovení je OK cronu po jeho výpadku, OK sondy před ním není; výpadek končí OK cronu',
         array_map(fn ($e) => [$e['source'] ?? null, $e['rawStatus'] ?? null, $e['isRecovery'] ?? null, $e['outageEnd'] ?? null], $src_ev2['events'] ?? []),
-        [['probe', 'down', false, null], ['cron', 'up', true, null], ['probe', 'up', false, null],
-         ['cron', 'down', false, $src_cron_up === false ? 'chybí' : date('d.m.Y H:i:s', strtotime((string)$src_cron_up))]]);
+        [['cron', 'up', false, null], ['probe', 'down', false, null], ['cron', 'up', true, null], ['probe', 'up', false, null],
+         ['cron', 'down', false, $src_fmt($src_cron_up)]]);
+    // The same in sla_report: the newest 'down' is the probe's, so cron's is
+    // looked up; the outage runs to cron's 'up', not to the probe's before it.
+    [, $src_sla2] = api_get_auth($base, 'action=sla_report&days=7', $cookie_jar);
+    $src_out2 = array_column($src_sla2['monitors'] ?? [], null, 'id')[1452]['lastOutage'] ?? [];
+    check('sla_report: vyřešený výpadek končí OK cronu, ne dřívějším OK sondy, a novější down sondy ho nenahradí',
+        [$src_out2['start'] ?? null, $src_out2['end'] ?? null, $src_out2['resolved'] ?? null, $src_out2['reason'] ?? null,
+         $src_out2['durationSec'] ?? null],
+        [$src_fmt($src_cron_down), $src_fmt($src_cron_up), true, 'HTTP 503',
+         $src_cron_up === false || $src_cron_down === false ? 'chybí' : strtotime((string)$src_cron_up) - strtotime((string)$src_cron_down)]);
 
     [, $src_mi] = api_get_auth($base, 'action=monitor_insights&monitor_id=1451&lang=cs', $cookie_jar);
     check('časová osa monitoru: jen změny cronu, OK sondy uprostřed výpadek nerozdělí',

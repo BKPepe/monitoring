@@ -974,17 +974,22 @@ $portal_url = trim(get_setting('portal_url'));
                                         <div class="details-content-inner">
                                             <?php
                                             // Načtení posledních logů pro historii a výpočet frekvence (zabraňuje duplicitním SQL dotazům)
-                                            $stmt_last_logs = $pdo->prepare("SELECT checked_at, status, response_time, error_message, checked_from, check_stages FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 5");
+                                            $stmt_last_logs = $pdo->prepare("SELECT checked_at, status, response_time, error_message, checked_from, check_stages, source FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 5");
                                             $stmt_last_logs->execute([$mid]);
                                             $last_logs = $stmt_last_logs->fetchAll();
+                                            // The lists below are the history, a remote probe's rows
+                                            // included. The stages, the check frequency and the
+                                            // newest-check readings are cron's own rows: a probe's
+                                            // (source 'probe') has no stages and logs 20 s after cron.
+                                            $own_logs = array_values(array_filter($last_logs, fn ($ll_row) => ($ll_row['source'] ?? null) !== 'probe'));
 
                                             // Knowledge layer - vysvětlení aktuálně překročených prahů (viz
                                             // bk_get_knowledge_tips() ve functions.php). Vlastní decode check_stages,
                                             // nezávislý na $pipeline/$ts3_check_stages níže, aby fungoval pro
                                             // jakýkoli typ bez ohledu na to, kde se v šabloně zrovna nacházíme.
                                             $check_stages_shared = null;
-                                            if (!empty($last_logs[0]['check_stages'])) {
-                                                $decoded_check_stages_shared = json_decode($last_logs[0]['check_stages'], true);
+                                            if (!empty($own_logs[0]['check_stages'])) {
+                                                $decoded_check_stages_shared = json_decode($own_logs[0]['check_stages'], true);
                                                 if (is_array($decoded_check_stages_shared)) {
                                                     $check_stages_shared = $decoded_check_stages_shared;
                                                 }
@@ -1056,9 +1061,9 @@ $portal_url = trim(get_setting('portal_url'));
                                             $distributed_view = $stmt_dist->fetchAll();
 
                                             $freq_text = 'N/A';
-                                            if (count($last_logs) >= 2) {
-                                                $t1 = strtotime($last_logs[0]['checked_at']);
-                                                $t2 = strtotime($last_logs[1]['checked_at']);
+                                            if (count($own_logs) >= 2) {
+                                                $t1 = strtotime($own_logs[0]['checked_at']);
+                                                $t2 = strtotime($own_logs[1]['checked_at']);
                                                 $diff_sec = abs($t1 - $t2);
                                                 if ($diff_sec > 0) {
                                                     $mins = round($diff_sec / 60);
@@ -1074,8 +1079,8 @@ $portal_url = trim(get_setting('portal_url'));
                                             // (Distributed View výše) - nikdy nenahrazuje status-dot, jen ho doplňuje.
                                             $pipeline = null;
                                             $confidence_score = null;
-                                            if ($m_type === 'web' && !empty($last_logs[0]['check_stages'])) {
-                                                $decoded_pipeline = json_decode($last_logs[0]['check_stages'], true);
+                                            if ($m_type === 'web' && !empty($own_logs[0]['check_stages'])) {
+                                                $decoded_pipeline = json_decode($own_logs[0]['check_stages'], true);
                                                 if (is_array($decoded_pipeline)) {
                                                     $pipeline = $decoded_pipeline;
                                                 }
@@ -1339,7 +1344,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
                                                         <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo $uptime_display; ?></span></p>
                                                         <?php 
-                                                        $mc_ll = $last_logs[0] ?? null;
+                                                        $mc_ll = $own_logs[0] ?? null;
                                                         if ($mc_ll && $mc_ll['checked_from']): 
                                                         ?>
                                                         <p style="margin-top:0.5rem;font-size:0.78rem;color:var(--text-muted);"><i class="fas fa-map-marker-alt" style="color:var(--color-red);font-size:0.7rem;"></i> <?php echo htmlspecialchars(t('measured_from')); ?> <strong><?php echo htmlspecialchars($mc_ll['checked_from']); ?></strong></p>
@@ -1443,7 +1448,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                         <p style="margin-bottom: 0.5rem;"><strong><?php echo htmlspecialchars(t('field_last_status_change')); ?></strong> <span class="stat-val"><?php echo $monitor['last_status_change'] ? date('d.m.Y H:i:s', strtotime($monitor['last_status_change'])) : 'N/A'; ?></span></p>
                                                         <p><strong><?php echo htmlspecialchars(t('field_uptime_30d')); ?></strong> <span class="uptime-pct <?php echo $uptime_class; ?>" style="font-weight:bold;"><?php echo $uptime_display; ?></span></p>
                                                         <?php 
-                                                        $ts_ll = $last_logs[0] ?? null;
+                                                        $ts_ll = $own_logs[0] ?? null;
                                                         if ($ts_ll): 
                                                         ?>
                                                         <p style="margin-top:0.5rem;font-size:0.78rem;color:var(--text-muted);">
