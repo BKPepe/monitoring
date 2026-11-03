@@ -123,3 +123,23 @@ describe('Protokol kontrol (W2-6)', () => {
     expect((await screen.findAllByText('E-shop: Výpadek')).length).toBeGreaterThan(0);
   });
 });
+
+describe('Protokol kontrol: řádek vzdálené sondy (r024)', () => {
+  it('selhaná kontrola sondy není výpadek ani úspěch a nespojí se s výpadkem cronu', async () => {
+    const probe = { ...row(11, 1, 'E-shop', 26, 'down'), isDown: false, source: 'probe', location: 'Frankfurt' };
+    stub((url) =>
+      url.includes('action=events')
+        ? json({ events: [row(12, 1, 'E-shop', 27, 'up'), probe, ...EVENTS.slice(2)], statusChange: null })
+        : json({ monitors: [] })
+    );
+    const { container } = renderPage();
+
+    expect((await screen.findAllByText('E-shop: Selhala kontrola vzdálené sondy')).length).toBeGreaterThan(0);
+    // The probe's row is a warning of its own: the three outage rows of cron
+    // still fold into one run, and nothing calls the probe's failure a pass.
+    expect(container.querySelector('[data-run]')?.getAttribute('data-run')).toBe('3');
+    fireEvent.click(screen.getByRole('button', { name: /^Vše/ }));
+    expect(screen.getAllByText('E-shop: Selhala kontrola vzdálené sondy').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('E-shop: Kontrola v pořádku').length).toBe(1);
+  });
+});

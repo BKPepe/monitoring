@@ -243,11 +243,13 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
     }
 
     // Načtení posledních incidentů – pouze výpadky a zprávy při návratu (ne každý úspěšný ping)
+    // A remote probe's row (source 'probe') is a measurement, not an incident.
     $stmt_inc = $pdo->query("
         SELECT l.*, m.name, m.type, m.target
         FROM monitor_logs l
         JOIN monitors m ON l.monitor_id = m.id
         WHERE m.archived_at IS NULL
+          AND (l.source IS NULL OR l.source <> 'probe')
           AND (l.status = 'down'
            OR (l.status = 'up' AND l.error_message IS NOT NULL AND l.error_message != ''))
         ORDER BY l.checked_at DESC
@@ -1032,7 +1034,8 @@ $portal_url = trim(get_setting('portal_url'));
                                             </div>
                                             <?php endif; ?>
                                             <?php
-                                            $stmt_outages = $pdo->prepare("SELECT checked_at, error_message, checked_from FROM monitor_logs WHERE monitor_id = ? AND status = 'down' AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY checked_at DESC LIMIT 5");
+                                            // Outages are cron's: a remote probe's 'down' (source 'probe') is not one.
+                                            $stmt_outages = $pdo->prepare("SELECT checked_at, error_message, checked_from FROM monitor_logs WHERE monitor_id = ? AND status = 'down' AND (source IS NULL OR source <> 'probe') AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY) ORDER BY checked_at DESC LIMIT 5");
                                             $stmt_outages->execute([$mid]);
                                             $monitor_outages = $stmt_outages->fetchAll();
 

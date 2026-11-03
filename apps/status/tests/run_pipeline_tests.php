@@ -553,6 +553,21 @@ check('cron bere odezvu pro monitor_logs jen přes bk_response_ms', $rt_assign[1
 check_true('a právě ji zapíše do historie',
     str_contains($cron_src, '$stmt_log->execute([$id, $new_status, $response_time, $error_msg, $loc, $check_stages_json]);'));
 
+// Who wrote a row (r024): every INSERT of cron.php names its source, and
+// nothing runs cron.php here, so the statements are read. A heartbeat
+// monitor's row is 'heartbeat', every other row cron writes is 'cron'.
+preg_match_all('/INSERT INTO monitor_logs \(([^)]*)\) VALUES \(([^)]*)\)/', $cron_src, $src_ins, PREG_SET_ORDER);
+check('každý zápis cronu do monitor_logs nese zdroj: 4× cron, 1× heartbeat',
+    array_map(fn ($m) => str_ends_with(trim($m[1]), 'source') ? substr(trim($m[2]), strrpos(trim($m[2]), ',') + 1) : 'chybí', $src_ins),
+    [" 'cron'", " 'cron'", " 'heartbeat'", " 'cron'", " 'cron'"]);
+// The alert_confirm_failures streak is cron's own: a probe's row neither
+// adds to it nor breaks it, a row from before r024 still does.
+check_true('řada pro alert_confirm_failures vynechá řádky sondy',
+    (bool)preg_match('/SELECT status FROM monitor_logs\s+WHERE monitor_id = \? AND \(source IS NULL OR source <> \'probe\'\)\s+ORDER BY id DESC LIMIT "/', $cron_src));
+$na_src = file_get_contents(__DIR__ . '/../node_api.php');
+check('node_api zapisuje řádek jako sondu, zdroj z požadavku nebere',
+    preg_match_all("/INSERT INTO monitor_logs \(monitor_id, status, response_time, error_message, checked_from, source\) VALUES \(\?, \?, \?, \?, \?, 'probe'\)/", $na_src), 1);
+
 // The call itself is matched - the helper's name also appears in comments.
 check_true('záloha přes agenta rozhoduje voláním bk_agent_backup_says_up',
     (bool)preg_match('/if \(bk_agent_backup_says_up\(\(string\)\$type, \$details_decoded, \$monitor, time\(\)\)\) \{/', $cron_src));
@@ -1273,7 +1288,7 @@ if (function_exists('bk_send_daily_reminder') && in_array('sqlite', PDO::getAvai
         archived_at TEXT, email_notifications INTEGER DEFAULT 1, sms_notifications INTEGER DEFAULT 0,
         heartbeat_interval INTEGER, heartbeat_grace INTEGER, last_heartbeat TEXT, heartbeat_last_result TEXT,
         heartbeat_last_message TEXT)");
-    $dr_pdo->exec("CREATE TABLE monitor_logs (id INTEGER PRIMARY KEY, monitor_id INTEGER, status TEXT, error_message TEXT)");
+    $dr_pdo->exec("CREATE TABLE monitor_logs (id INTEGER PRIMARY KEY, monitor_id INTEGER, status TEXT, error_message TEXT, source TEXT)");
     $dr_pdo->exec("CREATE TABLE incidents (id INTEGER PRIMARY KEY, title TEXT, impact TEXT, status TEXT,
         created_at TEXT, acknowledged_at TEXT, monitor_id INTEGER)");
     // Every column bk_log_notification() writes: it swallows a failed INSERT,
@@ -1383,6 +1398,20 @@ if ($dr_pdo instanceof PDO) {
     $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message) VALUES (1, 'down', 'HTTP 503'), (1, 'up', NULL)");
     check('důvod výpadku je z kontroly, která ho našla, ne z novějšího OK sondy',
         array_column(bk_daily_reminder_collect($dr_pdo, $dr_now)['outages'], 'reason', 'name'), ['Web' => 'HTTP 503']);
+
+    // Since r024 a probe's row says so (source 'probe'): its own newer 'down'
+    // does not give the outage its words either. A row without a source is
+    // from before r024 and still counts, as it always did.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(3600)]);
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, source) VALUES
+                   (1, 'down', 'HTTP 503', 'cron'), (1, 'down', 'Timeout after 8000ms', 'probe')");
+    check('ani novější výpadek sondy nedá výpadku důvod, jen kontrola cronu',
+        array_column(bk_daily_reminder_collect($dr_pdo, $dr_now)['outages'], 'reason', 'name'), ['Web' => 'HTTP 503']);
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, source) VALUES (1, 'down', 'HTTP 502', NULL)");
+    check('řádek bez zdroje (před r024) se počítá dál',
+        array_column(bk_daily_reminder_collect($dr_pdo, $dr_now)['outages'], 'reason', 'name'), ['Web' => 'HTTP 502']);
 
     // The e2e case behind the fix: "Záloha NAS" was in the silent section
     // twice - once from the heartbeat rule, once from the stalled checks -

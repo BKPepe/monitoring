@@ -23,6 +23,9 @@ interface CheckRow {
   rawStatus?: string;
   statusKey?: string;
   errorMsg?: string | null;
+  /** Who wrote the row: 'cron', 'heartbeat', 'agent', 'probe'; null before schema r024. */
+  source?: string | null;
+  /** A failure that is part of an outage; a remote probe's 'down' is not one. */
   isDown: boolean;
   isRecovery?: boolean;
   responseTime?: number | null;
@@ -37,6 +40,9 @@ type TranslateFn = ReturnType<typeof useLanguage>['t'];
 function checkLabel(row: CheckRow, t: TranslateFn): string {
   if (row.isDown) return t('checklog.down', 'Výpadek');
   const raw = row.statusKey ?? row.rawStatus;
+  // A remote probe's failed check: a real measurement from another place,
+  // but cron owns the monitor's state, so it is neither an outage nor a pass.
+  if (isProbeFailure(row)) return t('checklog.probe_down', 'Selhala kontrola vzdálené sondy');
   if (raw === 'warning') return t('checklog.warning', 'Zhoršená odezva');
   if (raw === 'maintenance') return t('checklog.maintenance', 'Údržba');
   if (raw === 'unknown' || raw === 'unknown_stale' || raw === 'unknown_new') {
@@ -46,8 +52,13 @@ function checkLabel(row: CheckRow, t: TranslateFn): string {
   return t('checklog.ok', 'Kontrola v pořádku');
 }
 
+function isProbeFailure(row: CheckRow): boolean {
+  return row.source === 'probe' && (row.rawStatus ?? row.statusKey) === 'down';
+}
+
 function severityOf(row: CheckRow): TimelineEvent['severity'] {
   if (row.isDown) return 'down';
+  if (isProbeFailure(row)) return 'warning';
   const raw = row.statusKey ?? row.rawStatus;
   // A silent agent is a warning, as everywhere else (decision 5.10); a check
   // that passed, or one skipped for announced maintenance, is routine.

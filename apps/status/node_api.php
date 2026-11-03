@@ -150,19 +150,16 @@ if ($action === 'post_results') {
             // post - and its NULL details wiped cron's latches (last_ssl_warn,
             // latency_alert_sent), so the SSL warning went out every 5 min.
             //
-            // The row still counts wherever cron reads monitor_logs, which
-            // does not record who wrote a row: a probe's 'down' adds to the
-            // alert_confirm_failures streak and its 'up' ends one, and its
-            // 'up' response times enter the latency alert's window. Like any
-            // measurement it counts in availability, the history and regions.
-            // It bounds sla_report's last outage too: a probe's 'up' ends or
-            // splits it while cron keeps the monitor down and the incident
-            // open, and its 'down' starts one. action=events takes the row
-            // before a status change as the state it came from (fromStatus),
-            // and that can be a probe's 'up' just before cron's recovery.
-            // A status's reason (findings, the admin diagnostics, the daily
-            // reminder) is the newest row in the monitor's current state, so
-            // a probe's 'up' never stands in for an outage's reason.
+            // The row is source 'probe', set here and never read from the
+            // post. Like any measurement it counts in availability, the
+            // history and regions. It never confirms an outage, splits one or
+            // gives it its reason: it is not in the alert_confirm_failures
+            // streak or the latency alert's window, does not bound
+            // sla_report's last outage or the monitor timeline, is never
+            // action=events' statusChange or its fromStatus, and the reason
+            // of a status (findings, the admin diagnostics, the daily
+            // reminder, an incident card) is never a probe's words. A row
+            // from before schema r024 has no source and counts as before.
             $stmt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source) VALUES (?, ?, ?, ?, ?, 'probe')");
             $stmt_log->execute([$mid, $status, $response_time, $error_message, $node_location]);
 

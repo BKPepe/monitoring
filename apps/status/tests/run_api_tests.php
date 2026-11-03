@@ -7980,6 +7980,98 @@ try {
 }
 
 // =======================================================================
+// Who wrote a row (r024, step 2): a remote probe's row (source 'probe') is a
+// measurement. It counts in availability and the history, but it confirms no
+// outage, splits none and gives none its reason. Monitor 1451: cron found it
+// down 30 minutes ago and still has it down; the probe, from another place,
+// logged a 'down' in the very second of the change (written first, so it
+// would win the tie), an 'up' in the middle of cron's outage, a later
+// 'down' of its own and the newest row of all, an 'up'.
+// =======================================================================
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, last_checked, last_status_change)
+                VALUES (1451, 'Web se sondou uprostřed výpadku', 'web', 'https://example.com/zdroj', 'down', 'Test',
+                        NOW(), DATE_SUB(NOW(), INTERVAL 30 MINUTE))");
+    $src_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source, checked_at)
+                              VALUES (1451, ?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? SECOND))");
+    foreach ([
+        ['up', 120, null, 'Praha', 'cron', 3600],
+        ['down', null, 'Probe timeout', 'Frankfurt', 'probe', 1800],
+        ['down', null, 'HTTP 503', 'Praha', 'cron', 1800],
+        ['up', 95, null, 'Frankfurt', 'probe', 1200],
+        ['down', null, 'HTTP 503', 'Praha', 'cron', 600],
+        ['down', null, 'Timeout after 8000ms', 'Frankfurt', 'probe', 300],
+        ['up', 90, null, 'Frankfurt', 'probe', 120],
+    ] as $src_r) {
+        $src_log->execute($src_r);
+    }
+    $src_cron_start = $pdo->query("SELECT checked_at FROM monitor_logs WHERE monitor_id = 1451 AND source = 'cron' AND status = 'down' ORDER BY id LIMIT 1")->fetchColumn();
+
+    [$src_ev_code, $src_ev] = api_get_auth($base, 'action=events&monitor_id=1451&limit=50', $cookie_jar);
+    check('zdroj: events vrací 200', $src_ev_code, 200);
+    $src_sc = $src_ev['statusChange'] ?? [];
+    check('statusChange je kontrola cronu, ne sonda ve stejné vteřině; fromStatus přeskočí řádek sondy',
+        [$src_sc['status'] ?? null, $src_sc['errorMsg'] ?? null, $src_sc['location'] ?? null, $src_sc['fromStatus'] ?? null],
+        ['down', 'HTTP 503', 'Praha', 'up']);
+    $src_events = $src_ev['events'] ?? [];
+    check('v historii zůstávají všechny řádky, i sondy, a každý říká, kdo ho zapsal',
+        array_map(fn ($e) => [$e['rawStatus'] ?? null, $e['source'] ?? null], $src_events),
+        [['up', 'probe'], ['down', 'probe'], ['down', 'cron'], ['up', 'probe'], ['down', 'cron'], ['down', 'probe'], ['up', 'cron']]);
+    check('down sondy není výpadek: isDown false a bez konce; down cronu je výpadek, který OK sondy neukončí',
+        array_map(fn ($e) => [$e['isDown'] ?? null, $e['outageEnd'] ?? null, $e['isRecovery'] ?? null], $src_events),
+        [[false, null, false], [false, null, false], [true, null, false], [false, null, false], [true, null, false], [false, null, false], [false, null, false]]);
+
+    [$src_sla_code, $src_sla] = api_get_auth($base, 'action=sla_report&days=7', $cookie_jar);
+    $src_row = array_column($src_sla['monitors'] ?? [], null, 'id')[1451] ?? [];
+    $src_out = $src_row['lastOutage'] ?? [];
+    check('sla_report: poslední výpadek začal první kontrolou cronu a trvá, OK sondy ho neukončí ani nerozdělí, důvod je cronu',
+        [$src_sla_code, $src_out['start'] ?? null, array_key_exists('end', $src_out) ? $src_out['end'] : 'chybí', $src_out['resolved'] ?? null, $src_out['reason'] ?? null],
+        [200, $src_cron_start === false ? 'chybí' : date('d.m.Y H:i:s', strtotime((string)$src_cron_start)), null, false, 'HTTP 503']);
+    check('sla_report: v dostupnosti se řádky sondy počítají dál',
+        [$src_row['upChecks'] ?? null, $src_row['downChecks'] ?? null], [3, 4]);
+
+    [, $src_f] = api_get_auth($base, 'action=findings&monitor_id=1451&lang=cs', $cookie_jar);
+    $src_down = array_column($src_f['findings'] ?? [], null, 'key')['status:1451:status_down'] ?? [];
+    check('nález výpadku nese důvod cronu, ne novější down sondy', $src_down['detail'] ?? 'chybí', 'HTTP 503');
+
+    [, $src_inc] = api_get_auth($base, 'action=incidents', $cookie_jar);
+    $src_card = null;
+    foreach ($src_inc['incidents'] ?? $src_inc as $src_i) {
+        if (is_array($src_i) && (int)($src_i['monitor_id'] ?? 0) === 1451) {
+            $src_card = $src_i;
+        }
+    }
+    check('karta probíhajícího výpadku má důvod cronu, ne sondy', $src_card['reason'] ?? 'chybí', 'HTTP 503');
+
+    [, $src_mi] = api_get_auth($base, 'action=monitor_insights&monitor_id=1451&lang=cs', $cookie_jar);
+    check('časová osa monitoru: jen změny cronu, OK sondy uprostřed výpadek nerozdělí',
+        array_values(array_map(fn ($e) => $e['type'], array_filter($src_mi['timeline'] ?? [], fn ($e) => str_starts_with((string)($e['type'] ?? ''), 'status_')))),
+        ['status_changed_down']);
+
+    // The writer itself: a real post is stored as the probe's, whatever the
+    // post claims about itself.
+    $src_key = 'test-node-key-' . str_repeat('y', 24);
+    $src_prev_key = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'cron_key'")->fetchColumn();
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('cron_key', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+        ->execute([$src_key]);
+    bk_raw_request($base . '/node_api.php?action=post_results&key=' . rawurlencode($src_key),
+        ['Content-Type: application/json'], json_encode(['location' => 'Testovací uzel', 'results' => [
+            ['id' => 1451, 'status' => 'up', 'response_time' => 70, 'source' => 'cron'],
+        ]]));
+    check('node_api uloží řádek jako sondu, i když výsledek tvrdí něco jiného',
+        $pdo->query("SELECT source FROM monitor_logs WHERE monitor_id = 1451 AND checked_from = 'Testovací uzel'")->fetchAll(PDO::FETCH_COLUMN),
+        ['probe']);
+    if ($src_prev_key === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'cron_key'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'cron_key'")->execute([$src_prev_key]);
+    }
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 1451");
+    $pdo->exec("DELETE FROM monitors WHERE id = 1451");
+}
+
+// =======================================================================
 // The database is down (W1-A6): 503 for everyone, JSON for programs, the
 // branded page for people, and not one word about why.
 //

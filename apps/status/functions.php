@@ -2303,8 +2303,10 @@ function bk_format_duration_secs(int $secs): string {
  * that cries at noise teaches everyone to ignore it within a week.
  *
  * The window holds every 'up' row with a response time from the last
- * latency_threshold_mins minutes, a remote probe's too: monitor_logs does
- * not record who wrote a row.
+ * latency_threshold_mins minutes except a remote probe's (source 'probe'):
+ * the alert is cron's decision about the monitor, and a probe measures from
+ * another place, so its times would raise or clear the alert for a latency
+ * cron never saw. A row from before schema r024 (source NULL) still counts.
  *
  * @return array{state: string, avg_ms: ?float, checks: int}
  *         state: 'degraded' | 'recovered' | 'ok'
@@ -2330,6 +2332,7 @@ function bk_evaluate_latency(PDO $pdo, array $monitor, bool $alert_already_sent)
               AND response_time IS NOT NULL
               AND response_time > 0
               AND checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+              AND (source IS NULL OR source <> 'probe')
         ");
         $stmt->execute([(int)$monitor['id'], $window]);
         $row = $stmt->fetch();
@@ -4367,6 +4370,12 @@ function bk_get_anomaly_insights($pdo, $monitor) {
     // --- Latency anomalies (monitor_logs) ---
     // Same reason as CPU/RAM above: the statistic is computed in the database,
     // not by shipping thirty days of checks into PHP.
+    // The baseline is the history, a remote probe's rows included: it stays a
+    // read of idx_logs_cover_latency alone, which a source predicate would
+    // turn into a row lookup for every check of 27 days. The newest value is
+    // cron's own check (not source 'probe'): a probe measures from another
+    // place, and its row as the newest read as an anomaly that is only
+    // distance.
     $stmt2 = $pdo->prepare("
         SELECT COUNT(response_time) AS lat_n, AVG(response_time) AS lat_mean, STDDEV_POP(response_time) AS lat_sd
         FROM monitor_logs
@@ -4382,6 +4391,7 @@ function bk_get_anomaly_insights($pdo, $monitor) {
         FROM monitor_logs
         WHERE monitor_id = ? AND status = 'up' AND response_time > 0
           AND checked_at >= DATE_SUB(NOW(), INTERVAL 3 DAY)
+          AND (source IS NULL OR source <> 'probe')
         ORDER BY id DESC
         LIMIT 1
     ");
@@ -4467,6 +4477,10 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
     //
     // LAG() returns just the transitions directly. Older MariaDB/MySQL without
     // window functions throws and the original path is used - hence the catch.
+    //
+    // A remote probe's row (source 'probe') is left out before LAG() sees it:
+    // cron owns the monitor's state, and a probe's 'up' inside cron's outage
+    // would split it into two changes, its 'down' start one nobody confirmed.
     $rows = [];
     $used_window_fn = false;
     try {
@@ -4477,6 +4491,7 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
                        LAG(status) OVER (ORDER BY checked_at) AS prev_status
                 FROM monitor_logs
                 WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+                  AND (source IS NULL OR source <> 'probe')
             ) zmeny
             WHERE prev_status IS NOT NULL AND status <> prev_status
             ORDER BY checked_at ASC
@@ -4490,7 +4505,7 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
 
     try {
         if (!$used_window_fn) {
-            $stmt = $pdo->prepare("SELECT status, checked_at, error_message FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY checked_at ASC");
+            $stmt = $pdo->prepare("SELECT status, checked_at, error_message FROM monitor_logs WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND (source IS NULL OR source <> 'probe') ORDER BY checked_at ASC");
             $stmt->execute([$monitor_id, $days]);
             $rows = $stmt->fetchAll();
         }
@@ -4587,9 +4602,10 @@ function bk_get_asset_timeline($pdo, $asset_id, $days = 30) {
     } catch (PDOException $e) {
     }
 
-    // Status changes
+    // Status changes, from the rows cron's state follows: a remote probe's
+    // (source 'probe') neither starts nor splits one.
     try {
-        $stmt = $pdo->prepare("SELECT monitor_id, status, checked_at FROM monitor_logs WHERE monitor_id IN ($placeholders) AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) ORDER BY checked_at ASC");
+        $stmt = $pdo->prepare("SELECT monitor_id, status, checked_at FROM monitor_logs WHERE monitor_id IN ($placeholders) AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND (source IS NULL OR source <> 'probe') ORDER BY checked_at ASC");
         $stmt->execute(array_merge($monitor_ids, [$days]));
         $prev_status = [];
         foreach ($stmt->fetchAll() as $row) {
@@ -8352,13 +8368,14 @@ function bk_daily_reminder_collect(PDO $pdo, ?int $now = null): array {
     $rows = $stmt ? $stmt->fetchAll(PDO::FETCH_ASSOC) : [];
 
     // The reason of the newest check that found the monitor in its current
-    // state: the newest row of all can be a remote probe's, which node_api
-    // only logs, and its 'up' says nothing about why the monitor is down.
-    // Read per monitor and only for the ones that are not fine - on a healthy
-    // system this loop does not run at all.
+    // state, never a remote probe's row (source 'probe'): node_api only logs
+    // it, and neither its 'up' nor its own 'down' says why cron has the
+    // monitor down. Read per monitor and only for the ones that are not fine
+    // - on a healthy system this loop does not run at all.
     $reason_stmt = $pdo->prepare("
         SELECT error_message FROM monitor_logs
-        WHERE monitor_id = ? AND status = ? ORDER BY id DESC LIMIT 1
+        WHERE monitor_id = ? AND status = ? AND (source IS NULL OR source <> 'probe')
+        ORDER BY id DESC LIMIT 1
     ");
     $monitors = [];
     foreach ($rows as $row) {
@@ -13918,7 +13935,6 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         SELECT
             SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
             SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count,
-            SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) as down_count,
             COUNT(*) as all_rows,
             AVG(CASE WHEN response_time > 0 THEN response_time END) as avg_latency
         FROM monitor_logs
@@ -13938,7 +13954,18 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     }
     $dg_pct = bk_uptime_totals(array_values($dg_time))['pct'];
     $availability = $dg_pct !== null ? round($dg_pct, 3) : null;
-    $incident_count = (int)($overall['down_count'] ?? 0);
+    // The incident count: 'down' rows, but not a remote probe's (source
+    // 'probe'), which confirms no outage; its rows still count in the checks
+    // above. A query of its own: source is in no index, and in the one above
+    // it would turn the read of idx_logs_regions into a read of every row of
+    // the period, fleet-wide. Here only the 'down' rows are looked up.
+    $stmt_incidents = $pdo->prepare("
+        SELECT COUNT(*) FROM monitor_logs
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND status = 'down'
+          AND (source IS NULL OR source <> 'probe') AND {$dg_active}
+    ");
+    $stmt_incidents->execute(array_merge([$days], $dg_active_params));
+    $incident_count = (int)$stmt_incidents->fetchColumn();
     $avg_latency = $overall['avg_latency'] !== null ? (int)round($overall['avg_latency']) : null;
 
     // --- Agents (only those that ever actually reported - same logic as index.php) ---
@@ -14217,11 +14244,14 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     }
 
     // --- Biggest incident (approximation: contiguous runs of 'down' rows, a gap > 15 min = a new incident) ---
+    // Without a remote probe's rows (source 'probe'): its 'down' starts no
+    // incident and gives none its reason, as in the incident count above.
     $stmt_down = $pdo->prepare("
         SELECT l.monitor_id, m.name, l.checked_at, l.checked_from, l.error_message, m.status as current_status
         FROM monitor_logs l
         JOIN monitors m ON m.id = l.monitor_id
-        WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND l.status = 'down' AND m.archived_at IS NULL
+        WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND l.status = 'down'
+          AND (l.source IS NULL OR l.source <> 'probe') AND m.archived_at IS NULL
         ORDER BY l.monitor_id ASC, l.checked_at ASC
         LIMIT 2000
     ");
@@ -14447,11 +14477,13 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
         if ($worst_region === null || $r['uptime'] < $worst_region['uptime']) $worst_region = $r;
     }
 
-    // Incident heatmap by day of week (aggregated over the whole month)
+    // Incident heatmap by day of week (aggregated over the whole month), from
+    // the same rows as the incident count: a remote probe's are not one.
     $stmt_dow = $pdo->prepare("
         SELECT DAYOFWEEK(checked_at) as dow, COUNT(*) as cnt
         FROM monitor_logs
         WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND status = 'down'
+          AND (source IS NULL OR source <> 'probe')
         GROUP BY DAYOFWEEK(checked_at)
     ");
     $stmt_dow->execute([$days]);

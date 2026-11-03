@@ -612,7 +612,7 @@ kontroly nebo hlášení. Obojí se zapíše do auditu.
 | `action=badge[&monitor_id=][&type=uptime][&lang=en]` | veřejné | Vložitelný SVG odznak (cache 60 s): živý stav, s `type=uptime` 30denní dostupnost; bez `monitor_id` tiskne celkový verdikt veřejné sady. Neznámý monitor, nebo monitor mimo veřejnou stránku pro volajícího, který ho nesmí vidět, je 404 |
 | `action=websites_overview` | přiřazený monitor | Weby s certifikáty a dostupností v okně (`sla7` / `sla30` / `sla365` v čase, kalendářní dny včetně dneška; `null` = nic nenaměřeno). `sslAlertDays` je hranice, u které cron upozorňuje (`ssl_alert_days`). Webový monitor navíc nese `httpStatusCode`, kód HTTP, který zaznamenala jeho poslední kontrola (čte se čerstvě, ne z cache; `null` = ta kontrola žádný nezaznamenala), a `httpCheckedAt` |
 | `action=monitor_insights&monitor_id=` | přiřazený monitor | Odvozená pozorování k jednomu monitoru; `status` je stav monitoru ve sdíleném slovníku (`key`, `label`, `tone`, `icon`) a věta shrnutí je formulovaná podle stavu - údržba, pozastavení ani čekání na data už nejsou „aktuálně nedostupný“. `statusSentence` je totéž shrnutí bez hlavní starosti a bez „vše v pořádku“ (jen stav a věta o zátěži): stránka zařízení vypisuje zjištění hned pod ním. `health` je skóre zdraví monitoru s rozpadem (viz „Skóre zdraví“ níž; `null` = nešlo spočítat, `score` `null` = málo dat). Staré `healthScore` patří TeamSpeaku a zůstává kvůli starším klientům |
-| `action=findings&monitor_id=&limit=&offset=&lang=` (nebo `&summary=1`) | přiřazený monitor | Jeden seznam zjištění (C-12): důvody k pozornosti (výpadek, varování, mlčící agent, privátní cíl, certifikát, metrika nad limitem, nový agent), tipy, postřehy a doporučení pro router v jednom seznamu. Tip, který opakuje důvod k pozornosti téhož monitoru (tip o CPU/RAM/disku vedle jeho metriky, tip o certifikátu), se vynechá. Každé zjištění: `key`, `source` (`status`, `certificate`, `check`, `metric`, `tip`, `agent`, `insight`, `router`), `kind`, `severity` (`critical`, `warning`, `info`), `monitorId` / `monitorName` / `monitorType`, `title`, `detail`, `action`, `since` a u doporučení pro router celá položka v `rec`. U zjištění o stavu je `detail` zpráva nejnovější kontroly, která monitor v jeho současném stavu našla od chvíle, kdy do něj vstoupil (`last_status_change`, o 120 s dřív kvůli řádku, který stav nastavil; null, když taková není), ne novějšího řádku s jiným stavem ani dřívějšího období téhož stavu. Seřazené od kritických. Stránkované přes `limit` (1-500, výchozí 50) a `offset`; `total`, `counts` podle závažnosti, `devices` (po zařízeních: `worst` a počty, přes celý seznam), `monitorsChecked`, `muted` (položky routeru, které vlastník ztlumil), `canMute`. `monitor_id` = jedno zařízení. Zdroj, který selhal, jmenuje `sourceErrors` - seznam pak není úplný, ne čistý. Položka v něm nese `source`, `monitorId` a `error`, jeden z kódů `attention_unavailable`, `tips_unavailable`, `insights_unavailable` a `router_recommendations_unavailable`. `summary=1` vrátí jen `total`, `counts`, `devicesWithFindings`, `monitorsChecked`, `sourceErrors` a `generatedAt`, pro zvonek nebo odznak, který se ptá opakovaně; počty celé flotily se drží minutu pro každý rozsah uživatele (`cachedAt`, když přišly odtud) a smaže je ztlumení nebo archivace. Plný seznam je vždy čerstvý |
+| `action=findings&monitor_id=&limit=&offset=&lang=` (nebo `&summary=1`) | přiřazený monitor | Jeden seznam zjištění (C-12): důvody k pozornosti (výpadek, varování, mlčící agent, privátní cíl, certifikát, metrika nad limitem, nový agent), tipy, postřehy a doporučení pro router v jednom seznamu. Tip, který opakuje důvod k pozornosti téhož monitoru (tip o CPU/RAM/disku vedle jeho metriky, tip o certifikátu), se vynechá. Každé zjištění: `key`, `source` (`status`, `certificate`, `check`, `metric`, `tip`, `agent`, `insight`, `router`), `kind`, `severity` (`critical`, `warning`, `info`), `monitorId` / `monitorName` / `monitorType`, `title`, `detail`, `action`, `since` a u doporučení pro router celá položka v `rec`. U zjištění o stavu je `detail` zpráva nejnovější kontroly, která monitor v jeho současném stavu našla od chvíle, kdy do něj vstoupil (`last_status_change`, o 120 s dřív kvůli řádku, který stav nastavil; null, když taková není), ne novějšího řádku s jiným stavem, dřívějšího období téhož stavu ani řádku vzdálené sondy (`monitor_logs.source = 'probe'`). Seřazené od kritických. Stránkované přes `limit` (1-500, výchozí 50) a `offset`; `total`, `counts` podle závažnosti, `devices` (po zařízeních: `worst` a počty, přes celý seznam), `monitorsChecked`, `muted` (položky routeru, které vlastník ztlumil), `canMute`. `monitor_id` = jedno zařízení. Zdroj, který selhal, jmenuje `sourceErrors` - seznam pak není úplný, ne čistý. Položka v něm nese `source`, `monitorId` a `error`, jeden z kódů `attention_unavailable`, `tips_unavailable`, `insights_unavailable` a `router_recommendations_unavailable`. `summary=1` vrátí jen `total`, `counts`, `devicesWithFindings`, `monitorsChecked`, `sourceErrors` a `generatedAt`, pro zvonek nebo odznak, který se ptá opakovaně; počty celé flotily se drží minutu pro každý rozsah uživatele (`cachedAt`, když přišly odtud) a smaže je ztlumení nebo archivace. Plný seznam je vždy čerstvý |
 | `action=ui_config` | veřejné | Nastavení vzhledu pro frontend (logo, názvy) |
 | `action=alerts_read_state` | přihlášený | Meze přečtených upozornění (`readUpToId`) |
 | `action=convert_to_agent_check` | admin | Převede proces hlídaný agentem na samostatný monitor |
@@ -944,8 +944,8 @@ LTE zálohu; to číslo je skutečné, jen to není rychlost linky.
 | `action=incidents` | veřejný stav / přiřazené | Seznam incidentů. Začátek výpadku je okamžik, kdy monitor spadl (`last_status_change`), ne poslední potvrzení výpadku. Veřejný pohled vynechá cíle, jména operátorů a důvody kontrol, i v `updates` |
 | `action=create_incident` | admin | Ruční založení. Volitelné `monitorId` naváže incident na monitor: 404 neznámý, 409 archivovaný, 409 když už monitor otevřený incident má |
 | `action=incident_action` | admin | `op`: acknowledge / resolve / postmortem. `resolve` vrátí `monitorStillDown: true`, když je monitor i po uzavření incidentu dál nedostupný |
-| `action=events&monitor_id=&limit=` | veřejný stav / přiřazené | Události monitoru Navíc vrací `statusChange`: kontrolu, která zaznamenala poslední změnu stavu (přišpendlenou na `monitors.last_status_change`, se stavem, ze kterého se přešlo: stavem řádku zapsaného před ní, který může patřit vzdálené sondě, viz `node_api.php` níž), nebo `null` - v samotném seznamu ten řádek často není, protože okno drží nejnovější kontroly plus nejnovější výpadky. Každá událost nese `statusKey` / `statusLabel` / `statusTone` ze sdíleného slovníku stavů (`up`, `warning`, `down`, `maintenance`, `paused`, `unknown_new`, `unknown_stale`); údržba ani neznámý stav už nejsou `"OK"` a řádek bez zprávy dostane větu svého stavu |
-| `action=sla_report&days=` | přiřazený monitor | SLA přehled v čase: `uptimePct` (`null` bez jediné naměřené sekundy), `outageMinutes` = skutečné minuty výpadku včetně mlčení agenta, `silentMinutes` = kolik z nich agent mlčel, `unmeasuredMinutes` = čas, který nikdo neměřil (mimo procento). `upChecks` / `downChecks` zůstávají počty řádků; za 30 dní (`days` 90 / 365) jdou z `uptime_daily` plus dnešních logů, ne z měsíce logů, který zbyl. Odpověď nese `days`, `windowStart` (první den okna), `since` (první den s daty, i u každého řádku) a `percentileDays` (percentily latence čtou syrové logy, nejvýš 30 dní). U řádku navíc `measuredMinutes`, `budgetMinutes` (výpadek, který cíl SLA dovolí za změřený čas, proti `outageMinutes`) a `incidentCount` (incidenty otevřené v okně; `null`, když se nepodařilo je přečíst). `lastOutage` běží od první kontroly `down` po poslední kontrole `up` nebo `maintenance` do další kontroly `up` nebo `maintenance` a `warning` uvnitř ho nerozdělí. Okno údržby ho ohraničí stejně jako `outageMinutes`: jeho kontroly `maintenance` výpadek ukončí a samy výpadkem nejsou, ale kontrola `down` zapsaná uvnitř okna (503 vzdálené sondy) je výpadek až do další kontroly okna, stejně jako v dostupnosti, a jde i do `mttrSec`. Incident monitoru zůstává přes okno otevřený a zavře se až dalším `up`. Řádek se počítá bez ohledu na to, kdo ho zapsal (`monitor_logs` to nezaznamenává): `up` vzdálené sondy výpadek ukončí nebo rozdělí stejně jako cron a její `down` ho začne. Monitor, který z `down` odešel bez další kontroly `up` nebo `maintenance`, má `end` i `durationSec` `null` a `mttrSec` je délka vyřešeného výpadku. Bez kontroly `up` nebo `maintenance` v uchovaných lozích (30 dní) je `start` nejstarší uchovaná kontrola `down`, takže starší výpadek je na ni oříznutý a jeho `durationSec` i `mttrSec` vycházejí kratší. Selhání je `500 {"error": "sla_report_unavailable"}` |
+| `action=events&monitor_id=&limit=` | veřejný stav / přiřazené | Události monitoru Navíc vrací `statusChange`: kontrolu, která zaznamenala poslední změnu stavu (přišpendlenou na `monitors.last_status_change`, se stavem, ze kterého se přešlo: stavem nejnovějšího řádku před ní; ani jeden z nich nikdy není řádek vzdálené sondy, viz `node_api.php` níž), nebo `null` - v samotném seznamu ten řádek často není, protože okno drží nejnovější kontroly plus nejnovější výpadky. Každá událost nese `statusKey` / `statusLabel` / `statusTone` ze sdíleného slovníku stavů (`up`, `warning`, `down`, `maintenance`, `paused`, `unknown_new`, `unknown_stale`); údržba ani neznámý stav už nejsou `"OK"` a řádek bez zprávy dostane větu svého stavu. `source` říká, kdo řádek zapsal (`cron`, `heartbeat`, `agent`, `probe`; `null` před schématem r024). Řádek sondy v seznamu zůstává, ale jeho `down` je neúspěšné měření, ne výpadek: `rawStatus` `down`, `isDown` false, bez `outageEnd` / `outageDurationSec`; výpadek neukončí, není `isRecovery` a výpadky přimíchané za nejnovějšími kontrolami nikdy nejsou sondy |
+| `action=sla_report&days=` | přiřazený monitor | SLA přehled v čase: `uptimePct` (`null` bez jediné naměřené sekundy), `outageMinutes` = skutečné minuty výpadku včetně mlčení agenta, `silentMinutes` = kolik z nich agent mlčel, `unmeasuredMinutes` = čas, který nikdo neměřil (mimo procento). `upChecks` / `downChecks` zůstávají počty řádků; za 30 dní (`days` 90 / 365) jdou z `uptime_daily` plus dnešních logů, ne z měsíce logů, který zbyl. Odpověď nese `days`, `windowStart` (první den okna), `since` (první den s daty, i u každého řádku) a `percentileDays` (percentily latence čtou syrové logy, nejvýš 30 dní). U řádku navíc `measuredMinutes`, `budgetMinutes` (výpadek, který cíl SLA dovolí za změřený čas, proti `outageMinutes`) a `incidentCount` (incidenty otevřené v okně; `null`, když se nepodařilo je přečíst). `lastOutage` běží od první kontroly `down` po poslední kontrole `up` nebo `maintenance` do další kontroly `up` nebo `maintenance` a `warning` uvnitř ho nerozdělí. Okno údržby ho ohraničí stejně jako `outageMinutes`: jeho kontroly `maintenance` výpadek ukončí a samy výpadkem nejsou, ale kontrola `down` zapsaná uvnitř okna je výpadek až do další kontroly okna, stejně jako v dostupnosti, a jde i do `mttrSec`. Incident monitoru zůstává přes okno otevřený a zavře se až dalším `up`. Řádek vzdálené sondy (`monitor_logs.source = 'probe'`) se tu nepočítá: jeho `up` výpadek neukončí ani nerozdělí a jeho `down` žádný nezačne, zatímco `uptimePct`, `outageMinutes` a `upChecks` / `downChecks` ho počítají dál (dostupnost); řádek bez zdroje se počítá jako dřív. Monitor, který z `down` odešel bez další kontroly `up` nebo `maintenance`, má `end` i `durationSec` `null` a `mttrSec` je délka vyřešeného výpadku. Bez kontroly `up` nebo `maintenance` v uchovaných lozích (30 dní) je `start` nejstarší uchovaná kontrola `down`, takže starší výpadek je na ni oříznutý a jeho `durationSec` i `mttrSec` vycházejí kratší. Selhání je `500 {"error": "sla_report_unavailable"}` |
 | `action=audit_logs&limit=` | admin | Poslední kontroly napříč monitory. Formulované sdíleným slovníkem stavů (`statusKey`, `statusLabel`, `statusTone`) |
 
 ---
@@ -1169,10 +1169,12 @@ Rozhraní pro vzdálené měřicí uzly. Autorizace sdíleným `cron_key`
 v `?key=` nebo v hlavičce `X-Node-Key` (`hash_equals`, tedy bez časového
 postranního kanálu); s prázdným `cron_key` je každé volání 403.
 
-Uzel si stáhne seznam monitorů ke kontrole a pošle zpátky výsledky včetně
-`checked_from`. Právě tahle hodnota plní `action=regions`.
+Uzel si stáhne seznam monitorů ke kontrole a pošle zpátky výsledky se svou
+`location`, která se u řádku uloží jako `checked_from`. Právě tahle hodnota
+plní `action=regions`.
 
-Poslaný výsledek jen přidá řádek do `monitor_logs`. Stav monitoru,
+Poslaný výsledek jen přidá řádek do `monitor_logs`, se `source = 'probe'`
+(nastaví ho server, z poslaných dat se nikdy nebere). Stav monitoru,
 `last_checked` a `last_details` zůstávají cronu, který uplatní údržbu,
 `alert_confirm_failures`, notifikace a životní cyklus incidentu; `details`
 výsledku se ignorují. Výsledek bez `status` se neuloží a stejně tak výsledek
@@ -1183,22 +1185,28 @@ upozornění ani incident. `response_time` se ukládá v celých milisekundách
 (`bk_response_ms`): chybějící hodnota nebo 0 neúspěšné kontroly je NULL a 0
 u výsledku `up` (odpověď pod 1 ms) je 1 ms.
 
-`monitor_logs` nezaznamenává, kdo řádek zapsal, takže řádek sondy se počítá
-všude, kde ho cron čte: `down` sondy přidá do řady pro `alert_confirm_failures`
-a její `up` řadu přeruší, doby odezvy jejích `up` vstupují do okna upozornění
-na pomalou odezvu. Jako každé měření se počítá i do dostupnosti, historie
-a `action=regions`. Ohraničuje i `lastOutage` v `action=sla_report`: `up` sondy
-výpadek ukončí nebo rozdělí, zatímco cron má monitor dál dole a jeho incident
-otevřený, takže `durationSec` a `mttrSec` můžou vyjít kratší než incident,
-a `down` sondy výpadek začne. A `action=events` bere řádek zapsaný před změnou
-stavu jako `statusChange.fromStatus`: `up` sondy těsně před zotavením podle
-cronu se čte jako změna z `up`. Rozlišit to jde jen se zapisovatelem uloženým
-u řádku.
+Každý řádek `monitor_logs` nese svého zapisovatele v `source` (schéma
+20261101r024): `cron` (jeho vlastní kontroly, řádky údržby a `unknown` / `down`
+za mlčícího agenta), `heartbeat` (vyhodnocení heartbeat monitoru cronem),
+`agent` (`agent_api.php`) nebo `probe` (řádek poslaný sem). Řádek sondy je
+měření: počítá se do dostupnosti (`uptime_windows`, `daily_uptime`,
+`uptimePct` a `outageMinutes` v `sla_report`, odznak), do historie
+(`action=events`, řady latence, export CSV) i do `action=regions`. Výpadek ale
+nikdy nepotvrdí, nerozdělí ani mu nedá důvod: nepatří do řady pro
+`alert_confirm_failures` ani do okna upozornění na pomalou odezvu, nezačne,
+neukončí ani nerozdělí `lastOutage` a `mttrSec` v `action=sla_report` ani změnu
+v časové ose monitoru, v `action=events` nikdy není `statusChange` ani jeho
+`fromStatus` a neúspěšná kontrola sondy tam má `isDown` false a žádný konec
+výpadku. Počet incidentů a největší incident v přehledu ji také vynechají.
+`outageMinutes` tak může obsahovat selhání sondy, které `lastOutage` nemá.
 
 Důvod uvedený u stavu - `detail` zjištění o stavu v `action=findings`,
-diagnostika výpadků v administraci, denní připomínka - je zpráva nejnovějšího
-řádku v současném stavu monitoru. Pozdější `up` sondy nenahradí důvod
-výpadku, který potvrdil cron; `down` sondy ho dát může.
+diagnostika výpadků v administraci, denní připomínka, karta probíhajícího
+výpadku v `action=incidents` - je zpráva nejnovějšího řádku v současném stavu
+monitoru, který nezapsala sonda.
+
+Řádek z doby před schématem r024 `source` nemá (NULL) a počítá se všude jako
+dřív, i řádek sondy z té doby, dokud ho 30denní logy nesmažou.
 
 > **Stav:** měření nepocházejí z jednoho místa. Kromě hlavního serveru sem
 > každých pět minut posílá výsledky Cloudflare Worker (`cloudflare-agent.js`
@@ -1207,7 +1215,7 @@ výpadku, který potvrdil cron; `down` sondy ho dát může.
 > GitHub Actions (`monitor.yml`) skončila 30. 10. 2026 a samostatný PHP uzel
 > (`node_client.php`) je pryč také - nikdo ho nespouštěl a nesl si vlastní
 > kopie kontrol. Řádky sondy GitHub si místo nechají, dokud logy nevyprší
-> (30 dní).
+> (30 dní); jsou z doby před schématem r024, takže `source` nemají.
 
 ---
 

@@ -366,17 +366,21 @@ export function AssetDetailPage() {
           rows.map((e: any) => ({
             id: e.id,
             // A row skipped for maintenance checked nothing, so it is not titled as a pass.
+            // A remote probe's 'down' is a failed measurement, not an outage
+            // (isDown false): cron owns the state, so it is not titled a pass.
             title: e.isDown
               ? t('asset.event_outage', 'Výpadek služby')
-              : e.rawStatus === 'warning'
-                ? t('asset.event_degraded', 'Zhoršená odezva')
-                : e.rawStatus === 'unknown'
-                  ? t('asset.event_unknown', 'Stav neznámý (agent nehlásí)')
-                  : e.rawStatus === 'maintenance'
-                    ? t('common.maintenance', 'Údržba')
-                    : e.isRecovery
-                      ? t('asset.event_recovered', 'Služba obnovena')
-                      : t('asset.event_ok', 'Kontrola proběhla v pořádku'),
+              : e.rawStatus === 'down'
+                ? t('asset.event_probe_down', 'Selhala kontrola vzdálené sondy')
+                : e.rawStatus === 'warning'
+                  ? t('asset.event_degraded', 'Zhoršená odezva')
+                  : e.rawStatus === 'unknown'
+                    ? t('asset.event_unknown', 'Stav neznámý (agent nehlásí)')
+                    : e.rawStatus === 'maintenance'
+                      ? t('common.maintenance', 'Údržba')
+                      : e.isRecovery
+                        ? t('asset.event_recovered', 'Služba obnovena')
+                        : t('asset.event_ok', 'Kontrola proběhla v pořádku'),
             detail:
               e.errorMsg +
               (e.outageDurationSec
@@ -388,7 +392,13 @@ export function AssetDetailPage() {
                 : ''),
             at: e.time,
             atIso: typeof e.timeIso === 'string' ? e.timeIso : null,
-            severity: e.isDown ? 'down' : e.rawStatus === 'warning' ? 'warning' : e.isRecovery ? 'up' : 'info',
+            severity: e.isDown
+              ? 'down'
+              : e.rawStatus === 'warning' || e.rawStatus === 'down'
+                ? 'warning'
+                : e.isRecovery
+                  ? 'up'
+                  : 'info',
             resolution: e.isDown ? 'Open' : e.isRecovery ? 'Resolved' : 'Info',
             // One row of the check log: a routine pass hides behind "Vše" (C-10).
             kind: 'check',

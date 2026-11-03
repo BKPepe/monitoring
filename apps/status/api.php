@@ -2393,7 +2393,7 @@ if ($action === 'events') {
         // mixed in regardless of age - the same principle the public status
         // page uses to fill its incident list (a filtered query, not a log tail).
         $where_monitor = $monitor_id > 0 ? 'AND l.monitor_id = ?' : '';
-        $select_cols = "l.id, l.checked_at, l.status, l.error_message, l.checked_from, l.response_time,
+        $select_cols = "l.id, l.checked_at, l.status, l.error_message, l.checked_from, l.response_time, l.source,
                        m.id as monitor_id, m.name as monitor_name, m.target, m.type";
 
         $stmt = $pdo->prepare("
@@ -2407,12 +2407,15 @@ if ($action === 'events') {
         $stmt->execute($ev_params);
         $recent_rows = $stmt->fetchAll();
 
+        // A remote probe's failure (source 'probe') is not an outage, so it is
+        // not mixed in; it shows only where it falls in the fresh window.
         $fail_limit = min(50, $limit);
         $stmt_fails = $pdo->prepare("
             SELECT $select_cols
             FROM monitor_logs l
             JOIN monitors m ON l.monitor_id = m.id
-            WHERE l.status IN ('down', 'warning') $where_monitor AND {$ev_scope}
+            WHERE l.status IN ('down', 'warning') AND (l.source IS NULL OR l.source <> 'probe')
+              $where_monitor AND {$ev_scope}
             ORDER BY l.id DESC
             LIMIT $fail_limit
         ");
@@ -2429,13 +2432,16 @@ if ($action === 'events') {
         // Only the fresh tail ($recent_rows: one monitor, consecutive ids) has
         // real neighbours - the older failures merged in above sit next to rows
         // hours apart, so deciding this from the merged list (as the frontend
-        // did) invents recoveries at times when nothing happened.
+        // did) invents recoveries at times when nothing happened. The tail is
+        // cron's rows only: a remote probe's (source 'probe') neither recovers
+        // an outage nor fails one, so its neighbours are the rows around it.
         $recovery_ids = [];
         if ($monitor_id > 0) {
-            for ($i = 0, $n = count($recent_rows) - 1; $i < $n; $i++) {
-                if ($recent_rows[$i]['status'] === 'up'
-                    && in_array($recent_rows[$i + 1]['status'], ['down', 'warning'], true)) {
-                    $recovery_ids[(int)$recent_rows[$i]['id']] = true;
+            $own_rows = array_values(array_filter($recent_rows, fn ($r) => ($r['source'] ?? null) !== 'probe'));
+            for ($i = 0, $n = count($own_rows) - 1; $i < $n; $i++) {
+                if ($own_rows[$i]['status'] === 'up'
+                    && in_array($own_rows[$i + 1]['status'], ['down', 'warning'], true)) {
+                    $recovery_ids[(int)$own_rows[$i]['id']] = true;
                 }
             }
         }
@@ -2452,20 +2458,31 @@ if ($action === 'events') {
         // the later ones either - one indexed lookup per outage, not per row.
         //
         // "After" is a later second, or the same second written later (several
-        // locations check at once). Two MIN()s, not one ORDER BY checked_at
-        // LIMIT 1: for that form MySQL 8.4 often walked the (monitor_id,
-        // checked_at) index from the monitor's oldest row up to the failure,
-        // 2-25 ms per outage. Each MIN() here is one dive into
-        // idx_logs_cover_latency (monitor_id, status, checked_at).
-        $down_rows = array_values(array_filter($rows, fn ($r) => $r['status'] === 'down'));
+        // locations check at once). Two lookups, not one ORDER BY checked_at
+        // LIMIT 1 over both: for that form MySQL 8.4 often walked the
+        // (monitor_id, checked_at) index from the monitor's oldest row up to
+        // the failure, 2-25 ms per outage.
+        //
+        // A remote probe's row (source 'probe') neither ends an outage nor is
+        // one: its 'down' gets no end, and its 'up' is skipped. source is not
+        // in idx_logs_cover_latency (monitor_id, status, checked_at), so a
+        // MIN() would read every 'up' row after the failure to filter it;
+        // ORDER BY checked_at LIMIT 1 on that index, forced so the planner
+        // cannot take the walk above, stops at the first 'up' that is not a
+        // probe's - usually the first one.
+        $down_rows = array_values(array_filter($rows, fn ($r) => $r['status'] === 'down' && ($r['source'] ?? null) !== 'probe'));
         usort($down_rows, fn ($a, $b) => [(int)$a['monitor_id'], (string)$a['checked_at'], (int)$a['id']]
             <=> [(int)$b['monitor_id'], (string)$b['checked_at'], (int)$b['id']]);
         $stmt_next_up = $pdo->prepare("
             SELECT COALESCE(
-                (SELECT MIN(checked_at) FROM monitor_logs
-                 WHERE monitor_id = ? AND status = 'up' AND checked_at = ? AND id > ?),
-                (SELECT MIN(checked_at) FROM monitor_logs
-                 WHERE monitor_id = ? AND status = 'up' AND checked_at > ?)
+                (SELECT checked_at FROM monitor_logs FORCE INDEX (idx_logs_cover_latency)
+                 WHERE monitor_id = ? AND status = 'up' AND checked_at = ? AND id > ?
+                   AND (source IS NULL OR source <> 'probe')
+                 ORDER BY checked_at ASC LIMIT 1),
+                (SELECT checked_at FROM monitor_logs FORCE INDEX (idx_logs_cover_latency)
+                 WHERE monitor_id = ? AND status = 'up' AND checked_at > ?
+                   AND (source IS NULL OR source <> 'probe')
+                 ORDER BY checked_at ASC LIMIT 1)
             )
         ");
         $outage_end_ts = [];
@@ -2518,7 +2535,13 @@ if ($action === 'events') {
                 'errorMsg' => ($ev_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: bk_event_fallback_text($ev_label['key']),
                 // A stored 0 is an older failed check or maintenance row: unmeasured.
                 'responseTime' => (int)$r['response_time'] > 0 ? (int)$r['response_time'] : null,
-                'isDown' => $r['status'] === 'down',
+                // Who wrote the row: 'cron', 'heartbeat', 'agent', 'probe', or
+                // null for a row from before schema r024.
+                'source' => $r['source'] ?? null,
+                // A failure that is part of an outage. A remote probe's 'down'
+                // is a failed measurement, not an outage: rawStatus says
+                // 'down', isDown false, and it has no outage end.
+                'isDown' => $r['status'] === 'down' && ($r['source'] ?? null) !== 'probe',
                 // true = this OK check ended an outage. false on rows whose
                 // neighbour is unknown - never a guess.
                 'isRecovery' => isset($recovery_ids[(int)$r['id']]),
@@ -2549,11 +2572,13 @@ if ($action === 'events') {
                 if ($changed_ts !== false) {
                     // +-120 s: the log INSERT and the monitors UPDATE are two
                     // statements of the same run, so they differ by about a
-                    // second - never by a check interval.
+                    // second - never by a check interval. A remote probe's row
+                    // (source 'probe') set no state, so it is never the change.
                     $stmt_change = $pdo->prepare("
                         SELECT id, checked_at, status, error_message, checked_from, response_time
                         FROM monitor_logs
                         WHERE monitor_id = ? AND status = ? AND checked_at BETWEEN ? AND ?
+                          AND (source IS NULL OR source <> 'probe')
                         ORDER BY ABS(TIMESTAMPDIFF(SECOND, checked_at, ?)) ASC, id ASC
                         LIMIT 1
                     ");
@@ -2569,13 +2594,14 @@ if ($action === 'events') {
                     if (is_array($change_row)) {
                         // The state it came FROM. Absent (the first check ever,
                         // or older rows already pruned) stays null - "it was up
-                        // before" is not a safe default. The row before can be
-                        // a remote probe's, which node_api only logs (and
-                        // monitor_logs does not record the writer): a probe's
-                        // 'up' just before cron's recovery reads as from 'up'.
+                        // before" is not a safe default. A remote probe's row
+                        // (source 'probe') is skipped: node_api only logs it,
+                        // and its 'up' just before cron's recovery read as a
+                        // change from 'up'. A row from before r024 still counts.
                         $stmt_prev = $pdo->prepare("
                             SELECT status FROM monitor_logs
-                            WHERE monitor_id = ? AND id < ? ORDER BY id DESC LIMIT 1
+                            WHERE monitor_id = ? AND id < ? AND (source IS NULL OR source <> 'probe')
+                            ORDER BY id DESC LIMIT 1
                         ");
                         $stmt_prev->execute([$monitor_id, (int)$change_row['id']]);
                         $prev = $stmt_prev->fetchColumn();
@@ -2630,7 +2656,9 @@ if ($action === 'monitor_insights') {
         $details = bk_monitor_details($monitor);
         bk_enrich_monitor_details($pdo, $monitor, $details);
 
-        $stmt_last_log = $pdo->prepare("SELECT status, check_stages FROM monitor_logs WHERE monitor_id = ? ORDER BY id DESC LIMIT 1");
+        // The newest of cron's own checks: a remote probe's row (source
+        // 'probe') carries no stages, and its status is not the monitor's.
+        $stmt_last_log = $pdo->prepare("SELECT status, check_stages FROM monitor_logs WHERE monitor_id = ? AND (source IS NULL OR source <> 'probe') ORDER BY id DESC LIMIT 1");
         $stmt_last_log->execute([$monitor_id]);
         $last_log = $stmt_last_log->fetch();
         $status = $last_log['status'] ?? ($monitor['status'] ?? 'unknown');
@@ -2771,17 +2799,18 @@ if ($action === 'findings') {
         $fd_muted = [];
         $fd_errors = [];
         $fd_ssl_days_limit = max(1, (int)get_setting('ssl_alert_days', '14'));
-        $fd_last_log = $pdo->prepare("SELECT status, check_stages FROM monitor_logs WHERE monitor_id = ? ORDER BY id DESC LIMIT 1");
+        $fd_last_log = $pdo->prepare("SELECT status, check_stages FROM monitor_logs WHERE monitor_id = ? AND (source IS NULL OR source <> 'probe') ORDER BY id DESC LIMIT 1");
         // A status finding's reason is the newest check that found the monitor
-        // in its current state since it entered it. The newest row of all can
-        // be a remote probe's, which node_api only logs: its 'up' after an
-        // outage cron confirmed says nothing about why the monitor is down.
+        // in its current state since it entered it, never a remote probe's row
+        // (source 'probe'): node_api only logs it, and neither its 'up' after
+        // an outage cron confirmed nor its own 'down' says why cron has the
+        // monitor down.
         // A state set without a row (maintenance switched off, a restore from
         // the archive) must not take the words of an earlier spell of it, so
         // the rows start at last_status_change - 120 s: the log INSERT and the
         // monitors UPDATE are two statements of the same run, so the row that
         // set the state can be a second older than the stamp.
-        $fd_state_log = $pdo->prepare("SELECT error_message FROM monitor_logs WHERE monitor_id = ? AND status = ? AND (? IS NULL OR checked_at >= ?) ORDER BY id DESC LIMIT 1");
+        $fd_state_log = $pdo->prepare("SELECT error_message FROM monitor_logs WHERE monitor_id = ? AND status = ? AND (? IS NULL OR checked_at >= ?) AND (source IS NULL OR source <> 'probe') ORDER BY id DESC LIMIT 1");
         $fd_base = fn (array $row, string $source, string $kind, string $severity): array => [
             'key' => $source . ':' . (int)$row['id'] . ':' . $kind,
             'source' => $source,
@@ -3464,7 +3493,9 @@ if ($action === 'incidents') {
 
         // Outages of TARGET monitors that are down RIGHT NOW - takes the latest
         // 'down' row per currently unavailable monitor, not every historical down
-        // row (that would show long-resolved outages as still ongoing).
+        // row (that would show long-resolved outages as still ongoing). Never a
+        // remote probe's (source 'probe'): cron has the monitor down, and the
+        // card's reason is the words of cron's check, not a probe's.
         // No inner catch any more: a failed read here used to leave the list
         // empty, and the page said "no outages" during one. Every query of
         // this action now fails the whole answer (the outer catch -> 500).
@@ -3474,7 +3505,10 @@ if ($action === 'incidents') {
             FROM monitor_logs l
             JOIN monitors m ON l.monitor_id = m.id
             WHERE m.status = 'down' AND {$inc_scope}
-              AND l.id = (SELECT MAX(l2.id) FROM monitor_logs l2 WHERE l2.monitor_id = l.monitor_id AND l2.status = 'down')
+              AND l.id = (SELECT l2.id FROM monitor_logs l2
+                          WHERE l2.monitor_id = l.monitor_id AND l2.status = 'down'
+                            AND (l2.source IS NULL OR l2.source <> 'probe')
+                          ORDER BY l2.id DESC LIMIT 1)
             ORDER BY l.id DESC
             LIMIT 50
         ");
@@ -4486,7 +4520,9 @@ if ($action === 'websites_overview') {
         // any site that was up and "OFFLINE" for a slow one, a code nobody
         // measured. null = the latest check recorded none (it failed before
         // HTTP, or the monitor is not a web check), and the card shows "—".
-        $wo_http = $pdo->prepare("SELECT check_stages, checked_at FROM monitor_logs WHERE monitor_id = ? ORDER BY id DESC LIMIT 1");
+        // The latest of cron's checks: a remote probe's row (source 'probe')
+        // stores no stages, and every five minutes it blanked the code.
+        $wo_http = $pdo->prepare("SELECT check_stages, checked_at FROM monitor_logs WHERE monitor_id = ? AND (source IS NULL OR source <> 'probe') ORDER BY id DESC LIMIT 1");
         $wo_web = $pdo->query("SELECT id FROM monitors WHERE type = 'web'")->fetchAll(PDO::FETCH_COLUMN);
         foreach (array_map('intval', $wo_web) as $wo_mid) {
             if (!isset($wo_monitors[$wo_mid])) {
@@ -4621,14 +4657,17 @@ if ($action === 'sla_report') {
         // (lastOutage null) for every monitor. It fails the report instead.
         // The latest down row of every monitor + the nearest following 'up' or
         // 'maintenance' row, where that outage ended (the correlated subquery
-        // runs only for monitors that ever went down).
+        // runs only for monitors that ever went down). Neither is a remote
+        // probe's row (source 'probe'), see the start below.
         $stmt_out_all = $pdo->query("
             SELECT l.monitor_id, l.id, l.checked_at, l.error_message,
                    (SELECT u.checked_at FROM monitor_logs u
                     WHERE u.monitor_id = l.monitor_id AND u.status IN ('up', 'maintenance') AND u.id > l.id
+                      AND (u.source IS NULL OR u.source <> 'probe')
                     ORDER BY u.id ASC LIMIT 1) AS end_at
             FROM monitor_logs l
-            JOIN (SELECT monitor_id, MAX(id) AS max_id FROM monitor_logs WHERE status = 'down' GROUP BY monitor_id) ld
+            JOIN (SELECT monitor_id, MAX(id) AS max_id FROM monitor_logs
+                  WHERE status = 'down' AND (source IS NULL OR source <> 'probe') GROUP BY monitor_id) ld
               ON ld.max_id = l.id
         ");
         foreach ($stmt_out_all->fetchAll() as $orow) {
@@ -4647,32 +4686,46 @@ if ($action === 'sla_report') {
         // 'down' row logged inside a window (a remote probe's 503) is an
         // outage until the window's next row, as it is in availability. The
         // incident stays open over a window and closes at the next 'up'.
-        // A row counts whoever wrote it, as in availability (monitor_logs does
-        // not record that): a remote probe's 'up' ends or splits the outage
-        // like cron's, and its 'down' starts one.
+        // Unlike availability, the outage is cron's: a remote probe's row
+        // (source 'probe') neither starts it with a 'down' nor ends or splits
+        // it with an 'up'. A row from before schema r024 has no source and
+        // still counts, a probe's of that time too.
         // "Before" / "after" is an earlier / later second, or the same second
-        // written earlier / later: cron and a remote probe both log a monitor,
-        // so an 'up' and a 'down' can share a second. b.at is the second of
-        // that last 'up' or 'maintenance' row, the subquery on u its id within
-        // that second. An earlier second is one MAX() per status: over an IN
-        // list MySQL reads the whole range instead of diving to its end.
-        // Without either in the kept logs (30 days) the start is the oldest
-        // down row there is, so an older outage is clipped to it. The lookups
-        // run on idx_logs_cover_latency (monitor_id, status, checked_at).
+        // written earlier / later: cron and the older rows of a remote probe
+        // both log a monitor, so an 'up' and a 'down' can share a second. b.at
+        // is the second of that last 'up' or 'maintenance' row, the subquery
+        // on u its id within that second. An earlier second is one lookup per
+        // status: over an IN list MySQL reads the whole range instead of
+        // diving to its end. source is not in idx_logs_cover_latency
+        // (monitor_id, status, checked_at), so a MAX() would read the whole
+        // range to filter it; ORDER BY checked_at DESC LIMIT 1 on that index,
+        // forced, stops at the newest row that is not a probe's. The start
+        // itself is read the same way, ascending: over a month-long outage a
+        // MIN() would look up every one of its down rows. Without either in
+        // the kept logs (30 days) the start is the oldest down row there is,
+        // so an older outage is clipped to it.
         $stmt_out_start = $pdo->prepare("
-            SELECT MIN(d.checked_at) FROM monitor_logs d
+            SELECT d.checked_at FROM monitor_logs d FORCE INDEX (idx_logs_cover_latency)
             CROSS JOIN (SELECT COALESCE(
                   (SELECT MAX(checked_at) FROM monitor_logs
-                   WHERE monitor_id = ? AND status IN ('up', 'maintenance') AND checked_at = ? AND id < ?),
+                   WHERE monitor_id = ? AND status IN ('up', 'maintenance') AND checked_at = ? AND id < ?
+                     AND (source IS NULL OR source <> 'probe')),
                   GREATEST(
-                      COALESCE((SELECT MAX(checked_at) FROM monitor_logs
-                                WHERE monitor_id = ? AND status = 'up' AND checked_at < ?), '1970-01-01 00:00:00'),
-                      COALESCE((SELECT MAX(checked_at) FROM monitor_logs
-                                WHERE monitor_id = ? AND status = 'maintenance' AND checked_at < ?), '1970-01-01 00:00:00'))) AS at) b
+                      COALESCE((SELECT checked_at FROM monitor_logs FORCE INDEX (idx_logs_cover_latency)
+                                WHERE monitor_id = ? AND status = 'up' AND checked_at < ?
+                                  AND (source IS NULL OR source <> 'probe')
+                                ORDER BY checked_at DESC LIMIT 1), '1970-01-01 00:00:00'),
+                      COALESCE((SELECT checked_at FROM monitor_logs FORCE INDEX (idx_logs_cover_latency)
+                                WHERE monitor_id = ? AND status = 'maintenance' AND checked_at < ?
+                                  AND (source IS NULL OR source <> 'probe')
+                                ORDER BY checked_at DESC LIMIT 1), '1970-01-01 00:00:00'))) AS at) b
             WHERE d.monitor_id = ? AND d.status = 'down' AND d.checked_at <= ? AND d.checked_at >= b.at
+              AND (d.source IS NULL OR d.source <> 'probe')
               AND (d.checked_at > b.at OR d.id > (
                   SELECT COALESCE(MAX(u.id), 0) FROM monitor_logs u
-                  WHERE u.monitor_id = ? AND u.status IN ('up', 'maintenance') AND u.checked_at = b.at AND u.id < ?))
+                  WHERE u.monitor_id = ? AND u.status IN ('up', 'maintenance') AND u.checked_at = b.at AND u.id < ?
+                    AND (u.source IS NULL OR u.source <> 'probe')))
+            ORDER BY d.checked_at ASC LIMIT 1
         ");
 
         $sla_pct_by_mid = [];
