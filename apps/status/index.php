@@ -974,14 +974,18 @@ $portal_url = trim(get_setting('portal_url'));
                                         <div class="details-content-inner">
                                             <?php
                                             // Načtení posledních logů pro historii a výpočet frekvence (zabraňuje duplicitním SQL dotazům)
-                                            $stmt_last_logs = $pdo->prepare("SELECT checked_at, status, response_time, error_message, checked_from, check_stages, source FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 5");
+                                            $stmt_last_logs = $pdo->prepare("SELECT checked_at, status, response_time, error_message, checked_from, check_stages FROM monitor_logs WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 5");
                                             $stmt_last_logs->execute([$mid]);
                                             $last_logs = $stmt_last_logs->fetchAll();
                                             // The lists below are the history, a remote probe's rows
                                             // included. The stages, the check frequency and the
-                                            // newest-check readings are cron's own rows: a probe's
-                                            // (source 'probe') has no stages and logs 20 s after cron.
-                                            $own_logs = array_values(array_filter($last_logs, fn ($ll_row) => ($ll_row['source'] ?? null) !== 'probe'));
+                                            // newest-check readings are cron's own two newest rows,
+                                            // read on their own: a probe's (source 'probe') has no
+                                            // stages and logs seconds after cron, and two probes
+                                            // left one cron row, or none, among the five above.
+                                            $stmt_own_logs = $pdo->prepare("SELECT checked_at, status, response_time, error_message, checked_from, check_stages FROM monitor_logs WHERE monitor_id = ? AND (source IS NULL OR source <> 'probe') ORDER BY checked_at DESC LIMIT 2");
+                                            $stmt_own_logs->execute([$mid]);
+                                            $own_logs = $stmt_own_logs->fetchAll();
 
                                             // Knowledge layer - vysvětlení aktuálně překročených prahů (viz
                                             // bk_get_knowledge_tips() ve functions.php). Vlastní decode check_stages,

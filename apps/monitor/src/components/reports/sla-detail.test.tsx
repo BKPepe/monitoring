@@ -93,6 +93,21 @@ describe('SlaDetail – minuty výpadku bez potvrzeného výpadku (r024)', () =>
     renderCs(none(12));
     expect(screen.getByText(/Žádný potvrzený výpadek za posledních 30 dní/)).toBeTruthy();
     expect(screen.queryByText('Žádný výpadek za posledních 30 dní.')).toBeNull();
+    expect(screen.getByText('MTTR (doba obnovení)').nextElementSibling?.textContent).toBe('Bez potvrzeného výpadku');
+  });
+
+  it('za 90 dní nikoho neobviňuje: poslední výpadek se čte jen z 30 dní logů', () => {
+    render(
+      <LanguageProvider>
+        <TooltipProvider>
+          <MemoryRouter>
+            <SlaDetail item={none(240)} days={90} />
+          </MemoryRouter>
+        </TooltipProvider>
+      </LanguageProvider>
+    );
+    expect(screen.getByText(/Žádný potvrzený výpadek v uchovaných logech \(30 dní\)/)).toBeTruthy();
+    expect(screen.queryByText(/za posledních 90 dní/)).toBeNull();
   });
 
   it('bez minut výpadku zůstává „žádný výpadek“', () => {

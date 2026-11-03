@@ -1198,7 +1198,7 @@ A posted result only adds a row to `monitor_logs`, with `source = 'probe'`
 (set by the server, never taken from the post). The monitor's status,
 `last_checked` and `last_details` stay with cron, which applies maintenance,
 `alert_confirm_failures`, notifications and the incident lifecycle; a result's
-`details` are ignored. A result without `status` is not stored, and neither is
+`details` are ignored. A result whose `status` is not `up` or `down` is not stored (a probe measures only those: its `warning` would reach the public failure list, its `maintenance` or `unknown` would turn measured time into time nobody measured), and neither is
 one for a monitor in maintenance (`is_in_maintenance`, as cron applies it):
 cron logs the window as `maintenance` rows, and a probe's `down` in it (the
 planned work's 503) would be an outage in availability and `action=sla_report`

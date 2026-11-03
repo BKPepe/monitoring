@@ -1716,6 +1716,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'reports.ongoing_badge': { cs: 'Probíhá', en: 'Ongoing' },
   'reports.reason_label': { cs: 'Důvod:', en: 'Reason:' },
   'reports.no_outage_30d': { cs: 'Žádný výpadek za posledních {days} dní.', en: 'No outage in the last {days} days.' },
+  'reports.no_confirmed_outage_short': { cs: 'Bez potvrzeného výpadku', en: 'No confirmed outage' },
+  'reports.no_confirmed_outage_kept': {
+    cs: 'Žádný potvrzený výpadek v uchovaných logech (30 dní). Minuty výpadku jsou ze starších dnů, z neúspěšných kontrol vzdálené sondy nebo z mlčení agenta.',
+    en: 'No confirmed outage in the kept logs (30 days). The outage minutes come from older days, failed remote probe checks or a silent agent.',
+  },
   'reports.no_confirmed_outage': {
     cs: 'Žádný potvrzený výpadek za posledních {days} dní. Minuty výpadku v dostupnosti jsou z neúspěšných kontrol vzdálené sondy nebo z mlčení agenta.',
     en: 'No confirmed outage in the last {days} days. The outage minutes in availability come from failed remote probe checks or a silent agent.',

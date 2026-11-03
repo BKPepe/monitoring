@@ -1177,7 +1177,7 @@ Poslaný výsledek jen přidá řádek do `monitor_logs`, se `source = 'probe'`
 (nastaví ho server, z poslaných dat se nikdy nebere). Stav monitoru,
 `last_checked` a `last_details` zůstávají cronu, který uplatní údržbu,
 `alert_confirm_failures`, notifikace a životní cyklus incidentu; `details`
-výsledku se ignorují. Výsledek bez `status` se neuloží a stejně tak výsledek
+výsledku se ignorují. Výsledek, jehož `status` není `up` ani `down`, se neuloží (sonda měří jen tyhle dva: její `warning` by se dostal do veřejného seznamu selhání, její `maintenance` nebo `unknown` by z naměřeného času udělal čas, který nikdo neměřil), a stejně tak výsledek
 pro monitor v údržbě (`is_in_maintenance`, jak ji uplatňuje cron): cron zapisuje
 okno jako řádky `maintenance` a `down` sondy v něm (503 plánované práce) by byl
 výpadkem v dostupnosti i v `action=sla_report`, ke kterému nikdy nebylo

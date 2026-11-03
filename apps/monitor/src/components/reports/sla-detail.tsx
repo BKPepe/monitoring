@@ -75,7 +75,9 @@ export function SlaDetail({ item, days }: { item: MonitorSla; days: number }) {
               ? formatDuration(item.mttrSec, lang)
               : item.lastOutage?.resolved
                 ? t('reports.mttr_unmeasured', 'Nezměřeno')
-                : t('reports.no_outage', 'Bez výpadku')}
+                : !item.lastOutage && item.outageMinutes > 0
+                  ? t('reports.no_confirmed_outage_short', 'Bez potvrzeného výpadku')
+                  : t('reports.no_outage', 'Bez výpadku')}
           </p>
         </div>
         <div className={cell}>
@@ -171,14 +173,21 @@ export function SlaDetail({ item, days }: { item: MonitorSla; days: number }) {
       ) : item.outageMinutes > 0 ? (
         // Availability counts time no outage stands for: a remote probe's
         // failed checks (which never start one) and an agent's silence. "No
-        // outage" next to outage minutes read as a contradiction.
+        // outage" next to outage minutes read as a contradiction. The last
+        // outage is read from the kept logs (30 days): over a longer window
+        // the minutes can also be an older outage, so nobody is blamed there.
         <p className="text-muted-foreground flex items-center gap-1.5">
           <CircleCheck aria-hidden="true" className="size-3.5" />
-          {t(
-            'reports.no_confirmed_outage',
-            { days },
-            `Žádný potvrzený výpadek za posledních ${days} dní. Minuty výpadku v dostupnosti jsou z neúspěšných kontrol vzdálené sondy nebo z mlčení agenta.`
-          )}
+          {days <= 30
+            ? t(
+                'reports.no_confirmed_outage',
+                { days },
+                `Žádný potvrzený výpadek za posledních ${days} dní. Minuty výpadku v dostupnosti jsou z neúspěšných kontrol vzdálené sondy nebo z mlčení agenta.`
+              )
+            : t(
+                'reports.no_confirmed_outage_kept',
+                'Žádný potvrzený výpadek v uchovaných logech (30 dní). Minuty výpadku jsou ze starších dnů, z neúspěšných kontrol vzdálené sondy nebo z mlčení agenta.'
+              )}
         </p>
       ) : (
         <p className="text-muted-foreground flex items-center gap-1.5">
