@@ -11,7 +11,7 @@ import { SubscriptionsCard } from '@/components/subscriptions-card';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { resolveUrl } from '@/api/http-source';
-import { oauthProblemText, oauthStartUrl, readOauthOutcome } from '@/lib/oauth';
+import { oauthLinkUrl, oauthProblemText, readOauthOutcome } from '@/lib/oauth';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 
 interface MyProfile {
@@ -311,20 +311,35 @@ function ProfileForm({ profile, onSaved }: { profile: MyProfile; onSaved: (passw
 }
 
 /**
- * OAuth login link. Linking is a browser round trip through api.php's
- * oauth_start; the server sends the browser back here with the outcome in
- * the query, which this card shows. Unlinking asks for the password so a
- * stolen session cannot quietly take over the account's login.
+ * OAuth login link. Linking is a browser round trip that starts with the
+ * password (oauth_link_start); the server sends the browser back here with the
+ * outcome in the query, which this card shows. Linking and unlinking both ask
+ * for the password so a stolen session cannot quietly take over the account's
+ * login.
  */
 function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () => void }) {
   const { t } = useLanguage();
   const [unlinking, setUnlinking] = React.useState(false);
+  const [linking, setLinking] = React.useState<'github' | 'google' | null>(null);
   const [password, setPassword] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [outcome] = React.useState(() => readOauthOutcome(window.location.search));
   const [error, setError] = React.useState<string | null>(() =>
     outcome?.problem ? oauthProblemText(outcome.problem, outcome.provider, t) : null
   );
+
+  const link = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!linking) return;
+    setBusy(true);
+    setError(null);
+    try {
+      window.location.assign(await oauthLinkUrl(linking, password));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t('profile.link_failed', 'Propojení se nepodařilo zahájit.'));
+      setBusy(false);
+    }
+  };
 
   const unlink = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -377,6 +392,7 @@ function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () =
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 autoComplete="current-password"
+                aria-label={t('profile.old_password', 'Stávající heslo')}
               />
               <div className="flex gap-2">
                 <Button type="submit" size="sm" variant="destructive" disabled={busy || !password}>
@@ -398,18 +414,49 @@ function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () =
           <p className="text-muted-foreground text-xs">
             {t('profile.oauth_hint', 'Propojení umožní přihlášení přes GitHub nebo Google místo hesla.')}
           </p>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" asChild>
-              <a href={oauthStartUrl('github', true)}>
+          {linking ? (
+            <form onSubmit={link} className="space-y-2">
+              <p className="text-muted-foreground text-xs">
+                {t('profile.link_hint', 'Propojení vyžaduje aktuální heslo.')}
+              </p>
+              <Input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                aria-label={t('profile.old_password', 'Stávající heslo')}
+                autoFocus
+              />
+              <div className="flex gap-2">
+                <Button type="submit" size="sm" disabled={busy || !password}>
+                  {linking === 'github'
+                    ? t('profile.link_github', 'Propojit GitHub')
+                    : t('profile.link_google', 'Propojit Google')}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setLinking(null);
+                    setPassword('');
+                    setError(null);
+                  }}
+                >
+                  {t('common.cancel', 'Zrušit')}
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={() => setLinking('github')}>
                 <GithubIcon className="size-4" /> {t('profile.link_github', 'Propojit GitHub')}
-              </a>
-            </Button>
-            <Button size="sm" variant="outline" asChild>
-              <a href={oauthStartUrl('google', true)}>
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setLinking('google')}>
                 <GoogleIcon className="size-4" /> {t('profile.link_google', 'Propojit Google')}
-              </a>
-            </Button>
-          </div>
+              </Button>
+            </div>
+          )}
         </div>
       )}
     </Panel>

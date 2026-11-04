@@ -169,7 +169,7 @@ function bk_api_error(int $status, string $message, array $extra = []): never {
  * Keeping that list correct is not left to memory - run_session_lock_lint.php
  * re-derives it from the code and fails the build when the two disagree.
  */
-$bk_session_writers = ['login', 'login_2fa', 'oauth_start', 'oauth_callback', 'logout', 'setup', 'totp_setup', 'totp_confirm'];
+$bk_session_writers = ['login', 'login_2fa', 'oauth_start', 'oauth_link_start', 'oauth_callback', 'logout', 'setup', 'totp_setup', 'totp_confirm'];
 if (!in_array($action, $bk_session_writers, true) && session_status() === PHP_SESSION_ACTIVE) {
     session_write_close();
 }
@@ -191,7 +191,7 @@ $bk_post_only_actions = [
     'clear_monitor_history', 'redetect_location',
     'generate_metrics_token', 'incident_action', 'create_incident',
     'save_preset', 'delete_preset',
-    'update_profile', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable', 'totp_recovery_regenerate',
+    'update_profile', 'oauth_link_start', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable', 'totp_recovery_regenerate',
     'save_status_page', 'delete_status_page', 'send_digest', 'save_subscriptions',
     'save_annotation', 'delete_annotation', 'save_user', 'delete_user',
     'router_recommendation_mute', 'wan_settings_save',
@@ -392,9 +392,10 @@ if ($action === 'login_2fa') {
 
 // 1b3. OAuth sign-in and account linking, a browser navigation in both steps.
 //
-// oauth_start (?provider=github|google|discord|gitlab, &link=1 to link the
-// provider to the signed-in account) sends the browser to the provider with a
-// fresh state. The provider answers at admin.php, the callback URL every
+// oauth_start (?provider=github|google|discord|gitlab) sends the browser to the
+// provider with a fresh state. A link to the signed-in account starts at
+// oauth_link_start instead, which asks for the password and answers the address
+// to send the browser to. The provider answers at admin.php, the callback URL every
 // provider has registered, which forwards here to oauth_callback. Both end in
 // /app: the dashboard, the profile after a link, or the login page, which asks
 // for the 2FA code of a pending sign-in or names what went wrong
@@ -405,19 +406,42 @@ if ($action === 'login_2fa') {
 // e-mail GitHub returned, and an admin can quietly change any user's e-mail,
 // so changing a stranger's address and signing in with one's own OAuth
 // account would have taken that account over. oauth_id is written only here,
-// after a link the account's owner started while signed in and is still
-// signed in to finish (bk_oauth_finish).
+// after a link the account's owner started with the password while signed in
+// and is still signed in to finish (bk_oauth_finish).
 if ($action === 'oauth_start') {
     $os_provider = (string)($_GET['provider'] ?? '');
-    $os_link = !empty($_GET['link']);
-    if ($os_link && empty($_SESSION['admin_logged_in'])) {
-        // The session ended before the link: sign in first, then the profile.
-        header('Location: ' . bk_setup_url() . '?' . http_build_query(['next' => '/profile']));
+    if (!empty($_GET['link'])) {
+        // An old link or bookmark: the password is asked for on the profile,
+        // after signing in if the session has ended.
+        header('Location: ' . (empty($_SESSION['admin_logged_in'])
+            ? bk_setup_url() . '?' . http_build_query(['next' => '/profile'])
+            : bk_app_url('/profile')));
         exit;
     }
-    $os_url = bk_oauth_authorize_url($os_provider, $os_link ? (int)$_SESSION['admin_id'] : null);
-    header('Location: ' . ($os_url ?? bk_oauth_problem_url('unavailable', $os_provider, $os_link)));
+    $os_url = bk_oauth_authorize_url($os_provider, null);
+    header('Location: ' . ($os_url ?? bk_oauth_problem_url('unavailable', $os_provider, false)));
     exit;
+}
+
+// A linked provider signs in without the password, so a link outlives the
+// session that made it: a stolen session could otherwise add its own provider
+// account and keep coming back. Unlinking asks for the password for the same reason.
+if ($action === 'oauth_link_start') {
+    bk_require_login();
+    $ol_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $ol_provider = (string)($ol_input['provider'] ?? '');
+    $ol_uid = (int)$_SESSION['admin_id'];
+    try {
+        $stmt_ol = $pdo->prepare("SELECT password_hash FROM users WHERE id = ? LIMIT 1");
+        $stmt_ol->execute([$ol_uid]);
+        $ol_hash = $stmt_ol->fetchColumn();
+    } catch (Throwable $e) {
+        bk_api_fail('oauth_link_start', 500, $e, 'Propojení se nepodařilo zahájit.');
+    }
+    if ($ol_hash === false || !password_verify((string)($ol_input['password'] ?? ''), (string)$ol_hash)) {
+        bk_api_error(400, 'Nesprávné heslo - účet se nepropojí.');
+    }
+    bk_api_json(['url' => bk_oauth_authorize_url($ol_provider, $ol_uid) ?? bk_oauth_problem_url('unavailable', $ol_provider, true)]);
 }
 
 if ($action === 'oauth_callback') {

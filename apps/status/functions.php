@@ -217,7 +217,7 @@ function bk_oauth_problem_url(string $reason, string $provider_key, bool $link):
 /**
  * The end of the callback, once the provider has confirmed an identity, as
  * the /app address to send the browser to. A link writes the identity to the
- * account that started it (proven by its password or an earlier sign-in) and
+ * account that started it (proven by its password, oauth_link_start) and
  * opens the profile, but only while that account is the one signed in here:
  * a session that signed out or is another account's by now (or whose account
  * was deleted meanwhile) gets link_session and nothing is written or
@@ -15782,7 +15782,7 @@ function bk_render_totp_section($me) {
 /**
  * Renders the linked OAuth accounts card (Profile) - only one provider at a
  * time (the schema has a single oauth_provider/oauth_id column pair per user).
- * Linking goes only through api.php's oauth_start (admin.php?link_oauth=
+ * Linking starts on the profile in /app, with the password (admin.php?link_oauth=
  * forwards there), never by e-mail.
  */
 function bk_render_oauth_section($me) {

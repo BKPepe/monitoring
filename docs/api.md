@@ -67,9 +67,12 @@ lockout) or when nothing waits, 429 while the account is locked.
 
 OAuth sign-in is a browser navigation, not a call: `GET
 /status/api.php?action=oauth_start&provider=github` (or `google`, `discord`,
-`gitlab`; `&link=1` links the provider to the signed-in account instead)
-sends the browser to the provider. The provider answers at `admin.php`, the
-callback URL registered with it, which forwards to `action=oauth_callback`.
+`gitlab`) sends the browser to the provider. A link to the signed-in account
+starts with `POST action=oauth_link_start` and `{"provider": "…", "password":
+"…"}`, which answers the `url` to send the browser to. A linked provider signs
+in without the password, so a session alone cannot add one. The provider
+answers at `admin.php`, the callback URL registered with it, which forwards to
+`action=oauth_callback`.
 That ends in /app: `/app/` when signed in, `/app/setup` when the account
 waits for its 2FA code, `/app/profile?oauth=linked` after a link. A round trip
 that did not finish goes to `/app/setup` (or `/app/profile` for a link) with
@@ -83,7 +86,8 @@ in; a session whose account was deleted meanwhile is no longer, and gets it
 on `/app/setup`. A sign-in or a sign-out drops a round trip the session had
 started, and its answer gets `state`. /app is the one next to the
 `/status` directory, so an install under a subdirectory stays in it. The old
-`admin.php?login_oauth=` and `?link_oauth=` links forward to `oauth_start`.
+`admin.php?login_oauth=` link forwards to `oauth_start`; `?link_oauth=` and
+`oauth_start&link=1` lead to `/app/profile`, which asks for the password.
 
 ### Who sees which monitor
 
@@ -1014,7 +1018,8 @@ LTE backup; that figure is real, it is just not the line speed.
 | `action=save_user` / `delete_user` | admin | User management for the React app (create sends the invite e-mail, delete refuses the own account; `monitorIds` sets which monitors a `user` account sees - omitted keeps the assignment, `[]` clears it, unknown ids are dropped); before 2026-08 these existed only as admin.php form handlers and the React page's calls hit "unknown action" |
 | `action=my_profile` / `update_profile` | logged in | Own profile: contacts, notification channels, e-mail language, changing the e-mail or the password (both require the current password in `oldPassword`) |
 | `action=oauth_unlink` | logged in | Unlink the OAuth sign-in (requires the current password) |
-| `action=oauth_start` / `oauth_callback` | public, link: logged in | OAuth sign-in and linking as a browser navigation that ends in /app (see Authentication) |
+| `action=oauth_start` / `oauth_callback` | public | OAuth sign-in as a browser navigation that ends in /app (see Authentication) |
+| `action=oauth_link_start` | logged in | Starts a link of a provider to the account with its password; answers the address to send the browser to (see Authentication) |
 | `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | logged in | Two-factor enrollment: the secret stays in the session until a code confirms it; confirming returns ten one-time recovery codes (hashes only are stored, shown exactly once); a recovery code works in place of the TOTP code at login and is consumed; confirming, regenerating a set and disabling all require the password; `totp_setup` and `totp_confirm` answer 409 while 2FA is on, so replacing it means disabling it first |
 | `action=set_password` | public (one-time token) | Set a password from an invite or reset e-mail; the token is consumed on first success |
 
@@ -1287,9 +1292,9 @@ instead). The token comes back from `action=login`, `action=login_2fa` and
 `action=session`; every sign-in leaves one in the session, an OAuth one too.
 Token-authenticated flows (`set_password`) and session-establishing ones
 (`login`, `login_2fa`, `setup`, `forgot_password`, `logout`) are exempt. Two
-actions write the session on a GET. `oauth_start` puts a fresh `state`, the
-provider and the account a link is for in the session, replacing a round
-trip already started; like any link it can be opened from another site. The
+actions write the session on a GET. `oauth_start` puts a fresh `state` and the
+provider in the session, replacing a round trip already started; like any
+link it can be opened from another site. The
 provider sends the browser back to `oauth_callback`, which signs in or links
 the provider to the account; the single-use `state` of the session's own
 `oauth_start` guards it instead of the token (see Authentication). CORS

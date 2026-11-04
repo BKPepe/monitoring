@@ -67,8 +67,10 @@ zámku) nebo když nic nečeká, 429, dokud je účet zamčený.
 
 Přihlášení přes OAuth je navigace prohlížeče, ne volání: `GET
 /status/api.php?action=oauth_start&provider=github` (nebo `google`,
-`discord`, `gitlab`; `&link=1` místo toho propojí poskytovatele
-s přihlášeným účtem) pošle prohlížeč k poskytovateli. Ten odpoví na
+`discord`, `gitlab`) pošle prohlížeč k poskytovateli. Propojení s přihlášeným
+účtem začíná přes `POST action=oauth_link_start` s `{"provider": "…",
+"password": "…"}`, které vrátí `url`, kam prohlížeč poslat. Propojený poskytovatel
+přihlašuje bez hesla, takže samotná session ho přidat nemůže. Ten odpoví na
 `admin.php`, adresu zaregistrovanou u něj, a admin.php to přepošle na
 `action=oauth_callback`. To končí v /app: `/app/` po přihlášení, `/app/setup`,
 když účet čeká na kód 2FA, `/app/profile?oauth=linked` po propojení. Cesta,
@@ -82,8 +84,9 @@ začal, už není ten přihlášený, takže se nic nepropojilo) a s `provider`.
 její účet mezitím někdo smazal, už přihlášená není a vede na `/app/setup`.
 Přihlášení i odhlášení zahodí cestu, kterou session předtím začala, a odpověď
 na ni dostane `state`. /app je ta vedle
-adresáře `/status`, takže instalace v podadresáři v něm zůstane. Staré odkazy
-`admin.php?login_oauth=` a `?link_oauth=` přeposílají na `oauth_start`.
+adresáře `/status`, takže instalace v podadresáři v něm zůstane. Starý odkaz
+`admin.php?login_oauth=` přeposílá na `oauth_start`; `?link_oauth=` a
+`oauth_start&link=1` vedou na `/app/profile`, který si heslo vyžádá.
 
 ### Kdo vidí který monitor
 
@@ -995,7 +998,8 @@ LTE zálohu; to číslo je skutečné, jen to není rychlost linky.
 | `action=save_user` / `delete_user` | admin | Správa uživatelů pro React (vytvoření posílá pozvánkový e-mail, smazání odmítne vlastní účet; `monitorIds` určuje, které monitory účet `user` vidí - vynechané pole přiřazení zachová, `[]` ho zruší, neexistující id se zahodí); do 2026-08 existovaly jen jako formulářové handlery v admin.php a volání z Reactu končila na „neznámé akci" |
 | `action=my_profile` / `update_profile` | přihlášený | Vlastní profil: kontakty, kanály notifikací, jazyk e-mailů, změna e-mailu nebo hesla (obojí vyžaduje stávající heslo v `oldPassword`) |
 | `action=oauth_unlink` | přihlášený | Odpojení OAuth přihlašování (vyžaduje stávající heslo) |
-| `action=oauth_start` / `oauth_callback` | veřejné, propojení: přihlášený | Přihlášení a propojení přes OAuth jako navigace prohlížeče, která končí v /app (viz Autentizace) |
+| `action=oauth_start` / `oauth_callback` | veřejné | Přihlášení přes OAuth jako navigace prohlížeče, která končí v /app (viz Autentizace) |
+| `action=oauth_link_start` | přihlášený | Zahájí propojení poskytovatele s účtem heslem; vrátí adresu, kam prohlížeč poslat (viz Autentizace) |
 | `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | přihlášený | Zapnutí dvoufázového ověření: tajemství žije v session, dokud ho kód nepotvrdí; potvrzení vrací deset jednorázových záložních kódů (ukládají se jen hashe, zobrazí se právě jednou); záložní kód funguje při přihlášení místo TOTP kódu a spotřebuje se; potvrzení, nová sada i vypnutí vyžadují heslo; `totp_setup` a `totp_confirm` při zapnutém 2FA odpoví 409, výměna tedy znamená nejdřív ho vypnout |
 | `action=set_password` | veřejné (jednorázový token) | Nastavení hesla z pozvánky nebo resetu; token se spotřebuje prvním úspěchem |
 
@@ -1262,9 +1266,9 @@ vrací `action=login`, `action=login_2fa` a `action=session`; každé
 přihlášení ho v session nechá, i přes OAuth. Tokenem autentizované toky
 (`set_password`) a akce session teprve zakládající (`login`, `login_2fa`,
 `setup`, `forgot_password`, `logout`) jsou vyjmuté. Dvě akce zapisují do
-session na GET. `oauth_start` do ní dá nový `state`, poskytovatele a účet,
-pro který je propojení, a nahradí tak cestu už rozběhnutou; jako každý odkaz
-ho jde otevřít i z cizího webu. Poskytovatel vrátí prohlížeč na
+session na GET. `oauth_start` do ní dá nový `state` a poskytovatele a nahradí
+tak cestu už rozběhnutou; jako každý odkaz ho jde otevřít i z cizího webu.
+Poskytovatel vrátí prohlížeč na
 `oauth_callback`, který přihlásí nebo propojí poskytovatele s účtem; místo
 tokenu ho hlídá jednorázový `state` z vlastního `oauth_start` téže session
 (viz Autentizace). CORS odráží jen vlastní origin - cizí origin

@@ -2409,7 +2409,7 @@ check('405 přes HTTP: bajty stejné jako dřív', [$code, $raw], [405, '{"error
 // password with bodies of their own. The guard at the top of api.php answers
 // every GET of them first, so those checks never ran and are gone.
 $m4_get = [];
-foreach (['login', 'update_profile', 'oauth_unlink', 'set_password', 'totp_setup', 'totp_confirm', 'totp_disable',
+foreach (['login', 'update_profile', 'oauth_link_start', 'oauth_unlink', 'set_password', 'totp_setup', 'totp_confirm', 'totp_disable',
     'totp_recovery_regenerate', 'forgot_password', 'setup'] as $m4_action) {
     [$code, , $raw] = bk_raw_request($base . '/api.php?action=' . $m4_action);
     if ([$code, $raw] !== [405, '{"error":"Vyžadován POST."}']) {
@@ -4738,26 +4738,40 @@ check('v logu je opsaná v \xNN na řádku [oauth], podvržený řádek tam nen�
 @unlink($oa_cj);
 // A link started while signed in comes back to the profile.
 $oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
-api_post($base, 'action=login', ['username' => 'oauth_plain', 'password' => $oa_password], $oa_cj, '');
-[$code, $oa_to] = $oa_nav('api.php?action=oauth_start&provider=github&link=1', $oa_cj);
+[, $oa_in] = api_post($base, 'action=login', ['username' => 'oauth_plain', 'password' => $oa_password], $oa_cj, '');
+$oa_link = fn (array $body, string $csrf) => api_post($base, 'action=oauth_link_start', $body + ['provider' => 'github'], $oa_cj, $csrf);
+// A linked provider signs in without the password, so a link needs it: a stolen
+// session must not add its own provider account. Nothing may start without it.
+check('starý odkaz na propojení vede na profil a k poskytovateli nepustí',
+    $oa_nav('api.php?action=oauth_start&provider=github&link=1', $oa_cj), [302, '/app/profile']);
+[$code] = $oa_nav('api.php?action=oauth_link_start', $oa_cj);
+check('propojení přes GET se odmítne', $code, 405);
+[$code] = $oa_link(['password' => $oa_password], '');
+check('bez CSRF tokenu se odmítne', $code, 403);
+foreach (['bez hesla' => [], 'se špatným heslem' => ['password' => 'spatne-heslo']] as $oa_how => $oa_extra) {
+    [$code, $oa_ans] = $oa_link($oa_extra, (string)($oa_in['csrfToken'] ?? ''));
+    check("propojení {$oa_how} se odmítne a adresu nevrátí", [$code, isset($oa_ans['url'])], [400, false]);
+}
+[$code, $oa_ans] = $oa_link(['password' => $oa_password], (string)($oa_in['csrfToken'] ?? ''));
+$oa_to = (string)($oa_ans['url'] ?? '');
 parse_str((string)parse_url($oa_to, PHP_URL_QUERY), $oa_q);
-check('propojení přihlášeného účtu jde ke GitHubu', [$code, strtok($oa_to, '?')], [302, 'https://github.com/login/oauth/authorize']);
+check('propojení přihlášeného účtu s heslem jde ke GitHubu', [$code, strtok($oa_to, '?')], [200, 'https://github.com/login/oauth/authorize']);
 check('a jeho konec vede zpět na profil',
     $oa_nav('api.php?action=oauth_callback&error=server_error&state=' . ($oa_q['state'] ?? ''), $oa_cj),
     [302, '/app/profile?oauth_error=provider&provider=github']);
 // A sign-in ends the round trip the session had started: a link one account
 // began cannot finish after another account signed in in the same browser.
-[, $oa_to] = $oa_nav('api.php?action=oauth_start&provider=github&link=1', $oa_cj);
-parse_str((string)parse_url($oa_to, PHP_URL_QUERY), $oa_q);
-api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password], $oa_cj, '');
+[, $oa_ans] = $oa_link(['password' => $oa_password], (string)($oa_in['csrfToken'] ?? ''));
+parse_str((string)parse_url((string)($oa_ans['url'] ?? ''), PHP_URL_QUERY), $oa_q);
+[, $oa_in] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password], $oa_cj, '');
 check('přihlášení jiného účtu rozběhnuté propojení zahodí, jeho konec už neprojde',
     [strlen((string)($oa_q['state'] ?? '')),
         $oa_nav('api.php?action=oauth_callback&error=server_error&state=' . ($oa_q['state'] ?? ''), $oa_cj)],
     [32, [302, '/app/setup?oauth_error=state']]);
 // A sign-out ends it too: the session is gone, so its answer is a state no
 // session issued, not link_session.
-[, $oa_to] = $oa_nav('api.php?action=oauth_start&provider=github&link=1', $oa_cj);
-parse_str((string)parse_url($oa_to, PHP_URL_QUERY), $oa_q);
+[, $oa_ans] = $oa_link(['password' => $bk_test_admin_password], (string)($oa_in['csrfToken'] ?? ''));
+parse_str((string)parse_url((string)($oa_ans['url'] ?? ''), PHP_URL_QUERY), $oa_q);
 api_post($base, 'action=logout', [], $oa_cj, '');
 check('odhlášení rozběhnuté propojení zahodí, jeho konec skončí na state',
     [strlen((string)($oa_q['state'] ?? '')),
@@ -4765,6 +4779,12 @@ check('odhlášení rozběhnuté propojení zahodí, jeho konec skončí na stat
     [32, [302, '/app/setup?oauth_error=state']]);
 @unlink($oa_cj);
 $pdo->exec("DELETE FROM settings WHERE key_name = 'oauth_github_client_id'");
+// A provider without a client ID ends the same way as a sign-in does, on the profile.
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+[, $oa_in] = api_post($base, 'action=login', ['username' => 'oauth_plain', 'password' => $oa_password], $oa_cj, '');
+[$code, $oa_ans] = api_post($base, 'action=oauth_link_start', ['provider' => 'github', 'password' => $oa_password], $oa_cj, (string)($oa_in['csrfToken'] ?? ''));
+check('propojení u poskytovatele bez client ID skončí na profilu s důvodem', [$code, $oa_ans['url'] ?? null], [200, '/app/profile?oauth_error=unavailable&provider=github']);
+@unlink($oa_cj);
 
 // admin.php stays the callback URL the four providers know and forwards it,
 // and the old start links, with their query.

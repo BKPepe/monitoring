@@ -13,7 +13,6 @@ const t = (key: string, params?: Record<string, string | number> | string, fallb
 describe('oauthStartUrl', () => {
   it('starts in api.php, not in the legacy admin.php', () => {
     expect(oauthStartUrl('github')).toBe('/status/api.php?action=oauth_start&provider=github');
-    expect(oauthStartUrl('google', true)).toBe('/status/api.php?action=oauth_start&provider=google&link=1');
   });
 
   afterEach(() => {
@@ -26,7 +25,7 @@ describe('oauthStartUrl', () => {
     vi.stubEnv('VITE_STATUS_API', '/monitoring/status');
     vi.resetModules();
     const { oauthStartUrl: startUrl } = await import('./oauth');
-    expect(startUrl('github', true)).toBe('/monitoring/status/api.php?action=oauth_start&provider=github&link=1');
+    expect(startUrl('github')).toBe('/monitoring/status/api.php?action=oauth_start&provider=github');
   });
 });
 

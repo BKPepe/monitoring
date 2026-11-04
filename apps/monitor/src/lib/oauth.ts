@@ -21,11 +21,28 @@ export const OAUTH_LABELS: Record<string, string> = {
 };
 
 /**
- * Where a sign-in (or, with `link`, a link to the signed-in account) starts:
- * the API the build points at (VITE_STATUS_API), like every other call.
+ * Where a sign-in starts: the API the build points at (VITE_STATUS_API), like
+ * every other call.
  */
-export function oauthStartUrl(provider: string, link = false): string {
-  return `${STATUS_API}/api.php?action=oauth_start&provider=${encodeURIComponent(provider)}${link ? '&link=1' : ''}`;
+export function oauthStartUrl(provider: string): string {
+  return `${STATUS_API}/api.php?action=oauth_start&provider=${encodeURIComponent(provider)}`;
+}
+
+/**
+ * A link to the signed-in account starts with its password. A linked provider
+ * signs in without one, so a stolen session must not be able to add its own.
+ * Answers where to send the browser; throws the server's reason when it refuses.
+ */
+export async function oauthLinkUrl(provider: string, password: string): Promise<string> {
+  const res = await fetch(`${STATUS_API}/api.php?action=oauth_link_start`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, password }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || typeof data.url !== 'string') throw new Error(data.error || `HTTP ${res.status}`);
+  return data.url;
 }
 
 /** Why a round trip did not sign in or link, as the server names it. */

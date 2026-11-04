@@ -33,7 +33,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'set_password') {
 // oauth_callback) and end in /app. admin.php stays the callback URL every
 // provider has registered, so GitHub, Google, Discord and GitLab need no new
 // registration: the provider's answer goes on to api.php with its query, and
-// so do the old start links (?login_oauth=, ?link_oauth=).
+// so do the old start links (?login_oauth=, ?link_oauth=, which api.php sends
+// on to the profile: a link asks for the password there).
 if (isset($_GET['state']) && (isset($_GET['code']) || isset($_GET['error']))) {
     $oauth_forward = [];
     foreach (['code', 'state', 'error'] as $oauth_key) {

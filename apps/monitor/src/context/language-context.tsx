@@ -893,6 +893,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Propojení umožní přihlášení přes GitHub nebo Google místo hesla.',
     en: 'Linking lets you sign in with GitHub or Google instead of a password.',
   },
+  'profile.link_hint': { cs: 'Propojení vyžaduje aktuální heslo.', en: 'Linking requires your current password.' },
+  'profile.link_failed': { cs: 'Propojení se nepodařilo zahájit.', en: 'Could not start linking.' },
   'profile.link_github': { cs: 'Propojit GitHub', en: 'Link GitHub' },
   'profile.link_google': { cs: 'Propojit Google', en: 'Link Google' },
   'profile.unlink_btn': { cs: 'Odpojit účet', en: 'Unlink account' },
