@@ -4367,25 +4367,52 @@ $pdo->prepare("UPDATE users SET password_hash = ? WHERE id = 1")
 
 // --- TOTP enrollment ------------------------------------------------------
 //
-// Two steps like the legacy admin: the secret lives in the session until a
-// code proves the QR scanned. The test computes a real code with the same
-// bk_totp_calculate the server verifies with.
+// Two steps: the secret lives in the session until a code proves the QR
+// scanned. The test computes a real code with the same bk_totp_calculate the
+// server verifies with.
+// A second session of the same account starts its own setup first, as a tab
+// left open would.
+$ts_jar = tempnam(sys_get_temp_dir(), 'bk_test_ts');
+[, $ts_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password], $ts_jar, '');
+$ts_csrf = (string)($ts_login['csrfToken'] ?? '');
+[, $ts_other] = api_post($base, 'action=totp_setup', [], $ts_jar, $ts_csrf);
 [$code, $ts] = api_post($base, 'action=totp_setup', [], $cookie_jar);
 check('totp_setup vrací 200', $code, 200);
 check_true('a secret', !empty($ts['secret']));
 check_true('a otpauth URI', str_starts_with($ts['otpauthUri'] ?? '', 'otpauth://totp/'));
 
 // A wrong code must not enable 2FA.
-[$code] = api_post($base, 'action=totp_confirm', ['code' => '000000'], $cookie_jar);
+[$code] = api_post($base, 'action=totp_confirm', ['code' => '000000', 'password' => $bk_test_admin_password], $cookie_jar);
 check('špatný kód vrací 400', $code, 400);
 $totp_row = $pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn();
 check('a 2FA zůstává vypnuté', (int)$totp_row, 0);
 
 // The right code computed from the same secret.
 $valid_code = bk_totp_calculate($ts['secret'], (int)floor(time() / 30));
-[$code, $tc] = api_post($base, 'action=totp_confirm', ['code' => $valid_code], $cookie_jar);
+// Not without the password: a stolen session must not put its own authenticator on.
+foreach (['bez hesla' => [], 'se špatným heslem' => ['password' => 'spatne-heslo']] as $ts_how => $ts_extra) {
+    [$code] = api_post($base, 'action=totp_confirm', ['code' => $valid_code] + $ts_extra, $cookie_jar);
+    check("správný kód {$ts_how} 2FA nezapne", [$code, (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn()], [400, 0]);
+}
+[$code, $tc] = api_post($base, 'action=totp_confirm', ['code' => $valid_code, 'password' => $bk_test_admin_password], $cookie_jar);
 check('správný kód 2FA zapne', $code, 200);
 check('v databázi je zapnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
+
+// With 2FA on nothing replaces it, password or not: only totp_disable leads there.
+$ts_state = fn (): array => [
+    $pdo->query("SELECT totp_secret FROM users WHERE id = 1")->fetchColumn(),
+    $pdo->query("SELECT GROUP_CONCAT(code_hash ORDER BY id) FROM totp_recovery_codes WHERE user_id = 1")->fetchColumn(),
+];
+$ts_before = $ts_state();
+[$code] = api_post($base, 'action=totp_setup', [], $cookie_jar);
+check('při zapnutém 2FA nové nastavení nezačne', $code, 409);
+[$code, $ts_answer] = api_post($base, 'action=totp_confirm', [
+    'code' => bk_totp_calculate($ts_other['secret'] ?? '', (int)floor(time() / 30)),
+    'password' => $bk_test_admin_password,
+], $ts_jar, $ts_csrf);
+check('ani nastavení rozdělané v druhém okně ho nepřepíše', [$code, isset($ts_answer['recoveryCodes'])], [409, false]);
+check('secret i záložní kódy zůstanou', $ts_state(), $ts_before);
+@unlink($ts_jar);
 
 // --- Recovery codes ----------------------------------------------------
 // Enabling 2FA hands out ten one-time codes exactly once; only hashes

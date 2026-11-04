@@ -4196,15 +4196,30 @@ if ($action === 'set_password') {
     exit;
 }
 
-// 2FA pro prihlaseneho uzivatele. Stejny dvoukrokovy postup jako admin.php:
-// secret zije jen v session, dokud uzivatel kodem nepotvrdi, ze se mu QR
-// opravdu naskenoval - jinak by sel ucet zamknout neoverenym secretem.
+// 2FA pro prihlaseneho uzivatele. Dvoukrokovy postup: secret zije jen v session,
+// dokud uzivatel kodem nepotvrdi, ze se mu QR opravdu naskenoval - jinak by sel
+// ucet zamknout neoverenym secretem.
 if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_disable' || $action === 'totp_recovery_regenerate') {
     bk_require_login();
     $totp_input = json_decode(file_get_contents('php://input'), true) ?: [];
     $totp_uid = (int)$_SESSION['admin_id'];
 
     try {
+        $stmt_me = $pdo->prepare("SELECT password_hash, totp_enabled FROM users WHERE id = ? LIMIT 1");
+        $stmt_me->execute([$totp_uid]);
+        $totp_me = $stmt_me->fetch();
+        if (!$totp_me) {
+            bk_api_error(404, 'Účet nenalezen.');
+        }
+
+        // A new authenticator goes on an account only with its password, and
+        // never over one in use: a stolen session could otherwise put its own
+        // on the account, with fresh recovery codes, and lock the owner out.
+        // Replacing one means switching 2FA off first, which asks the password.
+        if (($action === 'totp_setup' || $action === 'totp_confirm') && !empty($totp_me['totp_enabled'])) {
+            bk_api_error(409, '2FA už je zapnuté. Novou aplikaci nastavíte, až ho vypnete.');
+        }
+
         if ($action === 'totp_setup') {
             $totp_secret = bk_totp_generate_secret();
             $_SESSION['totp_pending_secret'] = $totp_secret;
@@ -4222,6 +4237,9 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
             $totp_code = trim((string)($totp_input['code'] ?? ''));
             if ($totp_pending === '') {
                 bk_api_error(400, '2FA nastavení vypršelo, začněte prosím znovu.');
+            }
+            if (!password_verify((string)($totp_input['password'] ?? ''), $totp_me['password_hash'])) {
+                bk_api_error(400, 'Nesprávné heslo - 2FA zůstává vypnuté.');
             }
             if (!bk_totp_verify_code($totp_pending, $totp_code)) {
                 bk_api_error(400, 'Neplatný kód z autentikační aplikace.');
@@ -4241,13 +4259,10 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
         if ($action === 'totp_recovery_regenerate') {
             // A new set invalidates the old one, so it demands the password -
             // a stolen session must not be able to mint sign-in codes.
-            $stmt_me = $pdo->prepare("SELECT password_hash, totp_enabled FROM users WHERE id = ? LIMIT 1");
-            $stmt_me->execute([$totp_uid]);
-            $trr_me = $stmt_me->fetch();
-            if (!$trr_me || empty($trr_me['totp_enabled'])) {
+            if (empty($totp_me['totp_enabled'])) {
                 bk_api_error(400, 'Záložní kódy mají smysl jen se zapnutým 2FA.');
             }
-            if (!password_verify((string)($totp_input['password'] ?? ''), $trr_me['password_hash'])) {
+            if (!password_verify((string)($totp_input['password'] ?? ''), $totp_me['password_hash'])) {
                 bk_api_error(400, 'Nesprávné heslo - kódy zůstávají beze změny.');
             }
             $totp_recovery = bk_totp_generate_recovery_codes($pdo, $totp_uid);
@@ -4258,10 +4273,7 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
 
         // totp_disable: vypnuti chce aktualni heslo - ukradena session bez
         // znalosti hesla 2FA tise nevypne.
-        $stmt_me = $pdo->prepare("SELECT password_hash FROM users WHERE id = ? LIMIT 1");
-        $stmt_me->execute([$totp_uid]);
-        $totp_me = $stmt_me->fetch();
-        if (!$totp_me || !password_verify((string)($totp_input['password'] ?? ''), $totp_me['password_hash'])) {
+        if (!password_verify((string)($totp_input['password'] ?? ''), $totp_me['password_hash'])) {
             bk_api_error(400, 'Nesprávné heslo - 2FA zůstává zapnuté.');
         }
         $stmt_t = $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?");

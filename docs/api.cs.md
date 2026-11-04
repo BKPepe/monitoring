@@ -996,7 +996,7 @@ LTE zálohu; to číslo je skutečné, jen to není rychlost linky.
 | `action=my_profile` / `update_profile` | přihlášený | Vlastní profil: kontakty, kanály notifikací, jazyk e-mailů, změna hesla (vyžaduje stávající heslo) |
 | `action=oauth_unlink` | přihlášený | Odpojení OAuth přihlašování (vyžaduje stávající heslo) |
 | `action=oauth_start` / `oauth_callback` | veřejné, propojení: přihlášený | Přihlášení a propojení přes OAuth jako navigace prohlížeče, která končí v /app (viz Autentizace) |
-| `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | přihlášený | Zapnutí dvoufázového ověření: tajemství žije v session, dokud ho kód nepotvrdí; potvrzení vrací deset jednorázových záložních kódů (ukládají se jen hashe, zobrazí se právě jednou); záložní kód funguje při přihlášení místo TOTP kódu a spotřebuje se; nová sada i vypnutí vyžadují heslo |
+| `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | přihlášený | Zapnutí dvoufázového ověření: tajemství žije v session, dokud ho kód nepotvrdí; potvrzení vrací deset jednorázových záložních kódů (ukládají se jen hashe, zobrazí se právě jednou); záložní kód funguje při přihlášení místo TOTP kódu a spotřebuje se; potvrzení, nová sada i vypnutí vyžadují heslo; `totp_setup` a `totp_confirm` při zapnutém 2FA odpoví 409, výměna tedy znamená nejdřív ho vypnout |
 | `action=set_password` | veřejné (jednorázový token) | Nastavení hesla z pozvánky nebo resetu; token se spotřebuje prvním úspěchem |
 
 `export_config` záměrně nevrací hesla, tokeny, adresy webhooků ani agent

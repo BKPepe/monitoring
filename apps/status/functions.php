@@ -22,8 +22,6 @@ define('BK_CDN_FONTAWESOME', 'https://cdn.jsdelivr.net/npm/@fortawesome/fontawes
 define('BK_CDN_FONTAWESOME_SRI', 'sha384-qrALq7+6jBOZIQsNnT6xGkMDru64qD6uTlDra39xrt2SoXl4pO3FX6Roz/RpR/BS');
 define('BK_CDN_ECHARTS', 'https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js');
 define('BK_CDN_ECHARTS_SRI', 'sha384-Mx5lkUEQPM1pOJCwFtUICyX45KNojXbkWdYhkKUKsbv391mavbfoAmONbzkgYPzR');
-define('BK_CDN_QRCODE', 'https://cdn.jsdelivr.net/npm/qrcode@1.5.4/lib/browser.min.js');
-define('BK_CDN_QRCODE_SRI', 'sha384-dykayVHnol2xD+KCZ38PbDk0WZnbP5x/sO6gOXKU3h+bodE3ILyIk1FOEfwO1hya');
 
 /**
  * Configuration of the supported OAuth providers - one place for all 4,
@@ -15768,48 +15766,17 @@ function bk_trusted_link_host(string $http_host, string $server_name, array $all
 }
 
 /**
- * Renders the card for enabling/disabling 2FA on one's own account (the admin
- * and regular-user Profile share this one implementation). The QR code is
- * generated purely client-side (the qrcode CDN library) - the secret is thus never
- * sent to any third party like with public QR-generator APIs, it only stays in the
- * response of one's own authenticated page.
+ * The 2FA card of the legacy Profile: the state and the way to /app, where 2FA
+ * is switched on and off (api.php's totp_* actions, with the password).
  */
-function bk_render_totp_section($me, $site_title) {
-    $html = '<div class="admin-card" id="totp-section">'
-        . '<div class="admin-header"><h2><i class="fas fa-shield-halved"></i> Dvoufázové ověření (2FA)</h2></div>';
-
-    if (!empty($me['totp_enabled'])) {
-        $html .= '<p style="font-size: 0.85rem; color: var(--color-green);"><i class="fas fa-check-circle"></i> 2FA je na tomhle účtu zapnuté.</p>'
-            . '<form action="admin.php#totp-section" method="POST" style="max-width: 320px;">'
-            . '<div class="form-group"><label for="totp_disable_password">Heslo pro potvrzení vypnutí</label>'
-            . '<input type="password" name="totp_disable_password" id="totp_disable_password" class="form-control" autocomplete="off" required></div>'
-            . '<button type="submit" name="totp_disable" class="btn btn-danger" onclick="return confirm(\'Opravdu vypnout 2FA? Účet pak bude chráněný jen heslem.\');"><i class="fas fa-shield-halved"></i> Vypnout 2FA</button>'
-            . '</form>';
-    } elseif (!empty($_SESSION['totp_pending_secret'])) {
-        $secret = $_SESSION['totp_pending_secret'];
-        $issuer = rawurlencode($site_title);
-        $account = rawurlencode($me['username'] ?? 'admin');
-        $otpauth_uri = "otpauth://totp/{$issuer}:{$account}?secret={$secret}&issuer={$issuer}&algorithm=SHA1&digits=6&period=30";
-
-        // The BK_CDN_QRCODE version (see the constants at the top of the file).
-        $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">Naskenujte QR kód v autentikační aplikaci (např. Proton Pass) a potvrďte 6místným kódem.</p>'
-            . '<canvas id="totp-qr" style="margin: 0.75rem 0; background: #fff; padding: 8px; border-radius: 6px;"></canvas>'
-            . '<p style="font-size: 0.75rem; color: var(--text-muted);">Nebo zadejte ručně: <code style="user-select: all;">' . htmlspecialchars($secret) . '</code></p>'
-            . '<form action="admin.php#totp-section" method="POST" style="max-width: 220px; margin-top: 0.75rem;">'
-            . '<div class="form-group"><label for="totp_code">6místný kód z appky</label>'
-            . '<input type="text" name="totp_code" id="totp_code" class="form-control" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></div>'
-            . '<button type="submit" name="totp_confirm" class="btn"><i class="fas fa-check"></i> Potvrdit a zapnout</button>'
-            . '</form>'
-            . '<script src="' . BK_CDN_QRCODE . '" integrity="' . BK_CDN_QRCODE_SRI . '" crossorigin="anonymous"></script>'
-            . '<script>QRCode.toCanvas(document.getElementById("totp-qr"), ' . json_encode($otpauth_uri) . ', { width: 184 }, function (err) { if (err) console.error(err); });</script>';
-    } else {
-        $html .= '<p style="font-size: 0.85rem; color: var(--text-muted);">2FA je vypnuté. Doporučujeme ho zapnout, hlavně pokud se přihlašujete heslem (ne přes GitHub OAuth).</p>'
-            . '<form action="admin.php#totp-section" method="POST" style="display:inline;">' . bk_csrf_field()
-            . '<button type="submit" name="totp_setup_start" class="btn"><i class="fas fa-qrcode"></i> Zapnout 2FA</button></form>';
-    }
-
-    $html .= '</div>';
-    return $html;
+function bk_render_totp_section($me) {
+    return '<div class="admin-card" id="totp-section">'
+        . '<div class="admin-header"><h2><i class="fas fa-shield-halved"></i> Dvoufázové ověření (2FA)</h2></div>'
+        . '<p style="font-size: 0.85rem; color: var(--text-muted);">'
+        . (!empty($me['totp_enabled']) ? '2FA je na tomhle účtu zapnuté.' : '2FA je vypnuté.')
+        . ' Zapíná a vypíná se v profilu aplikace.</p>'
+        . '<a href="' . htmlspecialchars(bk_app_url('/profile')) . '" class="btn"><i class="fas fa-arrow-right"></i> Otevřít profil</a>'
+        . '</div>';
 }
 
 /**

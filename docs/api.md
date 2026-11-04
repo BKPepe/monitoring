@@ -1015,7 +1015,7 @@ LTE backup; that figure is real, it is just not the line speed.
 | `action=my_profile` / `update_profile` | logged in | Own profile: contacts, notification channels, e-mail language, password change (requires the current password) |
 | `action=oauth_unlink` | logged in | Unlink the OAuth sign-in (requires the current password) |
 | `action=oauth_start` / `oauth_callback` | public, link: logged in | OAuth sign-in and linking as a browser navigation that ends in /app (see Authentication) |
-| `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | logged in | Two-factor enrollment: the secret stays in the session until a code confirms it; confirming returns ten one-time recovery codes (hashes only are stored, shown exactly once); a recovery code works in place of the TOTP code at login and is consumed; regenerating a set and disabling both require the password |
+| `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | logged in | Two-factor enrollment: the secret stays in the session until a code confirms it; confirming returns ten one-time recovery codes (hashes only are stored, shown exactly once); a recovery code works in place of the TOTP code at login and is consumed; confirming, regenerating a set and disabling all require the password; `totp_setup` and `totp_confirm` answer 409 while 2FA is on, so replacing it means disabling it first |
 | `action=set_password` | public (one-time token) | Set a password from an invite or reset e-mail; the token is consumed on first success |
 
 `export_config` deliberately omits passwords, tokens, webhook URLs and agent

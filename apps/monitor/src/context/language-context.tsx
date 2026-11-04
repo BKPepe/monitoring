@@ -957,6 +957,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'totp.qr_alt': { cs: 'QR kód pro autentikační aplikaci', en: 'QR code for the authenticator app' },
   'totp.confirm': { cs: 'Potvrdit a zapnout', en: 'Confirm and enable' },
+  'totp.enable_hint': { cs: 'Zapnutí vyžaduje aktuální heslo.', en: 'Enabling requires your current password.' },
+  'totp.code_label': { cs: 'Kód z aplikace', en: 'Code from the app' },
   'totp.codes_hint': {
     cs: 'Uložte si záložní kódy - zobrazí se jen teď. Každý funguje jednou a nahradí kód z aplikace, když přijdete o telefon.',
     en: 'Save your recovery codes - they are shown only now. Each works once and stands in for the app code when you lose your phone.',

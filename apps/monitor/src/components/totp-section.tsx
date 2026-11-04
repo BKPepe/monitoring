@@ -10,10 +10,8 @@ import { ErrorState } from '@/components/ui/states';
 /**
  * Two-factor enrollment for the logged-in user.
  *
- * This existed only in the legacy admin - React showed a "2FA" badge but had
- * no way to actually set it up, so anyone wanting two-factor had to go back
- * to admin.php. Same two-step flow as there: the secret lives only in the
- * server session until the user proves with a code that the QR really
+ * The only place that sets two-factor up. Two steps: the secret lives only in
+ * the server session until the user proves with a code that the QR really
  * scanned; nothing touches the database before that, so an account cannot be
  * locked by an unverified secret.
  *
@@ -75,8 +73,9 @@ export function TotpSection({
     setBusy(true);
     setError(null);
     try {
-      const res = await post('totp_confirm', { code });
+      const res = await post('totp_confirm', { code, password });
       setCode('');
+      setPassword('');
       setQrDataUrl(null);
       // Recovery codes come with enabling 2FA and are shown exactly once -
       // the server keeps only hashes, so there is no "show again" later.
@@ -174,13 +173,32 @@ export function TotpSection({
             placeholder="123 456"
             inputMode="numeric"
             autoComplete="one-time-code"
+            aria-label={t('totp.code_label', 'Kód z aplikace')}
             className="text-center font-mono"
           />
+          {/* Password required on purpose: a stolen session must not be able
+              to put its own authenticator on the account. */}
+          <p className="text-muted-foreground text-xs">{t('totp.enable_hint', 'Zapnutí vyžaduje aktuální heslo.')}</p>
+          <Input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoComplete="current-password"
+            aria-label={t('profile.old_password', 'Stávající heslo')}
+          />
           <div className="flex gap-2">
-            <Button type="submit" size="sm" disabled={busy || code.trim().length < 6}>
+            <Button type="submit" size="sm" disabled={busy || code.trim().length < 6 || !password}>
               {t('totp.confirm', 'Potvrdit a zapnout')}
             </Button>
-            <Button type="button" size="sm" variant="ghost" onClick={() => setPhase('idle')}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setPassword('');
+                setPhase('idle');
+              }}
+            >
               {t('common.cancel', 'Zrušit')}
             </Button>
           </div>
@@ -259,6 +277,7 @@ export function TotpSection({
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
+            aria-label={t('profile.old_password', 'Stávající heslo')}
           />
           <div className="flex gap-2">
             <Button type="submit" size="sm" disabled={busy || !password}>
@@ -281,6 +300,7 @@ export function TotpSection({
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             autoComplete="current-password"
+            aria-label={t('profile.old_password', 'Stávající heslo')}
           />
           <div className="flex gap-2">
             <Button type="submit" size="sm" variant="destructive" disabled={busy || !password}>

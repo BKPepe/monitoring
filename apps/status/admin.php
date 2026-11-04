@@ -574,59 +574,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
     }
 }
 
-// 4b. Zapnutí 2FA - krok 1: vygenerovat nový secret a uložit ho jen do session,
-// dokud uživatel nepotvrdí kódem z appky, že se mu opravdu naskenoval (viz
-// totp_confirm níže). Do DB (totp_secret/totp_enabled) se nic nezapisuje, dokud
-// se to takhle neověří - jinak by šlo omylem zamknout účet naskenovaným, ale
-// nikdy neověřeným secretem.
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_setup_start'])) {
-    bk_csrf_check();
-    $_SESSION['totp_pending_secret'] = bk_totp_generate_secret();
-    header('Location: admin.php#totp-section');
-    exit;
-}
-
-// Zapnutí 2FA - krok 2: ověření kódu z appky proti pending secretu ze session.
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_confirm'])) {
-    bk_csrf_check();
-    $pending_secret = $_SESSION['totp_pending_secret'] ?? '';
-    $totp_confirm_code = trim($_POST['totp_code'] ?? '');
-    if (empty($pending_secret)) {
-        $error_msg = '2FA nastavení vypršelo, zkuste to prosím znovu.';
-    } elseif (bk_totp_verify_code($pending_secret, $totp_confirm_code)) {
-        $stmt_totp = $pdo->prepare("UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?");
-        $stmt_totp->execute([$pending_secret, $_SESSION['admin_id']]);
-        unset($_SESSION['totp_pending_secret']);
-        bk_audit_log($pdo, 'totp_enabled', '', 'user', $_SESSION['admin_id']);
-        $success_msg = 'Dvoufázové ověření (2FA) bylo úspěšně zapnuto.';
-    } else {
-        $error_msg = 'Neplatný kód z autentikační aplikace - zkuste to znovu.';
-    }
-    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
-    $stmt->execute([$_SESSION['admin_id']]);
-    $me = $stmt->fetch();
-}
-
-// Vypnutí 2FA - vyžaduje potvrzení aktuálním heslem, aby to nešlo tiše
-// vypnout jen tak (např. přes ukradenou/CSRF session bez znalosti hesla).
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['totp_disable'])) {
-    bk_csrf_check();
-    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
-    $stmt->execute([$_SESSION['admin_id']]);
-    $me = $stmt->fetch();
-    if ($me && password_verify($_POST['totp_disable_password'] ?? '', $me['password_hash'])) {
-        $stmt_totp = $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?");
-        $stmt_totp->execute([$_SESSION['admin_id']]);
-        bk_audit_log($pdo, 'totp_disabled', '', 'user', $_SESSION['admin_id']);
-        $success_msg = 'Dvoufázové ověření (2FA) bylo vypnuto.';
-    } else {
-        $error_msg = 'Nesprávné heslo - 2FA zůstává zapnuté.';
-    }
-    $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
-    $stmt->execute([$_SESSION['admin_id']]);
-    $me = $stmt->fetch();
-}
-
 // Odpojení propojeného OAuth účtu - stejná ochrana heslem jako u vypnutí 2FA.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['oauth_unlink'])) {
     bk_csrf_check();
@@ -2893,7 +2840,7 @@ wget -O docker-compose.agent.yml <?php echo bk_link_origin() . str_replace('admi
                     </div>
 
                     <div class="settings-tab-panel" id="profile-tab-2fa">
-                        <?php echo bk_render_totp_section($me, $site_title); ?>
+                        <?php echo bk_render_totp_section($me); ?>
                     </div>
 
                     <div class="settings-tab-panel" id="profile-tab-oauth">
@@ -3181,7 +3128,7 @@ wget -O docker-compose.agent.yml <?php echo bk_link_origin() . str_replace('admi
                     </div>
 
                     <div class="settings-tab-panel" id="profile-tab-2fa">
-                        <?php echo bk_render_totp_section($me, $site_title); ?>
+                        <?php echo bk_render_totp_section($me); ?>
                     </div>
 
                     <div class="settings-tab-panel" id="profile-tab-oauth">
