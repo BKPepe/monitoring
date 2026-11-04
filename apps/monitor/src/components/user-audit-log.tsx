@@ -89,6 +89,7 @@ export function UserAuditLog() {
     password_reset_requested: t('uaudit.password_reset', 'Žádost o obnovu hesla'),
     password_changed: t('uaudit.password_changed', 'Heslo změněno'),
     profile_updated: t('uaudit.profile_updated', 'Profil upraven'),
+    email_changed: t('uaudit.email_changed', 'E-mail změněn'),
     oauth_unlinked: t('uaudit.oauth_unlinked', 'OAuth odpojen'),
     totp_recovery_used: t('uaudit.totp_recovery_used', 'Přihlášení záložním kódem'),
     totp_recovery_regenerated: t('uaudit.totp_recovery_regenerated', 'Nové záložní kódy'),

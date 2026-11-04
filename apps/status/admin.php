@@ -546,6 +546,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
     
     if (empty($email)) {
         $error_msg = 'E-mail administrátora je povinný.';
+    } elseif ($email !== (string)($me['email'] ?? '') && !password_verify((string)$old_pass, $me['password_hash'])) {
+        // Stejné pravidlo jako update_profile v api.php: na tuhle adresu jde reset hesla.
+        $error_msg = 'Změna e-mailu vyžaduje stávající heslo. Změna profilu neproběhla.';
     } else {
         // Kontrola a změna hesla
         if (!empty($new_pass)) {

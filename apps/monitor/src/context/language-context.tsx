@@ -868,10 +868,18 @@ const translations: Record<string, { cs: string; en: string }> = {
   'profile.whatsapp_enabled': { cs: 'Posílat WhatsApp notifikace', en: 'Send WhatsApp notifications' },
   'profile.password_title': { cs: 'Změna hesla', en: 'Change password' },
   'profile.password_hint': {
-    cs: 'Vyplňte jen při změně. Vyžaduje stávající heslo.',
-    en: 'Fill in only to change it. Requires the current password.',
+    cs: 'Vyplňte jen při změně.',
+    en: 'Fill in only to change it.',
+  },
+  'profile.email_change_hint': {
+    cs: 'Uložení nové adresy bude chtít stávající heslo.',
+    en: 'Saving a new address will ask for your current password.',
   },
   'profile.old_password': { cs: 'Stávající heslo', en: 'Current password' },
+  'profile.old_password_hint': {
+    cs: 'Potvrzuje změnu e-mailu nebo hesla.',
+    en: 'Confirms the change of e-mail or password.',
+  },
   'profile.new_password': { cs: 'Nové heslo', en: 'New password' },
   'profile.confirm_password': { cs: 'Nové heslo znovu', en: 'New password again' },
   'profile.pw_mismatch': { cs: 'Nová hesla se neshodují.', en: 'The new passwords do not match.' },
@@ -4326,6 +4334,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'uaudit.monitor_restored': { cs: 'Monitor obnoven z archivu', en: 'Monitor restored' },
   'uaudit.agent_key_viewed': { cs: 'Zobrazen klíč agenta', en: 'Agent key viewed' },
   'uaudit.heartbeat_token_regenerated': { cs: 'Nový token heartbeatu', en: 'New heartbeat token' },
+  'uaudit.email_changed': { cs: 'E-mail změněn', en: 'E-mail changed' },
   'infra.delete_monitor_btn': { cs: 'Smazat monitor', en: 'Delete Monitor' },
   'infra.delete_confirm': {
     cs: 'Opravdu smazat tento monitor včetně celé jeho historie měření? Akce je nevratná.',

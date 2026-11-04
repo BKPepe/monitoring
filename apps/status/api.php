@@ -4127,6 +4127,13 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
         if ($mp_email === '') {
             bk_api_error(400, 'E-mail je povinný.');
         }
+        // The password reset goes to this address, so whoever changes it can take
+        // the account: it asks for the same proof as a new password. A stolen
+        // session has the session and nothing else.
+        $mp_email_changed = $mp_email !== (string)($mp_me['email'] ?? '');
+        if ($mp_email_changed && !password_verify((string)($mp_input['oldPassword'] ?? ''), $mp_me['password_hash'])) {
+            bk_api_error(400, 'Změna e-mailu vyžaduje stávající heslo. Změna neproběhla.');
+        }
         $mp_phone = trim((string)($mp_input['phone'] ?? ''));
         $mp_lang = in_array($mp_input['emailLang'] ?? null, ['cs', 'en'], true) ? $mp_input['emailLang'] : null;
         $mp_sms = !empty($mp_input['smsNotifications']) ? 1 : 0;
@@ -4151,6 +4158,9 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
         $pdo->prepare("UPDATE users SET email = ?, phone = ?, whatsapp_apikey = ?, sms_notifications = ?, whatsapp_notifications = ?, email_lang = ?, password_hash = ? WHERE id = ?")
             ->execute([$mp_email, $mp_phone ?: null, $mp_wa_key_sql, $mp_sms, $mp_wa, $mp_lang, $mp_hash, $mp_uid]);
         bk_audit_log($pdo, $mp_new_pass !== '' ? 'password_changed' : 'profile_updated', 'Vlastní profil', 'user', $mp_uid);
+        if ($mp_email_changed) {
+            bk_audit_log($pdo, 'email_changed', 'Vlastní profil', 'user', $mp_uid);
+        }
         echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[update_profile] ' . $e->getMessage());

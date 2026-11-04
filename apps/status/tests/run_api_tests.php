@@ -4365,6 +4365,27 @@ $pdo->prepare("UPDATE users SET password_hash = ? WHERE id = 1")
     ->execute([password_hash($bk_test_admin_password, PASSWORD_BCRYPT)]);
 @unlink($login_jar2);
 
+// --- update_profile: the e-mail asks for the password ---------------------
+//
+// A password reset goes to this address, so a stolen session that could change
+// it could take the account.
+$up_row = $pdo->query("SELECT email, phone, sms_notifications, whatsapp_notifications, email_lang FROM users WHERE id = 1")->fetch();
+$up_email = fn (): string => (string)$pdo->query("SELECT email FROM users WHERE id = 1")->fetchColumn();
+$up_audits = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'email_changed' AND target_id = 1")->fetchColumn();
+$up_was = $up_row['email'];
+$up_audits_was = $up_audits();
+[$code] = api_post($base, 'action=update_profile', ['email' => 'unos@example.test'], $cookie_jar);
+check('změna e-mailu bez hesla neprojde', [$code, $up_email()], [400, $up_was]);
+[$code] = api_post($base, 'action=update_profile', ['email' => 'unos@example.test', 'oldPassword' => 'spatne-heslo'], $cookie_jar);
+check('se špatným heslem taky ne', [$code, $up_email()], [400, $up_was]);
+[$code] = api_post($base, 'action=update_profile', ['email' => $up_was, 'phone' => '+420111222333'], $cookie_jar);
+check('stejný e-mail heslo nechce, ostatní se uloží',
+    [$code, $pdo->query("SELECT phone FROM users WHERE id = 1")->fetchColumn(), $up_audits()], [200, '+420111222333', $up_audits_was]);
+[$code] = api_post($base, 'action=update_profile', ['email' => 'novy@example.test', 'oldPassword' => $bk_test_admin_password], $cookie_jar);
+check('se správným heslem se e-mail změní a zapíše do auditu', [$code, $up_email(), $up_audits()], [200, 'novy@example.test', $up_audits_was + 1]);
+$pdo->prepare("UPDATE users SET email = ?, phone = ?, sms_notifications = ?, whatsapp_notifications = ?, email_lang = ? WHERE id = 1")
+    ->execute(array_values($up_row));
+
 // --- TOTP enrollment ------------------------------------------------------
 //
 // Two steps: the secret lives in the session until a code proves the QR

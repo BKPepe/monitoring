@@ -136,6 +136,13 @@ function ProfileForm({ profile, onSaved }: { profile: MyProfile; onSaved: (passw
   const [confirmPassword, setConfirmPassword] = React.useState('');
   const [saving, setSaving] = React.useState(false);
   const [formError, setFormError] = React.useState<string | null>(null);
+  // A password reset goes to this address, so the server wants the current
+  // password for it as well as for a new password. The field exists only then.
+  const emailChanged = email.trim() !== (profile.email ?? '');
+  const passwordNeeded = emailChanged || newPassword !== '';
+  React.useEffect(() => {
+    if (!passwordNeeded) setOldPassword('');
+  }, [passwordNeeded]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -192,6 +199,11 @@ function ProfileForm({ profile, onSaved }: { profile: MyProfile; onSaved: (passw
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label={t('profile.email', 'E-mail')} required>
             <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            {emailChanged && (
+              <span className="text-muted-foreground text-2xs">
+                {t('profile.email_change_hint', 'Uložení nové adresy bude chtít stávající heslo.')}
+              </span>
+            )}
           </Field>
           <Field label={t('profile.phone', 'Telefon (SMS)')}>
             <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+420…" />
@@ -246,18 +258,10 @@ function ProfileForm({ profile, onSaved }: { profile: MyProfile; onSaved: (passw
       <Panel
         icon={LockKeyhole}
         title={t('profile.password_title', 'Změna hesla')}
-        hint={t('profile.password_hint', 'Vyplňte jen při změně. Vyžaduje stávající heslo.')}
+        hint={t('profile.password_hint', 'Vyplňte jen při změně.')}
         bodyClassName="space-y-4"
       >
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Field label={t('profile.old_password', 'Stávající heslo')}>
-            <Input
-              type="password"
-              value={oldPassword}
-              onChange={(e) => setOldPassword(e.target.value)}
-              autoComplete="current-password"
-            />
-          </Field>
+        <div className="grid gap-3 sm:grid-cols-2">
           <Field label={t('profile.new_password', 'Nové heslo')}>
             <Input
               type="password"
@@ -279,7 +283,23 @@ function ProfileForm({ profile, onSaved }: { profile: MyProfile; onSaved: (passw
 
         {formError && <p className="text-down text-sm">{formError}</p>}
 
-        <div className="flex justify-end">
+        <div className="flex flex-wrap items-end justify-end gap-3">
+          {passwordNeeded && (
+            <div className="mr-auto w-full sm:w-80">
+              <Field label={t('profile.old_password', 'Stávající heslo')} required>
+                <Input
+                  type="password"
+                  value={oldPassword}
+                  onChange={(e) => setOldPassword(e.target.value)}
+                  autoComplete="current-password"
+                  required
+                />
+                <span className="text-muted-foreground text-2xs">
+                  {t('profile.old_password_hint', 'Potvrzuje změnu e-mailu nebo hesla.')}
+                </span>
+              </Field>
+            </div>
+          )}
           <Button type="submit" variant="primary" size="sm" disabled={saving}>
             <Save />
             {saving ? t('common.saving', 'Ukládám…') : t('profile.save_btn', 'Uložit profil')}
