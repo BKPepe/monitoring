@@ -69,23 +69,22 @@ foreach (glob(__DIR__ . '/../*.php') ?: [] as $entry) {
 check('functions.php načítá jen bootstrap.php, žádná stránka napřímo', $lib_users, ['bootstrap.php']);
 check('každá stránka a endpoint s funkcemi startuje přes bootstrap.php', $boot_users,
     ['admin.php', 'agent_api.php', 'api.php', 'cron.php', 'index.php', 'monitor.php', 'node_api.php', 'rss.php']);
-// heartbeat.php and metrics.php need the database alone: neither may name a
-// function or a constant of the library. health.php loads db.php alone too,
-// but its HTML view prints BK_CDN_FONTAWESOME and its SRI, which only
-// functions.php defines - a break older than bootstrap.php, left out here.
+// heartbeat.php, metrics.php and health.php need the database alone: none may
+// name a function or a constant of the library. health.php did: its HTML view
+// printed BK_CDN_FONTAWESOME, and PHP 8 ended the page there with a fatal error.
 $lib_names = array_flip(array_map('strtolower', array_filter(get_defined_functions()['user'],
     fn ($f) => (new ReflectionFunction($f))->getFileName() === realpath(__DIR__ . '/../functions.php'))));
 preg_match_all("/^(?:define\\('|const )([A-Z][A-Z0-9_]*)/m", (string)file_get_contents(__DIR__ . '/../functions.php'), $lib_consts);
 $lib_consts = array_flip($lib_consts[1]);
 $hb_calls = [];
-foreach (['heartbeat.php', 'metrics.php'] as $hb_file) {
+foreach (['heartbeat.php', 'metrics.php', 'health.php'] as $hb_file) {
     foreach (token_get_all((string)file_get_contents(__DIR__ . '/../' . $hb_file)) as $tok) {
         if (is_array($tok) && $tok[0] === T_STRING && (isset($lib_names[strtolower($tok[1])]) || isset($lib_consts[$tok[1]]))) {
             $hb_calls[] = $hb_file . ': ' . $tok[1];
         }
     }
 }
-check('heartbeat.php a metrics.php nesahají na nic z functions.php, stačí jim db.php', $hb_calls, []);
+check('heartbeat.php, metrics.php a health.php nesahají na nic z functions.php, stačí jim db.php', $hb_calls, []);
 
 // --- bk_api_json / bk_api_error: the answers of api.php ---------------------
 // They replace about 160 pairs of http_response_code() and echo json_encode()

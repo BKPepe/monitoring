@@ -1120,6 +1120,17 @@ $pdo->exec("UPDATE monitors SET is_public = NULL WHERE id = 2");
 // Admin-only diagnostics checked only for a login.
 [$hl_user_code] = $page_get('/health.php?format=json', $jar3);
 check('diagnostika schématu běžnému uživateli zůstane zavřená', $hl_user_code, 403);
+// The browser view, not only ?format=json: it used to end in a fatal error at
+// the <head> (a constant of functions.php, which health.php does not load).
+[$hl_code, $hl_html] = $page_get('/health.php', $cookie_jar);
+check('health.php v prohlížeči se vykreslí celá, s výsledky kontrol', [
+    $hl_code, str_starts_with($hl_html, '<!DOCTYPE html>'), str_contains($hl_html, 'DB connection'),
+    str_contains($hl_html, 'kontrol prošlo'), str_contains($hl_html, '</html>'), str_contains($hl_html, 'Fatal error'),
+], [200, true, true, true, true, false]);
+check_true('a nic si nebere odjinud, musí se otevřít, i když zbytek webu nejde',
+    !preg_match('~<(?:link[^>]+rel="stylesheet"|script)~i', $hl_html));
+[$hl_code, $hl_html] = $page_get('/health.php');
+check('bez přihlášení nic neukáže', [$hl_code, str_contains($hl_html, 'DB connection')], [403, false]);
 
 // Signing in happens in /app (D1): a legacy page asked for without a session
 // sends the visitor to /app/setup, as api.php's loginUrl does, not admin.php.

@@ -9,10 +9,8 @@
  * once per web request, never on the command line. That call used to end
  * functions.php, so nothing could load the library without a database.
  *
- * heartbeat.php and metrics.php need only the database and load db.php
- * alone. health.php loads it alone too, but its HTML view prints
- * BK_CDN_FONTAWESOME and its SRI, which only functions.php defines, and
- * stops there: a break older than this file.
+ * heartbeat.php, metrics.php and health.php need only the database and load
+ * db.php alone.
  */
 
 // Included only; requested directly it has nothing to show.

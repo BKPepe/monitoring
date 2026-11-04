@@ -157,7 +157,9 @@ if (($_GET['format'] ?? '') === 'json') {
     exit;
 }
 
-// HTML rendering for browser
+// HTML rendering for browser. The page stands alone, with no stylesheet or icon
+// font from elsewhere: a diagnostic page has to open while the rest of the site
+// is in trouble, and it runs on db.php only (run_tests.php holds it to that).
 $site_title = 'Blood Kings';
 try {
     $stmt_st = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = 'site_title'");
@@ -173,47 +175,55 @@ try {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/png" href="assets/favicon.png">
     <title>Health Check — <?php echo htmlspecialchars($site_title); ?></title>
-    <link rel="stylesheet" href="assets/style.css?v=<?php echo @filemtime(__DIR__ . '/assets/style.css'); ?>">
-    <link rel="stylesheet" href="<?php echo BK_CDN_FONTAWESOME; ?>" integrity="<?php echo BK_CDN_FONTAWESOME_SRI; ?>" crossorigin="anonymous">
-    <script>if (localStorage.getItem('theme') === 'light') { document.documentElement.classList.add('light-theme'); }</script>
+    <style>
+        :root { color-scheme: light dark; --bg: #f5f6f8; --panel: #fff; --text: #16191f; --muted: #5a6370; --line: #dde1e6; --ok: #0e7346; --bad: #b3141e; }
+        @media (prefers-color-scheme: dark) {
+            :root { --bg: #0f1115; --panel: #171a20; --text: #e7e9ed; --muted: #9aa3af; --line: #2a2f37; --ok: #3ecf8e; --bad: #ff7b82; }
+        }
+        body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+        main { max-width: 800px; margin: 0 auto; padding: 2rem 1rem; }
+        .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+        .verdict { padding: 1.25rem 1.5rem; margin-bottom: 1.5rem; border-left: 4px solid var(--ok); }
+        .verdict.bad { border-left-color: var(--bad); }
+        .verdict h1 { margin: 0; font-size: 1.2rem; }
+        .verdict p { margin: 0.2rem 0 0; font-size: 0.82rem; color: var(--muted); }
+        .verdict strong { color: var(--bad); }
+        .check { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; padding: 0.7rem 1.25rem; }
+        .check + .check { border-top: 1px solid var(--line); }
+        .mark { width: 1.1rem; text-align: center; font-weight: 700; color: var(--ok); }
+        .name { flex: 1 1 12rem; font-size: 0.85rem; font-weight: 500; }
+        .detail { font: 0.75rem ui-monospace, Menlo, Consolas, monospace; color: var(--muted); overflow-wrap: anywhere; }
+        .fail .mark, .fail .detail { color: var(--bad); }
+        nav { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 1.5rem; font-size: 0.85rem; }
+    </style>
 </head>
 <body>
-<div class="container" style="max-width: 800px; margin: 0 auto; padding: 2rem 1rem;">
+<main>
+    <section class="panel verdict<?php echo $all_ok ? '' : ' bad'; ?>">
+        <h1><?php echo $all_ok ? 'Vše v pořádku' : 'Nalezeny problémy'; ?></h1>
+        <p>
+            <?php echo $result['checks_passed']; ?>/<?php echo $result['checks_total']; ?> kontrol prošlo &middot; <?php echo date('j.n.Y H:i'); ?>
+            <?php if (!$all_ok): ?> &middot; <strong>Opravte neprošlé kontroly níže</strong><?php endif; ?>
+        </p>
+    </section>
 
-    <!-- Verdict banner -->
-    <div style="background: <?php echo $all_ok ? 'rgba(30,199,115,0.08)' : 'rgba(193,18,31,0.08)'; ?>; border: 1px solid <?php echo $all_ok ? 'rgba(30,199,115,0.25)' : 'rgba(193,18,31,0.25)'; ?>; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 1rem;">
-        <i class="fas <?php echo $all_ok ? 'fa-circle-check' : 'fa-circle-exclamation'; ?>" style="font-size: 2rem; color: <?php echo $all_ok ? 'var(--color-green)' : 'var(--color-red)'; ?>;"></i>
-        <div>
-            <div style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary);">
-                <?php echo $all_ok ? 'Vše v pořádku' : 'Nalezeny problémy'; ?>
-            </div>
-            <div style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.2rem;">
-                <?php echo $result['checks_passed']; ?>/<?php echo $result['checks_total']; ?> kontrol prošlo &middot; <?php echo date('j.n.Y H:i'); ?>
-                <?php if (!$all_ok): ?> &middot; <strong style="color: var(--color-red);">Opravte neprošlé kontroly níže</strong><?php endif; ?>
-            </div>
-        </div>
-    </div>
-
-    <!-- Checks list -->
-    <div style="background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.07); border-radius: 12px; overflow: hidden;">
-        <?php foreach ($checks as $i => $c): ?>
-        <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.7rem 1.25rem; <?php echo $i > 0 ? 'border-top: 1px solid rgba(255,255,255,0.04);' : ''; ?>">
-            <i class="fas <?php echo $c['ok'] ? 'fa-check' : 'fa-xmark'; ?>" style="width: 18px; text-align: center; color: <?php echo $c['ok'] ? 'var(--color-green)' : 'var(--color-red)'; ?>;"></i>
-            <span style="flex: 1; font-size: 0.85rem; color: var(--text-primary); font-weight: 500;"><?php echo htmlspecialchars($c['name']); ?></span>
+    <section class="panel">
+        <?php foreach ($checks as $c): ?>
+        <div class="check<?php echo $c['ok'] ? '' : ' fail'; ?>">
+            <span class="mark" role="img" aria-label="<?php echo $c['ok'] ? 'prošlo' : 'neprošlo'; ?>"><?php echo $c['ok'] ? '✓' : '✗'; ?></span>
+            <span class="name"><?php echo htmlspecialchars($c['name']); ?></span>
             <?php if ($c['detail']): ?>
-                <span style="font-size: 0.75rem; color: <?php echo $c['ok'] ? 'var(--text-muted)' : 'var(--color-red)'; ?>; font-family: monospace;"><?php echo htmlspecialchars($c['detail']); ?></span>
+                <span class="detail"><?php echo htmlspecialchars($c['detail']); ?></span>
             <?php endif; ?>
         </div>
         <?php endforeach; ?>
-    </div>
+    </section>
 
-    <!-- Actions -->
-    <div style="margin-top: 1.5rem; display: flex; gap: 0.75rem; flex-wrap: wrap;">
-        <a href="health.php" class="btn btn-secondary btn-sm"><i class="fas fa-rotate"></i> Zkontrolovat znovu</a>
-        <a href="health.php?format=json" class="btn btn-secondary btn-sm"><i class="fas fa-code"></i> JSON výstup</a>
-        <a href="<?php echo htmlspecialchars(bk_app_url('/')); ?>" class="btn btn-secondary btn-sm"><i class="fas fa-arrow-left"></i> Zpět do aplikace</a>
-    </div>
-
-</div>
+    <nav>
+        <a href="health.php">Zkontrolovat znovu</a>
+        <a href="health.php?format=json">JSON výstup</a>
+        <a href="<?php echo htmlspecialchars(bk_app_url('/')); ?>">Zpět do aplikace</a>
+    </nav>
+</main>
 </body>
 </html>
