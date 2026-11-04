@@ -48,13 +48,10 @@ $pages = [
     "/badge.php?id={$monitor_id}" => ['odznak (alias, stav)', [302]],
     "/badge.php?id={$monitor_id}&type=uptime" => ['odznak (alias, dostupnost)', [302]],
     '/badge.php?id=999999' => ['odznak s neexistujícím id (alias)', [302]],
-    // widget.php too (D4), to the availability badge of its monitor. The
-    // quality gate runs this test against production in parallel with the
-    // deploy, where widget.php can still be the HTML card of before: its 200
-    // passes, and a redirect has to go exactly here.
-    "/widget.php?id={$monitor_id}" => ['widget (alias, dostupnost)', [200, 302],
+    // widget.php too (D4), to the availability badge of its monitor.
+    "/widget.php?id={$monitor_id}" => ['widget (alias, dostupnost)', [302],
         $base . "/api.php?action=badge&monitor_id={$monitor_id}&type=uptime"],
-    '/widget.php?id=999999' => ['widget s neexistujícím id (alias)', [200, 302], $base . '/api.php?action=badge&monitor_id=999999&type=uptime'],
+    '/widget.php?id=999999' => ['widget s neexistujícím id (alias)', [302], $base . '/api.php?action=badge&monitor_id=999999&type=uptime'],
     '/api.php?action=badge' => ['odznak (API, flotila)', [200]],
     "/api.php?action=badge&monitor_id={$monitor_id}&type=uptime" => ['odznak (API, dostupnost)', [200]],
     '/api.php?action=badge&monitor_id=999999' => ['odznak API s neexistujícím id', [404]],
