@@ -100,6 +100,7 @@ $files = array_filter(array_merge(
  */
 $no_caller_ok = [
     'audit_logs' => 'only tests call it since the app reads user_audit_log; retiring it (R57) is an owner decision',
+    'portal_status' => 'the game portal (BKPepe/bloodkings, app.js) calls it from outside this repository',
 ];
 
 $used = [];

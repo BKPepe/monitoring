@@ -2394,9 +2394,10 @@ check('GET na akce, které si metodu hlídaly samy, odmítne už společná str�
 check('špatné heslo přes HTTP: bajty stejné jako dřív', [$code, $raw], [401, '{"success":false,"message":"Invalid username or password."}']);
 $pdo->exec("DELETE FROM audit_log WHERE action = 'login_failed' AND actor_username = 'nikdo_takovy'");
 
-// An empty action keeps the old behaviour (the default service overview).
+// An empty action still answers as action=portal_status (the game portal),
+// until the portal asks for it by name.
 [$code] = api_get($base, '');
-check('prázdná akce dál vrací výchozí přehled', $code, 200);
+check('prázdná akce dál vrací přehled pro herní portál', $code, 200);
 
 // --- Export CSV ---------------------------------------------------------
 [$csv_anon_code] = api_get($base, 'action=export_csv&monitor_id=1');
@@ -7751,25 +7752,82 @@ try {
     $pdo->prepare("DELETE FROM incidents WHERE id = ?")->execute([$g3_inc]);
 }
 
-// The default overview (api.php with no action) feeds the game portal and
-// answers anyone, so it covers the public set as well. It used to take the
-// first monitor whose type or name said TeamSpeak, hidden ones included, and
-// hand its name, state and client count to every anonymous caller.
-$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_details)
-            VALUES (180, 'Interní TeamSpeak', 'teamspeak', 'ts.example.com', 'up', 'Hry', 0, '{\"clients_online\":3,\"clients_max\":32}')");
+// The game portal (BKPepe/bloodkings) reads action=portal_status: anyone may
+// call it, so it covers the public set. It used to read api.php with no
+// action, which took the first monitor whose type or name said TeamSpeak
+// (hidden ones included), printed the last players of a server that was down
+// and never filled Discord. Other game monitors are archived for the block,
+// so "the first by id" is one of these.
+$pg_others = array_map('intval', $pdo->query("SELECT id FROM monitors WHERE archived_at IS NULL
+    AND type IN ('teamspeak', 'minecraft', 'discord')")->fetchAll(PDO::FETCH_COLUMN));
+$pg_cron = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'last_cron_run'")->fetchColumn();
+// A key the answer must carry, null included (?? would read null as missing).
+$pg_val = fn (array $entry, string $key): mixed => array_key_exists($key, $entry) ? $entry[$key] : 'chybí';
+$pg_set_cron = function (int $ago) use ($pdo): void {
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('last_cron_run', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+        ->execute([date('Y-m-d H:i:s', time() - $ago)]);
+};
 try {
-    [$ov_code, $ov, $ov_raw] = api_get($base, '');
-    check('výchozí přehled vrací 200', $ov_code, 200);
-    check_false('výchozí přehled skrytý TeamSpeak nejmenuje', str_contains($ov_raw, 'Interní TeamSpeak'));
-    check_true('a nepřevezme jeho stav ani počet klientů (dostal ' . json_encode($ov['teamspeak'] ?? null, JSON_UNESCAPED_UNICODE) . ')',
-        ($ov['teamspeak']['online'] ?? null) !== true && array_key_exists('clients_online', $ov['teamspeak'] ?? []) && $ov['teamspeak']['clients_online'] === null);
-    $pdo->exec("UPDATE monitors SET is_public = 1 WHERE id = 180");
-    [, $ov_pub] = api_get($base, '');
-    check('veřejný TeamSpeak přehled ukáže i s počtem klientů',
-        [$ov_pub['teamspeak']['name'] ?? null, $ov_pub['teamspeak']['online'] ?? null, $ov_pub['teamspeak']['clients_online'] ?? null],
-        ['Interní TeamSpeak', true, 3]);
+    if ($pg_others) {
+        $pdo->exec('UPDATE monitors SET archived_at = NOW() WHERE id IN (' . implode(',', $pg_others) . ')');
+    }
+    $pg_set_cron(30);
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked, last_details) VALUES
+        (971, 'Interní TeamSpeak', 'teamspeak', 'ts.example.com', 'up', 'Hry', 0, NOW(), '{\"clients_online\":3,\"clients_max\":32}'),
+        (972, 'TeamSpeak stránka', 'web', 'https://ts.example.com', 'up', 'Hry', 1, NOW(), NULL),
+        (973, 'Minecraft', 'minecraft', 'mc.example.com', 'down', 'Hry', 1, NOW(), '{\"players_online\":4,\"players_max\":20,\"version\":\"Paper 1.21\"}'),
+        (974, 'Discord', 'discord', '123456', 'warning', 'Hry', 1, NOW(), '{\"presence_count\":7}')");
+    [$pg_code, $pg, $pg_raw] = api_get($base, 'action=portal_status');
+    check('portal_status vrací 200', $pg_code, 200);
+    check_false('skrytý TeamSpeak nejmenuje', str_contains($pg_raw, 'Interní TeamSpeak'));
+    check('web se jménem TeamSpeak není TeamSpeak, hra bez veřejného monitoru nemá stav',
+        $pg['teamspeak'] ?? null,
+        ['online' => false, 'status' => null, 'checkedAt' => null, 'name' => null, 'clients_online' => null, 'clients_max' => null]);
+    check('Minecraft ve výpadku: offline a bez hráčů z doby před ním',
+        [$pg['minecraft']['status'] ?? null, $pg['minecraft']['online'] ?? null, $pg_val($pg['minecraft'] ?? [], 'players_online'),
+            $pg_val($pg['minecraft'] ?? [], 'players_max'), $pg_val($pg['minecraft'] ?? [], 'version')],
+        ['down', false, null, null, null]);
+    check_true('a nese čas kontroly', is_string($pg['minecraft']['checkedAt'] ?? null) && strtotime($pg['minecraft']['checkedAt']) !== false);
+    check('Discord zhoršený, ale dosažitelný: online s počtem z monitoru, celkový počet nikdo neměří',
+        [$pg['discord']['status'] ?? null, $pg['discord']['online'] ?? null, $pg['discord']['online_count'] ?? null, $pg_val($pg['discord'] ?? [], 'total_count')],
+        ['warning', true, 7, null]);
+
+    $pdo->exec("UPDATE monitors SET is_public = 1 WHERE id = 971");
+    $pdo->exec("UPDATE monitors SET status = 'up', last_details = '{\"players_online\":0}' WHERE id = 973");
+    [, $pg2] = api_get($base, 'action=portal_status');
+    check('veřejný TeamSpeak ukáže jméno, stav i počet klientů',
+        [$pg2['teamspeak']['name'] ?? null, $pg2['teamspeak']['status'] ?? null, $pg2['teamspeak']['online'] ?? null,
+            $pg2['teamspeak']['clients_online'] ?? null, $pg2['teamspeak']['clients_max'] ?? null],
+        ['Interní TeamSpeak', 'up', true, 3, 32]);
+    check('nula hráčů je nula, nezměřené maximum a verze null (ne 20 a ne "")',
+        [$pg_val($pg2['minecraft'] ?? [], 'players_online'), $pg_val($pg2['minecraft'] ?? [], 'players_max'), $pg_val($pg2['minecraft'] ?? [], 'version')],
+        [0, null, null]);
+
+    // An empty action answers the same, and says it is on its way out.
+    [$pg_code, $pg_head, $pg_body] = bk_raw_request($base . '/api.php');
+    check('prázdná akce dál odpovídá jako portal_status', [$pg_code, json_decode($pg_body, true)], [200, $pg2]);
+    check_true('a hlásí Deprecation s odkazem na portal_status',
+        (bool)preg_match('/^Deprecation: @\d+\r?$/mi', $pg_head) && str_contains($pg_head, 'action=portal_status'));
+    [, $pg_head] = bk_raw_request($base . '/api.php?action=portal_status');
+    check_false('portal_status sám Deprecation nenese', (bool)preg_match('/^Deprecation:/mi', $pg_head));
+
+    // A stopped collector: nobody knows the state, so nothing is online.
+    $pg_set_cron(7200);
+    [, $pg3] = api_get($base, 'action=portal_status');
+    check('bez běžícího sběru je každý stav unknown a nic online',
+        [$pg3['teamspeak']['status'] ?? null, $pg3['teamspeak']['online'] ?? null, $pg_val($pg3['teamspeak'] ?? [], 'clients_online'),
+            $pg3['discord']['status'] ?? null, $pg3['discord']['online'] ?? null],
+        ['unknown', false, null, 'unknown', false]);
 } finally {
-    $pdo->exec("DELETE FROM monitors WHERE id = 180");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (971, 972, 973, 974)");
+    if ($pg_others) {
+        $pdo->exec('UPDATE monitors SET archived_at = NULL WHERE id IN (' . implode(',', $pg_others) . ')');
+    }
+    if ($pg_cron === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'last_cron_run'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'last_cron_run'")->execute([$pg_cron]);
+    }
 }
 
 // A red strip day never says "100 %". A failed check answered 30 s later is

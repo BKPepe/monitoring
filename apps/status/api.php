@@ -7673,6 +7673,31 @@ if ($action === 'delete_annotation') {
 }
 
 /**
+ * The game portal's view of its servers (bk_portal_status).
+ *
+ * The portal called api.php with no action and got the default service
+ * overview: monitors picked by a LIKE on type or name, a Discord block
+ * nothing filled and 20 players_max for one nobody measured. An empty action
+ * answers the same as portal_status until the portal asks for it by name,
+ * and says so in a Deprecation header.
+ */
+if ($action === 'portal_status' || $action === '') {
+    if ($action === '') {
+        // RFC 9745: deprecated since 2026-11-04 (UTC).
+        header('Deprecation: @1793750400');
+        header('Link: <api.php?action=portal_status>; rel="successor-version"');
+    }
+    try {
+        $portal = bk_portal_status($pdo);
+    } catch (Throwable $e) {
+        // Every service "offline" was the answer to a failed read.
+        bk_api_fail('overview_unavailable', 500, $e, 'Přehled služeb se nepodařilo načíst.');
+    }
+    echo json_encode($portal, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/**
  * An unknown action must be heard.
  *
  * Everything that matched no handler above falls through here, and it used to
@@ -7680,56 +7705,5 @@ if ($action === 'delete_annotation') {
  * action name thus looked like success - exactly why nobody noticed for years
  * that `save_annotation` (chart notes) and `setup` (the first-run wizard) were
  * missing from api.php. The caller got 200, the note was dropped, nobody learned anything.
- *
- * An empty action keeps the default overview - it is old behaviour and I do
- * not want to cut off whatever relies on it out there.
  */
-if ($action !== '') {
-    bk_api_error(400, sprintf('Neznámá akce „%s".', $action));
-}
-
-// 6. Default JSON service overview from the DB
-$response = [
-    'teamspeak' => ['online' => false, 'clients_online' => null, 'clients_max' => null, 'name' => 'TeamSpeak Server'],
-    'minecraft' => ['online' => false, 'players_online' => null, 'players_max' => null, 'version' => ''],
-    'discord' => ['online' => false, 'online_count' => null, 'total_count' => null]
-];
-
-try {
-    // Only the public set, whoever asks: the one consumer is the game portal,
-    // anonymous by nature, and a monitor the owner took off the public page
-    // (W1-G3) must not reappear here by name and state. ORDER BY id: with
-    // several matches the answer must not depend on the storage order.
-    [$ov_scope, $ov_scope_params] = bk_monitor_scope_sql(bk_public_monitor_ids($pdo), 'id');
-    $stmt = $pdo->prepare("SELECT status, last_details, name FROM monitors WHERE archived_at IS NULL AND {$ov_scope} AND (LOWER(type) LIKE '%teamspeak%' OR LOWER(type) LIKE '%ts3%' OR LOWER(name) LIKE '%teamspeak%') ORDER BY id LIMIT 1");
-    $stmt->execute($ov_scope_params);
-    $ts = $stmt->fetch();
-    if ($ts) {
-        $response['teamspeak']['online'] = ($ts['status'] === 'up');
-        $response['teamspeak']['name'] = $ts['name'];
-        $details = bk_monitor_details($ts);
-        if ($details && isset($details['clients_online'])) {
-            $response['teamspeak']['clients_online'] = (int)$details['clients_online'];
-            // Unknown capacity stays null - no "X / 100" with an invented limit.
-            $response['teamspeak']['clients_max'] = isset($details['clients_max']) ? (int)$details['clients_max'] : null;
-        }
-    }
-
-    $stmt = $pdo->prepare("SELECT status, last_details, name FROM monitors WHERE archived_at IS NULL AND {$ov_scope} AND (LOWER(type) LIKE '%minecraft%' OR LOWER(type) LIKE '%mc%' OR LOWER(name) LIKE '%minecraft%') ORDER BY id LIMIT 1");
-    $stmt->execute($ov_scope_params);
-    $mc = $stmt->fetch();
-    if ($mc) {
-        $response['minecraft']['online'] = ($mc['status'] === 'up');
-        $details = bk_monitor_details($mc);
-        if ($details && isset($details['players_online'])) {
-            $response['minecraft']['players_online'] = (int)$details['players_online'];
-            $response['minecraft']['players_max'] = (int)($details['players_max'] ?? 20);
-            $response['minecraft']['version'] = $details['version'] ?? '';
-        }
-    }
-} catch (Throwable $e) {
-    // Every service "offline" was the answer to a failed read.
-    bk_api_fail('overview_unavailable', 500, $e, 'Přehled služeb se nepodařilo načíst.');
-}
-
-echo json_encode($response, JSON_UNESCAPED_UNICODE);
+bk_api_error(400, sprintf('Neznámá akce „%s".', $action));

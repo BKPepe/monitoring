@@ -20160,6 +20160,62 @@ function bk_collection_is_fresh(): bool {
 }
 
 /**
+ * What the game portal shows about its servers (action=portal_status).
+ *
+ * One monitor per game: the first by id of exactly that type on the public
+ * page. A game no public monitor covers has status null. A count is given
+ * only while the server is online and is null when nobody measured it: the
+ * portal printed "8 / 100" for a missing count and kept the last players of
+ * a server that was down. While collection is stale every status is
+ * 'unknown', as in the overall verdict. Discord's widget carries no member
+ * total, so total_count stays null.
+ *
+ * @return array<string, array<string, mixed>>
+ */
+function bk_portal_status(PDO $pdo, ?bool $collection_fresh = null): array {
+    [$scope, $params] = bk_monitor_scope_sql(bk_public_monitor_ids($pdo), 'id');
+    $stmt = $pdo->prepare("SELECT type, name, status, last_checked, last_details FROM monitors
+        WHERE archived_at IS NULL AND {$scope} AND type IN ('teamspeak', 'minecraft', 'discord')
+        ORDER BY id");
+    $stmt->execute($params);
+    $first = [];
+    foreach ($stmt->fetchAll() as $row) {
+        $first[$row['type']] ??= $row;
+    }
+    $fresh = $collection_fresh ?? bk_collection_is_fresh();
+    $count = fn (array $d, string $key): ?int => isset($d[$key]) && is_numeric($d[$key]) ? (int)$d[$key] : null;
+
+    $out = [];
+    foreach (['teamspeak', 'minecraft', 'discord'] as $type) {
+        $row = $first[$type] ?? null;
+        $status = null;
+        if ($row !== null) {
+            $status = $fresh && in_array($row['status'], ['up', 'down', 'warning', 'maintenance'], true)
+                ? (string)$row['status'] : 'unknown';
+        }
+        // Reachable: a degraded server still answers.
+        $online = in_array($status, ['up', 'warning'], true);
+        $d = $row !== null && $online ? bk_monitor_details($row) : [];
+        $entry = [
+            'online' => $online,
+            'status' => $status,
+            'checkedAt' => $row !== null && !empty($row['last_checked']) ? date('c', strtotime((string)$row['last_checked'])) : null,
+            'name' => $row !== null ? (string)$row['name'] : null,
+        ];
+        if ($type === 'teamspeak') {
+            $entry += ['clients_online' => $count($d, 'clients_online'), 'clients_max' => $count($d, 'clients_max')];
+        } elseif ($type === 'minecraft') {
+            $version = isset($d['version']) && is_string($d['version']) && $d['version'] !== '' ? $d['version'] : null;
+            $entry += ['players_online' => $count($d, 'players_online'), 'players_max' => $count($d, 'players_max'), 'version' => $version];
+        } else {
+            $entry += ['online_count' => $count($d, 'presence_count'), 'total_count' => null];
+        }
+        $out[$type] = $entry;
+    }
+    return $out;
+}
+
+/**
  * The one overall verdict for a set of monitors (W1-B4). Pure.
  *
  * public_status, the fleet badge, the public page and the marketing site all
