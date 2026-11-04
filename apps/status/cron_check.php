@@ -1,14 +1,54 @@
 <?php
 /**
- * cron.php's check of one monitor (bk_cron_check_monitor) and the active
- * checks it runs. A file of its own so the suites can run it on a real
- * database, and so functions.php does not grow.
+ * cron.php's check of the monitors (bk_cron_check_all, bk_cron_check_monitor)
+ * and the active checks it runs. A file of its own so the suites can run it on
+ * a real database, and so functions.php does not grow.
  */
 
 // Included only (cron.php and the suites); requested directly it has nothing to show.
 if (count(get_included_files()) === 1) {
     http_response_code(404);
     exit;
+}
+
+/**
+ * Every monitor's turn in one run. A failure stays that monitor's: an exception
+ * from one check used to end the whole script, so no monitor after it was
+ * checked, no later step ran and the run looked like a dead cron. The monitor
+ * that failed keeps its old last_checked, and bk_get_collection_issues says so
+ * as checks_stalled within 15 minutes.
+ *
+ * @param ?callable(array, int): ?array $check
+ * @param ?callable(PDO, array, string, ?string): mixed $notify
+ * @return list<int> ids of the monitors whose check failed
+ */
+function bk_cron_check_all(PDO $pdo, array $monitors, ?callable $check = null, ?callable $notify = null): array {
+    $failed = [];
+    foreach ($monitors as $monitor) {
+        try {
+            bk_cron_check_monitor($pdo, $monitor, $check, $notify);
+        } catch (Throwable $e) {
+            // The next monitor must not write into what this one left open.
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            $failed[] = (int)$monitor['id'];
+            error_log(sprintf('[cron] Kontrola monitoru %d selhala: %s: %s', $monitor['id'], get_class($e), $e->getMessage()));
+            echo "CHYBA: kontrola monitoru #{$monitor['id']} selhala, pokračuji dalším.\n";
+        }
+    }
+    return $failed;
+}
+
+/**
+ * Does this run count as one that ran? `last_cron_run` tells the watchdog and
+ * the pages that data is being collected, so a run in which not one monitor
+ * got through must not write it: a bad deploy that fails every check would
+ * otherwise look like a healthy cron. Part of the monitors failing is the
+ * opposite case, the collector works and each of those says so on its own.
+ */
+function bk_cron_run_collected(int $monitors, int $failed): bool {
+    return $monitors === 0 || $failed < $monitors;
 }
 
 /**

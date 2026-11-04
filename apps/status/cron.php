@@ -75,9 +75,7 @@ if ($last_schema_check === '' || strtotime($last_schema_check) < strtotime('-24 
 $stmt = $pdo->query("SELECT * FROM monitors WHERE archived_at IS NULL");
 $monitors = $stmt->fetchAll();
 
-foreach ($monitors as $monitor) {
-    bk_cron_check_monitor($pdo, $monitor);
-}
+$bk_cron_failed = bk_cron_check_all($pdo, $monitors);
 
 // How many of the last 24 h of minute reports really arrived (G42). Hourly,
 // one indexed COUNT per OpenWrt router (a server agent's cron has no minute
@@ -346,14 +344,25 @@ try {
 //
 // Written at the very end, so `last_cron_run` means "the run finished whole",
 // not "the run started". An external watchdog (apps/worker) tracks it and
-// speaks up when the value grows stale.
-try {
-    $bk_cron_duration_ms = (int)round((microtime(true) - $bk_cron_started) * 1000);
-    bk_setting_set($pdo, 'last_cron_run', date('Y-m-d H:i:s'));
-    bk_setting_set($pdo, 'last_cron_duration_ms', (string)$bk_cron_duration_ms);
-    bk_setting_set($pdo, 'last_cron_monitors', (string)count($monitors));
-} catch (PDOException $e) {
-    error_log('[cron] Zápis otisku běhu selhal: ' . $e->getMessage());
+// speaks up when the value grows stale. A run that checked nothing leaves it
+// alone (bk_cron_run_collected), so the watchdog speaks up then too.
+if (bk_cron_run_collected(count($monitors), count($bk_cron_failed))) {
+    try {
+        $bk_cron_duration_ms = (int)round((microtime(true) - $bk_cron_started) * 1000);
+        bk_setting_set($pdo, 'last_cron_run', date('Y-m-d H:i:s'));
+        bk_setting_set($pdo, 'last_cron_duration_ms', (string)$bk_cron_duration_ms);
+        bk_setting_set($pdo, 'last_cron_monitors', (string)count($monitors));
+    } catch (PDOException $e) {
+        error_log('[cron] Zápis otisku běhu selhal: ' . $e->getMessage());
+    }
+} else {
+    error_log('[cron] Žádný z ' . count($monitors) . ' monitorů se nepodařilo zkontrolovat, otisk běhu se nezapíše.');
+    echo "CHYBA: žádný monitor se nepodařilo zkontrolovat.\n";
+    // Whoever started the run hears it too: the job's exit code, or the web call's status.
+    if (!headers_sent()) {
+        http_response_code(500);
+    }
+    exit(1);
 }
 
 echo "Kontrola dokončena.\n";

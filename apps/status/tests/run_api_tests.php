@@ -3890,6 +3890,53 @@ try {
             bk_setting_set($pdo, 'alert_confirm_failures', (string)$cm_confirm);
         }
     }
+
+    // One monitor's failure stays its own (bk_cron_check_all). An uncaught
+    // exception used to end the whole script: nothing after it was checked,
+    // no later step ran and the run looked like a dead cron.
+    $pdo->exec("UPDATE monitors SET agent_key = NULL, status = 'down', last_details = NULL, last_checked = NULL WHERE id IN (950, 952, 953)");
+    $ca_rows = fn (): array => $pdo->query("SELECT * FROM monitors WHERE id IN (950, 952, 953) ORDER BY id")->fetchAll();
+    $ca_up = $cm_up(5.0);
+    $ca_log = tempnam(sys_get_temp_dir(), 'bk_test_cron_log');
+    $ca_log_was = ini_set('error_log', $ca_log);
+    try {
+        // The monitor in the middle fails with its transaction still open.
+        $cm_notes = [];
+        ob_start();
+        $ca_failed = bk_cron_check_all($pdo, $ca_rows(), function (array $m) use ($pdo, $ca_up): array {
+            if ((int)$m['id'] === 952) {
+                $pdo->beginTransaction();
+                $pdo->exec("UPDATE monitors SET name = 'nedokončený zápis' WHERE id = 952");
+                throw new RuntimeException('neočekávaná chyba kontroly');
+            }
+            return $ca_up;
+        }, $cm_notify);
+        $ca_out = (string)ob_get_clean();
+        check('cron: selhání jednoho monitoru vrátí jeho id', $ca_failed, [952]);
+        check('cron: monitory kolem něj se zkontrolují', [$cm_status(950), $cm_status(953), $cm_notes], ['up', 'up', [[950, 'up'], [953, 'up']]]);
+        $ca_stuck = $pdo->query("SELECT name, status, last_checked FROM monitors WHERE id = 952")->fetch();
+        check('cron: jeho nedokončený zápis se vrátí a kontrola se nepřipíše', $ca_stuck, ['name' => 'Cron web', 'status' => 'down', 'last_checked' => null]);
+        check('cron: další monitor nepíše do jeho transakce', $pdo->inTransaction(), false);
+        check_true('cron: výstup běhu selhání jmenuje', str_contains($ca_out, 'kontrola monitoru #952 selhala'));
+        $ca_logged = (string)file_get_contents($ca_log);
+        check_true('cron: do logu jde důvod', str_contains($ca_logged, 'Kontrola monitoru 952 selhala: RuntimeException: neočekávaná chyba kontroly'));
+
+        // A programming error is no Exception, and it must not end the run either.
+        ob_start();
+        $ca_failed = bk_cron_check_all($pdo, $ca_rows(), function (array $m): array {
+            throw new TypeError('špatný typ');
+        }, $cm_notify);
+        ob_end_clean();
+        check('cron: ani chyba programu běh neukončí, selžou jen zasažené', $ca_failed, [950, 952, 953]);
+    } finally {
+        ini_set('error_log', $ca_log_was === false ? '' : $ca_log_was);
+        @unlink($ca_log);
+    }
+    // Whether the run may tell the watchdog that data is being collected.
+    check('cron: otisk běhu se píše, když prošel aspoň jeden monitor, a v prázdné instalaci', [
+        bk_cron_run_collected(3, 0), bk_cron_run_collected(3, 2), bk_cron_run_collected(0, 0),
+    ], [true, true, true]);
+    check('cron: běh, ve kterém neprošel žádný, se za běh nepočítá', bk_cron_run_collected(3, 3), false);
 } finally {
     if ($cm_location === false) {
         $pdo->exec("DELETE FROM settings WHERE key_name = 'cron_location'");
