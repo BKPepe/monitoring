@@ -3,7 +3,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { HeartPulse, Copy, Check, RefreshCw, AlertTriangle } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
-import { LoadingState } from '@/components/ui/states';
+import { ErrorState, LoadingState } from '@/components/ui/states';
 
 interface HeartbeatInfo {
   monitorId: number;
@@ -33,21 +33,32 @@ export function HeartbeatCard({ monitorId }: { monitorId: number }) {
   const [info, setInfo] = React.useState<HeartbeatInfo | null | undefined>(undefined);
   const [copied, setCopied] = React.useState<string | null>(null);
   const [regenerating, setRegenerating] = React.useState(false);
-
-  const load = React.useCallback(
-    (regenerate = false) => {
-      const url = `/status/api.php?action=heartbeat_info&monitor_id=${monitorId}${regenerate ? '&regenerate=1' : ''}`;
-      return fetch(url, { credentials: 'include' })
-        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-        .then((d) => setInfo(d))
-        .catch(() => setInfo(null));
-    },
-    [monitorId]
-  );
+  const [regenerateFailed, setRegenerateFailed] = React.useState(false);
 
   React.useEffect(() => {
-    load();
-  }, [load]);
+    let active = true;
+    fetch(`/status/api.php?action=heartbeat_info&monitor_id=${monitorId}`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d) => active && setInfo(d))
+      .catch(() => active && setInfo(null));
+    return () => {
+      active = false;
+    };
+  }, [monitorId]);
+
+  const regenerate = () => {
+    setRegenerating(true);
+    setRegenerateFailed(false);
+    fetch(`/status/api.php?action=heartbeat_info&monitor_id=${monitorId}&regenerate=1`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d) => setInfo(d))
+      // The address on screen still works then, so it stays.
+      .catch(() => setRegenerateFailed(true))
+      .finally(() => setRegenerating(false));
+  };
 
   const copy = (value: string, key: string) => {
     navigator.clipboard.writeText(value).then(
@@ -169,6 +180,13 @@ export function HeartbeatCard({ monitorId }: { monitorId: number }) {
         </div>
       )}
 
+      {regenerateFailed && (
+        <ErrorState
+          size="inline"
+          message={t('hb.regenerate_failed', 'Nový token se nepodařilo vytvořit. Platí dál adresa výše.')}
+        />
+      )}
+
       <div className="flex items-center justify-between border-t border-border pt-3">
         <p className="text-muted-foreground text-2xs">
           {info.lastSignalAt
@@ -190,8 +208,7 @@ export function HeartbeatCard({ monitorId }: { monitorId: number }) {
             ) {
               return;
             }
-            setRegenerating(true);
-            load(true).finally(() => setRegenerating(false));
+            regenerate();
           }}
           className="gap-1.5"
         >

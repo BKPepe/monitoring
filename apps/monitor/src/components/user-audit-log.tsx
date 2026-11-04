@@ -97,6 +97,7 @@ export function UserAuditLog() {
     monitor_archived: t('uaudit.monitor_archived', 'Monitor archivován'),
     monitor_restored: t('uaudit.monitor_restored', 'Monitor obnoven z archivu'),
     agent_key_viewed: t('uaudit.agent_key_viewed', 'Zobrazen klíč agenta'),
+    heartbeat_token_regenerated: t('uaudit.heartbeat_token_regenerated', 'Nový token heartbeatu'),
   };
 
   const isSecurity = (action: string) => /login|logout|password|totp|token|oauth|denied|key/.test(action);

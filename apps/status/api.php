@@ -202,10 +202,11 @@ $bk_post_only_actions = [
 ];
 $bk_csrf_exempt = ['login', 'login_2fa', 'logout', 'setup', 'forgot_password', 'set_password',
     'public_subscribe', 'public_subscribe_confirm', 'public_unsubscribe'];
-// alerts_read_state and dashboard_layout are GET read + POST write in one action.
+// alerts_read_state, dashboard_layout and heartbeat_info are GET read + POST
+// write in one action.
 $bk_csrf_on_post = array_merge(
     array_values(array_diff($bk_post_only_actions, $bk_csrf_exempt)),
-    ['alerts_read_state', 'dashboard_layout']
+    ['alerts_read_state', 'dashboard_layout', 'heartbeat_info']
 );
 
 if (in_array($action, $bk_post_only_actions, true) && $_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -995,8 +996,14 @@ if ($action === 'heartbeat_info') {
     bk_require_admin();
 
     $hb_id = (int)($_GET['monitor_id'] ?? 0);
+    // A new token stops the address every job calls, and the monitor goes down
+    // until each is rewritten. So not on a plain GET, which any link can make,
+    // and on purpose not silently a read either: the caller asked for a rotation.
     $regenerate = ($_GET['regenerate'] ?? '') === '1';
     if ($regenerate) {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            bk_api_error(405, 'Vyžadován POST.');
+        }
         bk_refuse_archived_write($pdo, $hb_id);
     }
 
@@ -1015,6 +1022,9 @@ if ($action === 'heartbeat_info') {
             $hb['heartbeat_token'] = bk_heartbeat_generate_token();
             $stmt_tok = $pdo->prepare("UPDATE monitors SET heartbeat_token = ? WHERE id = ?");
             $stmt_tok->execute([$hb['heartbeat_token'], $hb['id']]);
+            if ($regenerate) {
+                bk_audit_log($pdo, 'heartbeat_token_regenerated', (string)$hb['name'], 'monitor', (int)$hb['id']);
+            }
         }
 
         $base = dirname($_SERVER['SCRIPT_NAME'] ?? '/status/api.php');

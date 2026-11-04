@@ -355,8 +355,10 @@ backup would look healthy just because the cron is running.
 ### `GET api.php?action=heartbeat_info&monitor_id=…`
 
 **Admin.** Returns the URL to configure in the job, the current state and the
-time of the last signal. `regenerate=1` produces a new token - the old URL stops
-working immediately. Like every absolute address the server hands out (mail,
+time of the last signal. `POST` with `regenerate=1` and the CSRF token produces a
+new token and records it in the audit log - the old URL stops working
+immediately. A `GET` with `regenerate=1` is refused with 405. Like every absolute
+address the server hands out (mail,
 RSS, agent install and update), the URL starts at the origin of `site_url`, or
 at a Host the server trusts while that setting is empty.
 

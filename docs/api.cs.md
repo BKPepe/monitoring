@@ -350,8 +350,9 @@ záloha by vypadala zdravě jen proto, že se cron spouští.
 ### `GET api.php?action=heartbeat_info&monitor_id=…`
 
 **Admin.** Vrátí adresu k nastavení úlohy, aktuální stav a čas posledního
-signálu. Parametr `regenerate=1` vyrobí nový token - stará adresa tím okamžitě
-přestane platit. Jako každá absolutní adresa, kterou server vydává (e-maily,
+signálu. `POST` s parametrem `regenerate=1` a CSRF tokenem vyrobí nový token a
+zapíše ho do auditu - stará adresa tím okamžitě přestane platit. `GET`
+s `regenerate=1` se odmítne kódem 405. Jako každá absolutní adresa, kterou server vydává (e-maily,
 RSS, instalace a aktualizace agentů), začíná adresa na originu `site_url`,
 a dokud je prázdné, na hostu, kterému server věří.
 

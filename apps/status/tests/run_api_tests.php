@@ -1761,8 +1761,24 @@ if (!empty($cookie_jar)) {
         check('token špatného tvaru vrací taky 404', $bad_code2, 404);
 
         // --- Token rotation ---------------------------------------------
-        [, $info4] = api_get_auth($base, 'action=heartbeat_info&monitor_id=' . $hb_id . '&regenerate=1', $cookie_jar);
+        // A new token stops every job's address, so a link must not do it.
+        $hb_stored = fn (): string => (string)$pdo->query("SELECT heartbeat_token FROM monitors WHERE id = {$hb_id}")->fetchColumn();
+        $hb_audits = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'heartbeat_token_regenerated' AND target_id = {$hb_id}")->fetchColumn();
+        [$rot_code] = api_get_auth($base, 'action=heartbeat_info&monitor_id=' . $hb_id . '&regenerate=1', $cookie_jar);
+        check('výměna tokenu přes GET se odmítne a token zůstane', [$rot_code, $hb_stored()], [405, $hb_token]);
+        [$rot_code] = api_post($base, 'action=heartbeat_info&monitor_id=' . $hb_id . '&regenerate=1', [], $cookie_jar, '');
+        check('výměna tokenu bez CSRF se odmítne a token zůstane', [$rot_code, $hb_stored()], [403, $hb_token]);
+        [$rot_code] = api_post($base, 'action=heartbeat_info&monitor_id=' . $hb_id . '&regenerate=1', [], $jar3);
+        check('běžný uživatel token nevymění', [in_array($rot_code, [401, 403], true), $hb_stored()], [true, $hb_token]);
+        [, $hb_plain] = api_post($base, 'action=heartbeat_info&monitor_id=' . $hb_id, [], $cookie_jar);
+        check('POST bez regenerate jen čte', [$hb_plain['token'] ?? null, $hb_audits()], [$hb_token, 0]);
+        [$rot_code, $info4] = api_post($base, 'action=heartbeat_info&monitor_id=' . $hb_id . '&regenerate=1', [], $cookie_jar);
+        check('výměna tokenu přes POST projde', $rot_code, 200);
         check_true('regenerate vyrobí jiný token', ($info4['token'] ?? '') !== $hb_token);
+        check('a nový token vrátí i uloží', $info4['token'] ?? null, $hb_stored());
+        check('a zapíše se do auditu, s monitorem', [$hb_audits(),
+            $pdo->query("SELECT description FROM audit_log WHERE action = 'heartbeat_token_regenerated' AND target_id = {$hb_id}")->fetchColumn()],
+            [1, 'Noční záloha (test)']);
         [$old_code] = hb_ping($base, $hb_token);
         check('starý token po výměně přestane platit', $old_code, 404);
 

@@ -1173,6 +1173,10 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Vygenerovat nový token? Stará adresa přestane fungovat a je nutné ji přepsat všude, kde je zadaná.',
     en: 'Generate a new token? The old URL stops working and must be replaced everywhere it is configured.',
   },
+  'hb.regenerate_failed': {
+    cs: 'Nový token se nepodařilo vytvořit. Platí dál adresa výše.',
+    en: 'Could not create a new token. The address above still works.',
+  },
   'hb.unavailable_title': { cs: 'Nastavení heartbeatu se nepodařilo načíst', en: 'Could not load heartbeat setup' },
   'hb.unavailable_desc': {
     cs: 'Adresu vidí jen přihlášený administrátor.',
@@ -4319,6 +4323,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'uaudit.monitor_archived': { cs: 'Monitor archivován', en: 'Monitor archived' },
   'uaudit.monitor_restored': { cs: 'Monitor obnoven z archivu', en: 'Monitor restored' },
   'uaudit.agent_key_viewed': { cs: 'Zobrazen klíč agenta', en: 'Agent key viewed' },
+  'uaudit.heartbeat_token_regenerated': { cs: 'Nový token heartbeatu', en: 'New heartbeat token' },
   'infra.delete_monitor_btn': { cs: 'Smazat monitor', en: 'Delete Monitor' },
   'infra.delete_confirm': {
     cs: 'Opravdu smazat tento monitor včetně celé jeho historie měření? Akce je nevratná.',
