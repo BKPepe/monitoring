@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -34,12 +34,12 @@ const detail = {
   events: [],
 };
 
-function show(series: () => Response) {
+function show(series: () => Response, metricDetail: unknown = detail) {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('action=metric_detail')) return Promise.resolve(json(detail));
+      if (url.includes('action=metric_detail')) return Promise.resolve(json(metricDetail));
       if (url.includes('action=metric_series')) return Promise.resolve(series());
       if (url.includes('action=annotations')) return Promise.resolve(json({ annotations: [] }));
       return Promise.resolve(json({}));
@@ -81,5 +81,41 @@ describe('Metrika: selhání řady měření', () => {
     fireEvent.click(screen.getByRole('button', { name: /Zkusit znovu|Try again/ }));
     expect(await screen.findByTestId('chart')).toBeTruthy();
     expect(screen.queryByText('Měření se nepodařilo načíst.')).toBeNull();
+  });
+});
+
+describe('Metrika: stará hodnota není aktuální', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  const pointsEndingAgo = (seconds: number) =>
+    Array.from({ length: 20 }, (_, i) => [NOW - seconds - (19 - i) * 60, 10 + i]);
+  const withLimit = { ...detail, thresholds: { warning: 80, critical: 95 } };
+  const tile = async () => (await screen.findByText('Aktuální')).closest('[data-slot="stat-block"]') as HTMLElement;
+
+  it('čerstvé měření je aktuální', async () => {
+    show(() => json({ label: 'CPU', unit: '%', points: pointsEndingAgo(0), distinctValues: 20 }), withLimit);
+    expect(within(await tile()).queryByText('bez čerstvého měření')).toBeNull();
+    expect(screen.getByText('Je to v pořádku?')).toBeTruthy();
+  });
+
+  it('agent mlčí deset hodin: žádná aktuální hodnota ani verdikt', async () => {
+    show(() => json({ label: 'CPU', unit: '%', points: pointsEndingAgo(10 * 3600), distinctValues: 20 }), withLimit);
+    const box = await tile();
+    expect(within(box).getByText('bez čerstvého měření')).toBeTruthy();
+    expect(within(box).getByText('—')).toBeTruthy();
+    expect(screen.queryByText('Je to v pořádku?')).toBeNull();
+  });
+
+  it('jediné měření nemá s čím srovnat rytmus, zastaralé se neříká', async () => {
+    show(() => json({ label: 'CPU', unit: '%', points: [[NOW - 600, 12]] }));
+    expect(within(await tile()).queryByText('bez čerstvého měření')).toBeNull();
+  });
+
+  it('denní souhrn není aktuální hodnota', async () => {
+    show(() => json({ label: 'CPU', unit: '%', points: pointsEndingAgo(0), distinctValues: 20, resolution: 'daily' }));
+    expect(within(await tile()).getByText('bez čerstvého měření')).toBeTruthy();
   });
 });

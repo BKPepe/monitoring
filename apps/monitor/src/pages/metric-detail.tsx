@@ -327,10 +327,7 @@ export function MetricDetailPage() {
     const measured = rawPoints.filter((p) => p.v != null);
     if (measured.length < 2) return null;
     const marked = rawPoints.filter((p) => p.v == null).length;
-    const step = medianStep(measured);
-    const last = measured[measured.length - 1];
-    const stopsEarly = step != null && seriesAt != null && seriesAt - last.t > Math.max(step * 2.5, 90_000);
-    return marked + (stopsEarly ? 1 : 0);
+    return marked + (stopsEarly(measured, seriesAt) ? 1 : 0);
   }, [rawPoints, seriesAt]);
   /**
    * When the window peaked - the moment worth asking "what was running" about.
@@ -653,7 +650,16 @@ export function MetricDetailPage() {
   // on every dBm chart in the app.
   const worseTail = direction === 'higher' ? stats.p5 : stats.p95;
   const worstValue = direction === 'higher' ? stats.min : stats.max;
-  const signalRating = rateSignalMetric(metric, stats.current);
+  // A daily rollup's last point is a whole day, and a series that stops early
+  // ends at whenever the agent last spoke: neither is how things are now.
+  const currentIsFresh =
+    series?.resolution !== 'daily' &&
+    !stopsEarly(
+      rawPoints.filter((p) => p.v != null),
+      seriesAt
+    );
+  const current = currentIsFresh ? stats.current : null;
+  const signalRating = rateSignalMetric(metric, current);
   /**
    * What to do about an LTE number is decided by all three of them together:
    * a good RSRP with a bad SINR is interference, and "nothing to improve"
@@ -717,7 +723,7 @@ export function MetricDetailPage() {
     : null;
   const verdict = metricVerdict({
     metricKey: metric,
-    current: stats.current,
+    current,
     values: points.map((p) => p.v).filter((v): v is number => v != null),
     thresholds: detail?.thresholds ?? { warning: null, critical: null },
   });
@@ -939,7 +945,13 @@ export function MetricDetailPage() {
       ) : (
         <Panel icon={Sigma} title={t('metric.stats_title', 'Za zvolené období')}>
           <div className="grid grid-cols-2 gap-3 *:min-w-0 lg:grid-cols-4">
-            <StatTile label={t('metric.current', 'Aktuální')} value={stats.current} unit={unit} delta={delta} />
+            <StatTile
+              label={t('metric.current', 'Aktuální')}
+              value={current}
+              unit={unit}
+              delta={currentIsFresh ? delta : undefined}
+              hint={currentIsFresh ? undefined : t('metric.no_fresh_value', 'bez čerstvého měření')}
+            />
             <StatTile label={t('metric.typical', 'Obvykle (medián)')} value={stats.p50} unit={unit} />
             {/* Which tail is the bad one follows the metric. On a dBm scale p95 is
                 the BEST five percent, so calling it "the worse end" - as this page
@@ -1427,11 +1439,13 @@ function StatTile({
   value,
   unit,
   delta,
+  hint,
 }: {
   label: string;
   value: number | null;
   unit: string;
   delta?: React.ComponentProps<typeof StatBlock>['delta'];
+  hint?: string;
 }) {
   const { lang } = useLanguage();
   // Through Intl (C-5): a raw number printed "Průměr 22.04 %" on a Czech page.
@@ -1441,8 +1455,17 @@ function StatTile({
       value={value == null ? null : formatNumber(value, lang, 2)}
       secondary={unit || undefined}
       delta={delta}
+      hint={hint}
     />
   );
+}
+
+/** Whether the measurements end well before the moment they were fetched. */
+function stopsEarly(measured: Parameters<typeof medianStep>[0], at: number | null): boolean {
+  if (at == null || measured.length === 0) return false;
+  const step = medianStep(measured);
+  // A lone sample has no rhythm to fall behind, so it says nothing about being late.
+  return step != null && at - measured[measured.length - 1].t > Math.max(step * 2.5, 90_000);
 }
 
 function UnitPicker({ value, onChange }: { value: RateUnit; onChange: (u: RateUnit) => void }) {

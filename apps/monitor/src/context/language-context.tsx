@@ -1470,6 +1470,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.tl_warning': { cs: 'Zhoršená odezva', en: 'Degraded Response' },
   'asset.tl_maintenance': { cs: 'Plánovaná údržba', en: 'Scheduled Maintenance' },
   'asset.tl_unknown': { cs: 'Stav neznámý', en: 'State unknown' },
+  'metric.no_fresh_value': { cs: 'bez čerstvého měření', en: 'no recent measurement' },
   'asset.tl_config_changed': { cs: 'Nastavení monitoru upraveno', en: 'Monitor settings changed' },
   'asset.tl_remote_action': { cs: 'Vzdálená akce', en: 'Remote Action' },
   'asset.tl_ssl_warning': { cs: 'SSL varování', en: 'SSL Warning' },
