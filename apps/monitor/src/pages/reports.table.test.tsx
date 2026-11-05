@@ -121,6 +121,24 @@ describe('SLA výkaz jako jedna tabulka (W2-7)', () => {
     expect(screen.getByText('Splňuje SLA')).toBeTruthy();
   });
 
+  it('období bez měření neukáže výpadek 0 s', async () => {
+    stubApi(() =>
+      json({
+        ...REPORT,
+        overallUptime: null,
+        totalOutageMinutes: null,
+        overallMttrSec: null,
+        monitors: [row(1, 'Blog', null, { outageMinutes: null, totalChecks: 0 })],
+      })
+    );
+    renderPage();
+
+    await screen.findByRole('button', { name: 'Blog' });
+    const tile = screen.getByText(/Celkový výpadek/).closest('[data-slot="stat-block"]') as HTMLElement;
+    expect(within(tile).getByText('—')).toBeTruthy();
+    expect(screen.getAllByText('Bez měření').length).toBeGreaterThan(0);
+  });
+
   it('název otevře podrobnosti řádku', async () => {
     stubApi(() => json(REPORT));
     renderPage();

@@ -24,7 +24,7 @@ function worstFirst(a: MonitorSla, b: MonitorSla): number {
   if (a.uptimePercent == null || b.uptimePercent == null) {
     return Number(a.uptimePercent == null) - Number(b.uptimePercent == null);
   }
-  return a.uptimePercent - b.uptimePercent || b.outageMinutes - a.outageMinutes;
+  return a.uptimePercent - b.uptimePercent || (b.outageMinutes ?? 0) - (a.outageMinutes ?? 0);
 }
 
 /**
@@ -91,7 +91,7 @@ export function SlaTable({
             const measured = item.uptimePercent != null;
             const missed = measured && (item.uptimePercent as number) < slaGoal;
             const budget = item.budgetMinutes;
-            const overBudget = budget != null && item.outageMinutes > budget;
+            const overBudget = budget != null && item.outageMinutes != null && item.outageMinutes > budget;
             const expanded = open === item.id;
             const days30 = strips.status === 'ready' ? strips.series[String(item.id)] : undefined;
             const detailId = `sla-detail-${item.id}`;
@@ -136,7 +136,7 @@ export function SlaTable({
                     ) : (
                       <>
                         <span className={cn(overBudget && 'text-down font-semibold')}>
-                          {minutes(item.outageMinutes)}
+                          {item.outageMinutes != null ? minutes(item.outageMinutes) : '—'}
                         </span>
                         <span className="text-muted-foreground">
                           {' '}

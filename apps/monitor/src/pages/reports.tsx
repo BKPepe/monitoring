@@ -22,7 +22,7 @@ const API_BASE = '/status/api.php';
 interface SlaReport {
   slaGoal: number;
   overallUptime: number | null;
-  totalOutageMinutes: number;
+  totalOutageMinutes: number | null;
   overallMttrSec: number | null;
   monitors: MonitorSla[];
   since?: string | null;
@@ -140,7 +140,7 @@ export function ReportsPage() {
       m.type,
       m.currentStatus,
       m.uptimePercent != null ? m.uptimePercent.toFixed(3) : '',
-      m.outageMinutes,
+      m.outageMinutes ?? '',
       m.budgetMinutes ?? '',
       m.measuredMinutes ?? '',
       m.incidentCount ?? '',
@@ -300,7 +300,7 @@ function ReportBody({
           variant="card"
           icon={CircleX}
           label={t('reports.total_outage_30d', { days }, `Celkový výpadek (${days} d)`)}
-          value={formatDuration(report.totalOutageMinutes * 60, lang)}
+          value={report.totalOutageMinutes != null ? formatDuration(report.totalOutageMinutes * 60, lang) : null}
           hint={t('reports.outage_sum_hint', 'Suma výpadků všech cílů')}
         />
         <StatBlock

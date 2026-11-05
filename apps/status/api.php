@@ -5005,7 +5005,8 @@ if ($action === 'sla_report') {
                 ];
             }
 
-            $outageMinutes = $sla_sum !== null ? (int)round($sla_sum['outage'] / 60) : 0;
+            // Null, not 0: nobody measured it, so nobody can say it had no outage.
+            $outageMinutes = ($sla_sum['pct'] ?? null) !== null ? (int)round($sla_sum['outage'] / 60) : null;
             $mttr = $last_outage['resolved'] ?? false ? $last_outage['durationSec'] : null;
 
             $p50 = $sla_pct_by_mid[$mid]['p50'] ?? null;
@@ -5060,7 +5061,8 @@ if ($action === 'sla_report') {
         $overall_uptime = count($uptime_vals) > 0
             ? bk_uptime_pct_round(array_sum($uptime_vals) / count($uptime_vals), 3)
             : null;
-        $total_outage = array_sum(array_column($report, 'outageMinutes'));
+        $outage_values = array_filter(array_column($report, 'outageMinutes'), fn ($v) => $v !== null);
+        $total_outage = $outage_values !== [] ? array_sum($outage_values) : null;
         $mttr_values = array_filter(array_column($report, 'mttrSec'), fn($v) => $v !== null);
         $overall_mttr = !empty($mttr_values) ? round(array_sum($mttr_values) / count($mttr_values)) : null;
 

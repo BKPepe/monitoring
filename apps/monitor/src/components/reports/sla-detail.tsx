@@ -26,7 +26,7 @@ export interface MonitorSla {
   currentStatus: string;
   /** null = no measured check in the window (nobody measured the SLA). */
   uptimePercent: number | null;
-  outageMinutes: number;
+  outageMinutes: number | null;
   totalChecks: number;
   /** Measured time in the window; null = unknown. */
   measuredMinutes?: number | null;
@@ -75,7 +75,7 @@ export function SlaDetail({ item, days }: { item: MonitorSla; days: number }) {
               ? formatDuration(item.mttrSec, lang)
               : item.lastOutage?.resolved
                 ? t('reports.mttr_unmeasured', 'Nezměřeno')
-                : !item.lastOutage && item.outageMinutes > 0
+                : !item.lastOutage && (item.outageMinutes ?? 0) > 0
                   ? t('reports.no_confirmed_outage_short', 'Bez potvrzeného výpadku')
                   : t('reports.no_outage', 'Bez výpadku')}
           </p>
@@ -170,7 +170,7 @@ export function SlaDetail({ item, days }: { item: MonitorSla; days: number }) {
             {item.lastOutage.reason}
           </p>
         </div>
-      ) : item.outageMinutes > 0 ? (
+      ) : (item.outageMinutes ?? 0) > 0 ? (
         // Availability counts time no outage stands for: a remote probe's
         // failed checks (which never start one) and an agent's silence. "No
         // outage" next to outage minutes read as a contradiction. The last

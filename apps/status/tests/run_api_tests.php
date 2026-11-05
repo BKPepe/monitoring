@@ -682,6 +682,9 @@ check_true('poslední výpadek monitoru 1 je vyřešený', ($sla_by_id[1]['lastO
 // array_key_exists, not ?? - the ?? operator treats NULL as a missing value.
 check_true('monitor bez logů má p50 null, ne nulu', array_key_exists('p50Ms', $sla_by_id[2]) && $sla_by_id[2]['p50Ms'] === null);
 check_true('a uptime null, ne 100', array_key_exists('uptimePercent', $sla_by_id[2]) && $sla_by_id[2]['uptimePercent'] === null);
+// R27: no measurement is no outage figure, and the total sums what was measured.
+check_true('a výpadek null, ne nula minut', array_key_exists('outageMinutes', $sla_by_id[2]) && $sla_by_id[2]['outageMinutes'] === null);
+check('celkový výpadek sčítá jen změřené', $sla_pin['totalOutageMinutes'] ?? 'chybí', array_sum(array_filter(array_column($sla_pin['monitors'], 'outageMinutes'), fn ($v) => $v !== null)));
 
 // =======================================================================
 // =======================================================================
