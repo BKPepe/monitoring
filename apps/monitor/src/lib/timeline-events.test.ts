@@ -100,6 +100,7 @@ describe('timelineSeverity', () => {
   it('still judges the older types as the page did', () => {
     expect(timelineSeverity('wan_lost')).toBe('down');
     expect(timelineSeverity('status_changed_up')).toBe('up');
+    expect(timelineSeverity('status_changed_unknown')).toBe('warning');
     expect(timelineSeverity('monitor_added')).toBe('info');
   });
 });

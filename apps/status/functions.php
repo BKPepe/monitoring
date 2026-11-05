@@ -4631,7 +4631,9 @@ function bk_get_monitor_timeline($pdo, $monitor_id, $days = 30) {
                     'down' => 'status_changed_down',
                     'warning' => 'status_changed_warning',
                     'maintenance' => 'status_changed_maintenance',
-                    default => 'status_changed_up',
+                    'up' => 'status_changed_up',
+                    // A silent agent is not a recovery.
+                    default => 'status_changed_unknown',
                 };
                 $timeline[] = [
                     'event_type' => $event_type,
@@ -4723,7 +4725,9 @@ function bk_get_asset_timeline($pdo, $asset_id, $days = 30) {
                     'down' => 'status_changed_down',
                     'warning' => 'status_changed_warning',
                     'maintenance' => 'status_changed_maintenance',
-                    default => 'status_changed_up',
+                    'up' => 'status_changed_up',
+                    // A silent agent is not a recovery.
+                    default => 'status_changed_unknown',
                 };
                 $timeline[] = [
                     'event_type' => $event_type,

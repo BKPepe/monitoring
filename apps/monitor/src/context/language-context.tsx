@@ -1469,6 +1469,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.tl_up': { cs: 'Obnovení provozu', en: 'Service Restored' },
   'asset.tl_warning': { cs: 'Zhoršená odezva', en: 'Degraded Response' },
   'asset.tl_maintenance': { cs: 'Plánovaná údržba', en: 'Scheduled Maintenance' },
+  'asset.tl_unknown': { cs: 'Stav neznámý', en: 'State unknown' },
   'asset.tl_remote_action': { cs: 'Vzdálená akce', en: 'Remote Action' },
   'asset.tl_ssl_warning': { cs: 'SSL varování', en: 'SSL Warning' },
   'asset.tl_threshold': { cs: 'Překročen limit', en: 'Threshold Exceeded' },

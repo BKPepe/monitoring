@@ -3486,6 +3486,16 @@ $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 92");
 $pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
 $pdo->exec("DELETE FROM assets WHERE id = 92");
 
+// R13: a silent agent's 'unknown' read as "Obnovení provozu".
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status) VALUES (9130, 'R13', 'vps', 'r13.example.test', 'unknown')");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES (9130, 'up', NOW() - INTERVAL 3 HOUR), (9130, 'down', NOW() - INTERVAL 2 HOUR), (9130, 'up', NOW() - INTERVAL 90 MINUTE), (9130, 'unknown', NOW() - INTERVAL 1 HOUR), (9130, 'maintenance', NOW() - INTERVAL 30 MINUTE)");
+$tl_types = array_values(array_filter(array_column(bk_get_monitor_timeline($pdo, 9130, 1), 'event_type'), fn ($type) => str_starts_with($type, 'status_changed_')));
+$tl_types = array_values(array_unique($tl_types));
+sort($tl_types);
+check('časová osa: neznámý stav není obnovení', $tl_types, ['status_changed_down', 'status_changed_maintenance', 'status_changed_unknown', 'status_changed_up']);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9130");
+$pdo->exec("DELETE FROM monitors WHERE id = 9130");
+
 // R12: only a server known to be down fails availability.
 $ts_avail = function (string $status): array {
     $health = bk_compute_health_score(build_teamspeak_health_areas(['id' => 1, 'type' => 'teamspeak'], $status, [], [], null));

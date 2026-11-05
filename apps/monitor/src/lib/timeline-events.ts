@@ -19,6 +19,8 @@ const DOWN = ['status_changed_down', 'wan_lost', 'agent_disconnected', 'dns_lost
 /** Types that say something got worse, or that the router lost a guard. */
 const WARNING = [
   'status_changed_warning',
+  // Nobody knows the state: an agent went silent, a check could not run.
+  'status_changed_unknown',
   'ssl_warning',
   'threshold_exceeded',
   'lte_backup_lost',
@@ -73,6 +75,7 @@ export function timelineTitle(type: string, t: TranslateFn): string {
     status_changed_up: t('asset.tl_up', 'Obnovení provozu'),
     status_changed_warning: t('asset.tl_warning', 'Zhoršená odezva'),
     status_changed_maintenance: t('asset.tl_maintenance', 'Plánovaná údržba'),
+    status_changed_unknown: t('asset.tl_unknown', 'Stav neznámý'),
     remote_action: t('asset.tl_remote_action', 'Vzdálená akce'),
     ssl_warning: t('asset.tl_ssl_warning', 'SSL varování'),
     threshold_exceeded: t('asset.tl_threshold', 'Překročen limit'),
