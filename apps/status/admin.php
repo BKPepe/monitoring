@@ -1485,7 +1485,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                                 endif;
                                                 
                                                 if (isset($det['api_fallback']) && $det['api_fallback'] === true): ?>
-                                                    <br><span class="category-badge" style="background: var(--color-yellow); font-size: 0.65rem; padding: 2px 6px; display: inline-block; margin-top: 0.25rem;" title="Přímé TCP připojení selhalo, stav je stahován ze záložního mcsrvstat.us API.">Záložní API</span>
+                                                    <br><span class="category-badge" style="background: var(--color-yellow); font-size: 0.65rem; padding: 2px 6px; display: inline-block; margin-top: 0.25rem;" title="Přímé TCP připojení selhalo, běh služby potvrdil agent na stejném stroji">Potvrdil agent</span>
                                                 <?php endif; ?>
                                                 <?php if (!empty($mon['notes'])): ?>
                                                     <br><span style="font-size: 0.7rem; color: var(--text-muted); font-style: italic; display: inline-block; margin-top: 0.15rem;" title="<?php echo htmlspecialchars($mon['notes']); ?>"><i class="fas fa-sticky-note" style="margin-right: 0.25rem;"></i> <?php echo htmlspecialchars(substr($mon['notes'], 0, 35)) . (strlen($mon['notes']) > 35 ? '...' : ''); ?></span>
@@ -1561,7 +1561,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                         if ($m['status'] === 'down') {
                             $error_desc = $m['error_message'] ?: 'Neznámá chyba';
                         } else {
-                            $error_desc = 'Používá se záložní API (přímé TCP spojení selhalo). Původní chyba: ' . ($original_error ?: 'Neznámá chyba');
+                            $error_desc = 'Přímé spojení selhalo, službu potvrdil agent na stejném stroji. Původní chyba: ' . ($original_error ?: 'Neznámá chyba');
                         }
                         $problem_monitors[] = [
                             'mon' => $m,
@@ -1587,7 +1587,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                     <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(243, 156, 18, 0.15); padding-bottom: 0.5rem; margin-bottom: 0.5rem;">
                                         <strong><i class="fas fa-server"></i> <?php echo htmlspecialchars($m['name']); ?></strong>
                                         <span class="category-badge" style="background: <?php echo $is_fallback ? 'var(--color-yellow)' : 'var(--color-red)'; ?>; font-size: 0.7rem; color: #fff;">
-                                            <?php echo $is_fallback ? 'Záložní API' : 'Výpadek (DOWN)'; ?>
+                                            <?php echo $is_fallback ? 'Potvrdil agent' : 'Výpadek (DOWN)'; ?>
                                         </span>
                                     </div>
                                     <p style="font-size: 0.85rem; color: #fff; margin-bottom: 0.5rem;"><strong>Zjištěný problém:</strong> <code><?php echo htmlspecialchars($err_desc); ?></code></p>
@@ -1595,7 +1595,7 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                     <div style="font-size: 0.8rem; color: var(--text-secondary); line-height: 1.5; background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 6px;">
                                         <strong style="color: #fff; display: block; margin-bottom: 0.25rem;"><i class="fas fa-wrench"></i> Doporučený postup řešení:</strong>
                                         <?php if ($m['type'] === 'minecraft' && $is_fallback): ?>
-                                            1. Webhosting se pokusil připojit na IP/hostitele <code><?php echo htmlspecialchars($m['target']); ?></code> na TCP portu 25565, ale spojení bylo odmítnuto (*Connection refused*). Stav je stahován ze záložního API.<br>
+                                            1. Webhosting se pokusil připojit na IP/hostitele <code><?php echo htmlspecialchars($m['target']); ?></code> na TCP portu 25565, ale spojení selhalo. Běh služby potvrdil agent na stejném stroji.<br>
                                             2. **Řešení:** Zkontrolujte, zda na vašem Minecraft serveru VPS neblokuje firewall (např. UFW/CSF) příchozí dotazy z webhostingu. Povolte port 25565 pro příchozí komunikaci: <code>ufw allow 25565/tcp</code>.<br>
                                             3. Ujistěte se, že Minecraft server je spuštěn a naslouchá na zadaném portu (výchozí 25565).
                                         <?php elseif ($m['type'] === 'teamspeak'): 

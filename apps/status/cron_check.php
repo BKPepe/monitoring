@@ -331,7 +331,7 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
 
         if (bk_agent_backup_says_up((string)$type, $details_decoded, $monitor, time())) {
             $new_status = 'up';
-            $error_msg = 'Používá se záložní API (přímé TCP spojení selhalo)';
+            $error_msg = 'Přímé spojení selhalo, službu potvrdil agent na stejném stroji';
             // Only what the fallback adds - the rest of last_details is merged
             // in below from a fresh read, not from this copy.
             $fallback_details = [
@@ -357,7 +357,6 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
                 'version' => $check_result['version'] ?? '',
                 'players_list' => $check_result['players_list'] ?? [],
                 'motd' => $check_result['motd'] ?? '',
-                'api_fallback' => $check_result['api_fallback'] ?? false,
                 'tps_1m' => $check_result['tps_1m'] ?? null,
                 'tps_5m' => $check_result['tps_5m'] ?? null,
                 'tps_15m' => $check_result['tps_15m'] ?? null

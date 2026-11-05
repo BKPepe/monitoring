@@ -6126,9 +6126,6 @@ function check_socket($host, $port, $timeout = 5) {
  * Minecraft server query via Server List Ping (SLP)
  */
 /**
- * Fallback Minecraft query via the public mcsrvstat.us API
- */
-/**
  * Source RCON protocol (Valve/Source engine RCON - the same binary protocol
  * is used by Minecraft Paper/Spigot and Source-based games). Independent of
  * the game software - just packet framing (int32 length/id/type +
@@ -6238,67 +6235,13 @@ function check_minecraft_rcon($host, $rcon_port, $rcon_password, $timeout = 3) {
     ];
 }
 
-/** The address the public API is asked about: this host, on the monitor's own port. */
-function bk_minecraft_fallback_url(string $host, int $port): string {
-    return 'https://api.mcsrvstat.us/2/' . rawurlencode($host) . ':' . $port;
-}
-
-/**
- * What the public API answered, as a check result, or null when it said nothing
- * usable. A count it did not send stays null: 20 and 0 used to be filled in, and
- * cron drew them in the player history. So does the response time: this request
- * measures two failed attempts of ours and someone else's server, not the target.
- */
-function bk_minecraft_fallback_result($response): ?array {
-    $data = is_string($response) ? json_decode($response, true) : null;
-    if (!is_array($data) || !isset($data['online'])) {
-        return null;
-    }
-    if ($data['online'] !== true) {
-        return [
-            'status' => 'down',
-            'response_time' => null,
-            'error' => 'Minecraft server je podle API vypnutý.',
-            'players_online' => null,
-            'players_max' => null,
-        ];
-    }
-    $version = isset($data['version']) ? (string)$data['version'] : '';
-    if (isset($data['software'])) {
-        $version = $data['software'] . ' ' . $version;
-    }
-    return [
-        'status' => 'up',
-        'response_time' => null,
-        'error' => null,
-        'players_online' => is_numeric($data['players']['online'] ?? null) ? (int)$data['players']['online'] : null,
-        'players_max' => is_numeric($data['players']['max'] ?? null) ? (int)$data['players']['max'] : null,
-        'version' => $version,
-        'players_list' => is_array($data['players']['list'] ?? null) ? $data['players']['list'] : [],
-        'motd' => is_array($data['motd']['clean'] ?? null) ? implode("
-", $data['motd']['clean']) : '',
-        'api_fallback' => true,
-    ];
-}
-
-function check_minecraft_api_fallback($host, $port, $timeout = 3) {
-    $ch = curl_init(bk_minecraft_fallback_url((string)$host, (int)$port));
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_TIMEOUT, $timeout + 2);
-    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-    curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-    $response = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    return $http_code === 200 ? bk_minecraft_fallback_result($response) : null;
-}
-
 /**
  * Blood Kings Status - Minecraft SLP check with a single quick retry
  *
  * The short timeout and byte-by-byte response reading make a single attempt
  * prone to ordinary network snags (the server answers a fraction of a second
- * later than the limit allows) - so before falling back to the API and
- * possibly reporting an outage, the connection is tried once more.
+ * later than the limit allows) - so before reporting an outage, the connection
+ * is tried once more.
  */
 function check_minecraft($host, $port = 25565, $timeout = 3, $rcon_port = null, $rcon_password = null) {
     $start = microtime(true);
@@ -6330,9 +6273,6 @@ function check_minecraft($host, $port = 25565, $timeout = 3, $rcon_port = null, 
         return $result;
     }
 
-    $fb = check_minecraft_api_fallback($host, $port, $timeout);
-    if ($fb) return $fb;
-
     return [
         'status' => 'down',
         'response_time' => null,
@@ -6344,7 +6284,7 @@ function check_minecraft($host, $port = 25565, $timeout = 3, $rcon_port = null, 
 
 /**
  * One SLP handshake attempt. Returns null on connection/read failure (the
- * caller then retries or moves to the fallback API), otherwise returns a
+ * caller then retries), otherwise returns a
  * finished result array (status up or down - down is returned only where the
  * response is clearly valid yet plainly wrong, e.g. an invalid packet ID).
  */
@@ -6403,7 +6343,7 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
     $packetLength = $readVarInt($socket);
     if ($packetLength === false) {
         // "Server is down" cannot be told apart from "the byte arrived a fraction
-        // late" - let the caller retry before reaching for the fallback API.
+        // late" - let the caller retry first.
         @fclose($socket);
         return null;
     }
@@ -6413,9 +6353,6 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
         // Here the server genuinely replied, just with another packet ID - a retry
         // would not help, it is a real protocol/port mismatch.
         @fclose($socket);
-        $fb = check_minecraft_api_fallback($host, $port, $timeout);
-        if ($fb) return $fb;
-
         return [
             'status' => 'down',
             'response_time' => null,
@@ -6445,9 +6382,6 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
     $duration = bk_response_ms((microtime(true) - $start) * 1000);
 
     if (!$data) {
-        $fb = check_minecraft_api_fallback($host, $port, $timeout);
-        if ($fb) return $fb;
-        
         return [
             'status' => 'up',
             'response_time' => $duration,
@@ -6498,8 +6432,7 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
         'players_max' => $playersMax,
         'version' => $version,
         'players_list' => $playersList,
-        'motd' => $motd,
-        'api_fallback' => false
+        'motd' => $motd
     ];
 }
 
