@@ -3641,6 +3641,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Recent checks including latency and probe location.',
   },
   'asset.no_measurements': { cs: 'Zatím neproběhla žádná kontrola.', en: 'No check has run yet.' },
+  'asset.events_failed': { cs: 'Historii kontrol se nepodařilo načíst.', en: 'Failed to load the check history.' },
   'ts3.title': { cs: 'TeamSpeak server', en: 'TeamSpeak server' },
   'ts3.subtitle': { cs: 'Stav ze ServerQuery', en: 'State from ServerQuery' },
   'ts3.version': { cs: 'Verze {version}', en: 'Version {version}' },

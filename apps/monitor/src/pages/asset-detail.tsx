@@ -235,6 +235,7 @@ export function AssetDetailPage() {
   // nenalezeno ... v databázi", a failure dressed up as an answer (W1-A5).
   const [loadFailed, setLoadFailed] = React.useState(false);
   const [events, setEvents] = React.useState<TimelineEvent[]>([]);
+  const [eventsFailed, setEventsFailed] = React.useState(false);
   /** The check that recorded the last status change, straight from the server. */
   const [statusChange, setStatusChange] = React.useState<{
     changedAtIso: string;
@@ -353,10 +354,12 @@ export function AssetDetailPage() {
 
     // 200 is what the API allows; 30 rows of a per-minute check covered half an
     // hour and the page-size picker offered pages that could never fill.
+    setEventsFailed(false);
     fetch(`/status/api.php?action=events&monitor_id=${loadedAssetId}&limit=200`, { credentials: 'include' })
-      .then((res) => res.json().catch(() => ({})))
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(String(res.status)))))
       .then((data) => {
-        if (!active || !data || !Array.isArray(data.events)) return;
+        if (!active) return;
+        if (!Array.isArray(data?.events)) throw new Error('no events');
         // isRecovery comes from the server, which knows which rows are real
         // neighbours - the list mixes older outages in, so deciding it here
         // marked whichever OK row happened to sit above one of them.
@@ -410,7 +413,10 @@ export function AssetDetailPage() {
           }))
         );
       })
-      .catch(() => {});
+      // No rows because the request failed is not "no check has run yet".
+      .catch(() => {
+        if (active) setEventsFailed(true);
+      });
 
     return () => {
       active = false;
@@ -658,6 +664,7 @@ export function AssetDetailPage() {
             asset={asset}
             range={range}
             events={events}
+            eventsFailed={eventsFailed}
             serverInsights={serverInsights}
             insightsFailed={insightsFailed}
             statusChangeHint={statusChangeHint}
@@ -1179,6 +1186,7 @@ function OverviewTab({
   asset,
   range,
   events,
+  eventsFailed = false,
   serverInsights,
   insightsFailed = false,
   statusChangeHint,
@@ -1188,6 +1196,8 @@ function OverviewTab({
   asset: AssetDetail;
   range: TimeRange;
   events: TimelineEvent[];
+  /** action=events failed: the list says so instead of "no check has run". */
+  eventsFailed?: boolean;
   serverInsights: ServerInsights | null;
   /** monitor_insights failed: the summary says so instead of disappearing. */
   insightsFailed?: boolean;
@@ -1450,7 +1460,9 @@ function OverviewTab({
         className="xl:col-span-5"
         padding="sm"
       >
-        {events.length === 0 ? (
+        {events.length === 0 && eventsFailed ? (
+          <ErrorState size="inline" message={t('asset.events_failed', 'Historii kontrol se nepodařilo načíst.')} />
+        ) : events.length === 0 ? (
           <p className="text-muted-foreground py-4 text-center text-sm">
             {t('asset.no_measurements', 'Zatím neproběhla žádná kontrola.')}
           </p>
