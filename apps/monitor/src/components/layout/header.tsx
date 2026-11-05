@@ -7,6 +7,7 @@ import { ListRow, ListRows } from '@/components/ui/list-row';
 import { Pill } from '@/components/ui/pill';
 import { FreshnessPill } from '@/components/freshness-pill';
 import { useLanguage } from '@/context/language-context';
+import { outagesOf } from '@/lib/outage-groups';
 import { cn } from '@/lib/utils';
 import { ErrorState, LoadingState } from '@/components/ui/states';
 import { routeMeta } from './nav-config';
@@ -96,7 +97,8 @@ export function Header({
           setEventsState('failed');
           return;
         }
-        setActiveAlerts(data.events.filter((e: any) => e.isDown));
+        // One row per failed check: a 20-minute outage read as 20 outages.
+        setActiveAlerts(outagesOf(data.events.filter((e: any) => e.isDown)));
         setEventsState('ok');
       })
       .catch(() => {
@@ -118,7 +120,7 @@ export function Header({
   const allClearKnown = eventsState === 'ok' && findingsState === 'ok' && incidentsState === 'ok' && alertCount === 0;
 
   const markAllRead = () => {
-    const maxId = activeAlerts.reduce((mx, e) => (typeof e.id === 'number' && e.id > mx ? e.id : mx), readUpToId);
+    const maxId = activeAlerts.reduce((mx, e) => (e.latestId > mx ? e.latestId : mx), readUpToId);
     setReadUpToId(maxId);
     fetch('/status/api.php?action=alerts_read_state', {
       method: 'POST',

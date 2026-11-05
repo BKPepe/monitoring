@@ -92,6 +92,21 @@ describe('Zvonek: selhání není „vše OK“ (W1-A)', () => {
     expect(screen.getByText('Vše OK')).toBeTruthy();
   });
 
+  it('dvacet selhaných kontrol jednoho výpadku je jeden výpadek', async () => {
+    const rows = Array.from({ length: 20 }, (_, i) => ({
+      id: 100 - i,
+      monitorId: 7,
+      monitorName: 'Web',
+      target: 'web.example.test',
+      time: '05.11.2026 08:00:00',
+      isDown: true,
+      outageEnd: null,
+    }));
+    serve(() => json({ events: rows }));
+    openBell();
+    expect(await screen.findAllByText('Výpadek: Web')).toHaveLength(1);
+  });
+
   it('počet incidentů se nenačetl: ani prázdné události nejsou „vše OK“', async () => {
     serve(() => json({ events: [] }));
     openBell({ incidentsState: 'failed', openIncidents: null });
