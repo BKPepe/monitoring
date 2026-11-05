@@ -83,6 +83,8 @@ export function UserAuditLog() {
     monitor_updated: t('uaudit.monitor_updated', 'Monitor upraven'),
     monitor_deleted: t('uaudit.monitor_deleted', 'Monitor smazán'),
     settings_updated: t('uaudit.settings_updated', 'Nastavení změněno'),
+    metrics_token_generated: t('uaudit.metrics_token_generated', 'Nový token pro Prometheus'),
+    incident_created: t('uaudit.incident_created', 'Incident založen'),
     user_created: t('uaudit.user_created', 'Uživatel vytvořen'),
     user_updated: t('uaudit.user_updated', 'Uživatel upraven'),
     user_deleted: t('uaudit.user_deleted', 'Uživatel smazán'),

@@ -3489,6 +3489,40 @@ $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 92");
 $pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
 $pdo->exec("DELETE FROM assets WHERE id = 92");
 
+// R86: writes from /app left no trace, where admin.php's left both.
+$r86_audit = function (string $action) use ($pdo): array {
+    $stmt = $pdo->prepare("SELECT description, target_id FROM audit_log WHERE action = ? ORDER BY id DESC LIMIT 1");
+    $stmt->execute([$action]);
+    return $stmt->fetch() ?: [];
+};
+$r86_events = function (string $type, string $name) use ($pdo): int {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE event_type = ? AND monitor_name = ?");
+    $stmt->execute([$type, $name]);
+    return (int)$stmt->fetchColumn();
+};
+[$r86_code, $r86_new] = api_post($base, 'action=save_monitor', ['name' => 'R86 monitor', 'type' => 'web', 'target' => 'https://r86.example.test', 'category' => 'Testy'], $cookie_jar);
+$r86_id = (int)($r86_new['id'] ?? 0);
+check('audit: nový monitor', [$r86_code, $r86_audit('monitor_created')['description'] ?? null, (int)($r86_audit('monitor_created')['target_id'] ?? 0), $r86_events('monitor_added', 'R86 monitor')], [200, 'R86 monitor', $r86_id, 1]);
+api_post($base, 'action=save_monitor', ['id' => $r86_id, 'name' => 'R86 monitor', 'type' => 'web', 'target' => 'https://r86.example.test', 'category' => 'Testy'], $cookie_jar);
+check('audit: úprava monitoru', [$r86_audit('monitor_updated')['description'] ?? null, $r86_events('config_changed', 'R86 monitor')], ['R86 monitor', 1]);
+api_post($base, 'action=delete_monitor', ['id' => $r86_id], $cookie_jar);
+check('audit: smazání monitoru přežije jeho řádek', [$r86_audit('monitor_deleted')['description'] ?? null, (int)($r86_audit('monitor_deleted')['target_id'] ?? 0), $r86_events('monitor_removed', 'R86 monitor')], ['R86 monitor', $r86_id, 1]);
+$r86_title = get_setting('site_title', '');
+$r86_count = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'settings_updated'")->fetchColumn();
+$r86_before = $r86_count();
+api_post($base, 'action=save_settings', ['settings' => ['site_title' => 'R86 tajemství', 'smtp_pass' => 'R86-heslo']], $cookie_jar);
+$r86_changed = (string)($r86_audit('settings_updated')['description'] ?? '');
+check_true('audit: nastavení jmenuje klíče', str_contains($r86_changed, 'site_title') && $r86_count() === $r86_before + 1);
+check_true('audit: hodnoty do záznamu nejdou', !str_contains($r86_changed, 'tajemství') && !str_contains($r86_changed, 'R86-heslo'));
+api_post($base, 'action=save_settings', ['settings' => ['site_title' => 'R86 tajemství']], $cookie_jar);
+check('audit: uložení beze změny nic nezapíše', $r86_count(), $r86_before + 1);
+api_post($base, 'action=save_settings', ['settings' => ['site_title' => $r86_title, 'smtp_pass' => '']], $cookie_jar);
+[, $r86_token] = api_post($base, 'action=generate_metrics_token', [], $cookie_jar);
+check_true('audit: nový token bez tokenu v záznamu', isset($r86_audit('metrics_token_generated')['description']) && !str_contains((string)$r86_audit('metrics_token_generated')['description'], (string)($r86_token['metricsToken'] ?? 'x')));
+[, $r86_inc] = api_post($base, 'action=create_incident', ['title' => 'R86 incident'], $cookie_jar);
+check('audit: nový incident', [$r86_audit('incident_created')['description'] ?? null, (int)($r86_audit('incident_created')['target_id'] ?? 0)], ['R86 incident', (int)($r86_inc['id'] ?? -1)]);
+$pdo->exec("DELETE FROM incidents WHERE title = 'R86 incident'");
+
 // R172: an open incident fell off a list of the latest 50.
 $pdo->exec("INSERT INTO incidents (id, title, impact, status) VALUES (917200, 'R172 otevřený', 'minor', 'investigating')");
 $r172_ins = $pdo->prepare("INSERT INTO incidents (id, title, impact, status, resolved_at) VALUES (?, 'R172 uzavřený', 'minor', 'resolved', NOW())");
@@ -5851,7 +5885,9 @@ if (isset($cookie_jar)) {
     $digest_en = $digest_preview('en');
     check_true('EN digest se vyrenderoval', str_contains($digest_en, 'Weekly Report'));
     // DB data stays in its original language - only the template translates.
-    $digest_en_clean = str_replace(['Testovací web', 'Router bez metrik', 'Síť', 'Weby'], '', $digest_en);
+    // Monitor names are the user's own words, and /app's new monitors reach the digest.
+    $digest_names = $pdo->query("SELECT DISTINCT monitor_name FROM monitor_events WHERE monitor_name IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
+    $digest_en_clean = str_replace(array_merge(['Testovací web', 'Router bez metrik', 'Síť', 'Weby'], $digest_names), '', $digest_en);
     $digest_leaks = [];
     if (preg_match_all('/[^\s>]*[ěščřžýáíéúůťďňóĚŠČŘŽÝÁÍÉÚŮŤĎŇ][^\s<]*/u', $digest_en_clean, $m)) {
         $digest_leaks = array_slice(array_unique($m[0]), 0, 5);

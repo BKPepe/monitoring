@@ -989,6 +989,8 @@ if ($action === 'save_monitor') {
                 bk_asset_drop_if_empty($pdo, (int)$prev_asset_id);
             }
             $pdo->commit();
+            log_monitor_event($pdo, $id, $name, $type, 'config_changed', 'Nastavení monitoru bylo upraveno');
+            bk_audit_log($pdo, 'monitor_updated', $name, 'monitor', $id);
             echo json_encode(['success' => true, 'id' => $id, 'message' => 'Monitor úspěšně upraven'], JSON_UNESCAPED_UNICODE);
         } else {
             // The device (a new one by that name, or one of its own named
@@ -1010,6 +1012,8 @@ if ($action === 'save_monitor') {
                 'discord_webhook_url' => $mon_discord, 'slack_webhook_url' => $mon_slack,
                 'telegram_bot_token' => $mon_tg_token, 'telegram_chat_id' => $mon_tg_chat,
             ] + $mon_switches, $new_asset_name !== '' ? null : $asset_id, $new_asset_name !== '' ? $new_asset_name : null);
+            log_monitor_event($pdo, $created['id'], $name, $type, 'monitor_added', "Přidán nový monitor ({$type})");
+            bk_audit_log($pdo, 'monitor_created', $name, 'monitor', $created['id']);
             echo json_encode(['success' => true, 'id' => $created['id'], 'message' => 'Monitor úspěšně vytvořen'], JSON_UNESCAPED_UNICODE);
         }
     } catch (Throwable $e) {
@@ -1101,9 +1105,10 @@ if ($action === 'delete_monitor') {
     $del_id = (int)($input['id'] ?? 0);
     if ($del_id > 0) {
         try {
-            $stmt_del_asset = $pdo->prepare("SELECT asset_id FROM monitors WHERE id = ?");
+            $stmt_del_asset = $pdo->prepare("SELECT asset_id, name, type FROM monitors WHERE id = ?");
             $stmt_del_asset->execute([$del_id]);
-            $del_asset_id = $stmt_del_asset->fetchColumn();
+            $del_row = $stmt_del_asset->fetch();
+            $del_asset_id = $del_row['asset_id'] ?? null;
             $pdo->beginTransaction();
             // Explicitly, not only through the foreign key: an install whose table
             // was created without it must not keep access rows pointing at a
@@ -1113,10 +1118,14 @@ if ($action === 'delete_monitor') {
             $stmt->execute([$del_id]);
             // Its device goes with the last monitor on it; nothing in /app
             // could delete the empty one later.
-            if ($del_asset_id !== false && $del_asset_id !== null) {
+            if ($del_asset_id !== null) {
                 bk_asset_drop_if_empty($pdo, (int)$del_asset_id);
             }
             $pdo->commit();
+            if ($del_row) {
+                log_monitor_event($pdo, null, $del_row['name'], $del_row['type'], 'monitor_removed', "Monitor odebrán ({$del_row['type']})");
+                bk_audit_log($pdo, 'monitor_deleted', $del_row['name'], 'monitor', $del_id);
+            }
             echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) {
@@ -2413,6 +2422,7 @@ if ($action === 'save_settings') {
         $pdo->beginTransaction();
         // Not bk_setting_set(): after a rollback the snapshot would hold values
         // the table never kept.
+        $changed_settings = [];
         $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
 
         foreach ($input['settings'] as $key => $val) {
@@ -2426,10 +2436,17 @@ if ($action === 'save_settings') {
                 continue;
             }
 
+            if ((string)($system_settings[$key] ?? '') !== $val) {
+                $changed_settings[] = $key;
+            }
             $stmt_set->execute([$key, $val, $val]);
         }
 
         $pdo->commit();
+        // Which keys only: the values include SMTP passwords, tokens and webhooks.
+        if ($changed_settings !== []) {
+            bk_audit_log($pdo, 'settings_updated', implode(', ', $changed_settings));
+        }
         echo json_encode(['success' => true, 'message' => 'Nastavení systému bylo úspěšně uloženo.'], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) {
@@ -2450,6 +2467,7 @@ if ($action === 'generate_metrics_token') {
         // setting_key/setting_value crashed the INSERT here and the
         // "Activate token" button ended in a 500.
         bk_setting_set($pdo, 'metrics_token', $new_token);
+        bk_audit_log($pdo, 'metrics_token_generated', '', 'system', null);
 
         echo json_encode(['success' => true, 'metricsToken' => $new_token], JSON_UNESCAPED_UNICODE);
     } catch (Exception $e) {
@@ -3854,6 +3872,7 @@ if ($action === 'create_incident') {
             $stmt_upd->execute([$incident_id, $message]);
         }
 
+        bk_audit_log($pdo, 'incident_created', $title, 'incident', $incident_id);
         echo json_encode(['success' => true, 'id' => $incident_id], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         bk_api_error(500, 'Incident se nepodařilo uložit.');

@@ -104,6 +104,7 @@ export function timelineTitle(type: string, t: TranslateFn): string {
     scheme_upgraded: t('asset.tl_scheme_upgraded', 'Přechod na HTTPS'),
     wan_reconnected: t('asset.tl_wan_reconnected', 'WAN se znovu připojila'),
     config_change: t('asset.tl_config_change', 'Změna konfigurace cíle'),
+    config_changed: t('asset.tl_config_changed', 'Nastavení monitoru upraveno'),
     // Release 0.1.7 (contract X14). The three timeline-only types at the end
     // send no notification and no digest line, so this map is the only place
     // the user ever meets them.
