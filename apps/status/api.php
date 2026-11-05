@@ -3464,7 +3464,7 @@ if ($action === 'badge') {
     $bdg_mid = (int)($_GET['monitor_id'] ?? 0);
     try {
         if ($bdg_mid > 0) {
-            $stmt_bdg = $pdo->prepare("SELECT name, status FROM monitors WHERE id = ? AND archived_at IS NULL LIMIT 1");
+            $stmt_bdg = $pdo->prepare("SELECT name, status, maintenance, last_checked FROM monitors WHERE id = ? AND archived_at IS NULL LIMIT 1");
             $stmt_bdg->execute([$bdg_mid]);
             $bdg_row = $stmt_bdg->fetch();
             // A monitor off the public page (W1-G3) answers like a missing one
@@ -3490,7 +3490,14 @@ if ($action === 'badge') {
                     $bdg_value = number_format(bk_uptime_pct_round($bdg_uptime, 2), 2, '.', '') . ' %';
                 }
             } else {
-                $bdg_state = in_array($bdg_row['status'], ['up', 'down', 'warning', 'maintenance'], true) ? $bdg_row['status'] : 'unknown';
+                // The fleet badge's verdict: with the collector stopped, a stored
+                // "up" is only what somebody last saw, not a state anyone checks.
+                $bdg_state = [
+                    'healthy' => 'up',
+                    'down' => 'down',
+                    'maintenance' => 'maintenance',
+                    'degraded' => $bdg_row['status'] === 'warning' ? 'warning' : 'unknown',
+                ][bk_overall_verdict([$bdg_row], bk_collection_is_fresh())['verdict']] ?? 'unknown';
                 $bdg_value = $bdg_words[$bdg_state];
             }
         } else {

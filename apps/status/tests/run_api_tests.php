@@ -523,6 +523,28 @@ $bdg_name = $pdo->query("SELECT name FROM monitors WHERE id = 1")->fetchColumn()
 [$code, , $bdg_raw1] = api_get($base, 'action=badge&monitor_id=1');
 check('badge monitoru vrací HTTP 200', $code, 200);
 check_true('badge nese jméno monitoru', str_contains($bdg_raw1, htmlspecialchars((string)$bdg_name, ENT_QUOTES)));
+// R8: a stopped collector left this badge green in someone else's README.
+$bdg_at = fn (string $ran): string => (function () use ($pdo, $ran, $base): string {
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('last_cron_run', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")->execute([$ran]);
+    [, , $svg] = api_get($base, 'action=badge&monitor_id=1');
+    return (string)$svg;
+})();
+$bdg_saved = $pdo->query("SELECT status, maintenance, last_checked FROM monitors WHERE id = 1")->fetch();
+$bdg_saved_ran = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'last_cron_run'")->fetchColumn();
+$pdo->exec("UPDATE monitors SET status = 'up', maintenance = 0, last_checked = NOW() WHERE id = 1");
+check_true('odznak se sběrem v chodu říká online', str_contains($bdg_at(date('Y-m-d H:i:s')), '>online<'));
+$bdg_stale = $bdg_at(date('Y-m-d H:i:s', time() - 6 * 3600));
+check_true('odznak se zastaveným sběrem říká neznámý, ne online', str_contains($bdg_stale, 'neznámý') && !str_contains($bdg_stale, '>online<'));
+$pdo->exec("UPDATE monitors SET status = 'down' WHERE id = 1");
+check_true('výpadek odznak ukáže i se zastaveným sběrem', str_contains($bdg_at(date('Y-m-d H:i:s', time() - 6 * 3600)), 'výpadek'));
+$pdo->exec("UPDATE monitors SET status = 'warning' WHERE id = 1");
+check_true('zhoršený stav zůstane zhoršený', str_contains($bdg_at(date('Y-m-d H:i:s')), 'zhoršeno'));
+$pdo->prepare("UPDATE monitors SET status = ?, maintenance = ?, last_checked = ? WHERE id = 1")->execute([$bdg_saved['status'], $bdg_saved['maintenance'], $bdg_saved['last_checked']]);
+if ($bdg_saved_ran === false) {
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'last_cron_run'");
+} else {
+    $bdg_at((string)$bdg_saved_ran);
+}
 [$code] = api_get($base, 'action=badge&monitor_id=99999');
 check('badge neexistujícího monitoru je 404', $code, 404);
 
