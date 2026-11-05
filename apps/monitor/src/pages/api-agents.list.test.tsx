@@ -56,6 +56,25 @@ describe('API a agenti: seznam agentů', () => {
     expect(screen.queryByText(/Žádní registrovaní agenti/)).toBeNull();
   });
 
+  it('„Aktuální verze“ jen tehdy, když je s čím porovnat', async () => {
+    show(() =>
+      json({
+        monitors: [
+          monitor(1, 'Aktuální', 'openwrt', { details: { agent_version: '0.1.13' }, agentLatestVersion: '0.1.13' }),
+          monitor(2, 'Starý', 'openwrt', {
+            details: { agent_version: '0.1.12' },
+            agentLatestVersion: '0.1.13',
+            agentUpdateAvailable: '0.1.13',
+          }),
+          monitor(3, 'Neznámo', 'openwrt', { details: { agent_version: '0.1.11' } }),
+        ],
+      })
+    );
+    expect(await screen.findByText(/v0\.1\.13 \(Aktuální verze\)/)).toBeTruthy();
+    expect(screen.getByText(/v0\.1\.12 \(Neaktuální/)).toBeTruthy();
+    expect(screen.getByText('v0.1.11')).toBeTruthy();
+  });
+
   it('agent je, kdo se hlásí; typ TS/MC ani jméno z něj agenta nedělá', async () => {
     show(() =>
       json({

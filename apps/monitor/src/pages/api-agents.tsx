@@ -384,9 +384,15 @@ export function ApiAgentsPage() {
                               `v${version} (Neaktuální — Doporučeno v${latestVersion})`
                             )}
                           </span>
-                        ) : (
+                        ) : latestVersion ? (
                           <span className="figure text-up border-up/40 bg-card inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-2xs font-semibold">
                             {t('api_agents.version_current', { version }, `v${version} (Aktuální verze)`)}
+                          </span>
+                        ) : (
+                          // Nothing to compare with: the server sends the latest
+                          // version to admins only, and only when it knows it.
+                          <span className="figure text-muted-foreground bg-card inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-2xs">
+                            {`v${version}`}
                           </span>
                         )
                       ) : (
