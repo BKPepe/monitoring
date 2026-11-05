@@ -526,6 +526,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'metric.back': { cs: 'Zpět na zařízení', en: 'Back to device' },
   'metric.load_failed': { cs: 'Metriku se nepodařilo načíst', en: 'Could not load the metric' },
   'metric.loading': { cs: 'Načítám měření…', en: 'Loading measurements…' },
+  'metric.series_failed': { cs: 'Měření se nepodařilo načíst.', en: 'Failed to load the measurements.' },
   'metric.no_data': {
     cs: 'Pro tuto metriku a období nejsou naměřená data',
     en: 'No measurements for this metric and period',

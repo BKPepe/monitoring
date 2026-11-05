@@ -120,6 +120,8 @@ export function MetricDetailPage() {
   const [series, setSeries] = React.useState<MetricSeriesResponse | null>(null);
   /** When the series was received, so "it stops early" is judged against a fixed moment. */
   const [seriesAt, setSeriesAt] = React.useState<number | null>(null);
+  const [seriesFailed, setSeriesFailed] = React.useState(false);
+  const [seriesAttempt, setSeriesAttempt] = React.useState(0);
   const [heatmap, setHeatmap] = React.useState<MetricHeatmapResponse | null>(null);
   const [heatmapFailed, setHeatmapFailed] = React.useState(false);
   const [corr, setCorr] = React.useState<MetricCorrelationsResponse | null>(null);
@@ -160,6 +162,7 @@ export function MetricDetailPage() {
   React.useEffect(() => {
     let active = true;
     setSeries(null);
+    setSeriesFailed(false);
     httpMetricsSource
       .getMetricSeries(monId, metric, range)
       .then((s) => {
@@ -171,13 +174,17 @@ export function MetricDetailPage() {
         setSeriesAt(Date.now());
       })
       .catch((e: unknown) => {
-        // A failing series does not take the page down - the context is still useful.
-        if (active) setError(e instanceof Error ? e.message : String(e));
+        // A failing series does not take the page down - the context is still
+        // useful - but it has to say so: `series` stays null, which alone reads
+        // as still loading, for ever.
+        if (!active) return;
+        setError(e instanceof Error ? e.message : String(e));
+        setSeriesFailed(true);
       });
     return () => {
       active = false;
     };
-  }, [monId, metric, range]);
+  }, [monId, metric, range, seriesAttempt]);
 
   // The heatmap has its own fixed window (30 days of raw samples) - switching
   // the range picker must not repaint it, so it loads independently.
@@ -1107,9 +1114,16 @@ export function MetricDetailPage() {
           </div>
         ) : (
           <div className="text-muted-foreground grid h-[340px] place-items-center text-center text-xs">
-            {series === null
-              ? t('metric.loading', 'Načítám měření…')
-              : t('metric.no_data', 'Pro tuto metriku a období nejsou naměřená data')}
+            {seriesFailed ? (
+              <ErrorState
+                message={t('metric.series_failed', 'Měření se nepodařilo načíst.')}
+                onRetry={() => setSeriesAttempt((n) => n + 1)}
+              />
+            ) : series === null ? (
+              t('metric.loading', 'Načítám měření…')
+            ) : (
+              t('metric.no_data', 'Pro tuto metriku a období nejsou naměřená data')
+            )}
           </div>
         )}
 
