@@ -3805,16 +3805,21 @@ function bk_alert_color_class(string $status): string {
 
 /**
  * PagerDuty pairs a resolve with its trigger by the dedup key, and folds two
- * triggers under one key into ONE incident. Disks therefore need a key of
- * their own: with the shared per-monitor key a WAN flap's `wan_restored` would
- * resolve the page for a failing disk, and a disk page would swallow the
- * outage that follows.
+ * triggers under one key into ONE incident. So each pair of a problem and its
+ * recovery has a key of its own: with one key per monitor a WAN flap's
+ * `wan_restored` closed the page of a server that was still down, a lost LTE
+ * backup folded into a WAN page that stayed open after the WAN came back, and a
+ * disk page would swallow the outage that follows. `down` and `agent_offline`
+ * share the base key on purpose: both are the monitor gone, and `up` ends both.
  */
 function bk_pagerduty_dedup_key(int $monitor_id, string $status): string {
     $base = 'bk-monitor-' . $monitor_id;
-    return in_array($status, ['storage_failing', 'storage_warning', 'storage_recovered'], true)
-        ? $base . '-storage'
-        : $base;
+    return match ($status) {
+        'storage_failing', 'storage_warning', 'storage_recovered' => $base . '-storage',
+        'wan_lost', 'wan_restored' => $base . '-wan',
+        'lte_backup_lost', 'lte_backup_restored' => $base . '-lte',
+        default => $base,
+    };
 }
 
 /**
@@ -9788,10 +9793,8 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         // PagerDuty (they have their own channels).
         $pd_action = bk_pagerduty_action($new_status);
         if ($pd_action !== null) {
-            // One key per monitor: the agent-silence page and the outage page
-            // are the same incident, and the recovery closes it. Disks get
-            // their own key (bk_pagerduty_dedup_key), so neither side can
-            // close the other's incident.
+            // Each problem and its recovery share a key (bk_pagerduty_dedup_key),
+            // so one problem's recovery cannot close another's incident.
             $pd_ok = send_pagerduty_event($pd_key, $pd_action, "$emoji Monitor $name je $status_text. $error_msg",
                 'Blood Kings Monitoring', bk_pagerduty_dedup_key((int)($monitor['id'] ?? 0), $new_status));
             bk_log_notification(

@@ -585,7 +585,13 @@ if (function_exists('bk_pagerduty_action')) {
     check('storage_warning nepageuje', bk_pagerduty_action('storage_warning'), null);
     check('výpadek WAN nezavře incident disku',
         [bk_pagerduty_dedup_key(6, 'storage_failing'), bk_pagerduty_dedup_key(6, 'wan_restored')],
-        ['bk-monitor-6-storage', 'bk-monitor-6']);
+        ['bk-monitor-6-storage', 'bk-monitor-6-wan']);
+    // Every trigger and the resolve that belongs to it (R148).
+    foreach ([['wan_lost', 'wan_restored'], ['lte_backup_lost', 'lte_backup_restored'], ['down', 'up'], ['agent_offline', 'up']] as [$pd_problem, $pd_recovery]) {
+        check("{$pd_recovery} zavře právě {$pd_problem}", bk_pagerduty_dedup_key(6, $pd_problem), bk_pagerduty_dedup_key(6, $pd_recovery));
+    }
+    check('obnovení WAN nezavře výpadek serveru', bk_pagerduty_dedup_key(6, 'wan_restored') === bk_pagerduty_dedup_key(6, 'down'), false);
+    check('obnovení LTE nezavře výpadek WAN', bk_pagerduty_dedup_key(6, 'lte_backup_restored') === bk_pagerduty_dedup_key(6, 'wan_lost'), false);
     check('barvy tří stavů úložiště',
         [bk_alert_color_class('storage_failing'), bk_alert_color_class('storage_warning'),
             bk_alert_color_class('storage_recovered')],

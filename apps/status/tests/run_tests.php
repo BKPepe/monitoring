@@ -1704,12 +1704,14 @@ check('registr metrik: krokových metrik je přesně jedenáct', $reg_steps,
 //
 // Everything used to page under one key `bk-monitor-<id>`, so a WAN flap that
 // resolved closed the open incident of a failing disk - and the on-call saw
-// nothing until the disk died.
+// nothing until the disk died. The WAN and the LTE backup each have a key too:
+// their recoveries closed the page of a server that was still down (R148).
 check('storage_failing pageuje pod vlastním klíčem bk-monitor-6-storage',
     bk_pagerduty_dedup_key(6, 'storage_failing'), 'bk-monitor-6-storage');
-foreach (['wan_restored', 'up', 'lte_backup_restored'] as $s) {
-    check("wan_restored, up a lte_backup_restored zavírají jen klíč bk-monitor-6 ({$s})",
-        bk_pagerduty_dedup_key(6, $s), 'bk-monitor-6');
+foreach (['wan_lost' => 'bk-monitor-6-wan', 'wan_restored' => 'bk-monitor-6-wan',
+    'lte_backup_lost' => 'bk-monitor-6-lte', 'lte_backup_restored' => 'bk-monitor-6-lte',
+    'agent_offline' => 'bk-monitor-6', 'up' => 'bk-monitor-6'] as $s => $pd_key) {
+    check("klíč pro {$s}", bk_pagerduty_dedup_key(6, $s), $pd_key);
 }
 check('storage_recovered a storage_warning do PagerDuty nejdou (recovered)', bk_pagerduty_action('storage_recovered'), null);
 check('storage_recovered a storage_warning do PagerDuty nejdou (warning)', bk_pagerduty_action('storage_warning'), null);
