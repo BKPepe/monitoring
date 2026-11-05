@@ -1,3 +1,4 @@
+import { LastKnownNote } from '@/components/last-known-note';
 import { StatBlock } from '@/components/stat-block';
 import { Gamepad2, Users, Gauge, MessageSquare } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
@@ -12,7 +13,15 @@ import { useLanguage } from '@/context/language-context';
  * Only RCON can return TPS. When unconfigured, the values stay empty
  * and the card says why, instead of pretending a smooth run.
  */
-export function MinecraftCard({ d }: { d: Record<string, any> }) {
+export function MinecraftCard({
+  d,
+  status,
+  since,
+}: {
+  d: Record<string, any>;
+  status?: string;
+  since?: string | null;
+}) {
   const { t } = useLanguage();
 
   const online = typeof d.players_online === 'number' ? d.players_online : null;
@@ -44,6 +53,7 @@ export function MinecraftCard({ d }: { d: Record<string, any> }) {
               ? t('mc.version', { version: d.version }, `Verze ${d.version}`)
               : t('mc.subtitle', 'Stav serveru')}
           </p>
+          <LastKnownNote status={status} at={since} />
         </div>
       </div>
 

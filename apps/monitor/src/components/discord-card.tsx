@@ -1,3 +1,4 @@
+import { LastKnownNote } from '@/components/last-known-note';
 import { StatBlock } from '@/components/stat-block';
 import { MessageSquare, Volume2, Users, ExternalLink } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
@@ -24,7 +25,7 @@ interface DiscordVoiceChannel {
  * it returns only members currently online (not the whole list), and at most 100
  * of them - which is why "total members" is written nowhere.
  */
-export function DiscordCard({ d }: { d: Record<string, any> }) {
+export function DiscordCard({ d, status, since }: { d: Record<string, any>; status?: string; since?: string | null }) {
   const { t } = useLanguage();
 
   const members: DiscordMember[] = Array.isArray(d.members) ? d.members : [];
@@ -60,7 +61,12 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
         <MessageSquare className="size-5" style={{ color: '#5865F2' }} />
         <div className="min-w-0">
           <h3 className="text-sm font-semibold">{d.name || t('discord.title', 'Discord server')}</h3>
-          <p className="text-muted-foreground text-xs">{t('discord.subtitle', 'Živý stav ze serverového widgetu.')}</p>
+          <p className="text-muted-foreground text-xs">
+            {status === undefined || status === 'up' || status === 'warning'
+              ? t('discord.subtitle', 'Živý stav ze serverového widgetu.')
+              : t('discord.subtitle_stale', 'Stav ze serverového widgetu.')}
+          </p>
+          <LastKnownNote status={status} at={since} />
         </div>
         {d.instant_invite && (
           <a

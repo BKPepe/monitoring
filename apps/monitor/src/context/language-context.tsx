@@ -1470,6 +1470,13 @@ const translations: Record<string, { cs: string; en: string }> = {
   'asset.tl_warning': { cs: 'Zhoršená odezva', en: 'Degraded Response' },
   'asset.tl_maintenance': { cs: 'Plánovaná údržba', en: 'Scheduled Maintenance' },
   'asset.tl_unknown': { cs: 'Stav neznámý', en: 'State unknown' },
+  'last_known.at': {
+    cs: 'Poslední známé údaje, nejpozději z {when}.',
+    en: 'Last known data, from {when} at the latest.',
+  },
+  'last_known.plain': { cs: 'Poslední známé údaje, teď se neměří.', en: 'Last known data, not being measured now.' },
+  'discord.subtitle_stale': { cs: 'Stav ze serverového widgetu.', en: 'State from the server widget.' },
+  'ts3.load_failed': { cs: 'Detail serveru se nepodařilo načíst.', en: 'The server detail could not be loaded.' },
   'metric.no_fresh_value': { cs: 'bez čerstvého měření', en: 'no recent measurement' },
   'asset.tl_config_changed': { cs: 'Nastavení monitoru upraveno', en: 'Monitor settings changed' },
   'asset.tl_remote_action': { cs: 'Vzdálená akce', en: 'Remote Action' },

@@ -156,6 +156,7 @@ interface AssetDetail {
   cpanelStatsError?: { error?: string; hint?: string | null; since?: string } | null;
   /** ISO time of the last check/report - every tab shows data from this moment. */
   lastCheck: string | null;
+  lastStatusChange: string | null;
   /** The monitor's effective limits, so its charts show the line its alerts use. */
   thresholds?: { cpu: number | null; ram: number | null; hdd: number | null };
   /** Raw details from the last report - the Network tab reads OpenWrt telemetry from them. */
@@ -847,10 +848,14 @@ export function AssetDetailPage() {
             {/* A router certifies no website, and what its service chips said
                 (WAN, LTE, VPN, SQM, firewall) are rows of the Network tab's
                 sections now (W2-3): this tab holds its disks. */}
-            {isDiscord && <DiscordCard d={asset.rawDetails ?? {}} />}
-            {isMinecraft && <MinecraftCard d={asset.rawDetails ?? {}} />}
+            {isDiscord && (
+              <DiscordCard d={asset.rawDetails ?? {}} status={asset.status} since={asset.lastStatusChange} />
+            )}
+            {isMinecraft && (
+              <MinecraftCard d={asset.rawDetails ?? {}} status={asset.status} since={asset.lastStatusChange} />
+            )}
             {isWeb && <CheckPipeline monitorId={asset.id} />}
-            {isTeamspeak && <TeamspeakCard monitorId={asset.id} />}
+            {isTeamspeak && <TeamspeakCard monitorId={asset.id} status={asset.status} />}
             {isHeartbeat && <HeartbeatCard monitorId={asset.id} />}
             {/* Storage renders itself only where the agent reports partitions
                 sent them - a website or Discord shows nothing. */}
@@ -3319,6 +3324,7 @@ function buildDynamicAsset(
     cpanelStats: m.details?.cpanel_stats ?? null,
     cpanelStatsError: m.details?.cpanel_stats_error ?? null,
     lastCheck: m.lastCheck ?? null,
+    lastStatusChange: m.lastStatusChange ?? null,
     thresholds: m.effectiveThresholds,
     rawDetails: m.details && typeof m.details === 'object' ? m.details : {},
     remoteActionsEnabled: Boolean(m.remoteActionsEnabled),

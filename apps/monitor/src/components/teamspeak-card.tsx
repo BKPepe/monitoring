@@ -1,10 +1,11 @@
 import * as React from 'react';
+import { LastKnownNote } from '@/components/last-known-note';
 import { StatBlock } from '@/components/stat-block';
 import { Badge } from '@/components/ui/badge';
 import { Mic, Minus, Plug, IdCard, Users, Check, X } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
-import { LoadingState } from '@/components/ui/states';
+import { ErrorState, LoadingState } from '@/components/ui/states';
 
 interface Ts3Stages {
   query?: {
@@ -43,24 +44,45 @@ interface Ts3Stages {
  * Some fields require a ServerQuery login. Without it they stay empty
  * and the card says why.
  */
-export function TeamspeakCard({ monitorId }: { monitorId: number }) {
+export function TeamspeakCard({ monitorId, status }: { monitorId: number; status?: string }) {
   const { t } = useLanguage();
   const [stages, setStages] = React.useState<Ts3Stages | null | undefined>(undefined);
+  const [checkedAt, setCheckedAt] = React.useState<string | null>(null);
+  // A 500 said "not available yet, it will be saved at the next check".
+  const [failed, setFailed] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
 
   React.useEffect(() => {
     let active = true;
+    setFailed(false);
     fetch(`/status/api.php?action=check_stages&monitor_id=${monitorId}`, { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
       .then((d) => {
-        if (active) setStages(d?.stages ?? null);
+        if (!active) return;
+        setStages(d?.stages ?? null);
+        setCheckedAt(typeof d?.checkedAt === 'string' ? d.checkedAt : null);
       })
       .catch(() => {
-        if (active) setStages(null);
+        if (active) setFailed(true);
       });
     return () => {
       active = false;
     };
-  }, [monitorId]);
+  }, [monitorId, attempt]);
+
+  if (failed) {
+    return (
+      <div data-slot="well" className="bg-inset rounded-xl border border-border p-5">
+        <ErrorState
+          message={t('ts3.load_failed', 'Detail serveru se nepodařilo načíst.')}
+          onRetry={() => setAttempt((n) => n + 1)}
+        />
+      </div>
+    );
+  }
 
   if (stages === undefined) {
     return (
@@ -119,6 +141,7 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
         <Mic className="text-muted-foreground size-5" aria-hidden="true" />
         <div className="min-w-0">
           <h3 className="text-sm font-semibold">{t('ts3.title', 'TeamSpeak server')}</h3>
+          <LastKnownNote status={status} at={checkedAt} />
           <p className="text-muted-foreground text-xs">
             {stages.version
               ? t('ts3.version', { version: stages.version }, `Verze ${stages.version}`)

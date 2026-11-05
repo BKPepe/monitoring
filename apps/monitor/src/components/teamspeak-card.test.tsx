@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent } from '@testing-library/react';
 import { LanguageProvider } from '@/context/language-context';
 import { TeamspeakCard } from './teamspeak-card';
 
@@ -111,5 +111,62 @@ describe('TeamspeakCard', () => {
     expect(screen.queryByText(NO_AUTH)).toBeNull();
     expect(screen.queryByText(REJECTED)).toBeNull();
     expect(screen.queryByText(FAILED)).toBeNull();
+  });
+
+  it('během výpadku řekne, že jsou údaje staré, a kdy jsou nejpozději', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ stages: { query: { authenticated: true }, ports: {} }, checkedAt: '2026-11-04 08:25:15' }),
+      }))
+    );
+    render(
+      <LanguageProvider>
+        <TeamspeakCard monitorId={1} status="down" />
+      </LanguageProvider>
+    );
+    expect((await screen.findByRole('note')).textContent).toContain('Poslední známé údaje, nejpozději z');
+  });
+
+  it('běžící server poznámku nemá', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({ stages: { query: { authenticated: true }, ports: {} }, checkedAt: '2026-11-04 08:25:15' }),
+      }))
+    );
+    render(
+      <LanguageProvider>
+        <TeamspeakCard monitorId={1} status="up" />
+      </LanguageProvider>
+    );
+    await screen.findByText('TeamSpeak server');
+    expect(screen.queryByRole('note')).toBeNull();
+  });
+
+  it('chyba 500 není „zatím k dispozici“ a další pokus načte kartu', async () => {
+    let fail = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        fail
+          ? { ok: false, status: 500, json: async () => ({}) }
+          : { ok: true, status: 200, json: async () => ({ stages: { query: {}, ports: {} } }) }
+      )
+    );
+    render(
+      <LanguageProvider>
+        <TeamspeakCard monitorId={1} />
+      </LanguageProvider>
+    );
+    expect(await screen.findByText('Detail serveru se nepodařilo načíst.')).toBeTruthy();
+    expect(screen.queryByText('Detail ze ServerQuery zatím není k dispozici')).toBeNull();
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: /Zkusit znovu|Try again/ }));
+    expect(await screen.findByText('TeamSpeak server')).toBeTruthy();
   });
 });
