@@ -106,6 +106,42 @@ function tileValue(label: string): string {
   return tileValueEl(label)?.textContent ?? '';
 }
 
+describe('Veřejná stránka: selhané incidenty a události se nezamlčí (R176)', () => {
+  const failing = (what: string, answer: Response = failAll()) => {
+    const base = answering([monitor(1, 'Web', 'up')]);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        return Promise.resolve(url.includes(what) ? answer : base(url));
+      })
+    );
+    renderPage();
+  };
+
+  it('incidenty vrátí 500: stránka řekne, že je nezná', async () => {
+    failing('action=incidents');
+    expect(await screen.findByText(/Incidenty se nepodařilo načíst/)).toBeTruthy();
+  });
+
+  it('incidenty bez seznamu: stejně', async () => {
+    failing('action=incidents', json({}));
+    expect(await screen.findByText(/Incidenty se nepodařilo načíst/)).toBeTruthy();
+  });
+
+  it('události vrátí 500: stránka řekne, že je nezná', async () => {
+    failing('action=events');
+    expect(await screen.findByText('Poslední události se nepodařilo načíst.')).toBeTruthy();
+  });
+
+  it('když všechno odpoví, žádná hláška není', async () => {
+    failing('action=nothing');
+    await screen.findAllByText('Web');
+    expect(screen.queryByText(/Incidenty se nepodařilo načíst/)).toBeNull();
+    expect(screen.queryByText('Poslední události se nepodařilo načíst.')).toBeNull();
+  });
+});
+
 describe('Veřejná stránka: selhání není „vše v pořádku“ (W1-A1)', () => {
   it('všechna API vrací 500: nadpis „Stav se nepodařilo zjistit“, dlaždice s pomlčkou, žádné „online“', async () => {
     vi.stubGlobal(

@@ -204,6 +204,9 @@ export function PublicStatusPage() {
   // so a 90-day share never sits beside a 30-day strip.
   const [uptimeDays, setUptimeDays] = React.useState<30 | 90 | null>(null);
   const [incidents, setIncidents] = React.useState<Incident[] | null>(null);
+  // Nothing to show because the request failed is not "no incidents": a visitor
+  // who came because of an outage must not read the silence as nothing announced.
+  const [incidentsFailed, setIncidentsFailed] = React.useState(false);
   // The first incidents answer (or its failure) is in. The service list waits
   // for it: an ongoing incident pinned above services already on screen
   // pushed the whole list down under the visitor's eyes (layout shift).
@@ -229,6 +232,7 @@ export function PublicStatusPage() {
   /** First day of the 90-day window, for the "data od" line of a younger monitor (W1-B2). */
   const [windowStart90, setWindowStart90] = React.useState<string | null>(null);
   const [events, setEvents] = React.useState<PublicEvent[] | null>(null);
+  const [eventsFailed, setEventsFailed] = React.useState(false);
   // The strips' period. 90 days is asked for only when the visitor picks it:
   // three times the rows on every anonymous page load for a view few open.
   const [range, setRange] = React.useState<HistoryRange>('30d');
@@ -305,17 +309,27 @@ export function PublicStatusPage() {
     fetch('/status/api.php?action=events&limit=200&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        if (active && Array.isArray(d.events)) setEvents(d.events);
+        if (!active) return;
+        if (!Array.isArray(d.events)) throw new Error('no events');
+        setEvents(d.events);
+        setEventsFailed(false);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (active) setEventsFailed(true);
+      });
     // Incidents arrive as JSON and paginate client-side. The legacy page
     // shipped all 200 rows as styled HTML - a third of its 1.1 MB.
     fetch('/status/api.php?action=incidents&scope=public')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((d) => {
-        if (active && Array.isArray(d.manualIncidents)) setIncidents(d.manualIncidents);
+        if (!active) return;
+        if (!Array.isArray(d.manualIncidents)) throw new Error('no incidents');
+        setIncidents(d.manualIncidents);
+        setIncidentsFailed(false);
       })
-      .catch(() => {})
+      .catch(() => {
+        if (active) setIncidentsFailed(true);
+      })
       .finally(() => {
         if (active) setIncidentsSettled(true);
       });
@@ -840,6 +854,15 @@ export function PublicStatusPage() {
                 <IncidentList incidents={openIncidents} />
               </Panel>
             )}
+            {showIncidents && incidentsFailed && incidents === null && (
+              <ErrorState
+                tone="warning"
+                message={t(
+                  'public.incidents_failed',
+                  'Incidenty se nepodařilo načíst. Ohlášený incident tu teď nemusí být vidět.'
+                )}
+              />
+            )}
 
             {/* Announced future maintenance: the visitor should learn about a
               planned window ahead of time, not when the service disappears.
@@ -967,6 +990,9 @@ export function PublicStatusPage() {
             dots, location, repeats folded into one run), not a bare text list.
             Only failures and degradations: a wall of "check passed" rows tells
             a visitor nothing. */}
+        {opts.showEvents && eventsFailed && events === null && (
+          <ErrorState tone="warning" message={t('public.events_failed', 'Poslední události se nepodařilo načíst.')} />
+        )}
         {opts.showEvents && publicTimeline.length > 0 && (
           <Panel icon={History} title={t('public.recent_events', 'Poslední události')}>
             <div className="space-y-4">

@@ -752,6 +752,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'public.discord_online': { cs: '{n} online', en: '{n} online' },
   'public.incidents': { cs: 'Incidenty', en: 'Incidents' },
+  'public.incidents_failed': {
+    cs: 'Incidenty se nepodařilo načíst. Ohlášený incident tu teď nemusí být vidět.',
+    en: 'Failed to load the incidents. An announced incident may not be visible here right now.',
+  },
+  'public.events_failed': { cs: 'Poslední události se nepodařilo načíst.', en: 'Failed to load the recent events.' },
   'public.incident_open': { cs: 'Probíhá', en: 'Ongoing' },
   'public.incident_resolved': { cs: 'Vyřešeno', en: 'Resolved' },
   'public.in_maintenance': { cs: '{services} v plánované údržbě', en: '{services} in planned maintenance' },
