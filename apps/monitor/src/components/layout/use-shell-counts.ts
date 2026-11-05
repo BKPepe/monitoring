@@ -1,4 +1,5 @@
 import * as React from 'react';
+import { ongoingIncidentCount } from '@/lib/ongoing-incidents';
 
 /**
  * The counts the shell shows on every page: open incidents (the Incidenty
@@ -64,16 +65,18 @@ export function useShellCounts(): ShellCounts {
 
   const refresh = React.useCallback(async () => {
     await Promise.all([
-      // The Incidents badge counts THE SAME thing the incidents page shows:
-      // open records, freshly fallen monitors included by the endpoint itself.
+      // The Incidents badge counts THE SAME thing the incidents page shows. Only
+      // the outages were counted: an announced incident with no outage read as
+      // nothing on the badge and "Vše OK" on the bell, under a page saying 1.
       getJson('/status/api.php?action=incidents')
         .then((data) => {
           if (!alive.current) return;
-          const list = (data as { incidents?: unknown })?.incidents;
-          if (Array.isArray(list)) {
-            setOpenIncidents(
-              list.filter((i: { status?: string }) => (i?.status ?? 'investigating') !== 'resolved').length
-            );
+          const { incidents: live, manualIncidents: records } = (data ?? {}) as {
+            incidents?: unknown;
+            manualIncidents?: unknown;
+          };
+          if (Array.isArray(live) && Array.isArray(records)) {
+            setOpenIncidents(ongoingIncidentCount(live, records));
             setIncidentsState('ok');
           } else {
             setIncidentsState('failed');

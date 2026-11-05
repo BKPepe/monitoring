@@ -62,9 +62,8 @@ export function Sidebar({
   const attention = attentionCount(findings);
   const countFor = (item: NavItem) => {
     if (item.badge === 'incidents' && incidentCount != null && incidentCount > 0) {
-      // Open incident RECORDS, not services down right now: an incident stays
-      // open until somebody closes it, so the two numbers routinely differ and
-      // the label says which one this is.
+      // What the incidents page calls ongoing: outages now, and open records no
+      // outage stands for.
       return {
         count: incidentCount,
         tone: 'down' as const,

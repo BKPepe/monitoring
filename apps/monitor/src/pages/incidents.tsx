@@ -27,6 +27,7 @@ import { appApi } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+import { ongoingIncidentCount } from '@/lib/ongoing-incidents';
 import { pluralForm } from '@/lib/plural';
 import { locationFreshness, PROBE_STALE_AFTER_MS, type ProbeRegion } from '@/lib/probe-locations';
 import { cn } from '@/lib/utils';
@@ -196,7 +197,7 @@ export function IncidentsPage() {
   const standaloneIncidents = ongoingIncidents.filter((inc) => !linkedIncidentIds.has(inc.id));
 
   // The count in the heading must match what is listed below it.
-  const ongoingCount = liveOutages.length + standaloneIncidents.length;
+  const ongoingCount = ongoingIncidentCount(liveOutages, manualList);
   const activeBadge = {
     one: t('incidents.active_badge_one', { count: ongoingCount }, `${ongoingCount} probíhající`),
     few: t('incidents.active_badge_few', { count: ongoingCount }, `${ongoingCount} probíhající`),
