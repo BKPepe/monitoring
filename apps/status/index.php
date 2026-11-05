@@ -1518,7 +1518,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                      'fail' => 'var(--color-red)',
                                                      'na' => 'var(--text-muted)',
                                                  ];
-                                                 $ts3_score_color = $ts3_health['score'] >= 90 ? 'var(--color-green)' : ($ts3_health['score'] >= 70 ? 'var(--color-yellow)' : 'var(--color-red)');
+                                                 $ts3_score_color = $ts3_health['score'] === null ? 'var(--text-muted)' : ($ts3_health['score'] >= 90 ? 'var(--color-green)' : ($ts3_health['score'] >= 70 ? 'var(--color-yellow)' : 'var(--color-red)'));
                                                  ?>
 
                                                  <?php if ($enabled_metrics === null || in_array('health_score', $enabled_metrics)): ?>
@@ -1526,7 +1526,7 @@ $portal_url = trim(get_setting('portal_url'));
                                                  <div class="ts3-health-score-section" style="margin-top: 1.5rem; width: 100%; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 1.25rem;">
                                                      <div class="detail-section-title">
                                                          <i class="fas fa-heartbeat"></i> <?php echo htmlspecialchars(t('ts3_health_score_heading')); ?>
-                                                         <span style="font-weight: normal; font-size: 0.9rem; margin-left: 0.5rem; color: <?php echo $ts3_score_color; ?>;"><strong><?php echo $ts3_health['score']; ?></strong> / 100</span>
+                                                         <span style="font-weight: normal; font-size: 0.9rem; margin-left: 0.5rem; color: <?php echo $ts3_score_color; ?>;"><strong><?php echo $ts3_health['score'] ?? '—'; ?></strong> / 100</span>
                                                      </div>
                                                      <div style="overflow-x: auto; margin-top: 0.6rem;">
                                                          <table class="report-table" style="width: 100%; border-collapse: collapse; font-size: 0.8rem;">

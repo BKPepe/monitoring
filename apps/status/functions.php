@@ -6687,7 +6687,8 @@ function bk_compute_health_score(array $areas) {
         $weighted_sum += ($weight * $score_pct) / 100;
         $available_weight += $weight;
     }
-    $score = $available_weight > 0 ? (int)round(($weighted_sum / $available_weight) * 100) : 0;
+    // Nothing measured is no score, not a score of zero.
+    $score = $available_weight > 0 ? (int)round(($weighted_sum / $available_weight) * 100) : null;
     return ['score' => $score, 'areas' => $areas];
 }
 
@@ -6704,8 +6705,11 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
     $areas = [];
 
     // Dostupnost (35 %)
-    $avail_ok = $current_status === 'up';
-    $areas[] = ['key' => 'availability', 'label' => 'Dostupnost', 'weight_pct' => 35, 'score_pct' => $avail_ok ? 100 : 0, 'status' => $avail_ok ? 'ok' : 'fail'];
+    // Only a server known to be down fails this. A new, paused or unknown one has
+    // no measurement to judge, and one in maintenance is off on purpose: they read
+    // as a red 0 / 100 and "Server je nedostupný".
+    $avail_status = ['up' => 'ok', 'warning' => 'ok', 'down' => 'fail'][$current_status] ?? 'na';
+    $areas[] = ['key' => 'availability', 'label' => 'Dostupnost', 'weight_pct' => 35, 'score_pct' => $avail_status === 'ok' ? 100 : 0, 'status' => $avail_status];
 
     // TeamSpeak process (20 %) - only when an agent is attached and reports ts3_process
     if (is_array($agent_data) && isset($agent_data['ts3_process']) && is_array($agent_data['ts3_process'])) {

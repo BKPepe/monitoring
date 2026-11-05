@@ -3486,6 +3486,18 @@ $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 92");
 $pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
 $pdo->exec("DELETE FROM assets WHERE id = 92");
 
+// R12: only a server known to be down fails availability.
+$ts_avail = function (string $status): array {
+    $health = bk_compute_health_score(build_teamspeak_health_areas(['id' => 1, 'type' => 'teamspeak'], $status, [], [], null));
+    return [$health['areas'][0]['status'], $health['score']];
+};
+check('TS: běžící server dostupnost splní', $ts_avail('up'), ['ok', 100]);
+check('TS: zhoršený server pořád odpovídá', $ts_avail('warning'), ['ok', 100]);
+check('TS: výpadek dostupnost nesplní', $ts_avail('down'), ['fail', 0]);
+foreach (['unknown', 'maintenance', 'paused', ''] as $ts_state) {
+    check("TS: stav '{$ts_state}' nemá skóre, ne nulu", $ts_avail($ts_state), ['na', null]);
+}
+
 // --- TeamSpeak's version area reads the number, not the build (R150) ------------
 // version_compare() takes "3.13.7 [Build: 1655727713]" for older than "3.13.7".
 $tv_area = function (string $latest, ?string $reported) use ($pdo): array {
