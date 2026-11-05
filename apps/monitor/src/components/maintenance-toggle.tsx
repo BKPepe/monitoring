@@ -25,12 +25,16 @@ export function useMaintenanceToggle({
   const [error, setError] = React.useState<string | null>(null);
 
   const toggle = async () => {
+    // The prompt answers null for Cancel and '' for an empty OK. Cancel has to
+    // stop here: it used to fall through as an empty description, so changing
+    // your mind put the monitor into a maintenance with no end, silencing it.
+    const description = active
+      ? ''
+      : window.prompt(t('maint.prompt', 'Popis údržby (nepovinné, uvidí ho i veřejná stránka):'));
+    if (description === null) return;
     setBusy(true);
     setError(null);
     try {
-      const description = active
-        ? ''
-        : (window.prompt(t('maint.prompt', 'Popis údržby (nepovinné, uvidí ho i veřejná stránka):')) ?? '');
       await appApi.toggleMaintenance([monitorId], !active, description);
       onChanged?.();
     } catch (err) {
