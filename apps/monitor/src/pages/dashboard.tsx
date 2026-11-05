@@ -36,7 +36,7 @@ import { Sparkline } from '@/components/sparkline';
 import { Panel } from '@/components/ui/panel';
 import { Pill, type PillTone } from '@/components/ui/pill';
 import { ListRow, ListRows } from '@/components/ui/list-row';
-import type { DashboardTile } from '@/components/dashboard-layout-editor';
+import { withNewTiles, type DashboardTile } from '@/components/dashboard-layout';
 import type { DayUptime, UptimeHistoryRow } from '@/data/model';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
@@ -131,7 +131,8 @@ export function DashboardPage() {
     fetch('/status/api.php?action=dashboard_layout', { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (active && Array.isArray(d?.tiles) && d.tiles.length > 0) setTiles(d.tiles);
+        if (active && Array.isArray(d?.tiles) && d.tiles.length > 0)
+          setTiles(withNewTiles(d.tiles, Array.isArray(d.catalog) ? d.catalog : []));
       })
       .catch(() => {});
     return () => {
@@ -899,6 +900,7 @@ export function DashboardPage() {
       if (key === 'alerts') return alertsSection;
       if (key === 'health') return healthSection;
       if (key === 'insights') return insightsSection;
+      if (key === 'devices') return devicesSection;
       if (key === 'uptime_history') return uptimeSection;
       if (key === 'regions')
         return (

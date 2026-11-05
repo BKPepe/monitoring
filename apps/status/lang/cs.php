@@ -78,6 +78,7 @@ return [
     'tile_monitors' => 'Seznam monitorů',
     'tile_alerts' => 'Poslední výstrahy',
     'tile_insights' => 'System Insights',
+    'tile_devices' => 'Routery a servery',
     'tile_regions' => 'Měřicí místa',
     'tile_uptime_history' => 'Historie dostupnosti',
     'sp_not_found_title' => 'Stránka nenalezena',

@@ -77,6 +77,7 @@ return [
     'tile_monitors' => 'Monitor list',
     'tile_alerts' => 'Recent alerts',
     'tile_insights' => 'System Insights',
+    'tile_devices' => 'Routers and servers',
     'tile_regions' => 'Probe locations',
     'tile_uptime_history' => 'Availability history',
     'sp_not_found_title' => 'Page not found',

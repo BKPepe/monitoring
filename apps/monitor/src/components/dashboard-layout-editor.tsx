@@ -12,24 +12,7 @@ import { ChevronDown, ChevronUp, Eye, EyeOff, LayoutGrid } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
 import { LoadingState, ErrorState } from '@/components/ui/states';
-
-/** Sekce, ktere davaji smysl jen pres celou sirku. */
-const WIDE_BY_DEFAULT = new Set(['monitors', 'insights', 'uptime_history', 'attention']);
-
-export interface DashboardTile {
-  key: string;
-  visible: boolean;
-  size: 'normal' | 'wide';
-}
-
-interface CatalogEntry {
-  key: string;
-  label: string;
-  kind: 'panel' | 'metric';
-  /** false = nothing is actually collected for this tile, it would show only dashes. */
-  available: boolean;
-  samples: number | null;
-}
+import { withNewTiles, type CatalogEntry, type DashboardTile } from '@/components/dashboard-layout';
 
 /**
  * Dashboard layout editor.
@@ -71,23 +54,12 @@ export function DashboardLayoutEditor({
         const cat: CatalogEntry[] = data.catalog;
         setCatalog(cat);
         const saved: DashboardTile[] = Array.isArray(data.tiles) ? data.tiles : [];
-        // Catalogue tiles the user never ordered are appended at the end -
-        // new features do not vanish just because the user saved their
-        // layout earlier.
-        const known = new Set(saved.map((s) => s.key));
-        const merged = [
-          ...saved.filter((s) => cat.some((c) => c.key === s.key)),
-          ...cat
-            .filter((c) => !known.has(c.key))
-            .map((c) => ({
-              key: c.key,
-              visible: c.kind === 'panel' && c.available,
-              // Sekce, ktere se v uzkem sloupci necetly by (tabulka monitoru,
-              // heatmapa, radek insightu), zacinaji jako siroke.
-              size: WIDE_BY_DEFAULT.has(c.key) ? ('wide' as const) : ('normal' as const),
-            })),
-        ];
-        setTiles(merged);
+        setTiles(
+          withNewTiles(
+            saved.filter((s) => cat.some((c) => c.key === s.key)),
+            cat
+          )
+        );
         setLoaded(true);
       })
       .catch(() => {

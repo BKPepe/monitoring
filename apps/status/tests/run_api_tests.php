@@ -574,6 +574,8 @@ check_true('katalog je pole', isset($data['catalog']) && is_array($data['catalog
 
 $panels = array_filter($data['catalog'] ?? [], fn($c) => ($c['kind'] ?? '') === 'panel');
 check_true('katalog nabízí panely dashboardu', count($panels) >= 5);
+// A panel the catalogue leaves out disappears for good from any saved layout.
+check_true('katalog nabízí karty routerů a serverů', in_array('devices', array_column($panels, 'key'), true));
 
 // A metric without a single sample must not be offered as available - the user
 // would enable a tile that stays forever empty.

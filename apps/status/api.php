@@ -1663,6 +1663,7 @@ if ($action === 'dashboard_layout') {
         $panels = [
             'health' => t('tile_health'),
             'attention' => t('tile_attention'),
+            'devices' => t('tile_devices'),
             'monitors' => t('tile_monitors'),
             'alerts' => t('tile_alerts'),
             'insights' => t('tile_insights'),
