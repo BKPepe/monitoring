@@ -19654,7 +19654,6 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details, bool $system = fal
 
     $mid = (int)($monitor['id'] ?? 0);
     $asset_id = $monitor['asset_id'] ?? null;
-    $target = trim($monitor['target'] ?? '');
     $sib_details_raw = null;
 
     // Every lookup below reads ANOTHER monitor. A viewer may borrow only from
@@ -19676,55 +19675,7 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details, bool $system = fal
         } catch (Exception $e) {}
     }
 
-    // 2. Try matching via the target IP / hostname
-    if (!$sib_details_raw && !empty($target)) {
-        try {
-            $host_or_ip = parse_url($target, PHP_URL_HOST) ?: $target;
-
-            // A DNS query only when the target looks like an address at all.
-            //
-            // Agent monitors tend to carry a human label in `target` - e.g.
-            // "Turris - domov". gethostbyname() tries to resolve it anyway and
-            // waits for the resolver timeout: six seconds per render in
-            // production, synchronously in the middle of the page. That
-            // monitor's detail stretched to eight seconds while the others
-            // rendered within one.
-            //
-            // gethostbyname() moreover returns its input unchanged on failure,
-            // so nothing is lost this way - only the wait goes away.
-            $looks_like_address = filter_var($host_or_ip, FILTER_VALIDATE_IP) !== false
-                || preg_match('/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i', $host_or_ip) === 1;
-            $resolved_ip = $looks_like_address ? gethostbyname($host_or_ip) : $host_or_ip;
-            
-            $stmt = $pdo->prepare("
-                SELECT last_details FROM monitors 
-                WHERE id != ? AND agent_key IS NOT NULL AND agent_key != '' AND last_details IS NOT NULL
-                  AND (target = ? OR target = ? OR last_details LIKE ?)
-                  AND archived_at IS NULL AND {$vis_sql}
-                ORDER BY updated_at DESC LIMIT 1
-            ");
-            $stmt->execute(array_merge([$mid, $target, $resolved_ip, '%' . $resolved_ip . '%'], $vis_params));
-            $sib_details_raw = $stmt->fetchColumn();
-        } catch (Exception $e) {}
-    }
-
-    // 3. For TeamSpeak: if ts3_process is still missing, find ANY agent reporting an active ts3_process
-    if (!$sib_details_raw && ($monitor['type'] ?? '') === 'teamspeak') {
-        try {
-            $stmt = $pdo->prepare("
-                SELECT last_details FROM monitors 
-                WHERE agent_key IS NOT NULL AND agent_key != '' 
-                  AND last_details LIKE '%\"ts3_process\"%' 
-                  AND last_details NOT LIKE '%\"ts3_process\":null%'
-                  AND archived_at IS NULL AND {$vis_sql}
-                ORDER BY updated_at DESC LIMIT 1
-            ");
-            $stmt->execute($vis_params);
-            $sib_details_raw = $stmt->fetchColumn();
-        } catch (Exception $e) {}
-    }
-
-    // 4. When agent details were found, fill the gaps in $details
+    // 2. When agent details were found, fill the gaps in $details
     if ($sib_details_raw) {
         $sib_det = json_decode($sib_details_raw, true);
         if (is_array($sib_det)) {

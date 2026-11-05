@@ -3471,6 +3471,29 @@ $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 147");
 $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 147");
 $pdo->exec("DELETE FROM monitors WHERE id = 147");
 
+// --- Borrowed agent data comes from the same asset only (R82) ---------------------
+// Two more lookups used to follow, by target address and for any agent reporting
+// ts3_process. They ordered by a column monitors does not have, so they never
+// ran; this holds the line if someone reaches for them again.
+$pdo->exec("DELETE FROM monitors WHERE id IN (148, 149, 150)");
+$pdo->exec("DELETE FROM assets WHERE id = 148");
+$pdo->exec("INSERT INTO assets (id, name) VALUES (148, 'R82 stroj')");
+$bd_agent = json_encode(['cpu' => 12, 'ts3_process' => ['pid' => 1]]);
+$pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, agent_key, last_details, asset_id) VALUES
+    (148, 'R82 agent', 'vps', 'r82.example.test', 'up', 'Test', 'r82-key', ?, 148)")->execute([$bd_agent]);
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, asset_id) VALUES
+    (149, 'R82 cizí TS', 'teamspeak', 'r82.example.test', 'up', 'Test', NULL),
+    (150, 'R82 TS na stroji', 'teamspeak', 'r82.example.test', 'up', 'Test', 148)");
+$bd_row = fn (int $id): array => $pdo->query("SELECT * FROM monitors WHERE id = {$id}")->fetch();
+$bd_foreign = [];
+bk_enrich_monitor_details($pdo, $bd_row(149), $bd_foreign, true);
+check('monitor bez stroje si od cizího agenta nic nepůjčí', $bd_foreign, []);
+$bd_own = [];
+bk_enrich_monitor_details($pdo, $bd_row(150), $bd_own, true);
+check('monitor na stejném stroji ano', [$bd_own['cpu'] ?? null, $bd_own['ts3_process'] ?? null], [12, ['pid' => 1]]);
+$pdo->exec("DELETE FROM monitors WHERE id IN (148, 149, 150)");
+$pdo->exec("DELETE FROM assets WHERE id = 148");
+
 // --- An agent-side service in maintenance keeps cron's status ------------
 //
 // R141: the agent's result overwrote 'maintenance' with up/down, cron set it
