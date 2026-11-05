@@ -958,8 +958,31 @@ export function AssetDetailPage() {
                     </div>
                     <div className="bg-inset space-y-2 rounded-lg border border-border p-4">
                       <p className="font-semibold text-sm">{t('asset.service_status', 'Stav Služby')}</p>
-                      <p className={cn('text-xs font-medium', asset.status === 'down' ? 'text-down' : 'text-up')}>
-                        {asset.status === 'down' ? t('common.offline', 'Offline') : t('infra.active_since', 'Aktivní')}
+                      {/* Green "active" was the answer to everything but down: a warning,
+                          a maintenance and a monitor nobody has measured all read as fine. */}
+                      <p
+                        className={cn(
+                          'text-xs font-medium',
+                          asset.status === 'down'
+                            ? 'text-down'
+                            : asset.status === 'up'
+                              ? 'text-up'
+                              : asset.status === 'warning'
+                                ? 'text-warning'
+                                : 'text-muted-foreground'
+                        )}
+                      >
+                        {asset.status === 'down'
+                          ? t('common.offline', 'Offline')
+                          : asset.status === 'up'
+                            ? t('infra.active_since', 'Aktivní')
+                            : asset.status === 'warning'
+                              ? t('common.warning', 'Varování')
+                              : asset.status === 'maintenance'
+                                ? t('common.maintenance', 'Údržba')
+                                : asset.status === 'paused'
+                                  ? t('common.paused', 'Pozastaveno')
+                                  : t('common.unknown', 'Neznámý')}
                       </p>
                       <p className="text-2xs text-muted-foreground">
                         {t('common.protocol', 'Protokol')}: {asset.kind}
@@ -3044,7 +3067,7 @@ function buildDynamicAsset(
     });
   const lastCheckDisplay = m.lastCheck
     ? `${timeAgo(m.lastCheck, t)} (${stamp(m.lastCheck)})`
-    : t('asset.moment_ago', 'Před chvílí');
+    : t('asset.never_checked', 'Zatím nebyl zkontrolován');
   const lastChangeDisplay = m.lastStatusChange
     ? `${timeAgo(m.lastStatusChange, t)} (${stamp(m.lastStatusChange)})`
     : '—';

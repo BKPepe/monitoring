@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
 import { TooltipProvider } from '@/components/ui/tooltip';
@@ -31,13 +31,14 @@ const web = {
 };
 
 let events: () => Response = () => json({ events: [] });
+let monitor: Record<string, unknown> = web;
 
 beforeEach(() => {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('action=monitors')) return Promise.resolve(json({ monitors: [web] }));
+      if (url.includes('action=monitors')) return Promise.resolve(json({ monitors: [monitor] }));
       if (url.includes('action=events')) return Promise.resolve(events());
       return Promise.resolve(json({}));
     })
@@ -64,6 +65,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  monitor = web;
 });
 
 function show() {
@@ -100,5 +102,38 @@ describe('Detail: poslední kontroly', () => {
     show();
     expect(await screen.findByText('Zatím neproběhla žádná kontrola.', undefined, SLOW)).toBeTruthy();
     expect(screen.queryByText('Historii kontrol se nepodařilo načíst.')).toBeNull();
+  }, 20_000);
+});
+
+describe('Detail: stav a poslední kontrola', () => {
+  /** Opens the tab with the service box and returns the box's status line. */
+  const statusBox = async () => {
+    show();
+    fireEvent.mouseDown(await screen.findByRole('tab', { name: /Služby/ }, SLOW));
+    const title = await screen.findByText('Stav Služby');
+    return within(title.parentElement as HTMLElement);
+  };
+
+  it.each([
+    ['up', 'Aktivní', 'text-up'],
+    ['down', 'Offline', 'text-down'],
+    ['warning', 'Varování', 'text-warning'],
+    ['maintenance', 'Údržba', 'text-muted-foreground'],
+    ['unknown', 'Neznámý', 'text-muted-foreground'],
+  ])(
+    'stav %s je „%s“',
+    async (status, label, tone) => {
+      monitor = { ...web, status };
+      const box = await statusBox();
+      expect(box.getByText(label).className).toContain(tone);
+    },
+    20_000
+  );
+
+  it('monitor bez jediné kontroly netvrdí „Před chvílí“', async () => {
+    monitor = { ...web, lastCheck: null };
+    show();
+    expect(await screen.findByText('Zatím nebyl zkontrolován', undefined, SLOW)).toBeTruthy();
+    expect(screen.queryByText('Před chvílí')).toBeNull();
   }, 20_000);
 });

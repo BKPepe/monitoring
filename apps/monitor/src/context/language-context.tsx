@@ -1519,7 +1519,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   // server's value, yet the row claimed it about every one. The real port
   // is in the monitor parameters on the same page.
   'asset.protocol_type': { cs: 'Typ protokolu', en: 'Protocol Type' },
-  'asset.moment_ago': { cs: 'Před chvílí', en: 'Just now' },
+  'asset.never_checked': { cs: 'Zatím nebyl zkontrolován', en: 'Not checked yet' },
   'asset.ago_seconds': { cs: 'Před {s} s', en: '{s}s ago' },
   'asset.ago_minutes': { cs: 'Před {m} min', en: '{m}m ago' },
   'asset.ago_hours': { cs: 'Před {h}h {m}min', en: '{h}h {m}m ago' },
