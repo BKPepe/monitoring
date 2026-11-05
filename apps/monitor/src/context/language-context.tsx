@@ -1890,6 +1890,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'All agents up to date, auto-updates OK',
   },
   'api_agents.loading': { cs: 'Načítám agenty…', en: 'Loading agents…' },
+  'api_agents.load_failed': { cs: 'Seznam agentů se nepodařilo načíst.', en: 'Failed to load the list of agents.' },
   'api_agents.no_agents': { cs: 'Žádní registrovaní agenti v databázi.', en: 'No registered agents in the database.' },
   'api_agents.inactive': { cs: 'Neaktivní', en: 'Inactive' },
   'api_agents.version_outdated': {

@@ -24,7 +24,7 @@ import { useLanguage } from '@/context/language-context';
 import { appApi } from '@/api/app-api';
 import { Link, useSearchParams } from 'react-router';
 import { cn } from '@/lib/utils';
-import { EmptyState, LoadingState } from '@/components/ui/states';
+import { EmptyState, ErrorState, LoadingState } from '@/components/ui/states';
 import { AgentInstallSteps } from '@/components/agent-install-steps';
 import type { AgentPlatform } from '@/lib/agent-install';
 
@@ -57,6 +57,7 @@ export function ApiAgentsPage() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [agents, setAgents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
   useEffect(() => {
     appApi
       .getMonitors()
@@ -64,16 +65,11 @@ export function ApiAgentsPage() {
         const list = Array.isArray(rows) ? rows : ((rows as any)?.monitors ?? []);
         const agentMonitors = list.filter((m: any) => {
           const type = (m.type || '').toLowerCase();
-          const name = (m.name || '').toLowerCase();
           return (
             type === 'openwrt' ||
             type === 'vps' ||
             type === 'agent' ||
             type === 'router' ||
-            type === 'teamspeak' ||
-            type === 'minecraft' ||
-            name.includes('donald') ||
-            name.includes('router') ||
             m.agentLastSeen != null ||
             Boolean(m.details?.agent_version) ||
             Boolean(m.details?.cpanel_stats)
@@ -81,7 +77,9 @@ export function ApiAgentsPage() {
         });
         setAgents(agentMonitors);
       })
-      .catch(() => {})
+      // Not an empty list: "no registered agents" would be a claim about the
+      // fleet, made because one request failed.
+      .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false));
   }, []);
 
@@ -335,6 +333,8 @@ export function ApiAgentsPage() {
         <div className="space-y-3">
           {loading ? (
             <LoadingState size="inline" label={t('api_agents.loading', 'Načítám agenty…')} />
+          ) : loadFailed ? (
+            <ErrorState message={t('api_agents.load_failed', 'Seznam agentů se nepodařilo načíst.')} />
           ) : agents.length === 0 ? (
             <EmptyState
               boxed
