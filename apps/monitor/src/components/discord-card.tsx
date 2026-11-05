@@ -10,7 +10,8 @@ interface DiscordMember {
 
 interface DiscordVoiceChannel {
   name?: string | null;
-  users?: number | null;
+  /** The names of who is in the channel, as check_discord collects them. */
+  users?: string[] | null;
 }
 
 /**
@@ -102,8 +103,10 @@ export function DiscordCard({ d }: { d: Record<string, any> }) {
               {voice.map((ch, i) => (
                 <li key={`${ch.name ?? 'ch'}-${i}`} className="flex items-center justify-between gap-2 text-xs">
                   <span className="min-w-0 truncate font-medium">{ch.name ?? '—'}</span>
-                  <span className="text-muted-foreground shrink-0">
-                    {ch.users == null ? '—' : t('discord.voice_users', { count: ch.users }, `${ch.users} uživatelů`)}
+                  <span className="text-muted-foreground shrink-0" title={ch.users?.join(', ')}>
+                    {ch.users == null
+                      ? '—'
+                      : t('discord.voice_users', { count: ch.users.length }, `${ch.users.length} uživatelů`)}
                   </span>
                 </li>
               ))}
