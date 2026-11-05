@@ -7972,6 +7972,59 @@ function bk_callmebot_scrub(string $s, string $phone, string $key): string {
 }
 
 /**
+ * What an agent's report may say during a maintenance window: nothing. A router
+ * being rebooted on purpose loses its WAN, and that used to reach the phone. What
+ * is still wrong when the window ends has to be heard, though, and the alert's
+ * latch was set inside the window, so the rule would not fire again. Hence the
+ * notices are held in the monitor's details and go out with the first report
+ * after the window, with those that were settled inside it taken out:
+ *
+ * - a problem and its recovery inside one window cancel out;
+ * - a recovery of an alert sent before the window is held too, so it still
+ *   closes that alert, and cancels out if the problem comes back;
+ * - thresholds and the connection table are dropped, not held: they say nothing
+ *   an hour later, and the caller judges them afresh when the window ends.
+ *
+ * Pure.
+ *
+ * @param list<array{0: string, 1: ?string}> $pending The report's notices.
+ * @param array<string, array{0: string, 1: ?string}> $held What the window has held so far.
+ * @return array{send: list<array{0: string, 1: ?string}>, held: array<string, array{0: string, 1: ?string}>|null}
+ */
+function bk_maintenance_hold(array $pending, array $held, bool $in_window): array {
+    if (!$in_window) {
+        return ['send' => array_merge(array_values($held), $pending), 'held' => null];
+    }
+    $recovery_of = [
+        'wan_restored' => 'wan_lost',
+        'lte_backup_restored' => 'lte_backup_lost',
+        'wan_link_restored' => 'wan_link_degraded',
+        'firewall_restored' => 'firewall_disabled',
+        'dns_resolver_restored' => 'dns_resolver_failed',
+        'public_ipv4_restored' => 'public_ipv4_lost',
+        'wan_ipv6_restored' => 'wan_ipv6_lost',
+    ];
+    foreach ($pending as [$status, $message]) {
+        $pair = $recovery_of[$status] ?? array_search($status, $recovery_of, true);
+        if ($pair !== false) {
+            if (isset($held[$pair])) {
+                unset($held[$pair]);
+            } else {
+                $held[$status] = [$status, $message];
+            }
+        } elseif ($status === 'storage_failing' || $status === 'storage_warning') {
+            // Several disks: one entry per message.
+            $held[$status . ':' . $message] = [$status, $message];
+        } elseif ($status === 'storage_recovered') {
+            // Names no disk. A warning is over if it recovered; a failing disk
+            // never counts as recovered (see bk_pagerduty_action).
+            $held = array_filter($held, static fn (array $n): bool => $n[0] !== 'storage_warning');
+        }
+    }
+    return ['send' => [], 'held' => $held];
+}
+
+/**
  * Helper telling whether a monitor is in planned maintenance
  */
 function is_in_maintenance($monitor) {

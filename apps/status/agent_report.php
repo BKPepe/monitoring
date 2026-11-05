@@ -282,6 +282,17 @@ function bk_agent_report(PDO $pdo, array $data, array $monitor, string $base_url
     // next report - the "already sent" latch was rolled back with everything else.
     $bk_pending_notifications = [];
 
+    // A window ended since the last report: what was dropped inside it is judged
+    // afresh. A limit still crossed fires now, because its latch no longer holds it.
+    $bk_in_window = is_in_maintenance($monitor);
+    $bk_window_details = bk_monitor_details($monitor);
+    if (!$bk_in_window && is_array($bk_window_details['maintenance_held'] ?? null)) {
+        foreach (['cpu_alert_sent', 'ram_alert_sent', 'hdd_alert_sent', 'conntrack_full_sent'] as $bk_latch) {
+            $bk_window_details[$bk_latch] = false;
+        }
+        $monitor['last_details'] = json_encode($bk_window_details, JSON_UNESCAPED_UNICODE);
+    }
+
     try {
         $pdo->beginTransaction();
 
@@ -904,6 +915,13 @@ function bk_agent_report(PDO $pdo, array $data, array $monitor, string $base_url
         if (!$ow_report_reduced) {
             $new_data['ingest_issues'] = $bk_ingest_issues;
         }
+
+        // Nothing goes out during a maintenance window (bk_maintenance_hold). The
+        // verdict below adds no notice in a window: the one writer drops it.
+        $bk_hold = bk_maintenance_hold($bk_pending_notifications,
+            is_array($old_details['maintenance_held'] ?? null) ? $old_details['maintenance_held'] : [], $bk_in_window);
+        $bk_pending_notifications = $bk_hold['send'];
+        $new_data['maintenance_held'] = $bk_hold['held'];
 
         $merged_details_arr = array_merge($old_details, $new_data);
 

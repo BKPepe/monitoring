@@ -832,6 +832,23 @@ check('SMTP: STARTTLS', bk_smtp_encryption('tls'), ['tls', true]);
 check('SMTP: bez zabezpečení nic nezkouší', bk_smtp_encryption('none'), ['', false]);
 check('SMTP: neznámá hodnota šifruje', bk_smtp_encryption(''), ['tls', true]);
 
+// --- Notices of an agent's report in a maintenance window (bk_maintenance_hold) --
+$mh_lost = ['wan_lost', 'WAN pryč'];
+$mh_back = ['wan_restored', 'WAN zpět'];
+check('v okně nejde nic ven a problém se drží', bk_maintenance_hold([$mh_lost], [], true), ['send' => [], 'held' => ['wan_lost' => $mh_lost]]);
+check('problém a jeho obnovení v okně se vyruší', bk_maintenance_hold([$mh_back], ['wan_lost' => $mh_lost], true), ['send' => [], 'held' => []]);
+check('obnovení alertu z doby před oknem se drží', bk_maintenance_hold([$mh_back], [], true), ['send' => [], 'held' => ['wan_restored' => $mh_back]]);
+check('a vyruší se, když se problém vrátí', bk_maintenance_hold([$mh_lost], ['wan_restored' => $mh_back], true), ['send' => [], 'held' => []]);
+check('prahy se nedrží', bk_maintenance_hold([['vps_warning', 'CPU'], ['conntrack_full', 'plno']], [], true), ['send' => [], 'held' => []]);
+$mh_disk_a = ['storage_failing', 'Disk A'];
+$mh_disk_b = ['storage_failing', 'Disk B'];
+$mh_warm = ['storage_warning', 'Disk C horký'];
+$mh_disks = bk_maintenance_hold([$mh_disk_a, $mh_disk_b, $mh_warm], [], true)['held'];
+check('každý disk má svou položku', array_values($mh_disks), [$mh_disk_a, $mh_disk_b, $mh_warm]);
+check('obnovení úložiště zruší varování, ne selhávající disk', array_values(bk_maintenance_hold([['storage_recovered', 'ok']], $mh_disks, true)['held']), [$mh_disk_a, $mh_disk_b]);
+check('po okně jde ven, co zbylo, před tím, co přineslo hlášení', bk_maintenance_hold([$mh_back], ['wan_lost' => $mh_lost], false), ['send' => [$mh_lost, $mh_back], 'held' => null]);
+check('mimo okno se nic nemění', bk_maintenance_hold([$mh_lost], [], false), ['send' => [$mh_lost], 'held' => null]);
+
 // --- Is the window running now (is_in_maintenance) ------------------------------
 $im_at = fn (int $offset): string => date('Y-m-d H:i:s', time() + $offset);
 check_false('vypnutá údržba neplatí ani s oknem', is_in_maintenance(['maintenance' => 0, 'maintenance_start' => $im_at(-60), 'maintenance_end' => $im_at(60)]));

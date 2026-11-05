@@ -3533,6 +3533,66 @@ check('po uplynutí zámku správné heslo projde', $pa_ok, 200);
 $pa_rows = (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'login_failed'")->fetchColumn();
 check('správné heslo se nepočítá', $pa_rows, 0);
 
+// --- An agent's alerts wait for the end of a maintenance window (R161) ------------
+// A router rebooted on purpose used to page; what is still wrong after the window
+// has to be heard, and its latch was set inside it.
+$mw_clean = function () use ($pdo): void {
+    foreach (['notification_log', 'monitor_logs', 'monitor_events', 'vps_metrics', 'process_samples', 'metrics_daily'] as $mw_table) {
+        $pdo->exec("DELETE FROM {$mw_table} WHERE monitor_id = 161");
+    }
+    $pdo->exec("DELETE FROM monitors WHERE id = 161");
+};
+$mw_clean();
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, agent_key, maintenance)
+            VALUES (161, 'R161 router', 'openwrt', 'r161.test', 'maintenance', 'Test', 'r161-key', 1)");
+$mw_report = function (bool $wan_ok, float $cpu = 5.0) use ($base): int {
+    [$code] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode([
+        'agent_key' => 'r161-key', 'cpu' => $cpu, 'ram' => 30.0, 'hdd' => 40.0,
+        'wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => $wan_ok,
+    ]));
+    return $code;
+};
+$mw_window = fn (int $on) => $pdo->exec("UPDATE monitors SET maintenance = {$on}, status = '" . ($on ? 'maintenance' : 'up') . "' WHERE id = 161");
+$mw_any = fn (string $status): int => (int)$pdo->query("SELECT COUNT(*) FROM notification_log WHERE monitor_id = 161 AND status = '{$status}'")->fetchColumn();
+$mw_events = fn (string $type): int => (int)$pdo->query("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 161 AND event_type = '{$type}'")->fetchColumn();
+$mw_held = fn (): mixed => json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 161")->fetchColumn(), true)['maintenance_held'] ?? null;
+
+check('v okně: agent hlášení přijme', [$mw_report(false), $mw_report(false)], [200, 200]);
+check('v okně: událost na časové ose je, oznámení ne', [$mw_events('wan_lost'), $mw_any('wan_lost')], [1, 0]);
+check('v okně: výpadek WAN čeká', array_keys((array)$mw_held()), ['wan_lost']);
+$mw_window(0);
+$mw_report(false);
+check_true('po okně: co trvá, se oznámí', $mw_any('wan_lost') > 0);
+$mw_after = $mw_any('wan_lost');
+$mw_report(false);
+check('po okně: a jen jednou', $mw_any('wan_lost'), $mw_after);
+check('po okně: nic už nečeká', $mw_held(), null);
+
+$mw_window(1);
+$mw_report(true);
+check('v okně: obnovení alertu z doby před oknem čeká', [$mw_any('wan_restored'), array_keys((array)$mw_held())], [0, ['wan_restored']]);
+$mw_window(0);
+$mw_report(true);
+check_true('po okně: a pak ho uzavře', $mw_any('wan_restored') > 0);
+
+$pdo->exec("DELETE FROM notification_log WHERE monitor_id = 161");
+$mw_window(1);
+$mw_report(false);
+$mw_report(false);
+$mw_report(true);
+check('v okně: výpadek, který v okně skončil, nikdo řešit nemusí', $mw_held(), []);
+$mw_window(0);
+$mw_report(true);
+check('po okně: nepřijde ani jedno z nich', [$mw_any('wan_lost'), $mw_any('wan_restored')], [0, 0]);
+
+$mw_window(1);
+$mw_report(true, 99.0);
+check('v okně: přetížení nikoho nebudí', $mw_any('vps_warning'), 0);
+$mw_window(0);
+$mw_report(true, 99.0);
+check_true('po okně: trvá-li, ozve se', $mw_any('vps_warning') > 0);
+$mw_clean();
+
 // --- An agent-side service in maintenance keeps cron's status ------------
 //
 // R141: the agent's result overwrote 'maintenance' with up/down, cron set it
@@ -3732,6 +3792,15 @@ try {
     $cm_run(950, $cm_check([1 => $cm_up(5.0)]));
     check('cron: a podruhé už ne (pojistka přežila zápis detailů)', [$cm_notes, !empty($cm_details(950)['agent_alert_sent'])], [[], true]);
     check('cron: událost odpojení je jedna', (int)$pdo->query("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 950 AND event_type = 'agent_disconnected'")->fetchColumn(), 1);
+    // R161: a machine switched off for maintenance is silent on purpose. If it
+    // still is when the window ends, that is news.
+    $pdo->exec("UPDATE monitors SET maintenance = 1 WHERE id = 950");
+    $cm_set_details(950, ['agent_last_seen' => time() - 7200, 'agent_alert_sent' => false]);
+    $cm_run(950, $cm_check([1 => $cm_up(5.0)]));
+    check_false('cron: mlčení agenta v údržbě nikoho nebudí', in_array('agent_offline', array_column($cm_notes, 1), true));
+    $pdo->exec("UPDATE monitors SET maintenance = 0 WHERE id = 950");
+    $cm_run(950, $cm_check([1 => $cm_up(5.0)]));
+    check_true('cron: mlčí-li i po údržbě, ohlásí se', in_array('agent_offline', array_column($cm_notes, 1), true));
     $pdo->exec("UPDATE monitors SET agent_key = NULL, last_details = NULL WHERE id = 950");
 
     // Second: a report lands while the check runs. Merged into, not undone.
@@ -3979,8 +4048,8 @@ try {
         $pdo->exec("UPDATE monitors SET status = 'maintenance', maintenance = 1 WHERE id = 957");
         $cm_set_details(957, ['agent_last_seen' => time() - 7200]);
         $cm_run(957, null);
-        check('mlčící server v údržbě: nic se neohlásí, pojistka se nastaví', [$cm_status(957), $cm_notes, $cm_details(957)['agent_alert_sent'] ?? null],
-            ['maintenance', [], true]);
+        check('mlčící server v údržbě: nic se neohlásí, pojistka se nenastaví', [$cm_status(957), $cm_notes, $cm_details(957)['agent_alert_sent'] ?? null],
+            ['maintenance', [], null]);
         $pdo->exec("UPDATE monitors SET maintenance = 0 WHERE id = 957");
         $cm_run(957, null);
         check('mlčící server po údržbě: jedno oznámení (down), žádné agent_offline', [$cm_status(957), $cm_notes], ['down', [[957, 'down']]]);

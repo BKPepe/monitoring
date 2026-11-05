@@ -94,7 +94,9 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
     // null = timeout 0, agent inactivity detection is fully disabled
     $offline_secs = bk_agent_offline_secs();
     $offline_timeout_mins = $offline_secs !== null ? intdiv($offline_secs, 60) : 0;
-    if (!empty($monitor['agent_key']) && $offline_secs !== null) {
+    // A silent agent in a maintenance window is the point of the window. The latch
+    // stays off, so one still silent when the window ends is announced then.
+    if (!empty($monitor['agent_key']) && $offline_secs !== null && !is_in_maintenance($monitor)) {
         $details_arr = bk_monitor_details($monitor);
         $agent_last_seen = $details_arr['agent_last_seen'] ?? 0;
 
