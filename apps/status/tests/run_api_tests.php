@@ -2331,6 +2331,34 @@ foreach (['0', '', '-5', '1.5', 'hodina'] as $ea_bad) {
 check('bez kanálu se nic neodešle', $res['escalated'], 0);
 check_true('bez kanálu incident zůstává neorazítkovaný', $esc_state(910) === null);
 
+// R7: a failed lookup used to answer "Praha, CZ", and that went into every row.
+$loc_proxy = getenv('http_proxy');
+putenv('http_proxy=http://127.0.0.1:1');
+check('nedostupná geolokace nic nevymyslí', detect_server_location(), null);
+putenv($loc_proxy === false ? 'http_proxy' : "http_proxy={$loc_proxy}");
+$loc_asked = 0;
+$loc_ok = function () use (&$loc_asked): ?string {
+    $loc_asked++;
+    return '🇩🇪 Frankfurt, DE (Example)';
+};
+$loc_fail = function () use (&$loc_asked): ?string {
+    $loc_asked++;
+    return null;
+};
+bk_setting_set($pdo, 'cron_location', 'Ruční místo');
+bk_setting_set($pdo, 'ip_loc_local', '');
+check('ručně nastavená lokalita má přednost a nikoho se neptá', [bk_check_location($pdo, $loc_ok), $loc_asked], ['Ruční místo', 0]);
+bk_setting_set($pdo, 'cron_location', 'AUTO');
+bk_setting_set($pdo, 'ip_loc_local', '🇨🇿 Praha, CZ');
+check('dřív vymyšlená Praha se bere jako neznámá', [bk_known_hub_location(), bk_check_location($pdo, $loc_ok), $loc_asked, get_setting('ip_loc_local')],
+    ['', '🇩🇪 Frankfurt, DE (Example)', 1, '🇩🇪 Frankfurt, DE (Example)']);
+check('zjištěná lokalita se už znovu nezjišťuje', [bk_check_location($pdo, $loc_ok), $loc_asked], ['🇩🇪 Frankfurt, DE (Example)', 1]);
+bk_setting_set($pdo, 'ip_loc_local', '');
+check('selhání dá štítek, který regiony vynechávají, a nic neuloží', [bk_check_location($pdo, $loc_fail), get_setting('ip_loc_local', '')], ['Main Server', '']);
+$loc_asked = 0;
+check('selhání se v jednom běhu podruhé nezkouší', [bk_check_location($pdo, $loc_fail), $loc_asked], ['Main Server', 0]);
+bk_setting_set($pdo, 'cron_location', '');
+
 // --- A channel that refuses ---
 // A dead webhook used to get the stamp anyway: the incident never escalated
 // again, cron reported it escalated and no log showed the refusal. An unknown

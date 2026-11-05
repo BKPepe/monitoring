@@ -155,10 +155,7 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
 
     if (is_in_maintenance($monitor)) {
         echo "Údržba (přeskakuji)\n";
-        $loc = get_setting('ip_loc_local', '');
-        if (empty($loc)) {
-            $loc = 'Main Server';
-        }
+        $loc = bk_check_location($pdo);
         // The window's row, and on entering it the switch and its one notice.
         // last_details stays: entering a window used to set it to NULL, which
         // dropped every alert latch, so wan_lost went out again (R212).
@@ -554,17 +551,7 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
     }
     
     // Write the result into the log history
-    $loc = get_setting('cron_location', '');
-    // If set to AUTO, empty, or still the default Prague fallback -> use the auto-detected location
-    $loc_is_auto = empty($loc) || $loc === 'AUTO' || $loc === '🇨🇿 Praha, CZ';
-    if ($loc_is_auto) {
-        $loc = get_setting('ip_loc_local', '');
-        if (empty($loc)) {
-            $loc = detect_server_location();
-            // Store into the settings cache
-            bk_setting_set($pdo, 'ip_loc_local', $loc);
-        }
-    }
+    $loc = bk_check_location($pdo);
     // check_stages (DNS/TCP/TLS/HTTP/body breakdown for 'web', ServerQuery/service/
     // ports/license for 'teamspeak') exists only for these two types - for the
     // rest it is always null, no behaviour change for them.

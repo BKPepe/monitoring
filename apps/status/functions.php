@@ -14161,10 +14161,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $range_to = date('d.m.Y');
 
     // --- Main server / hub location (excluded from regions, same logic as index.php) ---
-    $hub_location = trim(get_setting('cron_location', ''));
-    if ($hub_location === '' || $hub_location === 'AUTO' || $hub_location === '🇨🇿 Praha, CZ') {
-        $hub_location = trim(get_setting('ip_loc_local', ''));
-    }
+    $hub_location = bk_known_hub_location();
 
     // --- Trend snapshot from the previous period ---
     $snapshot_key = 'digest_snapshot_' . $period;
@@ -15365,44 +15362,74 @@ function get_country_emoji($country_code) {
 }
 
 /**
- * Automatic detection of the server's geographic location and ASN via a public API
+ * The label a measurement carries, from what the geolocation API answered. Null
+ * when it answered nothing usable: no response, a refusal, no city or country.
+ * Whatever this returns is stored and stamped on every check as the place it
+ * was taken from, so a guess here would follow the data around for good.
  */
-function detect_server_location() {
-    if (!function_exists('curl_init')) {
-        return '🇨🇿 Praha, CZ';
+function bk_location_from_geo($response): ?string {
+    if (!is_string($response) || $response === '') {
+        return null;
     }
-    
+    $data = json_decode($response, true);
+    if (!is_array($data) || ($data['status'] ?? '') !== 'success' || empty($data['city']) || empty($data['countryCode'])) {
+        return null;
+    }
+    $org = $data['org'] ?? $data['isp'] ?? '';
+    $org_clean = $org !== '' ? implode(' ', array_slice(explode(' ', (string)$org), 0, 3)) : '';
+    return get_country_emoji($data['countryCode']) . ' ' . $data['city'] . ', ' . $data['countryCode'] . ($org_clean !== '' ? ' (' . $org_clean . ')' : '');
+}
+
+/**
+ * Asks a public API where this server is, with its ASN. Null when it cannot tell.
+ */
+function detect_server_location(): ?string {
+    if (!function_exists('curl_init')) {
+        return null;
+    }
     $ch = curl_init("http://ip-api.com/json/");
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 3);
     curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)');
     $resp = curl_exec($ch);
     curl_close($ch);
-    
-    if ($resp) {
-        $data = json_decode($resp, true);
-        if ($data && isset($data['status']) && $data['status'] === 'success') {
-            // Chybejici udaje z geolokace se NEDOPLNUJI - driv se sem psalo
-            // "Praha, CZ", takze kazdy neuspesny lookup tvrdil ceskou
-            // lokalitu bez ohledu na to, kde server opravdu je.
-            if (empty($data['city']) || empty($data['countryCode'])) {
-                return null;
-            }
-            $flag = get_country_emoji($data['countryCode']);
-            $city = $data['city'];
-            $country = $data['countryCode'];
-            
-            $org = $data['org'] ?? $data['isp'] ?? '';
-            $org_clean = '';
-            if (!empty($org)) {
-                $org_parts = explode(' ', $org);
-                $org_clean = implode(' ', array_slice($org_parts, 0, 3));
-            }
-            
-            return $flag . ' ' . $city . ', ' . $country . ($org_clean ? ' (' . $org_clean . ')' : '');
-        }
+    return bk_location_from_geo($resp);
+}
+
+/**
+ * Where this server measures from, as set by hand or as already found out. ''
+ * when nobody knows. '🇨🇿 Praha, CZ' is what a failed lookup used to store; the
+ * API itself says "Prague" and adds the network, so it never means a real answer.
+ */
+function bk_known_hub_location(): string {
+    $made_up = '🇨🇿 Praha, CZ';
+    $location = trim((string)get_setting('cron_location', ''));
+    if ($location === '' || $location === 'AUTO' || $location === $made_up) {
+        $location = trim((string)get_setting('ip_loc_local', ''));
     }
-    return '🇨🇿 Praha, CZ'; // Výchozí fallback
+    return $location === $made_up ? '' : $location;
+}
+
+/**
+ * The label for a check this server is writing now. An unknown place asks the
+ * API once per run, not once per monitor, and says 'Main Server', the label
+ * the region lists already leave out.
+ */
+function bk_check_location(PDO $pdo, ?callable $lookup = null): string {
+    static $lookup_failed = false;
+    $location = bk_known_hub_location();
+    if ($location !== '') {
+        return $location;
+    }
+    if (!$lookup_failed) {
+        $found = ($lookup ?? 'detect_server_location')();
+        if ($found !== null) {
+            bk_setting_set($pdo, 'ip_loc_local', $found);
+            return $found;
+        }
+        $lookup_failed = true;
+    }
+    return 'Main Server';
 }
 
 /**

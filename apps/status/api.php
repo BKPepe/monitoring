@@ -1835,6 +1835,9 @@ if ($action === 'redetect_location') {
     bk_require_admin();
     try {
         $rl_loc = detect_server_location();
+        if ($rl_loc === null) {
+            bk_api_error(502, 'Geolokační služba neodpověděla, uložená lokalita zůstává beze změny.');
+        }
         bk_setting_set($pdo, 'ip_loc_local', $rl_loc);
         bk_audit_log($pdo, 'location_redetected', $rl_loc);
         echo json_encode(['success' => true, 'location' => $rl_loc], JSON_UNESCAPED_UNICODE);

@@ -983,10 +983,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['test_email']) && $use
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['redetect_location']) && $user_role === 'admin') {
     bk_csrf_check();
     $loc = detect_server_location();
-    bk_setting_set($pdo, 'ip_loc_local', $loc);
-    bk_audit_log($pdo, 'location_redetected', $loc);
-    // Not escaped here any more - the message is escaped where it is printed.
-    $success_msg = 'Lokace serveru byla úspěšně znovuzjištěna: ' . $loc;
+    if ($loc === null) {
+        $error_msg = 'Geolokační služba neodpověděla, uložená lokace zůstává beze změny.';
+    } else {
+        bk_setting_set($pdo, 'ip_loc_local', $loc);
+        bk_audit_log($pdo, 'location_redetected', $loc);
+        // Not escaped here any more - the message is escaped where it is printed.
+        $success_msg = 'Lokace serveru byla úspěšně znovuzjištěna: ' . $loc;
+    }
 }
 
 // Ruční odeslání týdenního reportu/digestu (pouze pro Admina)

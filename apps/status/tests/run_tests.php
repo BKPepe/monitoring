@@ -5277,5 +5277,11 @@ check('úryvek: krátká a obyčejná slova zůstanou čitelná', array_map('bk_
     'Ah', 'Warning', "Ahoj\n", 'pw=hunter hunter',
 ]), ['Ah', 'Warning', 'Ahoj\\n', '••• hunter']);
 
+// --- What the geolocation API answered (bk_location_from_geo) ------------------
+foreach ([[false, 'bez odpovědi'], ['', 'prázdná odpověď'], ['nope', 'nečitelná odpověď'], ['{"status":"fail","message":"quota"}', 'odmítnutí'], ['{"status":"success","city":"Prague"}', 'bez země']] as [$geo_in, $geo_why]) {
+    check("lokalita: {$geo_why} nic nevymyslí", bk_location_from_geo($geo_in), null);
+}
+check('lokalita: skutečná odpověď se složí', bk_location_from_geo('{"status":"success","city":"Frankfurt","countryCode":"DE","org":"Example Hosting GmbH Extra"}'), get_country_emoji('DE') . ' Frankfurt, DE (Example Hosting GmbH)');
+
 $failed = bk_test_report('čisté funkce');
 exit($failed > 0 ? 1 : 0);

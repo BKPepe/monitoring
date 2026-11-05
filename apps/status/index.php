@@ -261,10 +261,7 @@ if (!is_array($bk_agg) || !isset($bk_agg['uptime_pct'], $bk_agg['history_data'],
     // Hlavní server (lokální cron.php) zapisuje své vlastní kontroly do stejného
     // sloupce checked_from jako vzdálení agenti - bez vyloučení by se "hub" tvářil
     // jako distribuovaný uzel, což zkresluje počet i smysl téhle sekce.
-    $hub_location = trim(get_setting('cron_location', ''));
-    if ($hub_location === '' || $hub_location === 'AUTO' || $hub_location === '🇨🇿 Praha, CZ') {
-        $hub_location = trim(get_setting('ip_loc_local', ''));
-    }
+    $hub_location = bk_known_hub_location();
     $stmt_regions = $pdo->prepare("
         SELECT checked_from, COUNT(*) as cnt, MAX(checked_at) as last_seen,
                ROUND(AVG(response_time)) as avg_latency
