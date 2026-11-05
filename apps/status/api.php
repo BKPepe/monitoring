@@ -597,10 +597,13 @@ if ($action === 'monitors') {
                 'archivedAt' => !empty($r['archived_at']) ? date('c', strtotime((string)$r['archived_at'])) : null,
                 'lastCheck' => $r['last_checked'] ? date('c', strtotime($r['last_checked'])) : null,
                 'lastStatusChange' => $r['last_status_change'] ? date('c', strtotime($r['last_status_change'])) : null,
-                'responseMs' => $r['response_time'] !== null ? (int)$r['response_time'] : null,
-                'cpu' => $r['cpu_usage'] !== null ? (float)$r['cpu_usage'] : null,
-                'ram' => $r['ram_usage'] !== null ? (float)$r['ram_usage'] : null,
-                'hdd' => $r['hdd_usage'] !== null ? (float)$r['hdd_usage'] : null,
+                // From the last check only. The stored one is from whichever check last
+                // measured it: a card read "Výpadek" and "Odezva 42 ms" side by side.
+                'responseMs' => ($r['response_time'] !== null && in_array(strtolower($r['status'] ?? ''), ['up', 'warning'], true)) ? (int)$r['response_time'] : null,
+                // And a silent agent's load is from whenever it last spoke.
+                'cpu' => ($r['cpu_usage'] !== null && bk_agent_is_silent($details) !== true) ? (float)$r['cpu_usage'] : null,
+                'ram' => ($r['ram_usage'] !== null && bk_agent_is_silent($details) !== true) ? (float)$r['ram_usage'] : null,
+                'hdd' => ($r['hdd_usage'] !== null && bk_agent_is_silent($details) !== true) ? (float)$r['hdd_usage'] : null,
                 // Time since the last status change. uptimeSeconds is only an
                 // uptime while the monitor is UP - it used to be 0 for a monitor
                 // that was down ("uptime 0 s", not "down for 3 h"), and 0 before

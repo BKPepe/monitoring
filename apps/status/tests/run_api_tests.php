@@ -3489,6 +3489,27 @@ $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 92");
 $pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
 $pdo->exec("DELETE FROM assets WHERE id = 92");
 
+// R36: a list showed the last response ever measured and a silent agent's load.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status) VALUES (9360, 'R36', 'vps', 'r36.example.test', 'up')");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (9360, 'up', 42, NOW())");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at) VALUES (9360, 23.5, 40, 50, NOW())");
+$r36_row = function () use ($base, $cookie_jar): array {
+    [, $list] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    return array_values(array_filter($list['monitors'] ?? [], fn ($m) => (int)$m['id'] === 9360))[0] ?? [];
+};
+$r36 = $r36_row();
+check('běžící monitor: odezva a vytížení platí', [$r36['responseMs'] ?? null, $r36['cpu'] ?? null], [42, 23.5]);
+$pdo->exec("UPDATE monitors SET status = 'down' WHERE id = 9360");
+check('monitor ve výpadku nemá starou odezvu', $r36_row()['responseMs'], null);
+$pdo->prepare("UPDATE monitors SET status = 'up', last_details = ? WHERE id = 9360")->execute([json_encode(['agent_last_seen' => time() - 7 * 86400])]);
+$r36 = $r36_row();
+check('tichý agent nemá staré vytížení', [$r36['agentSilent'], $r36['cpu'], $r36['ram'], $r36['hdd']], [true, null, null, null]);
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 9360")->execute([json_encode(['agent_last_seen' => time() - 30])]);
+check('agent, který právě hlásí, vytížení má', $r36_row()['cpu'] ?? null, 23.5);
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 9360");
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9360");
+$pdo->exec("DELETE FROM monitors WHERE id = 9360");
+
 // R86: writes from /app left no trace, where admin.php's left both.
 $r86_audit = function (string $action) use ($pdo): array {
     $stmt = $pdo->prepare("SELECT description, target_id FROM audit_log WHERE action = ? ORDER BY id DESC LIMIT 1");
