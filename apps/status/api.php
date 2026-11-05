@@ -3606,7 +3606,6 @@ if ($action === 'incidents') {
                             AND (l2.source IS NULL OR l2.source <> 'probe')
                           ORDER BY l2.id DESC LIMIT 1)
             ORDER BY l.id DESC
-            LIMIT 50
         ");
         $stmt_logs->execute($inc_scope_params);
         $log_rows = $stmt_logs->fetchAll();
@@ -3673,16 +3672,22 @@ if ($action === 'incidents') {
         // Manually reported / global incidents (the `incidents` table - title/impact/status,
         // without a link to a specific monitor).
         $manual_incidents = [];
-        $stmt_inc = $pdo->prepare("
-            SELECT id, title, impact, status, created_at, updated_at, resolved_at,
-                   monitor_id, acknowledged_by, acknowledged_at, postmortem
-            FROM incidents
-            WHERE {$inc_manual_where}
-            ORDER BY id DESC
-            LIMIT 50
-        ");
-        $stmt_inc->execute($inc_visible === null ? [] : $inc_m_params);
-        foreach ($stmt_inc->fetchAll() as $r) {
+        // Every open incident, however old, and the latest 50 closed ones. One
+        // limit over both let a long outage's record fall off the list: the page
+        // then called it closed, and opening another one answered 409.
+        $inc_rows = [];
+        foreach (["status != 'resolved'", "status = 'resolved'"] as $inc_i => $inc_state) {
+            $stmt_inc = $pdo->prepare("
+                SELECT id, title, impact, status, created_at, updated_at, resolved_at,
+                       monitor_id, acknowledged_by, acknowledged_at, postmortem
+                FROM incidents
+                WHERE ({$inc_manual_where}) AND {$inc_state}
+                ORDER BY id DESC" . ($inc_i === 1 ? ' LIMIT 50' : ''));
+            $stmt_inc->execute($inc_visible === null ? [] : $inc_m_params);
+            $inc_rows = array_merge($inc_rows, $stmt_inc->fetchAll());
+        }
+        usort($inc_rows, fn ($a, $b) => (int)$b['id'] <=> (int)$a['id']);
+        foreach ($inc_rows as $r) {
             $start_ts = strtotime($r['created_at']);
             $end_ts = $r['resolved_at'] ? strtotime($r['resolved_at']) : time();
             $updates = [];

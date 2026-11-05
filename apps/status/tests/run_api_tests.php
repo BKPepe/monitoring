@@ -3489,6 +3489,21 @@ $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 92");
 $pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
 $pdo->exec("DELETE FROM assets WHERE id = 92");
 
+// R172: an open incident fell off a list of the latest 50.
+$pdo->exec("INSERT INTO incidents (id, title, impact, status) VALUES (917200, 'R172 otevřený', 'minor', 'investigating')");
+$r172_ins = $pdo->prepare("INSERT INTO incidents (id, title, impact, status, resolved_at) VALUES (?, 'R172 uzavřený', 'minor', 'resolved', NOW())");
+for ($r172_i = 1; $r172_i <= 55; $r172_i++) {
+    $r172_ins->execute([917200 + $r172_i]);
+}
+[, $r172] = api_get_auth($base, 'action=incidents', $cookie_jar);
+$r172_ids = array_column($r172['manualIncidents'] ?? [], 'id');
+check_true('starý otevřený incident v seznamu zůstane', in_array(917200, $r172_ids, true));
+check('uzavřených je nejvýš 50', count(array_filter($r172['manualIncidents'] ?? [], fn ($i) => $i['status'] === 'resolved')) <= 50, true);
+$r172_sorted = $r172_ids;
+rsort($r172_sorted);
+check('seznam jde dál od nejnovějšího', $r172_ids, $r172_sorted);
+$pdo->exec("DELETE FROM incidents WHERE id BETWEEN 917200 AND 917255");
+
 // R13: a silent agent's 'unknown' read as "Obnovení provozu".
 $pdo->exec("INSERT INTO monitors (id, name, type, target, status) VALUES (9130, 'R13', 'vps', 'r13.example.test', 'unknown')");
 $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES (9130, 'up', NOW() - INTERVAL 3 HOUR), (9130, 'down', NOW() - INTERVAL 2 HOUR), (9130, 'up', NOW() - INTERVAL 90 MINUTE), (9130, 'unknown', NOW() - INTERVAL 1 HOUR), (9130, 'maintenance', NOW() - INTERVAL 30 MINUTE)");
