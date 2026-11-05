@@ -2013,6 +2013,12 @@ function bk_process_escalations(PDO $pdo, ?int $now = null): array {
     }
 
     $after_mins = (int)get_setting('escalation_after_mins', '15');
+    if ($after_mins < 1) {
+        // A value save_settings no longer takes may already be stored. Escalation
+        // is switched on, so nobody expects it to be silently off: the default.
+        error_log("[escalation] escalation_after_mins is {$after_mins}, using 15");
+        $after_mins = 15;
+    }
     $webhook = trim((string)get_setting('escalation_webhook_url', ''));
 
     try {

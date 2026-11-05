@@ -2318,6 +2318,16 @@ $set_setting('escalation_after_mins', '15');
 $set_setting('escalation_webhook_url', '');
 $res = bk_process_escalations($pdo);
 check_true('bez kanálu se incident započítá jako čekající', $res['skipped_no_channel'] >= 1);
+// R102: a stored 0 left the switch on and nothing ever overdue.
+$set_setting('escalation_after_mins', '0');
+$res = bk_process_escalations($pdo);
+check_true('uložená nula eskalaci tiše nevypne', $res['skipped_no_channel'] >= 1);
+$set_setting('escalation_after_mins', '15');
+foreach (['0', '', '-5', '1.5', 'hodina'] as $ea_bad) {
+    [$ea_code, $ea_res] = api_post($base, 'action=save_settings', ['settings' => ['escalation_after_mins' => $ea_bad]], $cookie_jar);
+    check("save_settings odmítne lhůtu '{$ea_bad}'", [$ea_code, $ea_res['invalidKeys'] ?? null, $pdo->query("SELECT key_value FROM settings WHERE key_name = 'escalation_after_mins'")->fetchColumn()],
+        [400, ['escalation_after_mins'], '15']);
+}
 check('bez kanálu se nic neodešle', $res['escalated'], 0);
 check_true('bez kanálu incident zůstává neorazítkovaný', $esc_state(910) === null);
 

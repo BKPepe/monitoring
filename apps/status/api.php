@@ -2397,6 +2397,15 @@ if ($action === 'save_settings') {
         bk_api_error(400, 'Přepínač musí být 0 nebo 1, prázdná hodnota se neukládá: ' . implode(', ', $bk_bad_switches), ['invalidKeys' => $bk_bad_switches]);
     }
 
+    // Whole minutes, at least one. A cleared field reached the cron as 0, and an
+    // incident then never counted as overdue, with the switch still on.
+    if (array_key_exists('escalation_after_mins', $input['settings']) && !is_setting_env_defined('escalation_after_mins')) {
+        $bk_after = trim((string)$input['settings']['escalation_after_mins']);
+        if (!ctype_digit($bk_after) || (int)$bk_after < 1) {
+            bk_api_error(400, 'Lhůta na převzetí musí být celý počet minut, alespoň 1.', ['invalidKeys' => ['escalation_after_mins']]);
+        }
+    }
+
     try {
         $pdo->beginTransaction();
         // Not bk_setting_set(): after a rollback the snapshot would hold values
