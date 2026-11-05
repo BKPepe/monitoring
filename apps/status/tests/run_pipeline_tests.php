@@ -1997,10 +1997,33 @@ check_true('a selhání nezůstane potichu', str_contains($dr_block, 'Denní př
 // =======================================================================
 bk_test_load_functions(__DIR__ . '/../db.php', ['bk_response_ms']);
 bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'check_minecraft', 'check_minecraft_slp_attempt', 'check_minecraft_api_fallback', 'check_minecraft_rcon',
+    'bk_minecraft_fallback_url', 'bk_minecraft_fallback_result', 'bk_rcon_execute',
     'check_teamspeak', 'check_ts3_ports', 'bk_ts3_send_command', 'bk_ts3_parse_error_id',
     'bk_ts3_parse_kv_line', 'bk_ts3_parse_list_response', 'bk_ts3_escape_decode', 'bk_ts3_escape_encode',
 ]);
 if (function_exists('check_teamspeak')) {
+    // R10: a count the server did not send stays unknown. The public API is out
+    // of reach here, so these answers are the server's own.
+    $mc_proxy = getenv('https_proxy');
+    putenv('https_proxy=http://127.0.0.1:1');
+    $mc_check = function (string $mode): array {
+        $proc = proc_open([PHP_BINARY, __DIR__ . '/fixtures/mc_slp_server.php', $mode], [1 => ['pipe', 'w']], $pipes);
+        $port = is_resource($proc) ? (int)fgets($pipes[1]) : 0;
+        $result = check_minecraft('127.0.0.1', $port, 2);
+        proc_terminate($proc);
+        return [$result['status'], $result['players_online'], $result['players_max']];
+    };
+    check('Minecraft: počty ze serveru', $mc_check('full'), ['up', 3, 32]);
+    check('Minecraft: skryté počty nejsou prázdný server', $mc_check('hidden'), ['up', null, null]);
+    check('Minecraft: nečitelná odpověď nevymyslí 0 / 0', $mc_check('garbage'), ['up', null, null]);
+    $mc_closed = stream_socket_server('tcp://127.0.0.1:0');
+    $mc_free = (int)substr(strrchr((string)stream_socket_get_name($mc_closed, false), ':'), 1);
+    fclose($mc_closed);
+    $mc_down = check_minecraft('127.0.0.1', $mc_free, 1);
+    check('Minecraft: vypnutý server nemá nula hráčů, ale žádné údaje', [$mc_down['status'], $mc_down['players_online'], $mc_down['players_max']], ['down', null, null]);
+    putenv($mc_proxy === false ? 'https_proxy' : "https_proxy={$mc_proxy}");
+
     $ts3_proc = proc_open([PHP_BINARY, __DIR__ . '/fixtures/ts3_query_server.php'], [1 => ['pipe', 'w']], $ts3_pipes);
     $ts3_port = is_resource($ts3_proc) ? (int)fgets($ts3_pipes[1]) : 0;
     check_true('falešný ServerQuery naslouchá', $ts3_port > 0);

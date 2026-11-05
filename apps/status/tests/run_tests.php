@@ -5277,6 +5277,19 @@ check('úryvek: krátká a obyčejná slova zůstanou čitelná', array_map('bk_
     'Ah', 'Warning', "Ahoj\n", 'pw=hunter hunter',
 ]), ['Ah', 'Warning', 'Ahoj\\n', '••• hunter']);
 
+// --- The public Minecraft API (R10, R11, R149) ----------------------------------
+check('API se ptá na port monitoru', bk_minecraft_fallback_url('mc.example.test', 25566), 'https://api.mcsrvstat.us/2/mc.example.test:25566');
+foreach ([false, '', 'nope', '{"debug":{}}'] as $mc_bad) {
+    check('nepoužitelná odpověď API je null', bk_minecraft_fallback_result($mc_bad), null);
+}
+$mc_on = bk_minecraft_fallback_result('{"online":true,"software":"Paper","version":"1.0","players":{"online":2,"max":32,"list":["Anna"]},"motd":{"clean":["Ahoj"]}}');
+check('API: co poslalo, to platí', [$mc_on['status'], $mc_on['players_online'], $mc_on['players_max'], $mc_on['version'], $mc_on['players_list'], $mc_on['motd'], $mc_on['api_fallback']], ['up', 2, 32, 'Paper 1.0', ['Anna'], 'Ahoj', true]);
+check('API: jeho odezva není odezva serveru', $mc_on['response_time'], null);
+$mc_bare = bk_minecraft_fallback_result('{"online":true}');
+check('API: co neposlalo, zůstane neznámé', [$mc_bare['status'], $mc_bare['players_online'], $mc_bare['players_max']], ['up', null, null]);
+$mc_off = bk_minecraft_fallback_result('{"online":false}');
+check('API: vypnutý server bez počtů', [$mc_off['status'], $mc_off['players_online'], $mc_off['players_max']], ['down', null, null]);
+
 // --- What the geolocation API answered (bk_location_from_geo) ------------------
 foreach ([[false, 'bez odpovědi'], ['', 'prázdná odpověď'], ['nope', 'nečitelná odpověď'], ['{"status":"fail","message":"quota"}', 'odmítnutí'], ['{"status":"success","city":"Prague"}', 'bez země']] as [$geo_in, $geo_why]) {
     check("lokalita: {$geo_why} nic nevymyslí", bk_location_from_geo($geo_in), null);

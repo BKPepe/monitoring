@@ -6238,55 +6238,58 @@ function check_minecraft_rcon($host, $rcon_port, $rcon_password, $timeout = 3) {
     ];
 }
 
-function check_minecraft_api_fallback($host, $start, $timeout = 3) {
-    $url = "https://api.mcsrvstat.us/2/" . urlencode($host);
-    $ch = curl_init($url);
+/** The address the public API is asked about: this host, on the monitor's own port. */
+function bk_minecraft_fallback_url(string $host, int $port): string {
+    return 'https://api.mcsrvstat.us/2/' . rawurlencode($host) . ':' . $port;
+}
+
+/**
+ * What the public API answered, as a check result, or null when it said nothing
+ * usable. A count it did not send stays null: 20 and 0 used to be filled in, and
+ * cron drew them in the player history. So does the response time: this request
+ * measures two failed attempts of ours and someone else's server, not the target.
+ */
+function bk_minecraft_fallback_result($response): ?array {
+    $data = is_string($response) ? json_decode($response, true) : null;
+    if (!is_array($data) || !isset($data['online'])) {
+        return null;
+    }
+    if ($data['online'] !== true) {
+        return [
+            'status' => 'down',
+            'response_time' => null,
+            'error' => 'Minecraft server je podle API vypnutý.',
+            'players_online' => null,
+            'players_max' => null,
+        ];
+    }
+    $version = isset($data['version']) ? (string)$data['version'] : '';
+    if (isset($data['software'])) {
+        $version = $data['software'] . ' ' . $version;
+    }
+    return [
+        'status' => 'up',
+        'response_time' => null,
+        'error' => null,
+        'players_online' => is_numeric($data['players']['online'] ?? null) ? (int)$data['players']['online'] : null,
+        'players_max' => is_numeric($data['players']['max'] ?? null) ? (int)$data['players']['max'] : null,
+        'version' => $version,
+        'players_list' => is_array($data['players']['list'] ?? null) ? $data['players']['list'] : [],
+        'motd' => is_array($data['motd']['clean'] ?? null) ? implode("
+", $data['motd']['clean']) : '',
+        'api_fallback' => true,
+    ];
+}
+
+function check_minecraft_api_fallback($host, $port, $timeout = 3) {
+    $ch = curl_init(bk_minecraft_fallback_url((string)$host, (int)$port));
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, $timeout + 2);
     curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
     curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
     $response = curl_exec($ch);
     $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-    
-    if ($http_code === 200 && $response) {
-        $data = json_decode($response, true);
-        if ($data && isset($data['online'])) {
-            if ($data['online'] === true) {
-                $players_online = isset($data['players']['online']) ? (int)$data['players']['online'] : 0;
-                $players_max = isset($data['players']['max']) ? (int)$data['players']['max'] : 20;
-                $version = isset($data['version']) ? $data['version'] : '';
-                if (isset($data['software'])) {
-                    $version = $data['software'] . ' ' . $version;
-                }
-                $players_list = isset($data['players']['list']) ? $data['players']['list'] : [];
-                $motd = '';
-                if (isset($data['motd']['clean']) && is_array($data['motd']['clean'])) {
-                    $motd = implode("\n", $data['motd']['clean']);
-                }
-                return [
-                    'status' => 'up',
-                    'response_time' => bk_response_ms((microtime(true) - $start) * 1000),
-                    'error' => null,
-                    'players_online' => $players_online,
-                    'players_max' => $players_max,
-                    'version' => $version,
-                    'players_list' => $players_list,
-                    'motd' => $motd,
-                    'api_fallback' => true
-                ];
-            } else {
-                return [
-                    'status' => 'down',
-                    'response_time' => null,
-                    'error' => 'Minecraft server je podle API vypnutý.',
-                    'players_online' => 0,
-                    'players_max' => 0
-                ];
-            }
-        }
-    }
-    return null;
+    return $http_code === 200 ? bk_minecraft_fallback_result($response) : null;
 }
 
 /**
@@ -6327,15 +6330,15 @@ function check_minecraft($host, $port = 25565, $timeout = 3, $rcon_port = null, 
         return $result;
     }
 
-    $fb = check_minecraft_api_fallback($host, $start, $timeout);
+    $fb = check_minecraft_api_fallback($host, $port, $timeout);
     if ($fb) return $fb;
 
     return [
         'status' => 'down',
         'response_time' => null,
         'error' => 'Prázdná odpověď od MC serveru (timeout nebo nepodporovaný protokol), i po opakovaném pokusu.',
-        'players_online' => 0,
-        'players_max' => 0
+        'players_online' => null,
+        'players_max' => null
     ];
 }
 
@@ -6410,15 +6413,15 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
         // Here the server genuinely replied, just with another packet ID - a retry
         // would not help, it is a real protocol/port mismatch.
         @fclose($socket);
-        $fb = check_minecraft_api_fallback($host, $start, $timeout);
+        $fb = check_minecraft_api_fallback($host, $port, $timeout);
         if ($fb) return $fb;
 
         return [
             'status' => 'down',
             'response_time' => null,
             'error' => 'Neočekávané ID paketu od MC serveru',
-            'players_online' => 0,
-            'players_max' => 0
+            'players_online' => null,
+            'players_max' => null
         ];
     }
 
@@ -6442,20 +6445,21 @@ function check_minecraft_slp_attempt($host, $port, $timeout, $start) {
     $duration = bk_response_ms((microtime(true) - $start) * 1000);
 
     if (!$data) {
-        $fb = check_minecraft_api_fallback($host, $start, $timeout);
+        $fb = check_minecraft_api_fallback($host, $port, $timeout);
         if ($fb) return $fb;
         
         return [
             'status' => 'up',
             'response_time' => $duration,
             'error' => 'Nelze dekódovat JSON stav Minecraft serveru',
-            'players_online' => 0,
-            'players_max' => 0
+            'players_online' => null,
+            'players_max' => null
         ];
     }
 
-    $playersOnline = isset($data['players']['online']) ? (int)$data['players']['online'] : 0;
-    $playersMax = isset($data['players']['max']) ? (int)$data['players']['max'] : 0;
+    // A proxy may hide the players: not sent is unknown, not an empty server.
+    $playersOnline = is_numeric($data['players']['online'] ?? null) ? (int)$data['players']['online'] : null;
+    $playersMax = is_numeric($data['players']['max'] ?? null) ? (int)$data['players']['max'] : null;
     $version = isset($data['version']['name']) ? $data['version']['name'] : 'Neznámá';
     
     // Fetch the player list
