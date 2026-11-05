@@ -299,6 +299,31 @@ describe('Veřejná stránka: zastavený sběr dat není „vše v pořádku“ 
     expect(screen.queryByText('Všechny systémy jsou online')).toBeNull();
   });
 
+  it('?page=: čísla celé sady se o výběru netvrdí', async () => {
+    const api = answering([monitor(1, 'E-shop', 'up'), monitor(2, 'Wiki', 'up')], { pageIds: [2] });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => api(String(input)))
+    );
+    renderPage('/public?page=weby');
+
+    expect(await screen.findByText('Online')).toBeTruthy();
+    expect(screen.queryByText('Dostupnost 30 dní')).toBeNull();
+    expect(screen.queryByText('Míst měření')).toBeNull();
+  });
+
+  it('bez výběru čísla celé sady zůstanou', async () => {
+    const api = answering([monitor(1, 'E-shop', 'up')]);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => api(String(input)))
+    );
+    renderPage('/public');
+
+    expect(await screen.findByText('Dostupnost 30 dní')).toBeTruthy();
+    expect(screen.getByText('Míst měření')).toBeTruthy();
+  });
+
   it('odpověď bez příznaku čerstvosti sběru není „všechny online“ a netvrdí, že cron stojí', async () => {
     // A server without the flag (or one whose status part did not deploy):
     // nobody knows whether cron runs, so the page says neither.
@@ -507,7 +532,7 @@ describe('Veřejná stránka: stránka bez veřejné služby není „vše v po�
       renderPage('/public?page=servery');
 
       expect(await screen.findByText('Na této stránce nejsou žádné veřejné služby')).toBeTruthy();
-      await fleetIn();
+      await waitFor(() => expect(tileValue('Online')).toBe('0'));
 
       act(() => vi.advanceTimersByTime(60_000));
       await waitFor(() => expect(pageCalls).toBe(2));

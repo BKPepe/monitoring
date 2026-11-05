@@ -812,7 +812,7 @@ export function PublicStatusPage() {
               {/* The figures under the verdict (NetPulse KPI strip). Unknown is a
                   dash, never a 0, and only a count of services down takes a
                   colour: a green "Online 6" read as a second verdict. */}
-              <StatRow cols={4} className="border-t border-border pt-5">
+              <StatRow cols={filtered ? 2 : 4} className="border-t border-border pt-5">
                 <StatBlock variant="plain" size="xs" label={t('public.stat_online', 'Online')} value={online} />
                 <StatBlock
                   variant="plain"
@@ -821,19 +821,25 @@ export function PublicStatusPage() {
                   value={down}
                   tone={down !== null && down > 0 ? 'down' : null}
                 />
-                <StatBlock
-                  variant="plain"
-                  size="xs"
-                  label={t('public.stat_uptime', 'Dostupnost 30 dní')}
-                  value={status?.uptimePercent != null ? formatPercentValue(status.uptimePercent, 2, lang) : null}
-                  secondary="%"
-                />
-                <StatBlock
-                  variant="plain"
-                  size="xs"
-                  label={t('public.stat_regions', 'Míst měření')}
-                  value={regions === null ? null : regions.length}
-                />
+                {/* Both are about the whole public set. On a page of two servers at
+                    97 % they read 99,98 %, about services the page does not list. */}
+                {!filtered && (
+                  <>
+                    <StatBlock
+                      variant="plain"
+                      size="xs"
+                      label={t('public.stat_uptime', 'Dostupnost 30 dní')}
+                      value={status?.uptimePercent != null ? formatPercentValue(status.uptimePercent, 2, lang) : null}
+                      secondary="%"
+                    />
+                    <StatBlock
+                      variant="plain"
+                      size="xs"
+                      label={t('public.stat_regions', 'Míst měření')}
+                      value={regions === null ? null : regions.length}
+                    />
+                  </>
+                )}
               </StatRow>
             </div>
             {showHealth && (
