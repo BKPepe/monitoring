@@ -7948,13 +7948,16 @@ function is_in_maintenance($monitor) {
     if ((int)($monitor['maintenance'] ?? 0) !== 1) {
         return false;
     }
-    if (!empty($monitor['maintenance_start']) && !empty($monitor['maintenance_end'])) {
-        $now = time();
-        $start = strtotime($monitor['maintenance_start']);
-        $end = strtotime($monitor['maintenance_end']);
-        if ($now >= $start && $now <= $end) {
-            return true;
-        }
+    // Each end of the window counts on its own. A window with only a start used
+    // to run from the moment it was saved, so planning next week's work silenced
+    // the monitor today, while the public page announced the work as upcoming.
+    $now = time();
+    $start = !empty($monitor['maintenance_start']) ? strtotime((string)$monitor['maintenance_start']) : false;
+    $end = !empty($monitor['maintenance_end']) ? strtotime((string)$monitor['maintenance_end']) : false;
+    if ($start !== false && $now < $start) {
+        return false;
+    }
+    if ($end !== false && $now > $end) {
         return false;
     }
     return true;

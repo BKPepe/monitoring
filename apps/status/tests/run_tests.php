@@ -824,6 +824,18 @@ check_true('varováno před 25 hodinami = znovu', bk_ssl_alert_due(10, 14, $now 
 check_false('prošlý certifikát řeší výpadek, ne varování', bk_ssl_alert_due(-1, 14, 0, $now));
 check_true('poslední den je ještě varování', bk_ssl_alert_due(0, 14, 0, $now));
 
+// --- Is the window running now (is_in_maintenance) ------------------------------
+$im_at = fn (int $offset): string => date('Y-m-d H:i:s', time() + $offset);
+check_false('vypnutá údržba neplatí ani s oknem', is_in_maintenance(['maintenance' => 0, 'maintenance_start' => $im_at(-60), 'maintenance_end' => $im_at(60)]));
+check_true('bez okna platí, dokud ji někdo nevypne', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => null, 'maintenance_end' => null]));
+check_true('okno, ve kterém jsme', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => $im_at(-60), 'maintenance_end' => $im_at(60)]));
+check_false('okno, které teprve začne', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => $im_at(3600), 'maintenance_end' => $im_at(7200)]));
+check_false('okno, které skončilo', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => $im_at(-7200), 'maintenance_end' => $im_at(-3600)]));
+check_false('jen začátek v budoucnu ještě neplatí', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => $im_at(3600), 'maintenance_end' => null]));
+check_true('jen začátek v minulosti platí', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => $im_at(-60), 'maintenance_end' => '']));
+check_true('jen konec v budoucnu platí', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => null, 'maintenance_end' => $im_at(60)]));
+check_false('jen konec v minulosti už neplatí', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => null, 'maintenance_end' => $im_at(-60)]));
+
 // --- Expired maintenance window (bk_maintenance_window_expired) -----------------
 $now = strtotime('2026-09-07 12:00:00');
 check_true('okno s koncem v minulosti vypršelo', bk_maintenance_window_expired(['maintenance' => 1, 'maintenance_end' => '2026-09-07 11:00:00'], $now));
