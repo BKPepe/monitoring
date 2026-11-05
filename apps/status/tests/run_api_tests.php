@@ -3426,6 +3426,26 @@ $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 92");
 $pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
 $pdo->exec("DELETE FROM assets WHERE id = 92");
 
+// --- TeamSpeak's version area reads the number, not the build (R150) ------------
+// version_compare() takes "3.13.7 [Build: 1655727713]" for older than "3.13.7".
+$tv_area = function (string $latest, ?string $reported) use ($pdo): array {
+    $GLOBALS['system_settings']['ts3_latest_version'] = $latest;
+    $areas = build_teamspeak_health_areas(['id' => 1, 'type' => 'teamspeak'], 'up', $reported === null ? [] : ['version' => $reported], [], $pdo);
+    foreach ($areas as $area) {
+        if ($area['key'] === 'version') {
+            return [$area['status'], $area['score_pct']];
+        }
+    }
+    return [];
+};
+check('TS3: aktuální verze s číslem buildu', $tv_area('3.13.7', '3.13.7 [Build: 1655727713]'), ['ok', 100]);
+check('TS3: starší verze s číslem buildu', $tv_area('3.13.8', '3.13.7 [Build: 1655727713]'), ['warn', 70]);
+check('TS3: novější než zadaná', $tv_area('3.13.7', '3.13.10 [Build: 1]'), ['ok', 100]);
+check('TS3: číslo buildu i v nastavení', $tv_area('3.13.7 [Build: 1655727713]', '3.13.7'), ['ok', 100]);
+check('TS3: bez čísla verze se nehodnotí', $tv_area('3.13.7', 'neznámá'), ['na', 0]);
+check('TS3: bez hlášené verze se nehodnotí', $tv_area('3.13.7', null), ['na', 0]);
+unset($GLOBALS['system_settings']['ts3_latest_version']);
+
 // --- An agent-side service in maintenance keeps cron's status ------------
 //
 // R141: the agent's result overwrote 'maintenance' with up/down, cron set it

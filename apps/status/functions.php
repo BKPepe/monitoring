@@ -6760,6 +6760,11 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
     // Version (5 %) - only when a "last known version" is filled in manually in settings
     $latest_version = trim((string)get_setting('ts3_latest_version', ''));
     $current_version = is_array($check_stages) ? (string)($check_stages['version'] ?? '') : '';
+    // The server reports "3.13.7 [Build: 1655727713]", and version_compare reads
+    // that tail as older than the bare number, so a current server scored outdated.
+    $version_number = fn (string $v): string => preg_match('/\d+(?:\.\d+)+/', $v, $m) === 1 ? $m[0] : '';
+    $latest_version = $version_number($latest_version);
+    $current_version = $version_number($current_version);
     if ($latest_version !== '' && $current_version !== '') {
         $up_to_date = version_compare($current_version, $latest_version, '>=');
         $areas[] = ['key' => 'version', 'label' => 'Verze', 'weight_pct' => 5, 'score_pct' => $up_to_date ? 100 : 70, 'status' => $up_to_date ? 'ok' : 'warn'];
