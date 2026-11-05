@@ -7,7 +7,7 @@ import { TeamspeakCard } from './teamspeak-card';
 const json = (body: unknown) => ({ ok: true, status: 200, json: () => Promise.resolve(body) }) as Response;
 
 /** The stored check_stages of a TeamSpeak check; only the ServerQuery part varies. */
-function stubStages(query: Record<string, unknown>) {
+function stubStages(query: Record<string, unknown>, ports: Record<string, unknown> = {}) {
   vi.stubGlobal(
     'fetch',
     vi.fn(() =>
@@ -16,7 +16,7 @@ function stubStages(query: Record<string, unknown>) {
           stages: {
             query: { ok: true, time_ms: 12, ...query },
             service: { clients_online: 3, clients_max: 32, slot_usage_pct: 9.4, channel_count: 3 },
-            ports: {},
+            ports,
             version: '3.13.7',
           },
         })
@@ -41,6 +41,24 @@ describe('TeamspeakCard', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+  });
+
+  it('tells a port not measured from a closed one', async () => {
+    stubStages(
+      { authenticated: true },
+      {
+        voice: { ok: null, port: 9987 },
+        query: { ok: true, port: 10011 },
+        filetransfer: { ok: false, port: 30033 },
+      }
+    );
+    renderCard();
+    const chip = async (label: string) =>
+      (await screen.findByText(label)).parentElement?.querySelector('span') as HTMLElement;
+    expect((await chip('Hlasový port')).className).toContain('text-muted-foreground');
+    expect((await chip('Hlasový port')).title).toBe('Neměří se');
+    expect((await chip('ServerQuery')).className).toContain('text-up');
+    expect((await chip('Přenos souborů')).className).toContain('text-down');
   });
 
   it('without credentials asks for them', async () => {

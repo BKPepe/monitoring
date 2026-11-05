@@ -3662,6 +3662,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'ts3.query_clients': { cs: '{count} query klientů', en: '{count} query clients' },
   'ts3.ports': { cs: 'Dostupnost portů', en: 'Port reachability' },
   'ts3.port_voice': { cs: 'Hlasový port', en: 'Voice port' },
+  'ts3.port_unmeasured': { cs: 'Neměří se', en: 'Not measured' },
   'ts3.port_query': { cs: 'ServerQuery', en: 'ServerQuery' },
   'ts3.port_filetransfer': { cs: 'Přenos souborů', en: 'File transfer' },
   'ts3.voice_activity': { cs: 'Aktivita v hlasu', en: 'Voice activity' },

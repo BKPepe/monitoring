@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { StatBlock } from '@/components/stat-block';
 import { Badge } from '@/components/ui/badge';
-import { Mic, Plug, IdCard, Users, Check, X } from 'lucide-react';
+import { Mic, Minus, Plug, IdCard, Users, Check, X } from 'lucide-react';
 import { useLanguage } from '@/context/language-context';
 import { cn } from '@/lib/utils';
 import { LoadingState } from '@/components/ui/states';
@@ -26,7 +26,8 @@ interface Ts3Stages {
     server_group_count?: number | null;
     voice_activity?: Record<string, number> | null;
   };
-  ports?: Record<string, { ok?: boolean; port?: number }>;
+  // ok null = not measured (the voice port is UDP).
+  ports?: Record<string, { ok?: boolean | null; port?: number }>;
   license?: string | null;
   version?: string | null;
 }
@@ -173,13 +174,26 @@ export function TeamspeakCard({ monitorId }: { monitorId: number }) {
             <ul className="mt-1.5 space-y-1">
               {Object.entries(ports).map(([key, info]) => (
                 <li key={key} className="flex items-center gap-2 text-xs">
+                  {/* null = not measured: the voice port is UDP, and a check cannot
+                      tell it apart from a closed one. A red cross called it closed. */}
                   <span
                     className={cn(
                       'grid size-4 shrink-0 place-items-center rounded-full',
-                      info?.ok ? 'bg-up/15 text-up' : 'bg-down/15 text-down'
+                      info?.ok == null
+                        ? 'bg-secondary text-muted-foreground'
+                        : info.ok
+                          ? 'bg-up/15 text-up'
+                          : 'bg-down/15 text-down'
                     )}
+                    title={info?.ok == null ? t('ts3.port_unmeasured', 'Neměří se') : undefined}
                   >
-                    {info?.ok ? <Check className="size-2.5" /> : <X className="size-2.5" />}
+                    {info?.ok == null ? (
+                      <Minus className="size-2.5" />
+                    ) : info.ok ? (
+                      <Check className="size-2.5" />
+                    ) : (
+                      <X className="size-2.5" />
+                    )}
                   </span>
                   <span>{portLabels[key] ?? key}</span>
                   {info?.port != null && <span className="text-muted-foreground ml-auto font-mono">{info.port}</span>}
