@@ -53,16 +53,22 @@ export function DashboardLayoutEditor({
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // What Save would write is the list on screen. With no catalogue that list
+  // is empty, and saving it would wipe the layout the user already has.
+  const [loaded, setLoaded] = React.useState(false);
 
   React.useEffect(() => {
     if (!open) return;
     let active = true;
     setLoading(true);
+    setLoaded(false);
+    setError(null);
     fetch('/status/api.php?action=dashboard_layout', { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((data) => {
-        if (!active || !data) return;
-        const cat: CatalogEntry[] = Array.isArray(data.catalog) ? data.catalog : [];
+        if (!active) return;
+        if (!Array.isArray(data?.catalog) || data.catalog.length === 0) throw new Error('empty catalog');
+        const cat: CatalogEntry[] = data.catalog;
         setCatalog(cat);
         const saved: DashboardTile[] = Array.isArray(data.tiles) ? data.tiles : [];
         // Catalogue tiles the user never ordered are appended at the end -
@@ -82,6 +88,7 @@ export function DashboardLayoutEditor({
             })),
         ];
         setTiles(merged);
+        setLoaded(true);
       })
       .catch(() => {
         if (active) setError(t('layout.load_error', 'Katalog dlaždic se nepodařilo načíst.'));
@@ -240,7 +247,7 @@ export function DashboardLayoutEditor({
           <Button variant="outline" size="sm" onClick={onClose}>
             {t('common.cancel', 'Zrušit')}
           </Button>
-          <Button size="sm" onClick={save} disabled={saving || loading} className="font-semibold">
+          <Button size="sm" onClick={save} disabled={saving || loading || !loaded} className="font-semibold">
             {saving ? t('layout.saving', 'Ukládám…') : t('layout.save', 'Uložit rozložení')}
           </Button>
         </DialogFooter>
