@@ -65,6 +65,10 @@ action=login_2fa` with `{"totp_code": "…"}` alone then finishes it. It
 answers like `action=login`: 401 for a wrong code (it counts towards the
 lockout) or when nothing waits, 429 while the account is locked.
 
+Actions that ask a signed-in account for its password count wrong ones toward
+the login's lockout: after five within 15 minutes, by account or address, they
+and the login answer 429 for 15 minutes.
+
 OAuth sign-in is a browser navigation, not a call: `GET
 /status/api.php?action=oauth_start&provider=github` (or `google`, `discord`,
 `gitlab`) sends the browser to the provider. A link to the signed-in account

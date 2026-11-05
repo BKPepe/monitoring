@@ -547,7 +547,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
     
     if (empty($email)) {
         $error_msg = 'E-mail administrátora je povinný.';
-    } elseif ($email !== (string)($me['email'] ?? '') && !password_verify((string)$old_pass, $me['password_hash'])) {
+    } elseif ($email !== (string)($me['email'] ?? '') && bk_password_attempt($pdo, $me, (string)$old_pass) !== 'ok') {
         // Stejné pravidlo jako update_profile v api.php: na tuhle adresu jde reset hesla.
         $error_msg = 'Změna e-mailu vyžaduje stávající heslo. Změna profilu neproběhla.';
     } else {
@@ -555,7 +555,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['change_password'])) {
         if (!empty($new_pass)) {
             if (strlen($new_pass) < 8) {
                 $error_msg = 'Heslo musí mít alespoň 8 znaků.';
-            } elseif (password_verify($old_pass, $me['password_hash'])) {
+            } elseif (bk_password_attempt($pdo, $me, (string)$old_pass) === 'ok') {
                 $new_hash = password_hash($new_pass, PASSWORD_BCRYPT);
                 $stmt_up = $pdo->prepare("UPDATE users SET email = ?, phone = ?, whatsapp_apikey = ?, sms_notifications = ?, whatsapp_notifications = ?, email_lang = ?, password_hash = ? WHERE id = ?");
                 $stmt_up->execute([$email, $phone, $wa_apikey, $sms_notif, $whatsapp_notif, $my_email_lang, $new_hash, $me['id']]);
@@ -584,7 +584,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['oauth_unlink'])) {
     $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
     $stmt->execute([$_SESSION['admin_id']]);
     $me = $stmt->fetch();
-    if ($me && password_verify($_POST['oauth_unlink_password'] ?? '', $me['password_hash'])) {
+    if ($me && bk_password_attempt($pdo, $me, (string)($_POST['oauth_unlink_password'] ?? '')) === 'ok') {
         $unlinked_provider = $me['oauth_provider'];
         $stmt_up = $pdo->prepare("UPDATE users SET oauth_provider = NULL, oauth_id = NULL WHERE id = ?");
         $stmt_up->execute([$_SESSION['admin_id']]);

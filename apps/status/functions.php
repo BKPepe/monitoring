@@ -15892,6 +15892,26 @@ function bk_audit_log($pdo, $action, $description = '', $target_type = null, $ta
 }
 
 /**
+ * The password a signed-in action asks for, under the login's limit on guesses.
+ * Only the login had one, so a stolen session could try passwords here as fast
+ * as it liked, and that prompt is what stands between it and the account. A
+ * wrong one counts as login_failed, against the same lockout.
+ *
+ * @param array{id: int|string, username: string, password_hash: string} $user
+ * @return 'ok'|'wrong'|'locked'
+ */
+function bk_password_attempt(PDO $pdo, array $user, string $password): string {
+    if (bk_login_lockout_seconds($pdo, (string)$user['username']) > 0) {
+        return 'locked';
+    }
+    if (password_verify($password, (string)$user['password_hash'])) {
+        return 'ok';
+    }
+    bk_audit_log($pdo, 'login_failed', 'Wrong password for a signed-in action', null, null, (int)$user['id'], (string)$user['username']);
+    return 'wrong';
+}
+
+/**
  * Rate limiting / lockout pro login.
  * Returns the remaining lockout seconds (0 = not locked).
  * Limit: 5 failed attempts in 15 minutes -> a 15-minute lockout.

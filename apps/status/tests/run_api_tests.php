@@ -3494,6 +3494,35 @@ check('monitor na stejném stroji ano', [$bd_own['cpu'] ?? null, $bd_own['ts3_pr
 $pdo->exec("DELETE FROM monitors WHERE id IN (148, 149, 150)");
 $pdo->exec("DELETE FROM assets WHERE id = 148");
 
+// --- A signed-in password prompt has the login's limit on guesses (R355) -----------
+// Only the login counted failures, so a stolen session could try the account's
+// password here for as long as it liked. Every prompt shares the one lockout.
+$pa_clear = fn () => $pdo->exec("DELETE FROM audit_log WHERE action = 'login_failed'");
+$pa_clear();
+$pa_prompts = [
+    ['oauth_link_start', ['provider' => 'github', 'password' => 'nespravne-heslo']],
+    ['update_profile', ['email' => 'jinam@example.com', 'phone' => '', 'oldPassword' => 'nespravne-heslo']],
+    ['update_profile', ['email' => 'admin@example.com', 'phone' => '', 'oldPassword' => 'nespravne-heslo', 'newPassword' => 'NoveHeslo123!']],
+    ['oauth_unlink', ['password' => 'nespravne-heslo']],
+    ['totp_disable', ['password' => 'nespravne-heslo']],
+];
+$pa_codes = [];
+foreach ($pa_prompts as [$pa_action, $pa_body]) {
+    [$pa_codes[]] = api_post($base, 'action=' . $pa_action, $pa_body, $cookie_jar);
+}
+check('každá výzva odmítne špatné heslo a započítá ho', [array_values(array_unique($pa_codes)),
+    (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'login_failed'")->fetchColumn()], [[400], 5]);
+[$pa_locked, $pa_res] = api_post($base, 'action=oauth_link_start', ['provider' => 'github', 'password' => $bk_test_admin_password], $cookie_jar);
+check('po pěti pokusech neprojde ani správné heslo', $pa_locked, 429);
+check_true('a odpověď řekne proč', str_contains((string)($pa_res['error'] ?? ''), 'Příliš mnoho'));
+[$pa_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password], tempnam(sys_get_temp_dir(), 'bk_test_pa'), '');
+check('zámek platí i pro přihlášení', $pa_login, 429);
+$pa_clear();
+[$pa_ok] = api_post($base, 'action=oauth_link_start', ['provider' => 'github', 'password' => $bk_test_admin_password], $cookie_jar);
+check('po uplynutí zámku správné heslo projde', $pa_ok, 200);
+$pa_rows = (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'login_failed'")->fetchColumn();
+check('správné heslo se nepočítá', $pa_rows, 0);
+
 // --- An agent-side service in maintenance keeps cron's status ------------
 //
 // R141: the agent's result overwrote 'maintenance' with up/down, cron set it
@@ -4555,6 +4584,7 @@ check('použitý kód podruhé nepřihlásí', $code, 401);
 @unlink($rc_jar);
 
 // Regeneration requires the password and invalidates the old set.
+$pa_clear();
 [$code] = api_post($base, 'action=totp_recovery_regenerate', ['password' => 'spatne-heslo'], $cookie_jar);
 check('regenerace se špatným heslem vrací 400', $code, 400);
 [$code, $rr] = api_post($base, 'action=totp_recovery_regenerate', ['password' => $bk_test_admin_password], $cookie_jar);
@@ -4665,6 +4695,7 @@ $oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
 check('API tu session nebere jako přihlášenou, ale řekne, že čeká na kód',
     [$oa_sess['authenticated'] ?? null, $oa_sess['pending2fa'] ?? null], [false, true]);
 
+$pa_clear();
 [$code, $oa_api] = $oa_l2($oa_cj, '000000');
 check('špatný kód nepřihlásí', [$code, $oa_api['message'] ?? null], [401, 'Invalid 2FA code.']);
 check('a zapíše se jako login_failed, který počítá zámek', $oa_fails(), 1);
@@ -4834,6 +4865,7 @@ check('v logu je opsaná v \xNN na řádku [oauth], podvržený řádek tam nen�
 $oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
 [, $oa_in] = api_post($base, 'action=login', ['username' => 'oauth_plain', 'password' => $oa_password], $oa_cj, '');
 $oa_link = fn (array $body, string $csrf) => api_post($base, 'action=oauth_link_start', $body + ['provider' => 'github'], $oa_cj, $csrf);
+$pa_clear();
 // A linked provider signs in without the password, so a link needs it: a stolen
 // session must not add its own provider account. Nothing may start without it.
 check('starý odkaz na propojení vede na profil a k poskytovateli nepustí',
@@ -4895,6 +4927,7 @@ check('starý odkaz na propojení taky, s link=1',
 
 // The password of the same account stops at the same step: admin.php's form
 // in the legacy UI, and the API asks for the code before it signs in.
+$pa_clear();
 $oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
 [$code, $oa_page] = $oa_admin($oa_cj, ['login' => '1', 'username' => 'oauth_totp', 'password' => $oa_password]);
 check_true('heslo účtu s 2FA v admin.php vede na krok s kódem', $code === 200 && str_contains($oa_page, 'name="totp_login_code"'));

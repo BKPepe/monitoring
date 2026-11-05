@@ -65,6 +65,10 @@ true`; přihlášení pak dokončí `POST action=login_2fa` jen s `{"totp_code":
 "…"}`. Odpovídá jako `action=login`: 401 na špatný kód (počítá se do
 zámku) nebo když nic nečeká, 429, dokud je účet zamčený.
 
+Akce, které po přihlášeném účtu chtějí heslo, započítávají špatné pokusy do zámku
+přihlášení: po pěti za 15 minut, podle účtu nebo adresy, odpovídají ony i přihlášení
+15 minut kódem 429.
+
 Přihlášení přes OAuth je navigace prohlížeče, ne volání: `GET
 /status/api.php?action=oauth_start&provider=github` (nebo `google`,
 `discord`, `gitlab`) pošle prohlížeč k poskytovateli. Propojení s přihlášeným

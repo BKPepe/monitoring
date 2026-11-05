@@ -152,6 +152,21 @@ function bk_api_error(int $status, string $message, array $extra = []): never {
 }
 
 /**
+ * bk_password_attempt() for the API: true for the right password, and a locked
+ * account answers 429 here instead of the action's own "wrong password", which
+ * would read as if the password had been tried.
+ *
+ * @param array{id: int|string, username: string, password_hash: string} $user
+ */
+function bk_api_password_ok(PDO $pdo, array $user, string $password): bool {
+    $attempt = bk_password_attempt($pdo, $user, $password);
+    if ($attempt === 'locked') {
+        bk_api_error(429, 'Příliš mnoho neúspěšných pokusů o heslo. Zkuste to znovu za chvíli.');
+    }
+    return $attempt === 'ok';
+}
+
+/**
  * Release the session lock for endpoints that only read from it.
  *
  * config.php calls session_start() on every request and PHP holds an exclusive
@@ -432,13 +447,13 @@ if ($action === 'oauth_link_start') {
     $ol_provider = (string)($ol_input['provider'] ?? '');
     $ol_uid = (int)$_SESSION['admin_id'];
     try {
-        $stmt_ol = $pdo->prepare("SELECT password_hash FROM users WHERE id = ? LIMIT 1");
+        $stmt_ol = $pdo->prepare("SELECT id, username, password_hash FROM users WHERE id = ? LIMIT 1");
         $stmt_ol->execute([$ol_uid]);
-        $ol_hash = $stmt_ol->fetchColumn();
+        $ol_me = $stmt_ol->fetch();
     } catch (Throwable $e) {
         bk_api_fail('oauth_link_start', 500, $e, 'Propojení se nepodařilo zahájit.');
     }
-    if ($ol_hash === false || !password_verify((string)($ol_input['password'] ?? ''), (string)$ol_hash)) {
+    if ($ol_me === false || !bk_api_password_ok($pdo, $ol_me, (string)($ol_input['password'] ?? ''))) {
         bk_api_error(400, 'Nesprávné heslo - účet se nepropojí.');
     }
     bk_api_json(['url' => bk_oauth_authorize_url($ol_provider, $ol_uid) ?? bk_oauth_problem_url('unavailable', $ol_provider, true)]);
@@ -4138,7 +4153,7 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
         if ($action === 'oauth_unlink') {
             // Odpojeni chce heslo - ukradena session nesmi tise odpojit
             // prihlasovani a prevzit ucet pres OAuth provider.
-            if (!password_verify((string)($mp_input['password'] ?? ''), $mp_me['password_hash'])) {
+            if (!bk_api_password_ok($pdo, $mp_me, (string)($mp_input['password'] ?? ''))) {
                 bk_api_error(400, 'Nesprávné heslo - účet zůstává propojený.');
             }
             $pdo->prepare("UPDATE users SET oauth_provider = NULL, oauth_id = NULL WHERE id = ?")->execute([$mp_uid]);
@@ -4156,7 +4171,7 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
         // the account: it asks for the same proof as a new password. A stolen
         // session has the session and nothing else.
         $mp_email_changed = $mp_email !== (string)($mp_me['email'] ?? '');
-        if ($mp_email_changed && !password_verify((string)($mp_input['oldPassword'] ?? ''), $mp_me['password_hash'])) {
+        if ($mp_email_changed && !bk_api_password_ok($pdo, $mp_me, (string)($mp_input['oldPassword'] ?? ''))) {
             bk_api_error(400, 'Změna e-mailu vyžaduje stávající heslo. Změna neproběhla.');
         }
         $mp_phone = trim((string)($mp_input['phone'] ?? ''));
@@ -4174,7 +4189,7 @@ if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oau
             if (strlen($mp_new_pass) < 8) {
                 bk_api_error(400, 'Heslo musí mít alespoň 8 znaků.');
             }
-            if (!password_verify((string)($mp_input['oldPassword'] ?? ''), $mp_me['password_hash'])) {
+            if (!bk_api_password_ok($pdo, $mp_me, (string)($mp_input['oldPassword'] ?? ''))) {
                 bk_api_error(400, 'Stávající heslo je nesprávné. Změna neproběhla.');
             }
             $mp_hash = password_hash($mp_new_pass, PASSWORD_BCRYPT);
@@ -4240,7 +4255,7 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
     $totp_uid = (int)$_SESSION['admin_id'];
 
     try {
-        $stmt_me = $pdo->prepare("SELECT password_hash, totp_enabled FROM users WHERE id = ? LIMIT 1");
+        $stmt_me = $pdo->prepare("SELECT id, username, password_hash, totp_enabled FROM users WHERE id = ? LIMIT 1");
         $stmt_me->execute([$totp_uid]);
         $totp_me = $stmt_me->fetch();
         if (!$totp_me) {
@@ -4273,7 +4288,7 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
             if ($totp_pending === '') {
                 bk_api_error(400, '2FA nastavení vypršelo, začněte prosím znovu.');
             }
-            if (!password_verify((string)($totp_input['password'] ?? ''), $totp_me['password_hash'])) {
+            if (!bk_api_password_ok($pdo, $totp_me, (string)($totp_input['password'] ?? ''))) {
                 bk_api_error(400, 'Nesprávné heslo - 2FA zůstává vypnuté.');
             }
             if (!bk_totp_verify_code($totp_pending, $totp_code)) {
@@ -4297,7 +4312,7 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
             if (empty($totp_me['totp_enabled'])) {
                 bk_api_error(400, 'Záložní kódy mají smysl jen se zapnutým 2FA.');
             }
-            if (!password_verify((string)($totp_input['password'] ?? ''), $totp_me['password_hash'])) {
+            if (!bk_api_password_ok($pdo, $totp_me, (string)($totp_input['password'] ?? ''))) {
                 bk_api_error(400, 'Nesprávné heslo - kódy zůstávají beze změny.');
             }
             $totp_recovery = bk_totp_generate_recovery_codes($pdo, $totp_uid);
@@ -4308,7 +4323,7 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
 
         // totp_disable: vypnuti chce aktualni heslo - ukradena session bez
         // znalosti hesla 2FA tise nevypne.
-        if (!password_verify((string)($totp_input['password'] ?? ''), $totp_me['password_hash'])) {
+        if (!bk_api_password_ok($pdo, $totp_me, (string)($totp_input['password'] ?? ''))) {
             bk_api_error(400, 'Nesprávné heslo - 2FA zůstává zapnuté.');
         }
         $stmt_t = $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?");
