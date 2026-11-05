@@ -661,6 +661,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_user']) && $user
                 // nepodmíněně zalogoval "user_updated" a ukázal lživý success_msg.
                 if (!empty($u_password) && strlen($u_password) < 8) {
                     $error_msg = 'Heslo musí mít alespoň 8 znaků.';
+                } elseif ($old_row && $old_row['role'] === 'admin' && $u_role !== 'admin' && bk_is_last_admin($pdo, $u_id)) {
+                    $error_msg = 'Toto je poslední administrátor. Nejdřív jmenujte jiného.';
                 } else {
                     if (!empty($u_password)) {
                         $new_pass_hash = password_hash($u_password, PASSWORD_BCRYPT);

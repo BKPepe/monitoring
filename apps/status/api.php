@@ -6269,6 +6269,10 @@ if ($action === 'save_user' || $action === 'delete_user') {
                 bk_api_error(404, 'Uživatel nenalezen.');
             }
             $pdo->beginTransaction();
+            if ($su_old['role'] === 'admin' && $su_role !== 'admin' && bk_is_last_admin($pdo, $su_id)) {
+                $pdo->rollBack();
+                bk_api_error(409, 'Toto je poslední administrátor. Nejdřív jmenujte jiného.');
+            }
             if ($su_password !== '') {
                 $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ?, password_hash = ? WHERE id = ?")
                     ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash($su_password, PASSWORD_BCRYPT), $su_id]);

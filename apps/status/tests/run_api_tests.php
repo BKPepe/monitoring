@@ -1160,6 +1160,30 @@ api_post($base, 'action=delete_user', ['id' => $da_id], $cookie_jar);
 check_false('smazaný účet je ve staré relaci odhlášený', !empty($da_session['authenticated']));
 @unlink($jar4);
 
+// R158: nobody can appoint an admin without an admin, so the last one keeps the
+// role. The others step aside for the test, leaving the one signed in here.
+$la_row = $pdo->query("SELECT id, username, email FROM users WHERE username = 'admin'")->fetch();
+$la_id = (int)$la_row['id'];
+$la_others = array_map('intval', $pdo->query("SELECT id FROM users WHERE role = 'admin' AND id != {$la_id}")->fetchAll(PDO::FETCH_COLUMN));
+if ($la_others) {
+    $pdo->exec("UPDATE users SET role = 'user' WHERE id IN (" . implode(',', $la_others) . ')');
+}
+$la_demote = ['id' => $la_id, 'username' => $la_row['username'], 'email' => $la_row['email'], 'role' => 'user'];
+$la_role = fn (): string => (string)$pdo->query("SELECT role FROM users WHERE id = {$la_id}")->fetchColumn();
+[$la_code, $la_res] = api_post($base, 'action=save_user', $la_demote, $cookie_jar);
+check('poslední admin o roli nepřijde', [$la_code, $la_role()], [409, 'admin']);
+check_true('a odpověď řekne proč', str_contains((string)($la_res['error'] ?? ''), 'poslední administrátor'));
+[$la_keep] = api_post($base, 'action=save_user', array_merge($la_demote, ['role' => 'admin']), $cookie_jar);
+check('poslední admin si dál upraví vlastní údaje', $la_keep, 200);
+[, $la_second] = api_post($base, 'action=save_user', ['username' => 'nahradni_admin', 'email' => 'nahradni@example.com', 'role' => 'admin', 'password' => 'NahradniAdmin123!'], $cookie_jar);
+[$la_with_second] = api_post($base, 'action=save_user', $la_demote, $cookie_jar);
+check('s druhým adminem může odejít', [$la_with_second, $la_role()], [200, 'user']);
+$pdo->exec("UPDATE users SET role = 'admin' WHERE id = {$la_id}");
+$pdo->prepare("DELETE FROM users WHERE id = ?")->execute([(int)($la_second['id'] ?? 0)]);
+if ($la_others) {
+    $pdo->exec("UPDATE users SET role = 'admin' WHERE id IN (" . implode(',', $la_others) . ')');
+}
+
 api_post($base, 'action=save_user', ['id' => $su_new_id, 'username' => 'audit_tester', 'email' => 'audit2@example.com', 'role' => 'user'], $cookie_jar);
 check('uložení bez seznamu monitorů přiřazení nesmaže', $ma_users_of(), [1]);
 api_post($base, 'action=save_user', ['id' => $su_new_id, 'username' => 'audit_tester', 'email' => 'audit2@example.com', 'role' => 'user', 'monitorIds' => []], $cookie_jar);

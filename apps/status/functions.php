@@ -19727,6 +19727,18 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details, bool $system = fal
 }
 
 /**
+ * Whether $user_id is the only administrator left. Nobody can appoint a new one
+ * from inside the app without an admin, so that role is not to be taken away.
+ * Inside a transaction the lock keeps two admins from demoting each other at
+ * the same moment.
+ */
+function bk_is_last_admin(PDO $pdo, int $user_id): bool {
+    $stmt = $pdo->query("SELECT id FROM users WHERE role = 'admin' FOR UPDATE");
+    $admins = array_map('intval', $stmt ? $stmt->fetchAll(PDO::FETCH_COLUMN) : []);
+    return $admins === [$user_id];
+}
+
+/**
  * Who is looking: an anonymous visitor, an admin, or a user who sees only the
  * monitors assigned to them. The session key admin_logged_in means "any
  * signed-in account", despite its name.
