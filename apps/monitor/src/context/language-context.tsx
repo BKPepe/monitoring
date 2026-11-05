@@ -3433,8 +3433,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'incidents.note_btn': { cs: 'Přidat poznámku', en: 'Add note' },
   'incidents.resolve_btn': { cs: 'Uzavřít incident', en: 'Resolve incident' },
   'incidents.no_open_incident': {
-    cs: 'Incident je uzavřený, ale monitor je stále nedostupný - výpadek trvá.',
-    en: 'The incident is closed, but the monitor is still down - the outage is still running.',
+    cs: 'K výpadku není otevřený žádný incident, monitor je stále nedostupný.',
+    en: 'No incident is open for this outage, and the monitor is still down.',
   },
   'incidents.reopen_btn': { cs: 'Otevřít incident', en: 'Open an incident' },
   'incidents.reopen_title': { cs: 'Výpadek: {name}', en: 'Outage: {name}' },

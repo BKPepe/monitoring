@@ -136,7 +136,9 @@ describe('IncidentsPage', () => {
     // The outage is real - the monitor is down - so the card stays, and says why
     // it carries no incident instead of standing there with no actions at all.
     const reopen = await screen.findByRole('button', { name: /otevřít incident|open an incident/i });
-    expect(screen.getByText(/výpadek trvá|the outage is still running/i)).toBeTruthy();
+    expect(
+      await screen.findByText('K výpadku není otevřený žádný incident, monitor je stále nedostupný.')
+    ).toBeTruthy();
     // The closed record is in the history, marked so it cannot read as "all done".
     expect(screen.getByText(/^(Monitor je stále nedostupný|The monitor is still down)$/)).toBeTruthy();
 

@@ -616,7 +616,7 @@ export function IncidentsPage() {
                             <p className="text-warning text-2xs font-semibold">
                               {t(
                                 'incidents.no_open_incident',
-                                'Incident je uzavřený, ale monitor je stále nedostupný - výpadek trvá.'
+                                'K výpadku není otevřený žádný incident, monitor je stále nedostupný.'
                               )}
                             </p>
                           )}
