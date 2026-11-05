@@ -419,7 +419,14 @@ export function SettingsPage() {
                       around until somebody forces a new lookup. Until now that
                       button existed only in the legacy administration. */}
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button size="sm" variant="outline" disabled={locBusy} onClick={redetectLocation} className="gap-1.5">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={locBusy}
+                    onClick={redetectLocation}
+                    className="gap-1.5"
+                  >
                     <RefreshCw className="size-3.5" />
                     {t('settings.redetect_location', 'Zjistit lokalitu znovu')}
                   </Button>
