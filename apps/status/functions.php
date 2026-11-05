@@ -7413,6 +7413,22 @@ function check_discord($guild_id, $timeout = 3) {
 }
 
 /**
+ * What the smtp_secure setting means for PHPMailer: the encryption to ask for,
+ * and whether it may upgrade to STARTTLS on its own. "Bez zabezpečení" used to
+ * fall through to STARTTLS, so a relay without a valid certificate, the reason
+ * to pick that option, failed the same way with it as without it.
+ *
+ * @return array{0: string, 1: bool}
+ */
+function bk_smtp_encryption(string $setting): array {
+    return match ($setting) {
+        'ssl' => ['ssl', true],
+        'none' => ['', false],
+        default => ['tls', true],
+    };
+}
+
+/**
  * Sends an e-mail and writes down that it happened.
  *
  * The logging sits HERE and not at the call sites on purpose. It used to be at
@@ -7502,9 +7518,7 @@ function bk_deliver_email($to, $subject, $html_body, array $extra_headers = []) 
             $mail->SMTPAuth   = true;
             $mail->Username   = $smtp_user;
             $mail->Password   = $smtp_pass;
-            $mail->SMTPSecure = ($smtp_secure === 'ssl')
-                ? PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS
-                : PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+            [$mail->SMTPSecure, $mail->SMTPAutoTLS] = bk_smtp_encryption((string)$smtp_secure);
             $mail->Port       = $smtp_port;
             $mail->CharSet    = 'UTF-8';
             // PHPMailer waits 300 s by default. Alerts are sent inside the

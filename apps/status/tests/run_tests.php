@@ -824,6 +824,14 @@ check_true('varováno před 25 hodinami = znovu', bk_ssl_alert_due(10, 14, $now 
 check_false('prošlý certifikát řeší výpadek, ne varování', bk_ssl_alert_due(-1, 14, 0, $now));
 check_true('poslední den je ještě varování', bk_ssl_alert_due(0, 14, 0, $now));
 
+// --- SMTP encryption (bk_smtp_encryption) ---------------------------------------
+// The values PHPMailer's ENCRYPTION_SMTPS and ENCRYPTION_STARTTLS stand for. Its
+// auto-upgrade is what would turn "none" into STARTTLS anyway, so it goes off too.
+check('SMTP: SSL', bk_smtp_encryption('ssl'), ['ssl', true]);
+check('SMTP: STARTTLS', bk_smtp_encryption('tls'), ['tls', true]);
+check('SMTP: bez zabezpečení nic nezkouší', bk_smtp_encryption('none'), ['', false]);
+check('SMTP: neznámá hodnota šifruje', bk_smtp_encryption(''), ['tls', true]);
+
 // --- Is the window running now (is_in_maintenance) ------------------------------
 $im_at = fn (int $offset): string => date('Y-m-d H:i:s', time() + $offset);
 check_false('vypnutá údržba neplatí ani s oknem', is_in_maintenance(['maintenance' => 0, 'maintenance_start' => $im_at(-60), 'maintenance_end' => $im_at(60)]));
