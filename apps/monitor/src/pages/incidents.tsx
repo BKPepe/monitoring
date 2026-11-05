@@ -363,6 +363,10 @@ export function IncidentsPage() {
           title: incidentTitle,
           message: `${incidentDetail || t('incidents.default_detail', 'Ručně nahlášený incident.')} [${t('incidents.scope_prefix', 'Rozsah')}: ${affectedName}]`,
           impact: 'minor',
+          // The incident belongs to the service picked above. Sent only as text
+          // in the message, it was global: everyone saw it, the public page
+          // included, even when the service is one they may not see.
+          ...(affectedScope === 'all' ? {} : { monitorId: Number(affectedScope) }),
         }),
       });
       const data = await res.json().catch(() => ({}));

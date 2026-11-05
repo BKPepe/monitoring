@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
 import { IncidentsPage } from './incidents';
@@ -144,6 +144,40 @@ describe('IncidentsPage', () => {
     const posted = fetchMock.mock.calls.find((c) => String(c[0]).includes('action=create_incident'));
     expect(posted).toBeTruthy();
     expect(JSON.parse(String(posted?.[1]?.body))).toMatchObject({ monitorId: 7, impact: 'major' });
+  });
+
+  describe('nový incident a zasažená služba', () => {
+    const report = async (scope: string | null) => {
+      const fetchMock = vi.fn((url: string) => Promise.resolve(api(String(url))));
+      vi.stubGlobal('fetch', fetchMock);
+      render(
+        <LanguageProvider>
+          <MemoryRouter>
+            <IncidentsPage />
+          </MemoryRouter>
+        </LanguageProvider>
+      );
+      fireEvent.click(await screen.findByRole('button', { name: /Nahlásit nový incident|Report a new incident/ }));
+      const form = document.querySelector('form') as HTMLFormElement;
+      await within(form).findByRole('option', { name: /Router - Praha/ });
+      fireEvent.change(form.querySelector('input[type="text"]') as HTMLInputElement, { target: { value: 'Porucha' } });
+      if (scope !== null)
+        fireEvent.change(form.querySelector('select') as HTMLSelectElement, { target: { value: scope } });
+      fireEvent.submit(form);
+      await waitFor(() =>
+        expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('action=create_incident'))).toBe(true)
+      );
+      const posted = fetchMock.mock.calls.find((c) => String(c[0]).includes('action=create_incident')) as unknown[];
+      return JSON.parse(String((posted[1] as RequestInit).body));
+    };
+
+    it('vybraný monitor jde jako monitorId', async () => {
+      expect(await report('7')).toMatchObject({ title: 'Porucha', monitorId: 7 });
+    });
+
+    it('globální incident žádný monitor nemá', async () => {
+      expect(await report(null)).not.toHaveProperty('monitorId');
+    });
   });
 
   it('dlaždice počítají z vypsaných seznamů: probíhá, nepřevzato, vyřešeno', async () => {
