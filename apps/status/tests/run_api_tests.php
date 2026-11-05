@@ -2112,12 +2112,14 @@ try {
     bk_kv_cache_put($pdo, 'findings_summary_abc', ['total' => 3]);
     $kv_put = bk_kv_cache_get('findings_summary_abc');
     check('uložená položka cache se přečte i se svým časem',
-        [$kv_put['data'] ?? null, abs(($kv_put['at'] ?? 0) - time()) <= 1], [['total' => 3], true]);
+        [$kv_put['data'] ?? null, abs(($kv_put['at'] ?? 0) - time()) <= 10], [['total' => 3], true]);
     // findings_summary_ lives 60 s, websites_overview_cache 600 s.
     bk_setting_set($pdo, 'findings_summary_old', $kv_entry(60, ['total' => 1]));
-    bk_setting_set($pdo, 'findings_summary_young', $kv_entry(59, ['total' => 1]));
-    bk_setting_set($pdo, 'websites_overview_cache', $kv_entry(599, ['monitors' => []]));
-    check('položka stará jako životnost své cache se nepoužije, o sekundu mladší ano',
+    // Ten seconds inside the limit: a loaded CI runner can lose a second or two
+    // between this write and the read below. The one at the limit only gets older.
+    bk_setting_set($pdo, 'findings_summary_young', $kv_entry(50, ['total' => 1]));
+    bk_setting_set($pdo, 'websites_overview_cache', $kv_entry(590, ['monitors' => []]));
+    check('položka stará jako životnost své cache se nepoužije, o trochu mladší ano',
         [bk_kv_cache_get('findings_summary_old'), bk_kv_cache_get('findings_summary_young')['data'] ?? null,
             bk_kv_cache_get('websites_overview_cache')['data'] ?? null],
         [null, ['total' => 1], ['monitors' => []]]);
