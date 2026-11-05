@@ -3279,7 +3279,7 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
                 $dur = ($pdo && $monitor) ? bk_metric_duration_above($pdo, $monitor['id'], 'cpu_usage', $cpu_crit) : null;
                 $suffix = $dur ? ' (' . bk_format_duration($dur) . ')' : '';
                 $add('critical', 'knowledge_tip_cpu_high');
-                $tips[count($tips)-1]['text'] .= $suffix . bk_enrich_threshold_tip($details, 'cpu', $pdo, $monitor, $dur);
+                $tips[count($tips)-1]['text'] .= $suffix . bk_enrich_threshold_tip($details, 'cpu', $pdo, $monitor, $dur !== null ? $dur * 60 : null);
             } elseif ($cpu > $cpu_warn) $add('warn', 'knowledge_tip_cpu_high');
         }
         if (isset($details['ram'])) {
@@ -3289,7 +3289,7 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
                 $dur = ($pdo && $monitor) ? bk_metric_duration_above($pdo, $monitor['id'], 'ram_usage', $ram_crit) : null;
                 $suffix = $dur ? ' (' . bk_format_duration($dur) . ')' : '';
                 $add('critical', 'knowledge_tip_ram_high');
-                $tips[count($tips)-1]['text'] .= $suffix . bk_enrich_threshold_tip($details, 'ram', $pdo, $monitor, $dur);
+                $tips[count($tips)-1]['text'] .= $suffix . bk_enrich_threshold_tip($details, 'ram', $pdo, $monitor, $dur !== null ? $dur * 60 : null);
             } elseif ($ram > $ram_warn) $add('warn', 'knowledge_tip_ram_high');
         }
         if (isset($details['hdd'])) {

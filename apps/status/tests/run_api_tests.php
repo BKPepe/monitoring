@@ -3446,6 +3446,31 @@ check('TS3: bez čísla verze se nehodnotí', $tv_area('3.13.7', 'neznámá'), [
 check('TS3: bez hlášené verze se nehodnotí', $tv_area('3.13.7', null), ['na', 0]);
 unset($GLOBALS['system_settings']['ts3_latest_version']);
 
+// --- A tip names who loaded the machine over the whole period (R147) ------------
+// The duration is in minutes, the tip's process history wants seconds: the window
+// came out 60× too short, and the tip fell back on who is busy this very minute.
+require_once $root . '/lang.php';
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 147");
+$pdo->exec("DELETE FROM process_samples WHERE monitor_id = 147");
+$pdo->exec("DELETE FROM monitors WHERE id = 147");
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, cpu_threshold) VALUES (147, 'R147 server', 'vps', 'server-r147', 'up', 'Test', 50)");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, checked_at) VALUES
+    (147, 99, 99, NOW() - INTERVAL 90 MINUTE), (147, 99, 99, NOW() - INTERVAL 45 MINUTE), (147, 99, 99, NOW() - INTERVAL 1 MINUTE)");
+$pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb) VALUES
+    (147, NOW() - INTERVAL 70 MINUTE, 'cpu', 'vinik-cpu', 1, 88, 10),
+    (147, NOW() - INTERVAL 70 MINUTE, 'ram', 'vinik-ram', 2, 1, 900)");
+$td_mon = $pdo->query("SELECT * FROM monitors WHERE id = 147")->fetch();
+$td_tips = implode(' | ', array_column(bk_get_knowledge_tips($td_mon, [
+    'cpu' => 99, 'ram' => 99,
+    'top_cpu_processes' => [['name' => 'snimek-cpu', 'cpu' => 10]],
+    'top_ram_processes' => [['name' => 'snimek-ram', 'ram_mb' => 10]],
+], [], 'up', null, $pdo), 'text'));
+check_true('tip CPU jmenuje viníka celého období', str_contains($td_tips, 'vinik-cpu') && !str_contains($td_tips, 'snimek-cpu'));
+check_true('tip RAM jmenuje viníka celého období', str_contains($td_tips, 'vinik-ram') && !str_contains($td_tips, 'snimek-ram'));
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 147");
+$pdo->exec("DELETE FROM process_samples WHERE monitor_id = 147");
+$pdo->exec("DELETE FROM monitors WHERE id = 147");
+
 // --- An agent-side service in maintenance keeps cron's status ------------
 //
 // R141: the agent's result overwrote 'maintenance' with up/down, cron set it
