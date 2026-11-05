@@ -150,13 +150,18 @@ export function ReportsPage() {
       m.p95Ms ?? '',
       m.p99Ms ?? '',
     ]);
-    const csv = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    // A Blob, not a data: URL. encodeURI leaves '#' alone, and to a browser that
+    // starts the fragment: the file ended at the first monitor with one in its name.
+    const csv = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const link = document.createElement('a');
-    link.setAttribute('href', encodeURI(csv));
+    link.setAttribute('href', url);
     link.setAttribute('download', `SLA_Report_BloodKings_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    // After the browser has picked the download up, not during the click.
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   return (
