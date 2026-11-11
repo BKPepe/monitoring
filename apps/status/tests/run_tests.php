@@ -5482,5 +5482,32 @@ foreach ([[false, 'bez odpovědi'], ['', 'prázdná odpověď'], ['nope', 'neči
 }
 check('lokalita: skutečná odpověď se složí', bk_location_from_geo('{"status":"success","city":"Frankfurt","countryCode":"DE","org":"Example Hosting GmbH Extra"}'), get_country_emoji('DE') . ' Frankfurt, DE (Example Hosting GmbH)');
 
+// --- The visitor's address behind a proxy of your own (R135) -------------------
+// trusted_proxies promised nginx and HAProxy, but only Cloudflare's header was
+// read: behind nginx every sign-in and lockout saw the proxy's address.
+$ci_server = $_SERVER;
+$ci_settings = $GLOBALS['system_settings'] ?? [];
+$GLOBALS['system_settings']['trusted_proxies'] = '10.0.0.0/8';
+$ci_ip = function (string $remote, ?string $xff, ?string $cf = null): ?string {
+    $_SERVER['REMOTE_ADDR'] = $remote;
+    unset($_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['HTTP_CF_CONNECTING_IP']);
+    if ($xff !== null) {
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = $xff;
+    }
+    if ($cf !== null) {
+        $_SERVER['HTTP_CF_CONNECTING_IP'] = $cf;
+    }
+    return bk_client_ip();
+};
+check('za vlastní proxy je návštěvník v X-Forwarded-For', $ci_ip('10.0.0.5', '203.0.113.9'), '203.0.113.9');
+check('adresa, kterou si návštěvník napsal sám vlevo, se nebere', $ci_ip('10.0.0.5', '6.6.6.6, 203.0.113.9'), '203.0.113.9');
+check('přes dvě důvěryhodné proxy', $ci_ip('10.0.0.5', '203.0.113.9, 10.0.0.7'), '203.0.113.9');
+check('od nedůvěryhodné adresy se hlavičce nevěří', $ci_ip('198.51.100.1', '6.6.6.6'), '198.51.100.1');
+check('bez hlavičky adresa proxy', $ci_ip('10.0.0.5', null), '10.0.0.5');
+check('nesmysl v hlavičce = adresa proxy', $ci_ip('10.0.0.5', 'nesmysl'), '10.0.0.5');
+check('Cloudflare dál podle své hlavičky', $ci_ip('173.245.48.1', '6.6.6.6', '203.0.113.9'), '203.0.113.9');
+$_SERVER = $ci_server;
+$GLOBALS['system_settings'] = $ci_settings;
+
 $failed = bk_test_report('čisté funkce');
 exit($failed > 0 ? 1 : 0);

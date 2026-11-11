@@ -1935,17 +1935,15 @@ function bk_ip_in_cidr(string $ip, string $cidr): bool {
  * changing it on every attempt.
  *
  * A custom proxy (nginx, HAProxy) can be added via the `trusted_proxies`
- * setting as a comma-separated CIDR list.
+ * setting as a comma-separated CIDR list. Such a proxy sends no Cloudflare
+ * header but appends the address it saw to X-Forwarded-For, read from the
+ * right: the first hop that is not a trusted proxy is the visitor, and
+ * anything left of it the visitor could have written.
  */
 function bk_client_ip(): ?string {
     $remote = $_SERVER['REMOTE_ADDR'] ?? null;
     if ($remote === null || $remote === '') {
         return null;
-    }
-
-    $forwarded = $_SERVER['HTTP_CF_CONNECTING_IP'] ?? null;
-    if ($forwarded === null || $forwarded === '') {
-        return $remote;
     }
 
     $trusted = BK_CLOUDFLARE_RANGES;
@@ -1959,11 +1957,31 @@ function bk_client_ip(): ?string {
         }
     }
 
-    foreach ($trusted as $range) {
-        if (bk_ip_in_cidr($remote, $range)) {
-            // The header may carry nonsense too - without a shape check an
-            // arbitrary string would land in the log.
-            return filter_var($forwarded, FILTER_VALIDATE_IP) !== false ? $forwarded : $remote;
+    $is_trusted = function (string $ip) use ($trusted): bool {
+        foreach ($trusted as $range) {
+            if (bk_ip_in_cidr($ip, $range)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (!$is_trusted($remote)) {
+        return $remote;
+    }
+
+    // The headers may carry nonsense too - without a shape check an
+    // arbitrary string would land in the log.
+    $cf = (string)($_SERVER['HTTP_CF_CONNECTING_IP'] ?? '');
+    if ($cf !== '') {
+        return filter_var($cf, FILTER_VALIDATE_IP) !== false ? $cf : $remote;
+    }
+    $hops = array_reverse(array_map('trim', explode(',', (string)($_SERVER['HTTP_X_FORWARDED_FOR'] ?? ''))));
+    foreach ($hops as $hop) {
+        if (filter_var($hop, FILTER_VALIDATE_IP) === false) {
+            return $remote;
+        }
+        if (!$is_trusted($hop)) {
+            return $hop;
         }
     }
 
