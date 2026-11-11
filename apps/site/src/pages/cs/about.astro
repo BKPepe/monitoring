@@ -77,7 +77,7 @@ import Layout from '../../layouts/Layout.astro';
   </section>
 
   <script>
-    import { fetchContributors, escapeHtml, initials, type Contributor } from '../../lib/github';
+    import { fetchContributors, escapeHtml, initials, contributorsUnavailableHtml, type Contributor } from '../../lib/github';
 
     // Data jdou přes worker (token + hodinová cache), ne přímo z api.github.com.
     async function loadContributors() {
@@ -89,11 +89,11 @@ import Layout from '../../layouts/Layout.astro';
         if (contributors.length > 0) {
           renderContributors(contributors);
         } else {
-          showFallbackContributors();
+          showUnavailable(false);
         }
       } catch (e) {
-        console.warn('Nepodařilo se načíst přispěvatele, používám statický seznam.', e);
-        showFallbackContributors();
+        console.warn('Could not load contributors.', e);
+        showUnavailable(true);
       } finally {
         loader?.classList.add('is-hidden');
         grid?.classList.remove('is-hidden');
@@ -123,17 +123,10 @@ import Layout from '../../layouts/Layout.astro';
       });
     }
 
-    function showFallbackContributors() {
+    function showUnavailable(failed: boolean) {
       const grid = document.getElementById('contributors-grid');
       if (!grid) return;
-
-      grid.innerHTML = `
-        <a href="https://github.com/BKPepe" target="_blank" rel="noopener" class="contributor-card card">
-          <span class="contrib-avatar" aria-hidden="true">BK</span>
-          <h5>BKPepe</h5>
-          <span class="contrib-commits">Autor / správce</span>
-        </a>
-      `;
+      grid.innerHTML = contributorsUnavailableHtml('cs', failed);
     }
 
     loadContributors();

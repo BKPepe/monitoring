@@ -98,3 +98,23 @@ export function renderReleaseBody(markdown: string, emptyText: string): string {
 export function initials(login: string): string {
   return login.slice(0, 2).toUpperCase();
 }
+
+const CONTRIBUTORS_URL = 'https://github.com/BKPepe/monitoring/graphs/contributors';
+
+/**
+ * What the contributors grid says when it has no list: why, and where the list
+ * is. It used to put in one hardcoded card for the author, so a GitHub rate
+ * limit read as a project with a single contributor.
+ */
+export function contributorsUnavailableHtml(lang: 'en' | 'cs', failed: boolean): string {
+  const text =
+    lang === 'cs'
+      ? failed
+        ? 'Seznam přispěvatelů se teď nepodařilo načíst.'
+        : 'GitHub teď nevrátil žádné přispěvatele.'
+      : failed
+        ? 'The list of contributors could not be loaded right now.'
+        : 'GitHub returned no contributors right now.';
+  const link = lang === 'cs' ? 'Přispěvatelé na GitHubu' : 'Contributors on GitHub';
+  return `<p class="contributors-unavailable">${escapeHtml(text)} <a href="${CONTRIBUTORS_URL}" target="_blank" rel="noopener">${escapeHtml(link)}</a></p>`;
+}
