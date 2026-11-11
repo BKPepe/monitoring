@@ -3709,6 +3709,13 @@ $dr_silent = $dr_select([$dr_monitor([
 check('mlčící agent se hlásí', count($dr_silent['silent']), 1);
 check('a NE mezi výpadky', count($dr_silent['outages']), 0);
 check('sekce zná svůj druh problému', $dr_silent['silent'][0]['issue'], 'agent_silent');
+// Cron puts a silent agent's monitor down: it is one problem, in the silent
+// section, not also an outage (a probe found it twice and counted 2).
+$dr_silent_down = $dr_select([$dr_monitor([
+    'type' => 'vps', 'status' => 'down', 'last_error' => 'Agent neodpovídá', 'details' => ['agent_last_seen' => $dr_now - 7200],
+])]);
+check('mlčící agent s monitorem dole je jeden problém v tichém sběru',
+    [count($dr_silent_down['silent']), count($dr_silent_down['outages']), $dr_silent_down['problem_count']], [1, 0, 1]);
 // Timeout 0 switches the detection off: the reminder used to list every
 // agent that ever reported as silent, every morning.
 $GLOBALS['system_settings'] = ['agent_offline_timeout' => '0'];

@@ -8608,11 +8608,17 @@ function bk_daily_reminder_select(
             }
         }
 
+        // A silent agent is the same subject as a silent heartbeat: cron puts
+        // its monitor down because the agent stopped reporting, and listed
+        // here as well it was in the e-mail twice and counted as 2 problems.
+        $issues = bk_get_collection_issues($m, $details);
+        $agent_silent = in_array('agent_silent', array_column($issues, 'type'), true);
+
         // 'unknown' and 'paused' are not faults: the first means nobody has
         // measured yet, the second that nobody is supposed to. Reported daily
         // they would teach the reader to skip the whole message.
         $alert_class = bk_alert_color_class($status);
-        if (!$heartbeat_silent
+        if (!$heartbeat_silent && !$agent_silent
             && !in_array($status, ['unknown', 'paused', ''], true)
             && $alert_class !== 'good') {
             $report['outages'][] = [
@@ -8631,7 +8637,7 @@ function bk_daily_reminder_select(
 
         // The collection outages of this monitor - read from the same source
         // as the app's banner, so the e-mail cannot disagree with the screen.
-        foreach (bk_get_collection_issues($m, $details) as $issue) {
+        foreach ($issues as $issue) {
             $add_silent($id, $name, $type, (string)($issue['type'] ?? 'other'),
                 (string)($issue['message'] ?? ''), $age_of($issue['since'] ?? null));
         }
