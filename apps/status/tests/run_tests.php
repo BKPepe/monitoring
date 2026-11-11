@@ -2222,6 +2222,10 @@ check('router nahozený před dvěma hodinami dluží jen dvě hodiny',
     bk_reports_24h_expected(['status' => 'up'], $rq_now - 7200, $rq_now)['expected'], 120);
 check('vypnutý (pozastavený) monitor nedluží nic',
     bk_reports_24h_expected(['status' => 'paused'], null, $rq_now)['expected'], 0);
+check('nový agent nedluží hlášení z doby před prvním (R152)',
+    bk_reports_24h_expected(['status' => 'up'], null, $rq_now, $rq_now - 1800)['expected'], 30);
+check('první hlášení před oknem nic nemění',
+    bk_reports_24h_expected(['status' => 'up'], null, $rq_now, $rq_now - 5 * 86400)['expected'], 1440);
 check('naplánovaná údržba se z očekávání odečte',
     bk_reports_24h_expected(['status' => 'up', 'maintenance' => 1,
         'maintenance_start' => date('Y-m-d H:i:s', $rq_now - 7200),

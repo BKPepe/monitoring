@@ -7025,8 +7025,11 @@ $ra_reset(['reports_24h', 'boot_time']);
 $ra_put(['agent_type' => 'openwrt']);
 check_true('Hlášení za 24 h: hodinový krok cronu monitor přepočítá', bk_update_reports_24h($pdo) >= 1);
 $ra_rep = $ra_details()['reports_24h'] ?? [];
+// R152: owed from the first report on, not from a full day before it.
+$ra_first = (int)$pdo->query("SELECT UNIX_TIMESTAMP(MIN(checked_at)) FROM vps_metrics WHERE monitor_id = 2")->fetchColumn();
+$ra_owed = intdiv(time() - max(time() - 86400, $ra_first), 60);
 check('Hlášení za 24 h: uloží se očekávání, skutečnost i čas výpočtu',
-    [is_int($ra_rep['expected'] ?? null) && $ra_rep['expected'] >= 120, is_int($ra_rep['received'] ?? null), is_int($ra_rep['checked_at'] ?? null)], [true, true, true]);
+    [is_int($ra_rep['expected'] ?? null) && abs($ra_rep['expected'] - $ra_owed) <= 1, is_int($ra_rep['received'] ?? null), is_int($ra_rep['checked_at'] ?? null)], [true, true, true]);
 check_true('Hlášení za 24 h: napočítá právě ta, která opravdu dorazila',
     ($ra_rep['received'] ?? 0) === (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = 2 AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn());
 check('Hlášení za 24 h: do hodiny se nepočítá znovu', bk_update_reports_24h($pdo), 0);

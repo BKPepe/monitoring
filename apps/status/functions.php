@@ -13725,10 +13725,16 @@ function bk_reports_24h_applies(array $details): bool {
  * @param array<string, mixed> $monitor_row id, status, maintenance window
  * @return array{from: int, expected: int}
  */
-function bk_reports_24h_expected(array $monitor_row, ?int $boot_time, int $now): array {
+function bk_reports_24h_expected(array $monitor_row, ?int $boot_time, int $now, ?int $first_report = null): array {
     $from = $now - 86400;
     if ($boot_time !== null && $boot_time > $from && $boot_time <= $now) {
         $from = $boot_time;
+    }
+    // An agent that started reporting inside the window owes nothing from
+    // before its first report: a new router "missed" hundreds of reports until
+    // the next day.
+    if ($first_report !== null && $first_report > $from && $first_report <= $now) {
+        $from = $first_report;
     }
     $minutes = max(0, intdiv($now - $from, 60));
     if (in_array(strtolower((string)($monitor_row['status'] ?? '')), ['paused', 'maintenance'], true)) {
@@ -13771,6 +13777,7 @@ function bk_update_reports_24h(PDO $pdo, ?int $now = null): int {
         return 0;
     }
     $stmt_count = $pdo->prepare("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = ? AND checked_at >= FROM_UNIXTIME(?)");
+    $stmt_first = $pdo->prepare("SELECT UNIX_TIMESTAMP(MIN(checked_at)) FROM vps_metrics WHERE monitor_id = ?");
     $stmt_fresh = $pdo->prepare("SELECT last_details FROM monitors WHERE id = ?");
     $stmt_save = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?");
     foreach ($rows as $row) {
@@ -13803,8 +13810,11 @@ function bk_update_reports_24h(PDO $pdo, ?int $now = null): int {
         if (is_int($last) && ($now - $last) < 3600) {
             continue;
         }
-        $window = bk_reports_24h_expected($row, bk_ranged_int($details['boot_time'] ?? null, 1, 4102444800), $now);
         try {
+            $stmt_first->execute([(int)$row['id']]);
+            $first = $stmt_first->fetchColumn();
+            $window = bk_reports_24h_expected($row, bk_ranged_int($details['boot_time'] ?? null, 1, 4102444800), $now,
+                $first !== false && $first !== null ? (int)$first : null);
             $stmt_count->execute([(int)$row['id'], $window['from']]);
             $received = (int)$stmt_count->fetchColumn();
             $stmt_fresh->execute([(int)$row['id']]);
