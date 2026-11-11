@@ -2365,6 +2365,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'corr.show_all': { cs: 'Zobrazit všechny', en: 'Show all' },
   'asset.more_metrics': { cs: 'Další měřené metriky ({count})', en: 'Other measured metrics ({count})' },
   'collector.heading': { cs: 'Sběr dat neběží', en: 'Data collection is not running' },
+  'collector.probe_failed': { cs: 'Kontrola sběru dat se nepovedla', en: 'The data collection check failed' },
   'avail.title': { cs: 'Dostupnost', en: 'Availability' },
   'avail.load_failed': { cs: 'Dostupnost se nepodařilo načíst.', en: 'Could not load the availability.' },
   'notif.title': { cs: 'Odeslané notifikace', en: 'Notifications sent' },

@@ -1,5 +1,6 @@
-import * as React from 'react';
 import { AlertOctagon } from 'lucide-react';
+import { useAdminProbe } from '@/api/use-admin-probe';
+import { ProbeFailedNotice } from '@/components/probe-failed-notice';
 import { useLanguage } from '@/context/language-context';
 
 interface Health {
@@ -21,33 +22,29 @@ interface Health {
  * checked) for a long time and nothing in the app ever asked.
  *
  * Silent while collection is healthy: a banner that is always there is not
- * read when it matters.
+ * read when it matters. Not silent when its own check fails: that is no
+ * proof cron died, but quiet it read exactly like a collector that runs, so
+ * it says the check failed, in amber, like the other health banners.
  */
+function isHealth(data: unknown): data is Health {
+  return typeof data === 'object' && data !== null && typeof (data as Health).stale === 'boolean';
+}
+
 export function CollectorHealthBanner() {
   const { t, lang } = useLanguage();
-  const [health, setHealth] = React.useState<Health | null>(null);
+  const probe = useAdminProbe('/status/api.php?action=collection_health', true, isHealth, 60_000);
 
-  React.useEffect(() => {
-    let active = true;
-    const load = () =>
-      fetch('/status/api.php?action=collection_health', { credentials: 'include' })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (active && data && typeof data.stale === 'boolean') setHealth(data as Health);
-        })
-        .catch(() => {
-          // A failed probe is not evidence that cron died - it could be the
-          // network or the session. Saying nothing beats crying wolf.
-        });
-    load();
-    const id = window.setInterval(load, 60_000);
-    return () => {
-      active = false;
-      window.clearInterval(id);
-    };
-  }, []);
-
-  if (!health || !health.stale) return null;
+  if (!probe) return null;
+  if (probe.state === 'failed') {
+    return (
+      <ProbeFailedNotice
+        title={t('collector.probe_failed', 'Kontrola sběru dat se nepovedla')}
+        failure={probe.failure}
+      />
+    );
+  }
+  const health = probe.data;
+  if (!health.stale) return null;
 
   const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
   const minutes = health.ageSecs != null ? Math.round(health.ageSecs / 60) : null;
