@@ -4296,6 +4296,14 @@ try {
         array_map(fn ($v) => $v === null ? null : (float)$v,
             $pdo->query("SELECT cpu_usage, ram_usage, hdd_usage FROM vps_metrics WHERE monitor_id = 953 ORDER BY id DESC LIMIT 1")->fetch()),
         ['cpu_usage' => null, 'ram_usage' => 63.0, 'hdd_usage' => 41.5]);
+    // The whole shared server's load is not the website's CPU (R78), nor its
+    // RAM: the exporter's fallbacks stay in the details, labelled, not here.
+    bk_cpanel_metrics_insert($pdo, 953, ['disk' => ['percent' => 41.5], 'memory' => ['percent' => 70.0, 'source' => 'meminfo'],
+        'cpu' => ['percent' => 310.0, 'source' => 'loadavg']]);
+    check('cron: zátěž a RAM celého serveru nejsou v historii webu',
+        array_map(fn ($v) => $v === null ? null : (float)$v,
+            $pdo->query("SELECT cpu_usage, ram_usage, hdd_usage FROM vps_metrics WHERE monitor_id = 953 ORDER BY id DESC LIMIT 1")->fetch()),
+        ['cpu_usage' => null, 'ram_usage' => null, 'hdd_usage' => 41.5]);
 
     // A type without an active check writes nothing to the history.
     $out = $cm_run(954, null);

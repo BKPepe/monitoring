@@ -679,11 +679,19 @@ function bk_cpanel_stats_details(array $res): array {
  * stored as NULL, not 0.0 - zero is a real value and an invented zero would
  * read as "the server is slacking" in charts (StatsBar without CloudLinux
  * returns no cpuusage at all).
+ *
+ * Neither is a figure of the whole server: without CloudLinux or UAPI the
+ * exporter falls back to the shared machine's load, RAM or filesystem, and
+ * a "CPU 310 %" of everybody's sites read as this website's. Those stay in
+ * the details, labelled "celý server", and stay out of the history.
  */
 function bk_cpanel_metrics_insert(PDO $pdo, int $monitor_id, array $res): void {
-    $cpu_val = isset($res['cpu']['percent']) ? floatval($res['cpu']['percent']) : null;
-    $ram_val = isset($res['memory']['percent']) ? floatval($res['memory']['percent']) : null;
-    $hdd_val = isset($res['disk']['percent']) ? floatval($res['disk']['percent']) : null;
+    $own = fn (string $key): ?float => isset($res[$key]['percent'])
+        && !in_array($res[$key]['source'] ?? null, ['loadavg', 'meminfo', 'filesystem'], true)
+        ? floatval($res[$key]['percent']) : null;
+    $cpu_val = $own('cpu');
+    $ram_val = $own('memory');
+    $hdd_val = $own('disk');
     $stmt_metrics = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage) VALUES (?, ?, ?, ?)");
     $stmt_metrics->execute([$monitor_id, $cpu_val, $ram_val, $hdd_val]);
 }
