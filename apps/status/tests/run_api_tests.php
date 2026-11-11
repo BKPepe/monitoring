@@ -3411,6 +3411,25 @@ try {
         check("{$ra_kind}: bez klíče 400, s neznámým klíčem 401", [$ra_none, $ra_unknown], [400, 401]);
     }
     check('odmítnuté potvrzení stav akce nezmění', $ra_row($ra_done)['status'] ?? null, 'executed');
+
+    // R111: an action whose type is no longer allowed stayed pending and, as
+    // the oldest, blocked every newer allowed one for good.
+    $ra_mon = $pdo->query("SELECT remote_actions_enabled, allowed_actions FROM monitors WHERE id = 2")->fetch();
+    try {
+        $pdo->exec("UPDATE monitors SET remote_actions_enabled = 1, allowed_actions = 'restart_service' WHERE id = 2");
+        $pdo->exec("INSERT INTO agent_actions (monitor_id, action_type, status) VALUES (2, 'reboot_router', 'pending')");
+        $ra_ids[] = $ra_old = (int)$pdo->lastInsertId();
+        $pdo->exec("INSERT INTO agent_actions (monitor_id, action_type, service_name, status) VALUES (2, 'restart_service', 'nginx', 'pending')");
+        $ra_ids[] = $ra_new = (int)$pdo->lastInsertId();
+        [, , $ra_body] = $ra_post($agent_payload);
+        $ra_sent = json_decode((string)$ra_body, true)['pending_action']['action_id'] ?? null;
+        check('zakázaná čekající akce selže s důvodem a novější povolená se odešle',
+            [$ra_row($ra_old)['status'] ?? null, str_contains((string)($ra_row($ra_old)['result_message'] ?? ''), 'není povolený'), $ra_sent, $ra_row($ra_new)['status'] ?? null],
+            ['failed', true, $ra_new, 'sent']);
+    } finally {
+        $pdo->prepare("UPDATE monitors SET remote_actions_enabled = ?, allowed_actions = ? WHERE id = 2")
+            ->execute([$ra_mon['remote_actions_enabled'] ?? 0, $ra_mon['allowed_actions'] ?? null]);
+    }
 } finally {
     foreach ($ra_ids as $ra_id) {
         $pdo->exec("DELETE FROM agent_actions WHERE id = {$ra_id}");

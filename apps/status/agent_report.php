@@ -1465,11 +1465,28 @@ function bk_agent_report(PDO $pdo, array $data, array $monitor, string $base_url
                 ? array_filter(explode(',', (string)($monitor['allowed_actions'] ?? '')))
                 : [];
 
-            if (!empty($ra_allowed_here)) {
-                $stmt_pact = $pdo->prepare("SELECT id, action_type, service_name FROM agent_actions WHERE monitor_id = ? AND status = 'pending' ORDER BY id ASC LIMIT 1");
-                $stmt_pact->execute([$monitor_id]);
+            // A queued action whose type is no longer allowed (or with remote
+            // actions switched off) will never be sent. It was left pending,
+            // and as the oldest it blocked every newer, allowed one for good.
+            $stmt_pall = $pdo->prepare("SELECT id, action_type FROM agent_actions WHERE monitor_id = ? AND status = 'pending' ORDER BY id ASC");
+            $stmt_pall->execute([$monitor_id]);
+            $stmt_refuse = $pdo->prepare("UPDATE agent_actions SET status = 'failed', executed_at = NOW(),
+                result_message = 'Akce nebyla odeslána: tento typ vzdálené akce už pro monitor není povolený.' WHERE id = ? AND status = 'pending'");
+            $pending_act = false;
+            foreach ($stmt_pall->fetchAll() as $pa) {
+                if (!in_array($pa['action_type'], $ra_allowed_here, true)) {
+                    $stmt_refuse->execute([(int)$pa['id']]);
+                } elseif ($pending_act === false) {
+                    $pending_act = $pa;
+                }
+            }
+            if ($pending_act !== false) {
+                $stmt_pact = $pdo->prepare("SELECT id, action_type, service_name FROM agent_actions WHERE id = ?");
+                $stmt_pact->execute([(int)$pending_act['id']]);
                 $pending_act = $stmt_pact->fetch();
+            }
 
+            if (!empty($ra_allowed_here)) {
                 if ($pending_act && in_array($pending_act['action_type'], $ra_allowed_here, true)) {
                     $action_id = (int)$pending_act['id'];
                     $action_type = $pending_act['action_type'];
