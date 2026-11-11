@@ -738,6 +738,7 @@ return [
     'knowledge_tip_ow_hostapd_cpu' => 'CPU je zatíženo procesem hostapd (%s %%). Wi-Fi klientů: %d. Zkontrolujte vytížení pásma.',
     'knowledge_tip_ow_wg_cpu' => 'CPU je zatíženo WireGuard (%s %%). Průchod: RX %s MB / TX %s MB.',
     'knowledge_tip_ow_dns_cpu' => 'CPU je zatíženo dnsmasq (%s %%). DNS dotazů: %d. Zvažte optimalizaci cache.',
+    'knowledge_tip_ow_dns_cpu_nocount' => 'CPU je zatíženo dnsmasq (%s %%). Zvažte optimalizaci cache.',
 
     // General UI
     'btn_edit' => 'Upravit',

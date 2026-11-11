@@ -4687,6 +4687,13 @@ $mon_none = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt'];
 $tips_none = bk_get_knowledge_tips($mon_none, $details_85, [], 'up', [], $pdo);
 check_true('bez prahu platí původní 80', count(array_filter($tips_none, fn($t) => $t['severity'] === 'critical')) > 0);
 
+// R15: "DNS dotazů: 0" stood for a count nobody measured.
+$dns_details = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'dnsmasq', 'cpu' => 72.0, 'ram_mb' => 4.0]]];
+$dns_tips = fn (array $extra): string => implode(' | ', array_column(bk_get_knowledge_tips($mon_high, $dns_details + $extra, [], 'up', [], $pdo), 'text'));
+check_true('tip pro dnsmasq bez změřeného počtu dotazů žádný počet nevymyslí',
+    str_contains($dns_tips([]), 'dnsmasq') && !str_contains($dns_tips([]), 'DNS dotazů'));
+check_true('změřený počet dotazů tip uvede', str_contains($dns_tips(['dns_queries' => 9000]), 'DNS dotazů: 9000'));
+
 // --- Knowledge tips: the threshold comes from the monitor's settings ------
 //
 // Tips had hardcoded thresholds (CPU 80/50) while the chart bands and the

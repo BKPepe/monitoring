@@ -3510,8 +3510,13 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
         }
         // CPU high + dnsmasq -> DNS query rate context
         if (isset($details['cpu']) && floatval($details['cpu']) > 70 && stripos($top_proc_name, 'dnsmasq') !== false) {
-            $dns_q = $details['dns_queries'] ?? 0;
-            $add('warn', 'knowledge_tip_ow_dns_cpu', $top_proc_cpu, $dns_q);
+            // The count only when the agent measured it: "DNS dotazů: 0" stood in
+            // for a number nobody had.
+            if (is_numeric($details['dns_queries'] ?? null)) {
+                $add('warn', 'knowledge_tip_ow_dns_cpu', $top_proc_cpu, (int)$details['dns_queries']);
+            } else {
+                $add('warn', 'knowledge_tip_ow_dns_cpu_nocount', $top_proc_cpu);
+            }
         }
     }
 
