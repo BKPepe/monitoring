@@ -15,6 +15,7 @@ const UNBACKED = [
   /\bEditor\b|\bRead-only role/i, // two roles: admin and user
   /dual-stack/i,
   /\bLTS\b|\b2 years\b|\b2 roky\b|dva roky/i, // no long-term support promise exists
+  /100 ?% open[- ]source/i, // R317: the bundled PHPMailer is LGPL-2.1, not MIT
 ];
 
 /**
@@ -92,5 +93,17 @@ describe('web tvrdí jen to, co produkt umí', () => {
     const license = join(REPO, 'LICENSE');
     expect(existsSync(license)).toBe(true);
     expect(readFileSync(license, 'utf8')).toMatch(/^MIT License/);
+  });
+
+  // R317: the pages called it all open source under MIT while the bundled
+  // PHPMailer is LGPL-2.1. Where the download page names the licence, it
+  // names the third-party notices too.
+  it('stránka ke stažení zmíní licence třetích stran', () => {
+    for (const page of ['pages/download.astro', 'pages/cs/download.astro']) {
+      const text = files.find((f) => f.path === page)?.text ?? '';
+      expect(text).toContain('THIRD_PARTY_NOTICES.md');
+      expect(text).toContain('LGPL-2.1');
+    }
+    expect(existsSync(join(REPO, 'THIRD_PARTY_NOTICES.md'))).toBe(true);
   });
 });
