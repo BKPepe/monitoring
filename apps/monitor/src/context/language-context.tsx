@@ -3305,6 +3305,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'settings.subs_loading': { cs: 'Načítám odběry…', en: 'Loading subscriptions…' },
   'settings.subs_none': { cs: 'Žádné monitory k odběru.', en: 'No monitors to subscribe to.' },
+  'settings.subs_load_error': { cs: 'Odběry se nepodařilo načíst.', en: 'The subscriptions could not be loaded.' },
   'settings.subs_col_monitor': { cs: 'Monitor', en: 'Monitor' },
   'settings.subs_saved': { cs: 'Uloženo!', en: 'Saved!' },
   'settings.subs_save': { cs: 'Uložit odběry', en: 'Save Subscriptions' },

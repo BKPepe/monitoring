@@ -142,6 +142,20 @@ describe('SubscriptionsCard', () => {
     expect(screen.queryByText(/Profil změnil přepínač SMS nebo WhatsApp/)).toBeNull();
   });
 
+  it('says a failed first load failed, not that there is nothing to subscribe to, and retries', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(json({ error: 'Odběry se nepodařilo načíst.' }, false, 500)))
+    );
+    renderCard();
+    expect((await screen.findByRole('alert')).textContent).toContain('Odběry se nepodařilo načíst.');
+    expect(screen.queryByText('Žádné monitory k odběru.')).toBeNull();
+    stubApi(ROWS);
+    fireEvent.click(screen.getByRole('button', { name: 'Zkusit znovu' }));
+    expect((await box('Web', 2)).checked).toBe(true);
+    expect(screen.queryAllByRole('alert')).toEqual([]);
+  });
+
   it('says a failed reload failed and keeps the list instead of showing no monitors', async () => {
     stubApi(ROWS, true, null);
     const profileSaved = renderCard('sms:0 whatsapp:1');

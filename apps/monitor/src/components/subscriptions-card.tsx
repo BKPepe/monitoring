@@ -36,6 +36,10 @@ export function SubscriptionsCard({ profileSwitches = '' }: { profileSwitches?: 
   const [error, setError] = React.useState<string | null>(null);
   // The last reload after a profile change failed; cleared by one that succeeds.
   const [reloadFailed, setReloadFailed] = React.useState(false);
+  // The first load failed: nothing is known, and "no monitors to subscribe
+  // to" would be the very mix-up the server answers 500 to prevent.
+  const [loadFailed, setLoadFailed] = React.useState(false);
+  const [retries, setRetries] = React.useState(0);
   // What each box showed when the card loaded (or last saved). The save posts
   // it so the server stores only the boxes changed here: a profile or monitor
   // switch flipped while the card stays open must not be pinned for every
@@ -64,16 +68,17 @@ export function SubscriptionsCard({ profileSwitches = '' }: { profileSwitches?: 
         setSubs(list);
         setLoadedFor(profileSwitches);
         setReloadFailed(false);
+        setLoadFailed(false);
       })
       .catch(() => {
         if (!active) return;
-        if (loadedFor === null) setSubs([]);
+        if (loadedFor === null) setLoadFailed(true);
         else setReloadFailed(true);
       });
     return () => {
       active = false;
     };
-  }, [loadedFor, profileSwitches, unsaved, saves]);
+  }, [loadedFor, profileSwitches, unsaved, saves, retries]);
 
   const toggle = (id: number, field: 'email' | 'sms' | 'whatsapp') => {
     setSubs((prev) => (prev ?? []).map((s) => (s.id === id ? { ...s, [field]: s[field] ? 0 : 1 } : s)));
@@ -133,7 +138,15 @@ export function SubscriptionsCard({ profileSwitches = '' }: { profileSwitches?: 
         />
       )}
 
-      {subs === null ? (
+      {subs === null && loadFailed ? (
+        <ErrorState
+          message={t('settings.subs_load_error', 'Odběry se nepodařilo načíst.')}
+          onRetry={() => {
+            setLoadFailed(false);
+            setRetries((n) => n + 1);
+          }}
+        />
+      ) : subs === null ? (
         <LoadingState label={t('settings.subs_loading', 'Načítám odběry…')} size="inline" />
       ) : subs.length === 0 ? (
         <p className="text-muted-foreground text-xs">{t('settings.subs_none', 'Žádné monitory k odběru.')}</p>
