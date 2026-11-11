@@ -26,6 +26,8 @@ export interface SessionInfo {
   user: { id: number; username: string; email: string; role: string; totpEnabled?: boolean | null } | null;
   csrfToken: string | null;
   loginUrl: string;
+  /** The OAuth providers this server has a client ID for (bk_oauth_providers() keys). */
+  oauthProviders?: string[];
 }
 
 export interface ApiMonitor {

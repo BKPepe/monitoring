@@ -17,7 +17,7 @@ const json = (body: unknown) =>
     text: () => Promise.resolve(JSON.stringify(body)),
   } as Response);
 
-function stubApi(oauthProvider: string | null) {
+function stubApi(oauthProvider: string | null, oauthProviders: string[] = ['github', 'google']) {
   vi.stubGlobal(
     'fetch',
     vi.fn((input: RequestInfo | URL) => {
@@ -28,6 +28,7 @@ function stubApi(oauthProvider: string | null) {
           user: { id: 1, username: 'admin', email: 'admin@example.com', role: 'admin' },
           csrfToken: 't',
           loginUrl: '',
+          oauthProviders,
         });
       }
       if (url.includes('action=my_profile')) {

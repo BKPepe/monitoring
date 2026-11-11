@@ -11,7 +11,7 @@ import { SubscriptionsCard } from '@/components/subscriptions-card';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { resolveUrl } from '@/api/http-source';
-import { oauthLinkUrl, oauthProblemText, readOauthOutcome } from '@/lib/oauth';
+import { OAUTH_LABELS, oauthLabel, oauthLinkUrl, oauthProblemText, readOauthOutcome } from '@/lib/oauth';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 
 interface MyProfile {
@@ -319,8 +319,13 @@ function ProfileForm({ profile, onSaved }: { profile: MyProfile; onSaved: (passw
  */
 function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () => void }) {
   const { t } = useLanguage();
+  const { session } = useSession();
+  // The providers the server has a client for, as on the login page: GitHub
+  // and Google were offered on every install, and a link to one without a
+  // client ended on an error, while Discord and GitLab were never offered.
+  const providers = (session?.oauthProviders ?? []).filter((p) => oauthLabel(p) !== null);
   const [unlinking, setUnlinking] = React.useState(false);
-  const [linking, setLinking] = React.useState<'github' | 'google' | null>(null);
+  const [linking, setLinking] = React.useState<string | null>(null);
   const [password, setPassword] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [outcome] = React.useState(() => readOauthOutcome(window.location.search));
@@ -429,9 +434,7 @@ function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () =
               />
               <div className="flex gap-2">
                 <Button type="submit" size="sm" disabled={busy || !password}>
-                  {linking === 'github'
-                    ? t('profile.link_github', 'Propojit GitHub')
-                    : t('profile.link_google', 'Propojit Google')}
+                  {t('profile.link_with', { provider: OAUTH_LABELS[linking] }, `Propojit ${OAUTH_LABELS[linking]}`)}
                 </Button>
                 <Button
                   type="button"
@@ -447,14 +450,21 @@ function OauthCard({ profile, onChanged }: { profile: MyProfile; onChanged: () =
                 </Button>
               </div>
             </form>
+          ) : providers.length === 0 ? (
+            <p className="text-muted-foreground text-xs">
+              {t('profile.oauth_none', 'Na tomto serveru není přihlášení přes externí účet nastavené.')}
+            </p>
           ) : (
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" onClick={() => setLinking('github')}>
-                <GithubIcon className="size-4" /> {t('profile.link_github', 'Propojit GitHub')}
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => setLinking('google')}>
-                <GoogleIcon className="size-4" /> {t('profile.link_google', 'Propojit Google')}
-              </Button>
+              {providers.map((key) => {
+                const Icon = key === 'github' ? GithubIcon : key === 'google' ? GoogleIcon : KeyRound;
+                return (
+                  <Button key={key} size="sm" variant="outline" onClick={() => setLinking(key)}>
+                    <Icon className="size-4" />{' '}
+                    {t('profile.link_with', { provider: OAUTH_LABELS[key] }, `Propojit ${OAUTH_LABELS[key]}`)}
+                  </Button>
+                );
+              })}
             </div>
           )}
         </div>
