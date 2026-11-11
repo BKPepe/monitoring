@@ -87,7 +87,7 @@ const raw: Dict = {
       stale: 'Stará data',
       unavailable: 'Nedostupné',
       monitors: 'Monitorů',
-      agents: 'Agentů online',
+      agents: 'Uzlů online',
       latency: 'Prům. odezva · 1\u00a0h',
       uptime: 'Dostupnost · 30\u00a0dní',
       updated: 'Poslední měření',

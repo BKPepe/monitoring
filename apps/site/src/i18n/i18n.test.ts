@@ -16,6 +16,12 @@ describe('jazyky webu', () => {
     expect(keys(dicts.cs)).toEqual(keys(dicts.en));
   });
 
+  // R276: the count is of the public nodes - mostly game servers probed as
+  // hosts; the agents themselves are private. "Agentů online" named them wrong.
+  it('živý panel počítá uzly, ne agenty', () => {
+    expect([dicts.cs.home.panel.agents, dicts.en.home.panel.agents]).toEqual(['Uzlů online', 'Nodes online']);
+  });
+
   it('jazyk plyne z cesty, /cs a /cs/ jsou česky, /csv ne', () => {
     expect(langFromPath('/')).toBe('en');
     expect(langFromPath('/cs')).toBe('cs');

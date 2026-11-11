@@ -72,7 +72,7 @@ export const en = {
       stale: 'Stale',
       unavailable: 'Unavailable',
       monitors: 'Monitors',
-      agents: 'Agents online',
+      agents: 'Nodes online',
       latency: 'Avg response · 1\u00a0h',
       uptime: 'Uptime · 30\u00a0days',
       updated: 'Last check',
