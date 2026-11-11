@@ -2029,6 +2029,22 @@ function bk_escalation_due(array $incident, int $after_mins, ?int $now = null): 
  *
  * @return array{checked: int, escalated: int, skipped_no_channel: int, failed: int, unknown: int, error: ?string}
  */
+/**
+ * The escalation message. It called every incident an outage and said the
+ * first alert had gone out; an incident announced by hand has no monitor, no
+ * outage and no alert, and the message woke someone with a false story.
+ */
+function bk_escalation_text(array $incident, int $after_mins, int $waiting_secs): string {
+    $service = !empty($incident['monitor_name']) ? (string)$incident['monitor_name'] : null;
+    $is_outage = ($incident['monitor_id'] ?? null) !== null;
+    return ($is_outage ? "🚨 **Eskalace: nikdo nepřevzal výpadek**\n" : "🚨 **Eskalace: nikdo nepřevzal ohlášený incident**\n")
+        . '**Incident:** ' . $incident['title'] . "\n"
+        . ($service !== null ? '**Služba:** ' . $service . "\n" : '')
+        . '**Trvá:** ' . bk_format_duration_secs($waiting_secs) . "\n"
+        . '**Limit na převzetí:** ' . $after_mins . " min\n"
+        . ($is_outage ? 'Výpadek trvá a nikdo ho zatím nepřevzal.' : 'Incident byl ohlášen ručně a nikdo ho zatím nepřevzal.');
+}
+
 function bk_process_escalations(PDO $pdo, ?int $now = null): array {
     $result = ['checked' => 0, 'escalated' => 0, 'skipped_no_channel' => 0, 'failed' => 0, 'unknown' => 0, 'error' => null];
 
@@ -2076,14 +2092,7 @@ function bk_process_escalations(PDO $pdo, ?int $now = null): array {
             continue;
         }
 
-        $waited = bk_format_duration_secs((int)$verdict['waiting_secs']);
-        $service = !empty($incident['monitor_name']) ? $incident['monitor_name'] : null;
-        $text = "🚨 **Eskalace: nikdo nepřevzal výpadek**\n"
-            . '**Incident:** ' . $incident['title'] . "\n"
-            . ($service !== null ? '**Služba:** ' . $service . "\n" : '')
-            . '**Trvá:** ' . $waited . "\n"
-            . '**Limit na převzetí:** ' . $after_mins . " min\n"
-            . 'Původní upozornění odešlo a nikdo na něj nezareagoval.';
+        $text = bk_escalation_text($incident, $after_mins, (int)$verdict['waiting_secs']);
 
         // The payload carries both `content` and `text`: Discord reads the first,
         // Slack the second, and both ignore an unknown key. One channel covers both.

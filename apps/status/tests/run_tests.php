@@ -5308,6 +5308,13 @@ foreach (["O'Brien", "x');alert(1);//", 'a"b<c>&d', 'Žluťoučký kůň', ''] a
 $js_admin = (string)file_get_contents(__DIR__ . '/../admin.php');
 check('admin.php nemá v onclick escapovaný řetězec v apostrofech', preg_match_all("/onclick=\"[^\"]*'<\?php echo htmlspecialchars\(/", $js_admin), 0);
 
+// --- Escalation message (R248) --------------------------------------------------
+$esc_outage = bk_escalation_text(['title' => 'Výpadek: Web', 'monitor_id' => 4, 'monitor_name' => 'Web'], 15, 1800);
+$esc_manual = bk_escalation_text(['title' => 'Plánované práce', 'monitor_id' => null, 'monitor_name' => null], 15, 1800);
+check_true('eskalace výpadku mluví o výpadku a službě', str_contains($esc_outage, 'nepřevzal výpadek') && str_contains($esc_outage, '**Služba:** Web'));
+check_true('ohlášený incident se nevydává za výpadek ani za odeslané upozornění',
+    !str_contains($esc_manual, 'výpadek') && !str_contains($esc_manual, 'upozornění odešlo') && str_contains($esc_manual, 'ohlášen ručně'));
+
 // --- What the geolocation API answered (bk_location_from_geo) ------------------
 foreach ([[false, 'bez odpovědi'], ['', 'prázdná odpověď'], ['nope', 'nečitelná odpověď'], ['{"status":"fail","message":"quota"}', 'odmítnutí'], ['{"status":"success","city":"Prague"}', 'bez země']] as [$geo_in, $geo_why]) {
     check("lokalita: {$geo_why} nic nevymyslí", bk_location_from_geo($geo_in), null);
