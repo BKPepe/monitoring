@@ -13553,8 +13553,11 @@ function bk_router_alert_eval(array $cur, array $state, int $now): array {
             $st['conntrack_bad_streak']++;
             $ct_refused = $ct_drops !== null && $ct_drops > 0;
             if (!$st['conntrack_full_sent'] && ($st['conntrack_bad_streak'] >= 2 || $ct_refused)) {
+                // "Refuses new connections" only when it measured one refused:
+                // two readings at 90 % fire this too, with nothing refused yet.
                 $events[] = bk_router_alert_event('conntrack_full', 'conntrack_full',
-                    sprintf('Tabulka spojení routeru je zaplněná z %d %% a nová spojení odmítá.', (int)round($ct_pct)));
+                    sprintf('Tabulka spojení routeru je zaplněná z %d %%', (int)round($ct_pct))
+                    . ($ct_refused ? ' a nová spojení odmítá.' : '.'));
                 $st['conntrack_full_sent'] = true;
             }
         } elseif ($ct_pct < 85.0) {

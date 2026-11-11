@@ -2100,9 +2100,11 @@ $ra_c1 = $ra_run(['conntrack_pct' => 92.0], [], $ra_now);
 $ra_c2 = $ra_run(['conntrack_pct' => 92.0], $ra_c1['state'], $ra_now + 60);
 check('plná tabulka spojení se ohlásí až po druhém hlášení',
     [$ra_types($ra_c1), $ra_types($ra_c2), $ra_c2['events'][0]['message']],
-    [[], ['conntrack_full'], 'Tabulka spojení routeru je zaplněná z 92 % a nová spojení odmítá.']);
-check('odmítnuté spojení při plné tabulce ohlásí hned první hlášení',
-    $ra_types($ra_run(['conntrack_pct' => 95.0, 'conntrack_drops' => 3], [], $ra_now)), ['conntrack_full']);
+    [[], ['conntrack_full'], 'Tabulka spojení routeru je zaplněná z 92 %.']);
+$ra_refused = $ra_run(['conntrack_pct' => 95.0, 'conntrack_drops' => 3], [], $ra_now);
+check('odmítnuté spojení při plné tabulce ohlásí hned první hlášení a řekne to',
+    [$ra_types($ra_refused), $ra_refused['events'][0]['message'] ?? null],
+    [['conntrack_full'], 'Tabulka spojení routeru je zaplněná z 95 % a nová spojení odmítá.']);
 check('kolize při poloprázdné tabulce nejsou odmítnutá spojení',
     $ra_types($ra_run(['conntrack_pct' => 40.0, 'conntrack_drops' => 3], [], $ra_now)), []);
 $ra_c3 = $ra_run(['conntrack_pct' => 88.0], $ra_c2['state'], $ra_now + 120);
