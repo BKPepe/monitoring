@@ -97,6 +97,16 @@ describe('Nastavení → Notifikace: kanály po řádcích (W2-11)', () => {
     expect(within(row('E-mail \\(SMTP\\)')).queryByText('Nastaveno')).toBeNull();
   });
 
+  it('SMTP host bez hesla je výchozí mail(), ne „Nastaveno“ (R297)', async () => {
+    serveSettings({ smtp_host: 'smtp.example.test', smtp_user: 'monitor@example.test', smtp_pass: '' });
+    await openTab(/Notifikace/);
+    expect(within(row('E-mail \\(SMTP\\)')).getByText('Výchozí PHP mail()')).toBeTruthy();
+    cleanup();
+    serveSettings({ smtp_host: 'smtp.example.test', smtp_user: 'monitor@example.test', smtp_pass: '••••••1234' });
+    await openTab(/Notifikace/);
+    expect(within(row('E-mail \\(SMTP\\)')).getByText('Nastaveno')).toBeTruthy();
+  });
+
   it('brána „Žádná“ se zbylými údaji Twilia není „Nastaveno“ (R296)', async () => {
     serveSettings({ sms_gateway_type: '', twilio_sid: 'AC1', twilio_token: 'tok', twilio_from: '+420700000000' });
     await openTab(/Notifikace/);

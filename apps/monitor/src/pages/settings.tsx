@@ -1340,8 +1340,10 @@ function channelState(
   const has = (...keys: string[]) => keys.every((k) => (saved[k] ?? '').trim() !== '');
   switch (id) {
     case 'email':
-      // An empty SMTP host is not "off": the server falls back to PHP mail().
-      return locked('smtp_host') || has('smtp_host') ? 'set' : 'default';
+      // SMTP is used only with a host, a user and a password (bk_deliver_email);
+      // without any of them the server falls back to PHP mail(), which is
+      // not "off" - and not "Nastaveno" either, as a host alone used to read.
+      return ['smtp_host', 'smtp_user', 'smtp_pass'].every((k) => locked(k) || has(k)) ? 'set' : 'default';
     case 'sms': {
       // The gateway type alone says nothing: a fresh install has none, an
       // older one still holds the 'twilio' row schema.sql used to seed.
