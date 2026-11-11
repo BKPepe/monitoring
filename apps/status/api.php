@@ -6470,7 +6470,7 @@ if ($action === 'metrics_history') {
     try {
         if ($period === '7d') {
             $stmt = $pdo->prepare("
-                SELECT DATE_FORMAT(checked_at, '%d.%m. %H:00') AS label,
+                SELECT DATE_FORMAT(MIN(checked_at), '%d.%m. %H:00') AS label,
                        AVG(cpu_usage) AS cpu, MAX(cpu_usage) AS cpu_peak,
                        AVG(ram_usage) AS ram, MAX(ram_usage) AS ram_peak,
                        AVG(hdd_usage) AS hdd, MAX(hdd_usage) AS hdd_peak,
@@ -6483,7 +6483,7 @@ if ($action === 'metrics_history') {
             $stmt->execute([$monitor_id, $monitor_id]);
         } elseif ($period === '30d') {
             $stmt = $pdo->prepare("
-                SELECT DATE_FORMAT(checked_at, '%d.%m.') AS label,
+                SELECT DATE_FORMAT(MIN(checked_at), '%d.%m.') AS label,
                        AVG(cpu_usage) AS cpu, MAX(cpu_usage) AS cpu_peak,
                        AVG(ram_usage) AS ram, MAX(ram_usage) AS ram_peak,
                        AVG(hdd_usage) AS hdd, MAX(hdd_usage) AS hdd_peak,
@@ -6512,6 +6512,7 @@ if ($action === 'metrics_history') {
         // No rows = no chart. A synthetic sine series used to be generated here
         // "for a natural look" - invented data passed off as measurements.
         // An empty array lets the frontend say "no data", which is the truth.
+        $peaks = ['cpu' => [], 'ram' => [], 'hdd' => [], 'net' => []];
         foreach ($rows as $r) {
             $result['labels'][] = $r['label'];
             // A NULL metric (e.g. cpuusage without CloudLinux) stays NULL -
@@ -6520,15 +6521,23 @@ if ($action === 'metrics_history') {
             $result['ram'][] = $r['ram'] !== null ? round((float)$r['ram'], 1) : null;
             $result['hdd'][] = $r['hdd'] !== null ? round((float)$r['hdd'], 1) : null;
             $result['net'][] = $r['net'] !== null ? round((float)$r['net'], 1) : null;
+            foreach ($peaks as $mk => $list) {
+                if ($r["{$mk}_peak"] !== null) {
+                    $peaks[$mk][] = round((float)$r["{$mk}_peak"], 1);
+                }
+            }
         }
 
         // Averages/maxima only from actually measured values; without a single
         // value it stays null and the frontend prints a dash instead of a zero.
+        // The maximum is the highest single reading. Over 7 and 30 days the
+        // points are hourly or daily averages, and their maximum hid a minute
+        // at 100 % behind "13 %".
         foreach (['cpu', 'ram', 'hdd', 'net'] as $mk) {
             $valid = array_filter($result[$mk], fn($v) => $v !== null);
             if (!empty($valid)) {
                 $result["{$mk}_avg"] = round(array_sum($valid) / count($valid), 1);
-                $result["{$mk}_max"] = max($valid);
+                $result["{$mk}_max"] = $peaks[$mk] !== [] ? max($peaks[$mk]) : max($valid);
             } else {
                 $result["{$mk}_avg"] = null;
                 $result["{$mk}_max"] = null;

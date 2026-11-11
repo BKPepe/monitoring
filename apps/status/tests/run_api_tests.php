@@ -684,6 +684,21 @@ check_true('monitor bez logů má p50 null, ne nulu', array_key_exists('p50Ms', 
 check_true('a uptime null, ne 100', array_key_exists('uptimePercent', $sla_by_id[2]) && $sla_by_id[2]['uptimePercent'] === null);
 // R27: no measurement is no outage figure, and the total sums what was measured.
 check_true('a výpadek null, ne nula minut', array_key_exists('outageMinutes', $sla_by_id[2]) && $sla_by_id[2]['outageMinutes'] === null);
+// R159: over 7 and 30 days the "max" was the highest hourly or daily average.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status) VALUES (9159, 'R159', 'vps', 'r159.example.test', 'up')");
+$r159_ins = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at) VALUES (9159, ?, 40, 50, NOW() - INTERVAL 2 DAY + INTERVAL ? MINUTE)");
+for ($i = 0; $i < 30; $i++) {
+    $r159_ins->execute([$i === 10 ? 100 : 10, $i]);
+}
+foreach (['7d', '30d'] as $r159_period) {
+    [$r159_code, $r159] = api_get_auth($base, "action=metrics_history&monitor_id=9159&period={$r159_period}", $cookie_jar);
+    // The strict MySQL default (ONLY_FULL_GROUP_BY) refused both queries: 500.
+    check("historie za {$r159_period} odpoví", $r159_code, 200);
+    check("max za {$r159_period} je nejvyšší měření, ne nejvyšší průměr", (float)($r159['cpu_max'] ?? -1), 100.0);
+}
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 9159");
+$pdo->exec("DELETE FROM monitors WHERE id = 9159");
+
 // R252: a 7-day report took its MTTR from an outage 25 days back.
 $pdo->exec("INSERT INTO monitors (id, name, type, target, status, created_at) VALUES (9252, 'R252', 'web', 'https://r252.example.test', 'up', NOW() - INTERVAL 40 DAY)");
 $r252_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES (9252, ?, NOW() - INTERVAL ? MINUTE)");
