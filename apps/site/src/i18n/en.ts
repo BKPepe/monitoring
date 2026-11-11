@@ -364,7 +364,7 @@ export const en = {
     req: {
       title: 'Check what the hosting offers',
       items: [
-        'PHP 8.2 or newer with the PDO MySQL, cURL and mbstring extensions',
+        'PHP 8.2 or newer with the PDO MySQL, cURL, mbstring and OpenSSL extensions',
         'A MySQL or MariaDB database',
         "A cron job every minute (cPanel's Cron Jobs is enough)",
         'Apache with .htaccess and mod_rewrite, as on most shared hosting',

@@ -376,7 +376,7 @@ const raw: Dict = {
     req: {
       title: 'Ověřte, co hosting nabízí',
       items: [
-        'PHP 8.2 nebo novější s rozšířeními PDO MySQL, cURL a mbstring',
+        'PHP 8.2 nebo novější s rozšířeními PDO MySQL, cURL, mbstring a OpenSSL',
         'Databáze MySQL nebo MariaDB',
         'Cron každou minutu (stačí Cron Jobs v cPanelu)',
         'Apache s .htaccess a mod_rewrite, jako na většině sdílených hostingů',

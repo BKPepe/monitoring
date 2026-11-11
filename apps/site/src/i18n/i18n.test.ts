@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { czTypography } from './cs';
 import { alternates, dicts, langFromPath, withSlash } from './index';
@@ -20,6 +21,23 @@ describe('jazyky webu', () => {
   // hosts; the agents themselves are private. "Agentů online" named them wrong.
   it('živý panel počítá uzly, ne agenty', () => {
     expect([dicts.cs.home.panel.agents, dicts.en.home.panel.agents]).toEqual(['Uzlů online', 'Nodes online']);
+  });
+
+  // R316: the list left out OpenSSL, which the installer requires.
+  it('požadavky na hosting jmenují každé rozšíření, které instalátor kontroluje', () => {
+    const installer = readFileSync(new URL('../../../status/installer.php', import.meta.url), 'utf8');
+    const exts = [...installer.matchAll(/'([a-z_]+)' => extension_loaded\('\1'\)/g)].map((m) => m[1]);
+    const names: Record<string, string> = {
+      pdo_mysql: 'PDO MySQL',
+      curl: 'cURL',
+      mbstring: 'mbstring',
+      openssl: 'OpenSSL',
+    };
+    expect(exts).toContain('openssl');
+    for (const lang of ['cs', 'en'] as const) {
+      const php = dicts[lang].server.req.items[0];
+      for (const ext of exts) expect(php).toContain(names[ext] ?? ext);
+    }
   });
 
   it('jazyk plyne z cesty, /cs a /cs/ jsou česky, /csv ne', () => {
