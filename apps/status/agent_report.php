@@ -262,7 +262,7 @@ function bk_agent_report(PDO $pdo, array $data, array $monitor, string $base_url
         $monitored_processes = array_filter(array_map('trim', explode(',', $monitored_processes_str)));
         $agent_processes = isset($data['processes']) && is_array($data['processes']) ? $data['processes'] : [];
         foreach ($monitored_processes as $proc) {
-            if (!in_array($proc, $agent_processes)) {
+            if (!bk_process_running($proc, $agent_processes)) {
                 $missing_processes[] = $proc;
             }
         }

@@ -5310,6 +5310,12 @@ foreach (["O'Brien", "x');alert(1);//", 'a"b<c>&d', 'Žluťoučký kůň', ''] a
 $js_admin = (string)file_get_contents(__DIR__ . '/../admin.php');
 check('admin.php nemá v onclick escapovaný řetězec v apostrofech', preg_match_all("/onclick=\"[^\"]*'<\?php echo htmlspecialchars\(/", $js_admin), 0);
 
+// --- A watched process with a long name (R164) ---------------------------------
+check_true('dlouhé jméno najde svých 15 znaků z comm', bk_process_running('systemd-resolved', ['sshd', 'systemd-resolve']));
+check_true('krátké jméno se hledá celé', bk_process_running('sshd', ['sshd']) && !bk_process_running('ssh', ['sshd']));
+check_false('dlouhé jméno nenajde jiný začátek', bk_process_running('systemd-resolved', ['systemd-network']));
+check_false('chybějící proces chybí', bk_process_running('nginx', ['sshd', 'cron']));
+
 // --- Escalation message (R248) --------------------------------------------------
 $esc_outage = bk_escalation_text(['title' => 'Výpadek: Web', 'monitor_id' => 4, 'monitor_name' => 'Web'], 15, 1800);
 $esc_manual = bk_escalation_text(['title' => 'Plánované práce', 'monitor_id' => null, 'monitor_name' => null], 15, 1800);

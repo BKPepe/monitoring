@@ -3166,6 +3166,20 @@ check_true('monitor.php nevypíše skript z čísla', !str_contains($x330_page, 
 // The report also stored them as process samples; later tests count those.
 $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2 AND (name LIKE '<img%' OR name LIKE 'aaaa%')");
 
+// R164: comm keeps 15 characters, so a longer watched name was always missing.
+$x164_saved = $pdo->query("SELECT monitored_processes FROM monitors WHERE id = 2")->fetchColumn();
+$pdo->exec("UPDATE monitors SET monitored_processes = 'systemd-resolved, sshd' WHERE id = 2");
+$x164_missing = function (array $running) use ($pdo, $post_agent): ?array {
+    $post_agent(['processes' => $running]);
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true)['missing_processes'] ?? null;
+};
+check('dlouhé jméno procesu se najde podle 15 znaků z comm', $x164_missing(['sshd', 'systemd-resolve']), []);
+check('chybějící proces se pořád ohlásí', $x164_missing(['systemd-resolve']), ['sshd']);
+// Back up, and without the outage that check wrote: later tests read the logs.
+$x164_missing(['sshd', 'systemd-resolve']);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 2 AND error_message LIKE 'Chybí běžící proces%'");
+$pdo->prepare("UPDATE monitors SET monitored_processes = ? WHERE id = 2")->execute([$x164_saved === false ? null : $x164_saved]);
+
 $lte_events = function (string $type) use ($pdo): int {
     $st = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 2 AND event_type = ?");
     $st->execute([$type]);

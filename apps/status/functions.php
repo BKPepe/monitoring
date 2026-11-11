@@ -809,6 +809,20 @@ function bk_agent_process_list(array $data, string $key): ?array {
     return $list;
 }
 
+/**
+ * Whether a process an admin asked to watch is in the agent's list. Agents
+ * read names from the kernel's comm, which keeps 15 characters, so
+ * "systemd-resolved" arrives as "systemd-resolve" and was reported missing
+ * every minute. A longer name also matches its 15-character start.
+ */
+function bk_process_running(string $wanted, array $running): bool {
+    $running = array_map('strval', $running);
+    if (in_array($wanted, $running, true)) {
+        return true;
+    }
+    return strlen($wanted) > 15 && in_array(substr($wanted, 0, 15), $running, true);
+}
+
 /** Integer variant of bk_agent_num() - for counters and counts. */
 function bk_agent_int(array $data, string $key): ?int {
     $num = bk_agent_num($data, $key);
