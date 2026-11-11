@@ -5144,8 +5144,10 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (vars) {
+        // A function, not a string: in a replacement string "$&", "$$" and
+        // "$1" are patterns, so a monitor named "A$&B" came out as "A{name}B".
         Object.entries(vars).forEach(([k, v]) => {
-          text = text.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+          text = text.replace(new RegExp(`\\{${k}\\}`, 'g'), () => String(v));
         });
       }
 
