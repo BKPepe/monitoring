@@ -16,6 +16,8 @@ const UNBACKED = [
   /dual-stack/i,
   /\bLTS\b|\b2 years\b|\b2 roky\b|dva roky/i, // no long-term support promise exists
   /100 ?% open[- ]source/i, // R317: the bundled PHPMailer is LGPL-2.1, not MIT
+  /isolated cach|čtou z cache/i, // R312: the public status answer is not served from a cache of its own
+  /target, code, and response latency/i, // R312: an alert carries name, state, time and error
 ];
 
 /**
