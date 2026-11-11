@@ -25,6 +25,7 @@ import {
   wearLabel,
   writtenPerDay,
   type HealthTone,
+  readingAgo,
 } from '@/lib/disk-health';
 import { cn } from '@/lib/utils';
 
@@ -37,7 +38,6 @@ import { cn } from '@/lib/utils';
  * an error and is not drawn as one - but it is never drawn as healthy either,
  * because nobody checked.
  */
-type TranslateFn = (key: string, params?: Record<string, string | number> | string, fallback?: string) => string;
 
 const TONE_TEXT: Record<HealthTone, string> = {
   up: 'text-up',
@@ -66,16 +66,6 @@ function human(bytes: number | null): string {
     unit++;
   }
   return `${value.toFixed(value >= 100 || unit === 0 ? 0 : 1)} ${units[unit]}`;
-}
-
-/** "3 d", "5 h", "12 min" - how long ago the reading the values come from was taken. */
-function ago(checkedAt: number | null, nowSecs: number, t: TranslateFn): string | null {
-  if (checkedAt === null || checkedAt <= 0) return null;
-  const secs = Math.max(0, nowSecs - checkedAt);
-  if (secs < 120) return t('net.just_now', 'před chvílí');
-  if (secs < 7200) return `${Math.round(secs / 60)} min`;
-  if (secs < 172800) return `${Math.round(secs / 3600)} h`;
-  return `${Math.round(secs / 86400)} d`;
 }
 
 type HistoryState =
@@ -534,7 +524,7 @@ function DiskHistory({ days }: { days: StorageHistoryDay[] }) {
 function DiskFooter({ disk }: { disk: StorageDisk }) {
   const { t } = useLanguage();
   const [nowSecs] = React.useState(() => Math.floor(Date.now() / 1000));
-  const readAgo = ago(num(disk.smart?.checked_at), nowSecs, t);
+  const readAgo = readingAgo(num(disk.smart?.checked_at), nowSecs, t);
   const selftests = num(disk.smart?.selftest_count);
 
   return (

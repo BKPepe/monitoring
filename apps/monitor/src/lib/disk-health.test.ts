@@ -218,7 +218,7 @@ describe('verdictSentence', () => {
     const { calls, record } = spy();
     const { verdict } = verdictSentence(withSmart({ state: 'standby' }), 'opkg', now, record);
     expect(verdict.key).toBe('storage.smart_standby');
-    expect(calls.at(-1)?.params).toEqual({ ago: '3 d' });
+    expect(calls.at(-1)?.params).toEqual({ ago: 'před 3 d' });
   });
 
   it('fills the install command only for the sentence that asks for one', () => {
@@ -231,7 +231,7 @@ describe('verdictSentence', () => {
     const second = spy();
     const healthy = verdictSentence(disk, 'opkg', now, second.record);
     expect(healthy.verdict.key).toBe('storage.smart_ok');
-    expect(second.calls.at(-1)?.params).toEqual({ ago: '3 d' });
+    expect(second.calls.at(-1)?.params).toEqual({ ago: 'před 3 d' });
   });
 
   it('asks for no value at all for a state that never had a reading', () => {

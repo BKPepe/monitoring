@@ -120,8 +120,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'SMART reports a failure – back up and replace the disk',
   },
   'storage.smart_standby': {
-    cs: 'Disk spí – SMART se nečetl, aby se neroztočil. Hodnoty jsou z {ago}.',
-    en: 'Disk asleep – SMART was not read so it stays asleep. Values are from {ago}.',
+    cs: 'Disk spí – SMART se nečetl, aby se neroztočil. Hodnoty jsou z měření {ago}.',
+    en: 'Disk asleep – SMART was not read so it stays asleep. Values are from a reading {ago}.',
   },
   'storage.smart_standby_never': {
     cs: 'Disk spí a ještě nebyl změřen.',
@@ -176,6 +176,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'storage.kind_ssd': { cs: 'SSD', en: 'SSD' },
   'storage.kind_hdd': { cs: 'HDD (rotační)', en: 'HDD (spinning)' },
   'storage.smart_age': { cs: 'SMART změřen {ago}', en: 'SMART read {ago}' },
+  'storage.reading_ago': { cs: 'před {span}', en: '{span} ago' },
   'storage.temperature': { cs: 'Teplota', en: 'Temperature' },
   'storage.temp_limit': { cs: 'limit {limit} °C', en: 'limit {limit} °C' },
   'storage.power_on': { cs: 'Doba provozu', en: 'Power-on time' },

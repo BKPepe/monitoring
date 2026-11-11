@@ -169,13 +169,26 @@ export function installCommand(
 
 /** How long ago the reading the values come from was taken; null when there is none. */
 function readingAge(disk: StorageDisk, nowSecs: number, t: TranslateFn): string | null {
-  const checkedAt = num(disk.smart?.checked_at);
+  return readingAgo(num(disk.smart?.checked_at), nowSecs, t);
+}
+
+/**
+ * How long ago a reading was taken, as the whole phrase: "před 3 d",
+ * "před chvílí" / "3 d ago", "just now". The bare length went into sentences
+ * that put "z" or nothing before it: "Hodnoty jsou z před chvílí", "SMART
+ * změřen 3 d". null for no reading.
+ */
+export function readingAgo(checkedAt: number | null, nowSecs: number, t: TranslateFn): string | null {
   if (checkedAt === null || checkedAt <= 0) return null;
   const secs = Math.max(0, nowSecs - checkedAt);
   if (secs < 120) return t('net.just_now', 'před chvílí');
-  if (secs < 7200) return `${Math.round(secs / 60)} min`;
-  if (secs < 172800) return `${Math.round(secs / 3600)} h`;
-  return `${Math.round(secs / 86400)} d`;
+  const span =
+    secs < 7200
+      ? `${Math.round(secs / 60)} min`
+      : secs < 172800
+        ? `${Math.round(secs / 3600)} h`
+        : `${Math.round(secs / 86400)} d`;
+  return t('storage.reading_ago', { span }, `před ${span}`);
 }
 
 /**

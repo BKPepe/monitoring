@@ -72,7 +72,9 @@ describe('DiskHealthList', () => {
     const now = Math.floor(Date.now() / 1000);
     const disk: StorageDisk = { ...sda, smart: { ...sda.smart!, state: 'standby', checked_at: now - 3 * 86400 } };
     renderList({ disks: [disk] });
-    expect(screen.getByText(/Disk spí – SMART se nečetl.*3 d/)).toBeTruthy();
+    // R308: the whole phrase - it read "Hodnoty jsou z 3 d", and "z před chvílí".
+    expect(screen.getByText(/Disk spí – SMART se nečetl.*Hodnoty jsou z měření před 3 d\./)).toBeTruthy();
+    expect(screen.getByText('SMART změřen před 3 d')).toBeTruthy();
     // The last reading is still shown: it is what the disk last said, not nothing.
     expect(screen.getByText('67 °C')).toBeTruthy();
   });
