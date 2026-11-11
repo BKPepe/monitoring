@@ -27,8 +27,8 @@ export function HistogramPanel({ points, unit, tone }: { points: MetricPoint[]; 
 
   const histogram = React.useMemo(() => {
     const values = points.map((p) => p.v).filter((v): v is number => v != null);
-    return values.length >= 2 ? buildHistogram(values) : null;
-  }, [points]);
+    return values.length >= 2 ? buildHistogram(values, locale) : null;
+  }, [points, locale]);
 
   // p95/p99 marked on the bars themselves: the shape shows where the mass is,
   // the markers show where the tail starts. Both come from the same values, so
@@ -162,7 +162,9 @@ interface Histogram {
  * counts read better than mathematically optimal ones - "40–45" beats
  * "41.3–46.7" on an axis.
  */
-function buildHistogram(values: number[]): Histogram {
+export function buildHistogram(values: number[], locale: string): Histogram {
+  // The bin edges in the page's number format: "0.5–1" on a Czech page.
+  const formatEdge = (v: number) => formatHistogramEdge(v, locale);
   const min = Math.min(...values);
   const max = Math.max(...values);
 
@@ -197,9 +199,9 @@ function buildHistogram(values: number[]): Histogram {
   };
 }
 
-function formatEdge(v: number): string {
+function formatHistogramEdge(v: number, locale: string): string {
   const rounded = Math.round(v * 100) / 100;
-  return String(Math.abs(rounded % 1) < 1e-9 ? Math.round(rounded) : rounded);
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 2, useGrouping: false }).format(rounded);
 }
 
 /** Text alternative - the canvas is invisible to a screen reader. */
