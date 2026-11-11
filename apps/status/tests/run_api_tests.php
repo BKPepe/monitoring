@@ -4751,6 +4751,12 @@ $dns_tips = fn (array $extra): string => implode(' | ', array_column(bk_get_know
 check_true('tip pro dnsmasq bez změřeného počtu dotazů žádný počet nevymyslí',
     str_contains($dns_tips([]), 'dnsmasq') && !str_contains($dns_tips([]), 'DNS dotazů'));
 check_true('změřený počet dotazů tip uvede', str_contains($dns_tips(['dns_queries' => 9000]), 'DNS dotazů: 9000'));
+// R47: "Wi-Fi klientů: 0" when no radio reported a count.
+$hostapd_tips = fn (array $extra): string => implode(' | ', array_column(bk_get_knowledge_tips($mon_high, $details_85 + $extra, [], 'up', [], $pdo), 'text'));
+check_true('tip pro hostapd bez nahlášeného počtu klientů žádný počet nevymyslí',
+    str_contains($hostapd_tips(['wifi_radios' => [['band' => '5GHz', 'clients' => null]]]), 'hostapd')
+    && !str_contains($hostapd_tips(['wifi_radios' => [['band' => '5GHz', 'clients' => null]]]), 'Wi-Fi klientů'));
+check_true('nahlášený počet tip sečte', str_contains($hostapd_tips(['wifi_radios' => [['clients' => 3], ['clients' => null], ['clients' => '2']]]), 'Wi-Fi klientů: 5'));
 
 // --- Knowledge tips: the threshold comes from the monitor's settings ------
 //

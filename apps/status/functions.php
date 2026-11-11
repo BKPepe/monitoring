@@ -3509,12 +3509,24 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
 
         // CPU high + hostapd -> WiFi client context
         if (isset($details['cpu']) && floatval($details['cpu']) > 70 && stripos($top_proc_name, 'hostapd') !== false) {
-            $wifi_clients = 0;
-            if (!empty($details['wifi_radios']) && is_array($details['wifi_radios'])) {
-                // Scita se jen to, co radio opravdu nahlasilo.
-        foreach ($details['wifi_radios'] as $r) { if (isset($r['clients'])) { $wifi_clients += (int)$r['clients']; } }
+            // The count only when something counted: the router's own total,
+            // else the radios that reported one. With none of them it stayed
+            // 0, and "Wi-Fi klientů: 0" stood for a number nobody had.
+            $wifi_clients = is_numeric($details['wifi_clients_count'] ?? null) ? (int)$details['wifi_clients_count'] : null;
+            if ($wifi_clients === null && is_array($details['wifi_radios'] ?? null)) {
+                $radio_counts = [];
+                foreach ($details['wifi_radios'] as $r) {
+                    if (is_array($r) && is_numeric($r['clients'] ?? null)) {
+                        $radio_counts[] = (int)$r['clients'];
+                    }
+                }
+                $wifi_clients = $radio_counts !== [] ? array_sum($radio_counts) : null;
             }
-            $add('warn', 'knowledge_tip_ow_hostapd_cpu', $top_proc_cpu, $wifi_clients);
+            if ($wifi_clients !== null) {
+                $add('warn', 'knowledge_tip_ow_hostapd_cpu', $top_proc_cpu, $wifi_clients);
+            } else {
+                $add('warn', 'knowledge_tip_ow_hostapd_cpu_nocount', $top_proc_cpu);
+            }
         }
         // CPU high + wireguard -> WG throughput context
         if (isset($details['cpu']) && floatval($details['cpu']) > 70 && stripos($top_proc_name, 'wireguard') !== false) {
