@@ -3595,6 +3595,20 @@ check('bez uložené sady přijde doporučená, ne prázdná', $r97[9097] ?? nul
 check('uložená sada zůstává, jak je', $r97[9098] ?? null, ['headers']);
 $pdo->exec("DELETE FROM monitors WHERE id IN (9097, 9098)");
 
+// R39: a node's latency was its newest one in the current state, however old.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status) VALUES (9039, 'R39 uzel', 'vps', 'r39.example.test', 'up')");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (9039, 'up', 23, NOW() - INTERVAL 2 DAY)");
+$r39_latency = function () use ($base, $cookie_jar) {
+    [, $ps] = api_get_auth($base, 'action=public_status', $cookie_jar);
+    $node = array_values(array_filter($ps['nodes'] ?? [], fn ($n) => $n['name'] === 'R39 uzel'))[0] ?? null;
+    return $node === null ? 'chybí' : $node['latencyMs'];
+};
+check('uzel bez nedávné kontroly nemá starou latenci', $r39_latency(), null);
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (9039, 'up', 25, NOW())");
+check('čerstvá kontrola latenci má', $r39_latency(), 25);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9039");
+$pdo->exec("DELETE FROM monitors WHERE id = 9039");
+
 // R36: a list showed the last response ever measured and a silent agent's load.
 $pdo->exec("INSERT INTO monitors (id, name, type, target, status) VALUES (9360, 'R36', 'vps', 'r36.example.test', 'up')");
 $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (9360, 'up', 42, NOW())");

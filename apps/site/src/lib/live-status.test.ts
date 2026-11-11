@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { dash, formatPercent, normaliseStatus, STALE_AFTER_MS } from './live-status';
+import { dash, formatPercent, normaliseStatus, STALE_AFTER_MS, nodeForList } from './live-status';
 
 const NOW = Date.parse('2026-09-23T10:00:00Z');
 const FRESH = '2026-09-23T11:55:00+02:00'; // 5 minutes before NOW
@@ -109,5 +109,11 @@ describe('živý stav na webu', () => {
     const source = readFileSync(new URL('./live-status.ts', import.meta.url), 'utf8');
     expect(source).toContain("from '../../../monitor/src/lib/percent'");
     expect(source).not.toContain('10 ** -digits');
+  });
+
+  it('se zastaveným sběrem seznam agentů netvrdí stav ani latenci (R39)', () => {
+    const node = { name: 'Router', status: 'online' as const, latencyMs: 23 };
+    expect(nodeForList(node, true)).toEqual({ status: 'online', latencyMs: 23 });
+    expect(nodeForList(node, false)).toEqual({ status: 'unknown', latencyMs: null });
   });
 });

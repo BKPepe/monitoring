@@ -6678,6 +6678,7 @@ if ($action === 'public_status') {
                    (SELECT l.response_time FROM monitor_logs l
                     WHERE l.monitor_id = m.id AND l.response_time > 0
                       AND (m.last_status_change IS NULL OR l.checked_at >= m.last_status_change - INTERVAL 10 SECOND)
+                      AND l.checked_at >= NOW() - INTERVAL 15 MINUTE
                     ORDER BY l.id DESC LIMIT 1) AS response_time
             FROM monitors m
             WHERE LOWER(m.type) IN ('agent', 'vps', 'openwrt', 'teamspeak', 'node', 'router')

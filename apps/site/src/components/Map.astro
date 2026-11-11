@@ -67,7 +67,7 @@ const t =
 
 <script>
   import { escapeHtml } from '../lib/github';
-  import { onLiveStatus, type NodeState } from '../lib/live-status';
+  import { nodeForList, onLiveStatus, type NodeState } from '../lib/live-status';
 
   const list = document.getElementById('agent-nodes-grid');
   const countBadge = document.getElementById('agent-map-count');
@@ -105,7 +105,8 @@ const t =
 
     render(
       nodes
-        .map((n) => {
+        .map((node) => {
+          const n = { ...node, ...nodeForList(node, result.data.fresh) };
           const meta = [STATE_WORD[n.status] ?? '', n.latencyMs !== null ? `${n.latencyMs} ms` : '']
             .filter(Boolean)
             .join(' · ');

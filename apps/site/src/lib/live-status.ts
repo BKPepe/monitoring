@@ -164,3 +164,12 @@ export function formatPercent(value: number | null | undefined, digits: number, 
   if (typeof value !== 'number' || !Number.isFinite(value)) return '—';
   return `${formatPercentValue(value, digits, locale)} %`;
 }
+
+/**
+ * A node as the agent list shows it. With the collector stalled, the stored
+ * states are only the last known ones: the list said "online · 23 ms" under a
+ * badge that said the data was stale.
+ */
+export function nodeForList(node: PublicNode, fresh: boolean): { status: NodeState; latencyMs: number | null } {
+  return fresh ? { status: node.status, latencyMs: node.latencyMs } : { status: 'unknown', latencyMs: null };
+}
