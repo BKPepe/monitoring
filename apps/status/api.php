@@ -4349,7 +4349,9 @@ if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_
             $totp_secret = bk_totp_generate_secret();
             $_SESSION['totp_pending_secret'] = $totp_secret;
             $totp_issuer = rawurlencode(get_setting('site_title', 'Blood Kings'));
-            $totp_account = rawurlencode((string)($_SESSION['admin_user'] ?? 'admin'));
+            // The account's own name: the label read a session key nothing
+            // ever sets, so every account was "…:admin" in the authenticator.
+            $totp_account = rawurlencode((string)$totp_me['username']);
             echo json_encode([
                 'secret' => $totp_secret,
                 'otpauthUri' => "otpauth://totp/{$totp_issuer}:{$totp_account}?secret={$totp_secret}&issuer={$totp_issuer}&algorithm=SHA1&digits=6&period=30",

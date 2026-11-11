@@ -4917,10 +4917,15 @@ $ts_jar = tempnam(sys_get_temp_dir(), 'bk_test_ts');
 [, $ts_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password], $ts_jar, '');
 $ts_csrf = (string)($ts_login['csrfToken'] ?? '');
 [, $ts_other] = api_post($base, 'action=totp_setup', [], $ts_jar, $ts_csrf);
+// R208: the label read a session key nothing sets, so every account was
+// "…:admin" in the authenticator. Renamed for the call, so "admin" cannot pass.
+$pdo->exec("UPDATE users SET username = 'pepa_r208' WHERE id = 1");
 [$code, $ts] = api_post($base, 'action=totp_setup', [], $cookie_jar);
+$pdo->exec("UPDATE users SET username = 'admin' WHERE id = 1");
 check('totp_setup vrací 200', $code, 200);
 check_true('a secret', !empty($ts['secret']));
 check_true('a otpauth URI', str_starts_with($ts['otpauthUri'] ?? '', 'otpauth://totp/'));
+check_true('štítek v aplikaci nese jméno účtu', str_contains((string)($ts['otpauthUri'] ?? ''), ':pepa_r208?secret='));
 
 // A wrong code must not enable 2FA.
 [$code] = api_post($base, 'action=totp_confirm', ['code' => '000000', 'password' => $bk_test_admin_password], $cookie_jar);
