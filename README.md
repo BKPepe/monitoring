@@ -18,7 +18,7 @@ deploy on your own hosting:
 ```
 /
 ├── apps/
-│   ├── site/                      # Astro v5 - static landing page (SSG), EN + CS
+│   ├── site/                      # Astro 7 - static landing page (SSG), EN + CS
 │   ├── worker/                    # Cloudflare Worker + Hono - backend API for the landing page
 │   ├── monitor/                   # React SPA - monitoring app, served at bloodkings.eu/app/
 │   └── status/                    # PHP - self-hosted monitoring dashboard (live backend)
@@ -29,11 +29,12 @@ deploy on your own hosting:
 └── package.json                   # NPM workspaces config (site, worker, monitor)
 ```
 
-Host-metrics agents ship in two places: the reference scripts deployed together
-with the dashboard live in `apps/status/` (`agent.sh`, `agent.py`, `agent.ps1`,
-`agent_openwrt.sh`), and the standalone distribution lives in the
+The host-metrics agents (`agent.sh`, `agent.py`, `agent.ps1`,
+`agent_openwrt.sh`) live in one place, the
 [BKPepe/monitoring-agent](https://github.com/BKPepe/monitoring-agent) repository
-(the `agents/` submodule here).
+(the `agents/` submodule here). They are not in `apps/status/` in this repository:
+the status deploy and the release copy them from the submodule into `status/`
+(`scripts/assemble-agents.sh`).
 
 ### apps/status — self-hosted monitoring dashboard
 
