@@ -13993,7 +13993,10 @@ function bk_digest_routers(PDO $pdo, bool $save_snapshot = true): array {
     foreach (array_chunk($rt_list, 50) as $rt_chunk) {
         $rt_ids = array_map(fn ($r) => (int)$r['id'], $rt_chunk);
         $rt_in = implode(',', array_fill(0, count($rt_ids), '?'));
-        $stmt_rt = $pdo->prepare("SELECT id, name, type, hdd_threshold, last_details FROM monitors WHERE id IN ($rt_in)");
+        // Every column the rules read: without the plan columns, the rules that
+        // compare with the tariff never fired in the e-mail.
+        $stmt_rt = $pdo->prepare("SELECT id, name, type, hdd_threshold, last_details, wan_plan_down_mbit, wan_plan_up_mbit,
+                wan_plan_ok_pct, wan_probe_enabled FROM monitors WHERE id IN ($rt_in)");
         $stmt_rt->execute($rt_ids);
         $rt_rows = [];
         foreach ($stmt_rt->fetchAll(PDO::FETCH_ASSOC) as $row) {

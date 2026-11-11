@@ -5948,6 +5948,18 @@ if (isset($cookie_jar)) {
     $pdo->rollBack();
     check_true('bez měření digest netvrdí, že výpadek nebyl', !in_array(t('digest_summary_no_outages'), $dg250['executive_summary'], true));
 
+    // R153: the rules that compare with the tariff never fired in the e-mail.
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, wan_plan_down_mbit, last_details) VALUES (9153, 'R153 router', 'openwrt', 'r153.example.test', 'up', 1000, ?)")
+        ->execute([json_encode(['agent_version' => '0.1.13', 'agent_last_seen' => time() - 30, 'wan_link_dev' => 'eth2'])]);
+    $dg153_md = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (9153, ?, 'wan_link_mbit', 100, 100, 100, 1440)");
+    foreach (bk_router_rec_window(date('Y-m-d'))['days'] as $dg153_day) {
+        $dg153_md->execute([$dg153_day]);
+    }
+    $dg153 = array_values(array_filter(build_digest_data($pdo, 'weekly', false)['routers'] ?? [], fn ($r) => (int)$r['id'] === 9153))[0] ?? [];
+    check_true('pravidlo pod tarifem v digestu vystřelí', str_contains((string)json_encode($dg153), 'wan_link_below_plan'));
+    $pdo->exec("DELETE FROM metrics_daily WHERE monitor_id = 9153");
+    $pdo->exec("DELETE FROM monitors WHERE id = 9153");
+
     $digest_en = $digest_preview('en');
     check_true('EN digest se vyrenderoval', str_contains($digest_en, 'Weekly Report'));
     // DB data stays in its original language - only the template translates.
