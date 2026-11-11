@@ -6208,7 +6208,10 @@ if ($action === 'save_subscriptions') {
         foreach ($stmt_old->fetchAll() as $o) {
             $ss_old[(int)$o['monitor_id']] = $o;
         }
-        $stmt_del = $pdo->prepare("DELETE FROM user_subscriptions WHERE user_id = ?");
+        // The form lists no archived monitor, so their rows are kept: deleted
+        // here, alerts about a restored monitor stopped without a word.
+        $stmt_del = $pdo->prepare("DELETE FROM user_subscriptions WHERE user_id = ?
+            AND monitor_id NOT IN (SELECT id FROM monitors WHERE archived_at IS NOT NULL)");
         $stmt_del->execute([$user_id]);
         $stmt_ins = $pdo->prepare("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications, sms_notifications, whatsapp_notifications) VALUES (?, ?, ?, ?, ?)");
         $stmt_me = $pdo->prepare("SELECT sms_notifications, whatsapp_notifications FROM users WHERE id = ?");

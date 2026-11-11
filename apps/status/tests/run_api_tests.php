@@ -2863,6 +2863,14 @@ $pdo->exec("DELETE FROM user_subscriptions WHERE user_id = 1");
 // now; posted back unchanged they still pin nothing.
 api_post($base, 'action=save_subscriptions', ['subscriptions' => $gsub_rows], $cookie_jar);
 check('nezměněný formulář bez „shown“ nic nepřipne', $gsub_stored(), []);
+// R209: an archived monitor is not in the form, and saving it deleted the
+// account's row for it, so alerts about it stopped once it was restored.
+$pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications, sms_notifications) VALUES (1, 2, 1, 1)");
+$pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE id = 2");
+api_post($base, 'action=save_subscriptions', ['subscriptions' => array_values(array_filter($gsub_rows, fn (array $r): bool => $r['id'] !== 2))], $cookie_jar);
+$pdo->exec("UPDATE monitors SET archived_at = NULL WHERE id = 2");
+check('uložení formuláře nesmaže odběr archivovaného monitoru', $gsub_stored(), [[2, 1, 1, 0]]);
+$pdo->exec("DELETE FROM user_subscriptions WHERE user_id = 1");
 $pdo->exec("DELETE FROM user_subscriptions WHERE user_id = 1");
 $pdo->prepare("UPDATE users SET whatsapp_notifications = ? WHERE id = 1")->execute([$gsub_wa_before]);
 
