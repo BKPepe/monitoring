@@ -110,6 +110,25 @@ describe('Incidenty: selhání není „bez výpadků“ (W1-A3)', () => {
     expect(screen.queryByText(ALL_OK)).toBeNull();
   });
 
+  it('bez výpadku, ale se stavem neznámým: žádné „Všechny služby OK“ (R79)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        api({
+          monitors: () =>
+            json({
+              monitors: [{ id: 4, name: 'dnsmasq', type: 'agent_service', status: 'unknown', target: 'dnsmasq' }],
+            }),
+        })
+      )
+    );
+    renderPage();
+
+    expect(await screen.findByText(/Stav některých monitorů ale není známý: 1/)).toBeTruthy();
+    expect(screen.queryByText(ALL_OK)).toBeNull();
+    expect(screen.queryByText('Všechny služby OK')).toBeNull();
+  });
+
   it('úspěšná prázdná odpověď smí ukázat zelený box', async () => {
     vi.stubGlobal('fetch', vi.fn(api()));
     renderPage();

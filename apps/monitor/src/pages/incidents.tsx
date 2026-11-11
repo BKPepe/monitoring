@@ -13,6 +13,7 @@ import {
   Megaphone,
   Siren,
   Hand,
+  HelpCircle,
   type LucideIcon,
 } from 'lucide-react';
 import { PageHeader } from '@/components/layout/page-header';
@@ -198,6 +199,9 @@ export function IncidentsPage() {
 
   // The count in the heading must match what is listed below it.
   const ongoingCount = ongoingIncidentCount(liveOutages, manualList);
+  // No outage is not "all OK" while some monitors' state is unknown - a
+  // router's service the agent stopped reporting hangs in 'unknown'.
+  const unknownCount = targetMonitors.filter((m) => m.status === 'unknown').length;
   const activeBadge = {
     one: t('incidents.active_badge_one', { count: ongoingCount }, `${ongoingCount} probíhající`),
     few: t('incidents.active_badge_few', { count: ongoingCount }, `${ongoingCount} probíhající`),
@@ -542,17 +546,35 @@ export function IncidentsPage() {
                   {activeBadge}
                 </Pill>
               ) : (
-                !incidentsError && (
+                !incidentsError &&
+                (unknownCount > 0 ? (
+                  <Pill tone="neutral" dot>
+                    {t('incidents.some_unknown', { n: unknownCount }, `Stav neznámý: ${unknownCount}`)}
+                  </Pill>
+                ) : (
                   <Pill tone="up" dot>
                     {t('status.healthy', 'Všechny služby OK')}
                   </Pill>
-                )
+                ))
               )}
             </div>
 
             {ongoingCount === 0 ? (
-              // The all-clear comes only from a fresh, successful answer.
-              !incidentsError && (
+              // The all-clear comes only from a fresh, successful answer, and
+              // not while some states are unknown.
+              !incidentsError &&
+              (unknownCount > 0 ? (
+                <div className="bg-card flex items-center gap-3 rounded-lg border-l-2 border-l-border px-3 py-3">
+                  <IconTile icon={HelpCircle} tone="neutral" />
+                  <p className="text-sm">
+                    {t(
+                      'incidents.no_outage_some_unknown',
+                      { n: unknownCount },
+                      `Žádný výpadek ani otevřený incident. Stav některých monitorů ale není známý: ${unknownCount}.`
+                    )}
+                  </p>
+                </div>
+              ) : (
                 <div className="bg-card flex items-center gap-3 rounded-lg border-l-2 border-l-up px-3 py-3">
                   <IconTile icon={CheckCircle2} tone="up" />
                   <p className="text-sm">
@@ -562,7 +584,7 @@ export function IncidentsPage() {
                     )}
                   </p>
                 </div>
-              )
+              ))
             ) : (
               <ul>
                 {liveOutages.map((inc, i) => {
