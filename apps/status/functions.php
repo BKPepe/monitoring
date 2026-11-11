@@ -7587,7 +7587,7 @@ function bk_deliver_email($to, $subject, $html_body, array $extra_headers = []) 
     // 'fallback' = unauthenticated PHP mail() - true only means the local MTA
     // took it for processing, and nothing reports back what happened next.
     // Callers (the digest etc.) use this to calibrate how confidently to word
-    // the success message - see send_digest_report_inner().
+    // the success message - see bk_digest_result_message().
     $GLOBALS['last_mail_method'] = null;
     // What send_email() writes to the log: 'sent' (the server confirmed with
     // 250), 'failed' or 'unknown' (mail() took it, nobody confirmed), plus the
@@ -10141,16 +10141,70 @@ function bk_send_test_notification(string $channel, ?string $to_email, string $l
  * @param string $period 'weekly' nebo 'monthly'
  * @return bool True when the report reached at least one administrator.
  */
-function send_digest_report($pdo, $period = 'weekly') {
+/**
+ * Sends the digest to every administrator. True when at least one mail went:
+ * the period is then done, and a retry would send it twice to the others.
+ * $counts says how many of how many, and the first error.
+ *
+ * @param array{sent: int, total: int, error: string}|null $counts
+ * @param-out array{sent: int, total: int, error: string} $counts
+ */
+function send_digest_report($pdo, $period = 'weekly', ?array &$counts = null) {
     $GLOBALS['last_mail_error'] = '';
+    $counts = ['sent' => 0, 'total' => 0, 'error' => ''];
     try {
         // The language wrapper moved inside - the digest renders per recipient
         // language (users.email_lang), not once globally.
-        return send_digest_report_inner($pdo, $period);
+        $counts = send_digest_report_inner($pdo, $period);
     } catch (Exception $e) {
         $GLOBALS['last_mail_error'] = $e->getMessage();
-        return false;
+        $counts['error'] = $e->getMessage();
     }
+    return $counts['sent'] > 0;
+}
+
+/**
+ * Sends the rendered digest to each administrator and counts the mails that
+ * went, with the first refusal's reason. "Sent" used to mean "at least one",
+ * and the button then said the digest reached every administrator.
+ *
+ * @return array{sent: int, total: int, error: string}
+ */
+function bk_digest_deliver(array $admins, callable $render): array {
+    $result = ['sent' => 0, 'total' => count($admins), 'error' => ''];
+    foreach ($admins as $adm) {
+        [$subject, $html_body] = $render(bk_recipient_lang($adm));
+        if (send_email($adm['email'], $subject, $html_body, [], ['kind' => 'digest'])) {
+            $result['sent']++;
+        } elseif ($result['error'] === '') {
+            $result['error'] = (string)($GLOBALS['last_mail_error'] ?? '');
+        }
+    }
+    return $result;
+}
+
+/**
+ * What the digest button says after sending: whether every administrator
+ * got it, or how many did not and why.
+ *
+ * @param array{sent: int, total: int, error: string} $counts
+ * @return array{ok: bool, message: string}
+ */
+function bk_digest_result_message(string $period, array $counts, ?string $method): array {
+    $what = $period === 'monthly' ? 'Měsíční digest' : 'Týdenní digest';
+    $why = $counts['error'] !== '' ? ' Důvod: ' . $counts['error'] : '';
+    if ($counts['total'] === 0) {
+        return ['ok' => false, 'message' => $counts['error'] !== '' ? $counts['error'] : $what . ' není komu poslat.'];
+    }
+    if ($counts['sent'] === 0) {
+        return ['ok' => false, 'message' => 'Odeslání digestu selhalo, zkontrolujte SMTP nastavení a e-mailové adresy administrátorů.' . $why];
+    }
+    if ($counts['sent'] < $counts['total']) {
+        return ['ok' => false, 'message' => sprintf('%s nedostali všichni administrátoři: odesláno %d, selhalo %d.%s',
+            $what, $counts['sent'], $counts['total'] - $counts['sent'], $why)];
+    }
+    return ['ok' => true, 'message' => $what . ' byl odeslán všem administrátorům (' . $counts['total'] . ').'
+        . ($method === 'fallback' ? ' SMTP není nastaveno: e-maily jen převzala funkce mail() hostingu a doručení nikdo nepotvrdil.' : '')];
 }
 
 /**
@@ -15473,7 +15527,7 @@ function send_digest_report_inner($pdo, $period = 'weekly') {
         static fn (array $a): bool => trim((string)($a['email'] ?? '')) !== ''));
     if (empty($admins)) {
         $GLOBALS['last_mail_error'] = t('digest_error_no_admin_email');
-        return false;
+        return ['sent' => 0, 'total' => 0, 'error' => $GLOBALS['last_mail_error']];
     }
 
     $render = bk_render_per_lang(function () use ($data, $period) {
@@ -15483,15 +15537,7 @@ function send_digest_report_inner($pdo, $period = 'weekly') {
             render_digest_html($data),
         ];
     });
-    $any_success = false;
-    foreach ($admins as $adm) {
-        [$subject, $html_body] = $render(bk_recipient_lang($adm));
-        if (send_email($adm['email'], $subject, $html_body, [], ['kind' => 'digest'])) {
-            $any_success = true;
-        }
-    }
-
-    return $any_success;
+    return bk_digest_deliver($admins, $render);
 }
 
 /**

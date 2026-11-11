@@ -1266,10 +1266,36 @@ if (function_exists('send_email')) {
 } else {
     function send_email($to, $subject, $html_body, array $extra_headers = [], array $context = []) {
         $GLOBALS['bk_test_mails'][] = ['to' => $to, 'subject' => $subject, 'body' => $html_body, 'context' => $context];
-        return true;
+        // An address with "selze" is refused, the way an SMTP server refuses one.
+        $ok = !str_contains((string)$to, 'selze');
+        $GLOBALS['last_mail_error'] = $ok ? '' : 'SMTP Error: recipient refused';
+        return $ok;
     }
 }
 check_true('e-mail se posílá jen přes testovací náhradu', (new ReflectionFunction('send_email'))->getFileName() === __FILE__);
+
+// The digest: how many administrators got it. "Sent" used to mean "at least
+// one mail went", and the button said the digest reached all of them.
+bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_digest_deliver', 'bk_digest_result_message']);
+if (function_exists('bk_digest_deliver')) {
+    $GLOBALS['bk_test_mails'] = [];
+    $dg = bk_digest_deliver([['email' => 'a@example.com', 'email_lang' => 'cs'],
+        ['email' => 'selze@example.com', 'email_lang' => 'cs'], ['email' => 'b@example.com', 'email_lang' => 'en']],
+        fn (string $lang): array => ["Digest $lang", '<p>x</p>']);
+    check('digest: kolik odešlo, z kolika a první důvod', $dg,
+        ['sent' => 2, 'total' => 3, 'error' => 'SMTP Error: recipient refused']);
+    check('každý administrátor ve svém jazyce', array_column($GLOBALS['bk_test_mails'], 'subject'),
+        ['Digest cs', 'Digest cs', 'Digest en']);
+    check('hláška: nedostali všichni, kolik a proč', bk_digest_result_message('weekly', $dg, 'smtp'),
+        ['ok' => false, 'message' => 'Týdenní digest nedostali všichni administrátoři: odesláno 2, selhalo 1.'
+            . ' Důvod: SMTP Error: recipient refused']);
+    check('všem: úspěch s počtem', bk_digest_result_message('monthly', ['sent' => 3, 'total' => 3, 'error' => ''], 'smtp'),
+        ['ok' => true, 'message' => 'Měsíční digest byl odeslán všem administrátorům (3).']);
+    check_true('přes mail(): řekne, že doručení nikdo nepotvrdil', str_contains(
+        bk_digest_result_message('weekly', ['sent' => 1, 'total' => 1, 'error' => ''], 'fallback')['message'], 'mail()'));
+    check('nikomu: selhání', bk_digest_result_message('weekly', ['sent' => 0, 'total' => 2, 'error' => 'x'], 'smtp')['ok'], false);
+    $GLOBALS['bk_test_mails'] = [];
+}
 
 $dr_pdo = null;
 if (function_exists('bk_send_daily_reminder') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {

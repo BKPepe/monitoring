@@ -234,10 +234,11 @@ try {
         $current_week = date('Y-W');
         if ($last_weekly !== $current_week) {
             echo "Odesílám týdenní digest...\n";
-            if (send_digest_report($pdo, 'weekly')) {
+            $digest_counts = null;
+            if (send_digest_report($pdo, 'weekly', $digest_counts)) {
                 bk_setting_set($pdo, 'last_weekly_digest_sent', $current_week);
-                echo "Týdenní digest odeslán.\n";
             }
+            echo bk_digest_result_message('weekly', $digest_counts, $GLOBALS['last_mail_method'] ?? null)['message'] . "\n";
         }
     }
     
@@ -247,10 +248,11 @@ try {
         $current_month = date('Y-m');
         if ($last_monthly !== $current_month) {
             echo "Odesílám měsíční digest...\n";
-            if (send_digest_report($pdo, 'monthly')) {
+            $digest_counts = null;
+            if (send_digest_report($pdo, 'monthly', $digest_counts)) {
                 bk_setting_set($pdo, 'last_monthly_digest_sent', $current_month);
-                echo "Měsíční digest odeslán.\n";
             }
+            echo bk_digest_result_message('monthly', $digest_counts, $GLOBALS['last_mail_method'] ?? null)['message'] . "\n";
         }
     }
 } catch (Exception $e) {

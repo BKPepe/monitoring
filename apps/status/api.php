@@ -6111,11 +6111,11 @@ if ($action === 'send_digest') {
     $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
     $period = ($input['period'] ?? $_GET['period'] ?? '') === 'monthly' ? 'monthly' : 'weekly';
     try {
-        if (function_exists('send_digest_report') && send_digest_report($pdo, $period)) {
-            echo json_encode(['success' => true, 'message' => ($period === 'monthly' ? 'Měsíční' : 'Týdenní') . ' digest byl úspěšně odeslán.'], JSON_UNESCAPED_UNICODE);
-        } else {
-            echo json_encode(['success' => false, 'message' => 'Odeslání digestu selhalo — zkontrolujte SMTP nastavení a e-mailové adresy administrátorů.'], JSON_UNESCAPED_UNICODE);
-        }
+        $counts = null;
+        send_digest_report($pdo, $period, $counts);
+        $res = bk_digest_result_message($period, $counts, $GLOBALS['last_mail_method'] ?? null);
+        echo json_encode(['success' => $res['ok'], 'message' => $res['message'], 'sent' => $counts['sent'],
+            'total' => $counts['total']], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         bk_api_fail('send_digest_failed', 500, $e, 'Digest se nepodařilo odeslat.');
     }

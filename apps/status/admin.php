@@ -996,28 +996,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['redetect_location']) 
 // Ruční odeslání týdenního reportu/digestu (pouze pro Admina)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_weekly_digest']) && $user_role === 'admin') {
     bk_csrf_check();
-    if (send_digest_report($pdo, 'weekly')) {
+    $digest_counts = null;
+    if (send_digest_report($pdo, 'weekly', $digest_counts)) {
         bk_audit_log($pdo, 'digest_sent', 'weekly');
-        $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
-            ? 'Týdenní report byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) - to znamená jen "webhosting to přijal ke zpracování", ne potvrzené doručení. Pokud e-mail nedorazí, nastavte prosím SMTP níže.'
-            : 'Týdenní report byl úspěšně vygenerován a odeslán na e-maily všech administrátorů.';
+    }
+    $digest_res = bk_digest_result_message('weekly', $digest_counts, $GLOBALS['last_mail_method'] ?? null);
+    if ($digest_res['ok']) {
+        $success_msg = $digest_res['message'];
     } else {
-        $detail = !empty($GLOBALS['last_mail_error']) ? ' Detaily: ' . htmlspecialchars($GLOBALS['last_mail_error']) : '';
-        $error_msg = 'Chyba při odesílání týdenního reportu.' . $detail;
+        $error_msg = $digest_res['message'];
     }
 }
 
 // Ruční odeslání měsíčního reportu/digestu (pouze pro Admina)
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['send_monthly_digest']) && $user_role === 'admin') {
     bk_csrf_check();
-    if (send_digest_report($pdo, 'monthly')) {
+    $digest_counts = null;
+    if (send_digest_report($pdo, 'monthly', $digest_counts)) {
         bk_audit_log($pdo, 'digest_sent', 'monthly');
-        $success_msg = ($GLOBALS['last_mail_method'] ?? null) === 'fallback'
-            ? 'Měsíční report byl předán k odeslání přes systémovou funkci mail() (SMTP není nastaveno) - to znamená jen "webhosting to přijal ke zpracování", ne potvrzené doručení. Pokud e-mail nedorazí, nastavte prosím SMTP níže.'
-            : 'Měsíční report byl úspěšně vygenerován a odeslán na e-maily všech administrátorů.';
+    }
+    $digest_res = bk_digest_result_message('monthly', $digest_counts, $GLOBALS['last_mail_method'] ?? null);
+    if ($digest_res['ok']) {
+        $success_msg = $digest_res['message'];
     } else {
-        $detail = !empty($GLOBALS['last_mail_error']) ? ' Detaily: ' . htmlspecialchars($GLOBALS['last_mail_error']) : '';
-        $error_msg = 'Chyba při odesílání měsíčního reportu.' . $detail;
+        $error_msg = $digest_res['message'];
     }
 }
 
