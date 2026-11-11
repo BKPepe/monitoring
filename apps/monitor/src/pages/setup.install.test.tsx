@@ -204,6 +204,26 @@ describe('Instalátor /app/setup (site W1-5)', () => {
     }
   });
 
+  it('selhaný import tabulek řekne číslo příkazu ze schema.sql (R112)', async () => {
+    serve((url) => {
+      if (url.includes('action=install_status')) return json(STATUS('schema'));
+      if (url.includes('action=install_import_schema'))
+        return json(
+          {
+            error: 'schema_import_failed',
+            message: 'Import schema.sql se zastavil. Číslo příkazu je v odpovědi, podrobnosti v logu chyb serveru.',
+            statement: 11,
+            driverCode: 1071,
+          },
+          500
+        );
+      return json({});
+    });
+    renderSetup();
+    fireEvent.click(await screen.findByRole('button', { name: 'Vytvořit tabulky' }));
+    expect(await screen.findByText('Selhal příkaz č. 11 v schema.sql. (1071)')).toBeTruthy();
+  });
+
   it('config.php chybí nebo jeho databáze neodpovídá: žádný formulář, jen co opravit', async () => {
     serve((url) =>
       url.includes('action=install_status') ? json({ step: 'config_unreachable', locked: true }) : json({})

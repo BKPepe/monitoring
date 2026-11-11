@@ -2116,6 +2116,10 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Some tables already exist. The import adds the missing ones and leaves the rest alone.',
   },
   'install.import_schema': { cs: 'Vytvořit tabulky', en: 'Create the tables' },
+  'install.schema_failed_statement': {
+    cs: 'Selhal příkaz č. {n} v schema.sql.',
+    en: 'Statement {n} of schema.sql failed.',
+  },
   'install.password_min': { cs: 'Aspoň 8 znaků.', en: 'At least 8 characters.' },
   'install.create_account': { cs: 'Vytvořit účet a pokračovat', en: 'Create the account and continue' },
   'install.cron_intro': {

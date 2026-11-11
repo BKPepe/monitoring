@@ -23,11 +23,20 @@ export function SchemaStep({ status, lang, onDone }: { status: InstallStatus; la
       onDone();
     } catch (err) {
       if (err instanceof InstallError && err.code === 'installer_locked') return onDone();
+      // The server names the failed statement by its number in schema.sql
+      // (and the database's error code): read as a string only, the number
+      // the message points to never showed.
+      const failed = err instanceof InstallError ? err.body.statement : undefined;
+      const driver = err instanceof InstallError ? err.body.driverCode : undefined;
       setError({
         message: err instanceof Error ? err.message : String(err),
-        // The statement that failed is what the operator can look for in schema.sql.
         statement:
-          err instanceof InstallError && typeof err.body.statement === 'string' ? err.body.statement : undefined,
+          typeof failed === 'number' && Number.isFinite(failed)
+            ? t('install.schema_failed_statement', { n: failed }, `Selhal příkaz č. ${failed} v schema.sql.`) +
+              (typeof driver === 'string' || typeof driver === 'number' ? ` (${driver})` : '')
+            : typeof failed === 'string'
+              ? failed
+              : undefined,
       });
     } finally {
       setBusy(false);
