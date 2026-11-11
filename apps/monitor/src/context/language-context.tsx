@@ -2249,8 +2249,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Trusted proxies (CIDR, comma separated)',
   },
   'settings.trusted_proxies_hint': {
-    cs: 'Jen pro vlastní reverzní proxy (nginx, HAProxy) - rozsahy Cloudflare jsou zabudované. Z těchto adres se věří hlavičce s IP návštěvníka; odkudkoli jinam by si každý mohl do protokolu zapsat cizí adresu a obejít zamykání účtu. Prázdné = důvěřuje se jen Cloudflare.',
-    en: 'Only for your own reverse proxy (nginx, HAProxy) - Cloudflare ranges are built in. The visitor IP header is trusted from these addresses; from anywhere else anyone could write a foreign address into the log and bypass account lockout. Empty = only Cloudflare is trusted.',
+    cs: 'Jen pro vlastní reverzní proxy (nginx, HAProxy), která přidává adresu návštěvníka do X-Forwarded-For - rozsahy Cloudflare jsou zabudované. Z těchto adres se věří hlavičce s IP návštěvníka; odkudkoli jinam by si každý mohl do protokolu zapsat cizí adresu a obejít zamykání účtu. Prázdné = důvěřuje se jen Cloudflare.',
+    en: 'Only for your own reverse proxy (nginx, HAProxy) that appends the visitor address to X-Forwarded-For - Cloudflare ranges are built in. The visitor IP header is trusted from these addresses; from anywhere else anyone could write a foreign address into the log and bypass account lockout. Empty = only Cloudflare is trusted.',
   },
   'settings.smtp_desc': {
     cs: 'SMTP připojení pro odesílání notifikací. Prázdný SMTP server = výchozí PHP mail().',

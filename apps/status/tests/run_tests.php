@@ -5520,6 +5520,10 @@ check('od nedůvěryhodné adresy se hlavičce nevěří', $ci_ip('198.51.100.1'
 check('bez hlavičky adresa proxy', $ci_ip('10.0.0.5', null), '10.0.0.5');
 check('nesmysl v hlavičce = adresa proxy', $ci_ip('10.0.0.5', 'nesmysl'), '10.0.0.5');
 check('Cloudflare dál podle své hlavičky', $ci_ip('173.245.48.1', '6.6.6.6', '203.0.113.9'), '203.0.113.9');
+// nginx passes a header it does not set through: Cloudflare's, sent by the
+// visitor to a proxy of your own, would name any address it liked.
+check('hlavičce Cloudflaru se věří jen od Cloudflaru', $ci_ip('10.0.0.5', '203.0.113.9', '6.6.6.6'), '203.0.113.9');
+check('Cloudflare před vlastní proxy: návštěvník z X-Forwarded-For', $ci_ip('10.0.0.5', '203.0.113.9, 173.245.48.1', '203.0.113.9'), '203.0.113.9');
 $_SERVER = $ci_server;
 $GLOBALS['system_settings'] = $ci_settings;
 

@@ -1935,10 +1935,10 @@ function bk_ip_in_cidr(string $ip, string $cidr): bool {
  * changing it on every attempt.
  *
  * A custom proxy (nginx, HAProxy) can be added via the `trusted_proxies`
- * setting as a comma-separated CIDR list. Such a proxy sends no Cloudflare
- * header but appends the address it saw to X-Forwarded-For, read from the
- * right: the first hop that is not a trusted proxy is the visitor, and
- * anything left of it the visitor could have written.
+ * setting as a comma-separated CIDR list. Such a proxy appends the address
+ * it saw to X-Forwarded-For, read from the right: the first hop that is not a
+ * trusted proxy is the visitor, and anything left of it the visitor could
+ * have written. Cloudflare's header is read only from Cloudflare itself.
  */
 function bk_client_ip(): ?string {
     $remote = $_SERVER['REMOTE_ADDR'] ?? null;
@@ -1970,9 +1970,18 @@ function bk_client_ip(): ?string {
     }
 
     // The headers may carry nonsense too - without a shape check an
-    // arbitrary string would land in the log.
+    // arbitrary string would land in the log. Cloudflare's header counts only
+    // from Cloudflare: a proxy of your own passes on a header it does not
+    // set, so a visitor could name any address through it.
     $cf = (string)($_SERVER['HTTP_CF_CONNECTING_IP'] ?? '');
-    if ($cf !== '') {
+    $from_cloudflare = false;
+    foreach (BK_CLOUDFLARE_RANGES as $range) {
+        if (bk_ip_in_cidr($remote, $range)) {
+            $from_cloudflare = true;
+            break;
+        }
+    }
+    if ($cf !== '' && $from_cloudflare) {
         return filter_var($cf, FILTER_VALIDATE_IP) !== false ? $cf : $remote;
     }
     $hops = array_reverse(array_map('trim', explode(',', (string)($_SERVER['HTTP_X_FORWARDED_FOR'] ?? ''))));
