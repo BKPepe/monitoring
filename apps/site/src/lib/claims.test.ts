@@ -95,6 +95,15 @@ describe('web tvrdí jen to, co produkt umí', () => {
     expect(readFileSync(license, 'utf8')).toMatch(/^MIT License/);
   });
 
+  // R314: only agent.sh and the OpenWrt agent register with a token and run
+  // from cron; Windows runs a scheduled task and Docker a container.
+  it('registraci tokenem slibuje jen Linuxu a OpenWrt', () => {
+    const claims = files
+      .filter((f) => f.path.endsWith('features.astro'))
+      .flatMap((f) => lines(f.text).filter(({ line }) => /token[^.;]*(Windows|Docker)/i.test(line)));
+    expect(claims).toEqual([]);
+  });
+
   // R317: the pages called it all open source under MIT while the bundled
   // PHPMailer is LGPL-2.1. Where the download page names the licence, it
   // names the third-party notices too.
