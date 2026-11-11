@@ -1593,6 +1593,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'websites.sla_label': { cs: 'SLA dostupnost', en: 'SLA availability' },
   'websites.sla_goal': { cs: 'cíl {goal} %', en: 'target {goal} %' },
   'websites.sla_since': { cs: '{days} dní', en: '{days} days' },
+  'websites.sla_since_few': { cs: '{days} dny', en: '{days} days' },
+  'websites.sla_today': { cs: 'dnes', en: 'today' },
   'websites.sla_7d': { cs: '7 dní', en: '7 days' },
   'websites.sla_30d': { cs: '30 dní', en: '30 days' },
   'websites.sla_365d': { cs: 'rok', en: 'year' },

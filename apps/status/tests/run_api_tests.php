@@ -642,6 +642,21 @@ check_true(
 $sla_agent = $data['monitors'][2] ?? $data['monitors']['2'] ?? null;
 check('monitor bez logů nemá vymyšlené SLA', $sla_agent, null);
 
+// R324: before the first rollup the long window holds today's checks only,
+// and its coverage started at 0, which the page read as "rok".
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES (9324, 'R324', 'web', 'https://r324.example.test', 'up', 'Test')");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (9324, 'up', 90, NOW() - INTERVAL 2 MINUTE), (9324, 'up', 90, NOW() - INTERVAL 1 MINUTE)");
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'websites_overview_cache'");
+    [, $lt_data] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
+    $lt_sla = $lt_data['monitors'][9324] ?? $lt_data['monitors']['9324'] ?? [];
+    check('dlouhé okno bez denního souhrnu pokrývá jeden den, ne rok ani 0', $lt_sla['longTermDays'] ?? 'chybí', 1);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9324");
+    $pdo->exec("DELETE FROM monitors WHERE id = 9324");
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'websites_overview_cache'");
+}
+
 // =======================================================================
 // 5. Authorisation - mutating operations must not be reachable without login
 // =======================================================================

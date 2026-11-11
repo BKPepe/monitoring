@@ -4745,7 +4745,9 @@ if ($action === 'websites_overview') {
                 'sla30' => null,
                 'sla365' => null,
                 'measuredSince' => $row['measured_since'],
-                'longTermDays' => 0,
+                // How many days the long window really covers; set below.
+                // It started at 0, which the page read as "rok".
+                'longTermDays' => null,
             ];
         }
 
@@ -4763,7 +4765,7 @@ if ($action === 'websites_overview') {
             foreach ($stmt_long->fetchAll() as $lrow) {
                 $mid = (int)$lrow['monitor_id'];
                 if (!isset($sla[$mid])) {
-                    $sla[$mid] = ['sla7' => null, 'sla30' => null, 'sla365' => null, 'measuredSince' => null, 'longTermDays' => 0];
+                    $sla[$mid] = ['sla7' => null, 'sla30' => null, 'sla365' => null, 'measuredSince' => null, 'longTermDays' => null];
                 }
                 $sla[$mid]['longTermDays'] = (int)$lrow['days_covered'];
                 if (empty($sla[$mid]['measuredSince']) && !empty($lrow['since'])) {
@@ -4773,6 +4775,14 @@ if ($action === 'websites_overview') {
         } catch (Throwable $e) {
             // Without the rollup table the long window stays null - visibly empty.
             error_log('[api.php action=' . $action . '] long-term coverage unavailable: ' . $e->getMessage());
+        }
+        // Before the first rollup (a new monitor, the minutes after midnight)
+        // the window holds only what was measured since: today, not a year.
+        foreach ($sla as $mid => $row) {
+            if ($row['longTermDays'] === null && !empty($row['measuredSince'])) {
+                $since = strtotime(date('Y-m-d', (int)strtotime((string)$row['measuredSince'])));
+                $sla[$mid]['longTermDays'] = min(365, (int)floor((strtotime('today') - $since) / 86400) + 1);
+            }
         }
 
         // Availability in time, not in rows (bk_uptime_day_windows): the

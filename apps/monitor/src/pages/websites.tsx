@@ -6,6 +6,7 @@ import { Globe, Plus, ExternalLink, ShieldCheck, Activity, Clock, Lock, Server, 
 import { appApi } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
+import { pluralForm } from '@/lib/plural';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -514,9 +515,13 @@ export function WebsitesPage() {
                           {/* Until the history exceeds a year, the real range is
                               written - "a year" over 47 days of data would be fiction. */}
                           {cell(
-                            sla.longTermDays != null && sla.longTermDays > 0 && sla.longTermDays < 365
-                              ? t('websites.sla_since', { days: sla.longTermDays }, `${sla.longTermDays} dní`)
-                              : t('websites.sla_365d', 'rok'),
+                            sla.longTermDays == null || sla.longTermDays >= 365
+                              ? t('websites.sla_365d', 'rok')
+                              : sla.longTermDays <= 1
+                                ? t('websites.sla_today', 'dnes')
+                                : pluralForm(lang, sla.longTermDays) === 'few'
+                                  ? t('websites.sla_since_few', { days: sla.longTermDays }, `${sla.longTermDays} dny`)
+                                  : t('websites.sla_since', { days: sla.longTermDays }, `${sla.longTermDays} dní`),
                             sla.sla365
                           )}
                         </div>

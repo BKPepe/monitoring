@@ -49,4 +49,41 @@ describe('Weby: SLA okna s pětisekundovým výpadkem', () => {
     expect(screen.getAllByText('99,99 %')).toHaveLength(2);
     expect(screen.queryByText('100,00 %')).toBeNull();
   });
+
+  it.each([
+    [1, 'dnes'],
+    [3, '3 dny'],
+    [47, '47 dní'],
+  ])('dlouhé okno pokryté %i dny se jmenuje „%s“, ne „rok“ (R324)', async (days, label) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('action=session')) return Promise.resolve(json({ authenticated: false }));
+        if (url.includes('action=websites_overview'))
+          return Promise.resolve(
+            json({
+              slaGoal: 99.9,
+              monitors: { 4: { sla7: 100, sla30: 100, sla365: 100, measuredSince: null, longTermDays: days } },
+            })
+          );
+        if (url.includes('action=monitors'))
+          return Promise.resolve(
+            json({
+              monitors: [{ id: 4, name: 'Blog', type: 'web', status: 'up', target: 'https://blog.example.test' }],
+            })
+          );
+        return Promise.resolve(json({}));
+      })
+    );
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <WebsitesPage />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    expect(await screen.findByText(label)).toBeTruthy();
+    expect(screen.queryByText('rok')).toBeNull();
+  });
 });
