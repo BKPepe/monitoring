@@ -18563,7 +18563,9 @@ function bk_rec_rules_gap(array $in, array $state): array {
     // Packages. `agent_tools` carries strict booleans (X4), so `false` means
     // "looked and did not find it"; a tool the agent could not test at all is
     // absent from the object and no rule fires.
-    $pkg_manager = is_string($details['pkg_manager'] ?? null) ? $details['pkg_manager'] : null;
+    // In agent_tools, where the agent sends it: read from the top level it was
+    // always null, and the install hint lost its opkg/apk command.
+    $pkg_manager = is_string($details['agent_tools']['pkg_manager'] ?? null) ? $details['agent_tools']['pkg_manager'] : null;
     $pkg_rules = [
         'pkg_smartmontools' => ['smartctl', 'smartmontools'],
         'pkg_smart_drivedb' => ['smart_drivedb', 'smartmontools-drivedb'],

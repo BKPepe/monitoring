@@ -3197,6 +3197,9 @@ check_true('16 s drží jen aktivní doporučení, 15 s ho ukončí',
 check_true('chybějící balíček se doporučí, netestovaný ne',
     $rg_ids(bk_rec_rules_gap($rg_in(['details' => ['wan_up' => true, 'agent_tools' => ['iw' => false]]]), [])) === ['pkg_iw']
     && $rg_ids(bk_rec_rules_gap($rg_in(['details' => ['wan_up' => true, 'agent_tools' => ['smartctl' => true]]]), [])) === []);
+// R103: the install hint reads the package manager where the agent sends it.
+$rg_pkg = bk_rec_rules_gap($rg_in(['details' => ['wan_up' => true, 'agent_tools' => ['iw' => false, 'pkg_manager' => 'apk']]]), []);
+check('rada k instalaci zná správce balíčků z agent_tools', $rg_pkg['items'][0]['params']['pkg_manager'] ?? 'chybí', 'apk');
 check_true('pkg_librespeed_cli: jen se zapnutým měřením a chybějícím programem',
     in_array('pkg_librespeed_cli', $rg_ids(bk_rec_rules_gap($rg_in([
         'details' => ['wan_up' => true, 'agent_tools' => ['librespeed_cli' => false]],
