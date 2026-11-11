@@ -29,6 +29,14 @@ describe('CSP webu', () => {
     expect(attrs).toMatch(/\bdata-cfasync="false"/);
   });
 
+  // R231: Chrome logs "Unrecognized feature: 'interest-cohort'" on every
+  // page; FLoC is gone and the feature with it.
+  it('Permissions-Policy names no feature the browser does not know', () => {
+    const headers = readFileSync(new URL('../../public/_headers', import.meta.url), 'utf8');
+    expect(headers).toContain('Permissions-Policy:');
+    expect(headers).not.toContain('interest-cohort');
+  });
+
   it('frame-ancestors neleží v <meta> CSP, posílá ho hlavička z public/_headers', () => {
     const directives = (policy.directives ?? []).map((d) => d.split(/\s+/)[0]);
     expect(directives).not.toContain('frame-ancestors');
