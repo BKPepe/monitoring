@@ -340,9 +340,25 @@ function DiskCounters({ disk, days }: { disk: StorageDisk; days: StorageHistoryD
   );
 }
 
-/** Bytes written per day over the last week; null while the history is not loaded. */
-function weeklyWrite(days: StorageHistoryDay[]): { perDay: number; partial: boolean } | null {
-  const week = days.slice(0, 7).filter((d) => d.hostWrittenBytes !== null);
+/** Today as the history's days are written (Y-m-d), in the reader's time zone. */
+function todayDay(now: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+/**
+ * Bytes written per day over the last week; null while the history is not
+ * loaded. Today is left out: it is not over, and counted as a whole day it
+ * pulled the average down by a seventh of a day's writes every morning.
+ */
+function weeklyWrite(
+  days: StorageHistoryDay[],
+  today: string = todayDay()
+): { perDay: number; partial: boolean } | null {
+  const week = days
+    .filter((d) => d.day !== today)
+    .slice(0, 7)
+    .filter((d) => d.hostWrittenBytes !== null);
   if (week.length === 0) return null;
   const total = week.reduce((sum, d) => sum + (d.hostWrittenBytes ?? 0), 0);
   return { perDay: total / week.length, partial: week.some((d) => d.hostWrittenPartial) };

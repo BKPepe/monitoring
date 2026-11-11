@@ -200,6 +200,28 @@ describe('DiskHealthList', () => {
     expect(screen.getByText(/den neúplný \(restart routeru\)/)).toBeTruthy();
   });
 
+  it('the 7-day write average leaves out today, which is not over yet', async () => {
+    const history = structuredClone(omnia.storageHistory);
+    const day = history.disks[0].daily[0];
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    // Early in the day: 256 MB so far today, 2 GB on each of the two days before.
+    history.disks[0].daily = [
+      { ...day, day: today, hostWrittenBytes: 268435456, hostWrittenPartial: false },
+      { ...day, day: '2026-09-20', hostWrittenBytes: 2147483648, hostWrittenPartial: false },
+      { ...day, day: '2026-09-19', hostWrittenBytes: 2147483648, hostWrittenPartial: false },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(json(history)))
+    );
+
+    renderList({ disks: [sda], monitorId: 6 });
+    fireEvent.click(screen.getByText('Historie disku'));
+    await waitFor(() => expect(screen.getByText(/za 7 dní průměrně 2\.0 GB denně/)).toBeTruthy());
+  });
+
   it('the partitions of the disk are listed with how full they are', () => {
     renderList({ disks: [sda] });
     expect(screen.getByText('/')).toBeTruthy();
