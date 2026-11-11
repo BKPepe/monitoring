@@ -5317,6 +5317,25 @@ check('výpadek, který běžel už na začátku okna, nemá začátek', bk_outa
     [['monitor_id' => 3, 'started' => null, 'secs' => 60, 'first_down' => 60, 'ongoing' => false]]);
 check('bez výpadku žádný', bk_outage_runs([1 => ['from' => 0, 'segments' => [[0, 60, 'up'], [60, 90, 'warning']]]]), []);
 
+// --- upload_logo keeps the old logo until the new one is in place (R238) -------
+bk_test_load_functions(__DIR__ . '/../api.php', ['bk_logo_replace']);
+$lg_dir = sys_get_temp_dir() . '/bk_r238_' . getmypid();
+@mkdir($lg_dir);
+file_put_contents($lg_dir . '/custom-logo.png', 'staré');
+file_put_contents($lg_dir . '/nahrany.tmp', 'nové');
+try {
+    bk_logo_replace($lg_dir, $lg_dir . '/nahrany.tmp', 'jpg', fn (string $from, string $to): bool => false);
+    check_true('nepodařený přesun nového loga musí selhat', false);
+} catch (RuntimeException $e) {
+    check('nepodařený přesun nechá staré logo na místě', array_map('basename', glob($lg_dir . '/custom-logo.*') ?: []), ['custom-logo.png']);
+}
+$lg_dest = bk_logo_replace($lg_dir, $lg_dir . '/nahrany.tmp', 'jpg', fn (string $from, string $to): bool => rename($from, $to));
+check('podařené nahrání: jen nové logo a v něm nový obsah',
+    [array_map('basename', glob($lg_dir . '/custom-logo.*') ?: []), basename($lg_dest), (string)file_get_contents($lg_dest)],
+    [['custom-logo.jpg'], 'custom-logo.jpg', 'nové']);
+array_map('unlink', glob($lg_dir . '/*') ?: []);
+@rmdir($lg_dir);
+
 // --- The htmode a router recommendation names (R204) ---------------------------
 check('režim jen se šířkou, kterou generace má: HT80 neexistuje', [
     bk_rec_htmode(4, 40), bk_rec_htmode(4, 80), bk_rec_htmode(5, 80), bk_rec_htmode(6, 160), bk_rec_htmode(7, 320), bk_rec_htmode(null, 80),

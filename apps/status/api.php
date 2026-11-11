@@ -1473,6 +1473,34 @@ if ($action === 'import_discovered_service') {
 // purpose: it can carry scripts and opening the uploaded URL directly would
 // run them on our domain. The file is stored under a fixed name in uploads/
 // and the URL goes straight into the custom_logo_url setting.
+/**
+ * Puts an uploaded logo in place as custom-logo.<ext> and only then removes
+ * the logos of other formats. The old ones used to be deleted first, so a
+ * failed move left the stored URL pointing at a file that was gone: a 404
+ * logo on every page. The new file lands under a temporary name and one
+ * rename replaces it. $move is move_uploaded_file() in production.
+ *
+ * @param callable(string, string): bool $move
+ * @return string the path of the new logo
+ */
+function bk_logo_replace(string $dir, string $tmp, string $ext, callable $move): string {
+    $staged = $dir . '/custom-logo.upload-' . bin2hex(random_bytes(4)) . '.' . $ext;
+    if (!$move($tmp, $staged)) {
+        throw new RuntimeException('Soubor se nepodařilo uložit.');
+    }
+    $dest = $dir . '/custom-logo.' . $ext;
+    if (!@rename($staged, $dest)) {
+        @unlink($staged);
+        throw new RuntimeException('Soubor se nepodařilo uložit.');
+    }
+    foreach ((glob($dir . '/custom-logo.*') ?: []) as $old) {
+        if ($old !== $dest) {
+            @unlink($old);
+        }
+    }
+    return $dest;
+}
+
 if ($action === 'upload_logo') {
     bk_require_admin();
     if (empty($_FILES['logo']) || !is_array($_FILES['logo'])) {
@@ -1496,13 +1524,7 @@ if ($action === 'upload_logo') {
         if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
             throw new RuntimeException('Adresář uploads/ nejde vytvořit.');
         }
-        foreach ((glob($dir . '/custom-logo.*') ?: []) as $old) {
-            @unlink($old);
-        }
-        $dest = $dir . '/custom-logo.' . $ext;
-        if (!move_uploaded_file($f['tmp_name'], $dest)) {
-            throw new RuntimeException('Soubor se nepodařilo uložit.');
-        }
+        $dest = bk_logo_replace($dir, (string)$f['tmp_name'], $ext, 'move_uploaded_file');
         // Cache-bust via mtime so a logo swap is not hostage to the browser cache.
         $url = '/status/uploads/custom-logo.' . $ext . '?v=' . filemtime($dest);
         bk_setting_set($pdo, 'custom_logo_url', $url);
