@@ -620,7 +620,13 @@ export function SettingsPage() {
                         <FieldInput
                           ctx={fieldCtx}
                           k="smtp_user"
-                          label={t('settings.smtp_user_label', 'Odesílatel zpráv (From E-mail)')}
+                          // The mailer signs in with it and sends from it
+                          // (send_email): a "From" that is not the account fails.
+                          label={t('settings.smtp_user_label', 'SMTP účet a odesílatel (e-mail)')}
+                          hint={t(
+                            'settings.smtp_user_hint',
+                            'Přihlašuje se jím k SMTP serveru a zprávy odcházejí z něj. Musí to být schránka, ke které patří heslo níže.'
+                          )}
                           placeholder="status@vasedomena.cz"
                         />
                       </div>

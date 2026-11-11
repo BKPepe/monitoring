@@ -107,6 +107,15 @@ describe('Nastavení → Notifikace: kanály po řádcích (W2-11)', () => {
     expect(within(row('E-mail \\(SMTP\\)')).getByText('Nastaveno')).toBeTruthy();
   });
 
+  it('pole SMTP účtu říká, že je i přihlášením, nejen odesílatelem (R298)', async () => {
+    serveSettings({ smtp_host: 'smtp.example.test' });
+    await openTab(/Notifikace/);
+    fireEvent.click(within(row('E-mail \\(SMTP\\)')).getAllByRole('button')[0]);
+    expect(screen.getByText('SMTP účet a odesílatel (e-mail)')).toBeTruthy();
+    expect(screen.getByText(/Přihlašuje se jím k SMTP serveru/)).toBeTruthy();
+    expect(screen.queryByText('Odesílatel zpráv (From E-mail)')).toBeNull();
+  });
+
   it('brána „Žádná“ se zbylými údaji Twilia není „Nastaveno“ (R296)', async () => {
     serveSettings({ sms_gateway_type: '', twilio_sid: 'AC1', twilio_token: 'tok', twilio_from: '+420700000000' });
     await openTab(/Notifikace/);

@@ -2263,7 +2263,11 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Default outgoing email language (users can override it in their profile)',
   },
   'settings.lang_cs': { cs: 'Čeština', en: 'Czech' },
-  'settings.smtp_user_label': { cs: 'Odesílatel zpráv (From E-mail)', en: 'Sender Address (From Email)' },
+  'settings.smtp_user_label': { cs: 'SMTP účet a odesílatel (e-mail)', en: 'SMTP account and sender (email)' },
+  'settings.smtp_user_hint': {
+    cs: 'Přihlašuje se jím k SMTP serveru a zprávy odcházejí z něj. Musí to být schránka, ke které patří heslo níže.',
+    en: 'It signs in to the SMTP server and the messages are sent from it. It must be the mailbox the password below belongs to.',
+  },
   'settings.smtp_host_label': { cs: 'SMTP Server (Host)', en: 'SMTP Server (Host)' },
   'settings.smtp_secure_label': { cs: 'SMTP Zabezpečení', en: 'SMTP Security' },
   'settings.smtp_secure_none': { cs: 'Bez zabezpečení', en: 'No encryption' },
