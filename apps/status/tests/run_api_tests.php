@@ -6087,6 +6087,22 @@ if (isset($cookie_jar)) {
         [$dg202['monitor'] ?? null, intdiv((int)($dg202['duration_sec'] ?? 0), 60), $dg202['reason'] ?? null, $dg202['resolved'] ?? null],
         ['R202 dlouhý', 181, 'HTTP 503', true]);
 
+    // R203: the monthly best and worst day counted archived monitors.
+    $pdo->beginTransaction();
+    $pdo->exec("DELETE FROM monitor_logs");
+    $pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE archived_at IS NULL");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, created_at, archived_at) VALUES
+        (9205, 'R203 aktivní', 'web', 'https://r203a.example.test', 'up', NOW() - INTERVAL 3 DAY, NULL),
+        (9206, 'R203 archivovaný', 'web', 'https://r203b.example.test', 'down', NOW() - INTERVAL 3 DAY, NOW())");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES
+        (9205, 'up', NOW() - INTERVAL 1 HOUR), (9206, 'down', NOW() - INTERVAL 1 HOUR), (9206, 'down', NOW() - INTERVAL 70 MINUTE)");
+    // The archived ids are cached per process; this test changes them twice.
+    bk_archived_monitor_ids($pdo, true);
+    $dg203 = build_digest_data($pdo, 'monthly', false)['monthly'] ?? [];
+    $pdo->rollBack();
+    bk_archived_monitor_ids($pdo, true);
+    check('měsíční nejhorší den nepočítá archivovaný monitor', (float)($dg203['worst_day']['uptime'] ?? 0), 100.0);
+
     // R266: a row that named no place stores the column's default 'Main
     // Server', so an agent's outage came "z Main Server", and an empty
     // place left "()" in the summary.

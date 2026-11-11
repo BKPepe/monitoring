@@ -14918,16 +14918,19 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
 function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $score, $event_counts, array $outage_runs = []) {
     $sla_goal = (float)get_setting('sla_goal_pct', '99.95');
 
-    // Best/worst day (the ratio is computed in PHP, not in ORDER BY - same reason as worst monitors above)
+    // Best/worst day (the ratio is computed in PHP, not in ORDER BY - same reason as worst monitors above).
+    // Archived monitors are out, as everywhere else in the digest: a monitor
+    // archived for its outage made that day the month's worst.
+    [$md_active, $md_active_params] = bk_active_monitor_sql($pdo, 'monitor_id');
     $stmt_days = $pdo->prepare("
         SELECT DATE(checked_at) as d,
                SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) as up_count,
                SUM(CASE WHEN status IN ('up','down','warning') THEN 1 ELSE 0 END) as total_count
         FROM monitor_logs
-        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND {$md_active}
         GROUP BY DATE(checked_at)
     ");
-    $stmt_days->execute([$days]);
+    $stmt_days->execute(array_merge([$days], $md_active_params));
     $day_rows = $stmt_days->fetchAll();
     $best_day = null;
     $worst_day = null;
