@@ -29,6 +29,13 @@ describe('CSP webu', () => {
     expect(attrs).toMatch(/\bdata-cfasync="false"/);
   });
 
+  // R123: the pages are served as /docs/, never as /docs.html, so a /*.html
+  // rule matched nothing and only looked like a cache policy for HTML.
+  it('_headers has no rule for paths the site never serves', () => {
+    const headers = readFileSync(new URL('../../public/_headers', import.meta.url), 'utf8');
+    expect(headers).not.toMatch(/^\/\*\.html$/m);
+  });
+
   // R231: Chrome logs "Unrecognized feature: 'interest-cohort'" on every
   // page; FLoC is gone and the feature with it.
   it('Permissions-Policy names no feature the browser does not know', () => {
