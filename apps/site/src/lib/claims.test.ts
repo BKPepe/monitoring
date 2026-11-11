@@ -18,6 +18,7 @@ const UNBACKED = [
   /100 ?% open[- ]source/i, // R317: the bundled PHPMailer is LGPL-2.1, not MIT
   /isolated cach|čtou z cache/i, // R312: the public status answer is not served from a cache of its own
   /target, code, and response latency/i, // R312: an alert carries name, state, time and error
+  /každá stránka má SVG odznak|each page has an SVG badge/i, // R313: the badge has no page parameter
 ];
 
 /**
