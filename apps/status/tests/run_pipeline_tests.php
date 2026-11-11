@@ -1798,7 +1798,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_self_check_url', 'bk_site_origin', 'bk_self_check_quote', 'bk_self_check_verdict', 'bk_self_check_step',
     'bk_self_check_message',
     'bk_send_admin_notice', 'bk_send_shared_channels', 'send_pushover_alert', 'bk_alert_telegram_text',
-    'bk_alert_discord_description',
+    'bk_alert_discord_description', 'bk_alert_sms_body',
 ]);
 
 if (function_exists('bk_self_check_verdict')) {
@@ -1979,6 +1979,20 @@ if (function_exists('bk_alert_telegram_text') && function_exists('bk_daily_remin
     check('připomínka pro Telegram: vlastní tučné písmo a escapovaný název', bk_daily_reminder_text($tg_report, true),
         "🔔 *Denní připomínka: pořád je něco rozbité*\n• db\\_main – DOWN");
     check_true('ostatní kanály dostanou název beze změny', str_contains(bk_daily_reminder_text($tg_report), '• db_main – DOWN'));
+}
+// SMS and WhatsApp: every alert but a recovery says why.
+if (function_exists('bk_alert_sms_body')) {
+    check('SMS: certifikát řekne, za kolik dní vyprší',
+        bk_alert_sms_body('ssl_expiring', '🔒', 'web', 'SSL CERTIFIKÁT BRZY VYPRŠÍ', 't', "SSL certifikát pro 'web' vyprší za 9 dní!"),
+        "🔒 Monitor web je SSL CERTIFIKÁT BRZY VYPRŠÍ. Čas: t. Důvod: SSL certifikát pro 'web' vyprší za 9 dní!");
+    check_true('SMS: zpomalení řekne, jak pomalé',
+        str_ends_with(bk_alert_sms_body('latency_degraded', '⏱', 'web', 'ZPOMALENÍ', 't', 'Odezva je 850 ms'), 'Důvod: Odezva je 850 ms'));
+    check('SMS: obnova bez důvodu', bk_alert_sms_body('up', '🟢', 'web', 'ONLINE', 't', 'cokoli'), '🟢 Monitor web je ONLINE. Čas: t.');
+    check('SMS: výpadek nese chybu, zkrácenou po znacích',
+        bk_alert_sms_body('down', '🔴', 'web', 'DOWN', 't', str_repeat('ů', 120)),
+        '🔴 Monitor web je DOWN. Čas: t. Chyba: ' . str_repeat('ů', 99) . '…');
+    check('SMS: údržba s důvodem', bk_alert_sms_body('maintenance', '🔧', 'web', 'ÚDRŽBA', 't', 'aktualizace'),
+        '🔧 Monitor web byl přepnut do režimu plánované údržby. Důvod: aktualizace');
 }
 // Discord's embed is no HTML: "&" and "'" stay as they are.
 if (function_exists('bk_alert_discord_description')) {

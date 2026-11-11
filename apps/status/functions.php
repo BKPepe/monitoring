@@ -8946,6 +8946,26 @@ function bk_alert_discord_description(string $name, string $status_text, string 
 }
 
 /**
+ * The SMS and WhatsApp text of an alert. An outage carries its error, and
+ * every other alert but a recovery its reason: an agent event, and also an
+ * expiring certificate (how many days) or a slow answer (how slow), which
+ * used to arrive as just "SSL CERTIFIKÁT BRZY VYPRŠÍ" and "ZPOMALENÍ".
+ */
+function bk_alert_sms_body(string $new_status, string $emoji, string $name, string $status_text, string $time, string $error_msg): string {
+    if ($new_status === 'maintenance') {
+        return "$emoji Monitor $name byl přepnut do režimu plánované údržby. Důvod: $error_msg";
+    }
+    $body = "$emoji Monitor $name je $status_text. Čas: $time.";
+    if ($error_msg === '' || $new_status === 'up') {
+        return $body;
+    }
+    // Cut by characters. A byte cut split a letter like "ů" in half, and the
+    // keyword error arrived naming a shorter keyword than the configured one.
+    return $new_status === 'down' ? $body . " Chyba: " . mb_strimwidth($error_msg, 0, 100, '…', 'UTF-8')
+        : $body . " Důvod: " . mb_strimwidth($error_msg, 0, 220, '…', 'UTF-8');
+}
+
+/**
  * The reminder as one chat text. $telegram: the Markdown variant for
  * Telegram, with its own bold and every name escaped (bk_telegram_md()).
  */
@@ -9830,17 +9850,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     });
 
     // SMS / WhatsApp message
-    $sms_body = "$emoji Monitor $name je $status_text. Čas: $time.";
-    if ($new_status === 'maintenance') {
-        $sms_body = "$emoji Monitor $name byl přepnut do režimu plánované údržby. Důvod: $error_msg";
-    } elseif ($new_status === 'down' && !empty($error_msg)) {
-        // Cut by characters. A byte cut split a letter like "ů" in half, and the
-        // keyword error arrived naming a shorter keyword than the configured one.
-        $sms_body .= " Chyba: " . mb_strimwidth($error_msg, 0, 100, '…', 'UTF-8');
-    } elseif ($is_agent_event && !empty($error_msg)) {
-    // For agent events (inactive agent, exceeded limits) always state the reason
-        $sms_body .= " Důvod: " . mb_strimwidth($error_msg, 0, 220, '…', 'UTF-8');
-    }
+    $sms_body = bk_alert_sms_body($new_status, $emoji, (string)$name, $status_text, $time, (string)$error_msg);
     
     foreach ($recipients as $rec) {
         // No channels for this monitor: the account hears nothing about it.
