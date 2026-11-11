@@ -686,12 +686,19 @@ function render_vps_agent_details($details, $monitor = null) {
 /**
  * Determines how long (in minutes) a metric has been above a threshold.
  * Returns null when there is not enough data or the metric is currently below it.
+ *
+ * Only measured samples count, and the run ends at a gap of more than 15
+ * minutes: a NULL used to end it as if it were below the threshold, and a
+ * gap - the agent offline for hours - was counted as time above it, so a tip
+ * said "nad prahem 6 h 30 min" across an offline window. The newest sample
+ * has to be recent too, or "now" is not known.
  */
 function bk_metric_duration_above($pdo, $monitor_id, $column, $threshold, $lookback_hours = 24) {
+    $max_gap = 900;
     try {
         $stmt = $pdo->prepare("
-            SELECT checked_at, $column AS val FROM vps_metrics
-            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+            SELECT UNIX_TIMESTAMP(checked_at) AS ts, $column AS val FROM vps_metrics
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? HOUR) AND $column IS NOT NULL
             ORDER BY checked_at DESC
         ");
         $stmt->execute([$monitor_id, $lookback_hours]);
@@ -700,19 +707,19 @@ function bk_metric_duration_above($pdo, $monitor_id, $column, $threshold, $lookb
         return null;
     }
 
-    if (empty($rows)) return null;
+    if (empty($rows) || time() - (int)$rows[0]['ts'] > $max_gap) return null;
 
     // The current value must be above the threshold
-    $latest = (float)$rows[0]['val'];
-    if ($latest <= $threshold) return null;
+    if ((float)$rows[0]['val'] <= $threshold) return null;
 
-    // Walk back from the newest sample and find the first one below the threshold
-    $above_since = strtotime($rows[0]['checked_at']);
+    // Walk back from the newest sample to the first one below the threshold,
+    // or to a gap in the measurements.
+    $above_since = (int)$rows[0]['ts'];
     foreach ($rows as $row) {
-        if ((float)$row['val'] <= $threshold) {
+        if ((float)$row['val'] <= $threshold || $above_since - (int)$row['ts'] > $max_gap) {
             break;
         }
-        $above_since = strtotime($row['checked_at']);
+        $above_since = (int)$row['ts'];
     }
 
     $minutes = (int)round((time() - $above_since) / 60);

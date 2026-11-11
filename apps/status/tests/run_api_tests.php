@@ -3768,8 +3768,9 @@ $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 147");
 $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 147");
 $pdo->exec("DELETE FROM monitors WHERE id = 147");
 $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, cpu_threshold) VALUES (147, 'R147 server', 'vps', 'server-r147', 'up', 'Test', 50)");
-$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, checked_at) VALUES
-    (147, 99, 99, NOW() - INTERVAL 90 MINUTE), (147, 99, 99, NOW() - INTERVAL 45 MINUTE), (147, 99, 99, NOW() - INTERVAL 1 MINUTE)");
+// A sample every five minutes, as from a reporting agent: a gap ends the run.
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, checked_at) VALUES "
+    . implode(', ', array_map(fn ($m) => "(147, 99, 99, NOW() - INTERVAL {$m} MINUTE)", range(90, 0, -5))));
 $pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb) VALUES
     (147, NOW() - INTERVAL 70 MINUTE, 'cpu', 'vinik-cpu', 1, 88, 10),
     (147, NOW() - INTERVAL 70 MINUTE, 'ram', 'vinik-ram', 2, 1, 900)");
@@ -4709,6 +4710,18 @@ check('bez času vrací 400, ne prázdný seznam', $code, 400);
 // rest of it did not. A threshold breach is only meaningful with a duration
 // ("above 85 % for 18 minutes", not "at 91 % right now") and with the process
 // behind it, and both are computable from data we already store.
+// R199: a gap in the measurements was counted as time above the threshold,
+// and a NULL ended the run as if it were below it.
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+$dab_ins = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at) VALUES (2, ?, 40, 50, NOW() - INTERVAL ? MINUTE)");
+foreach ([[95, 0], [null, 1], [95, 2], [95, 4], [95, 180], [95, 182], [20, 184]] as [$dab_cpu, $dab_ago]) {
+    $dab_ins->execute([$dab_cpu, $dab_ago]);
+}
+check('doba nad prahem skončí na mezeře v měření, ne na řádku bez hodnoty', bk_metric_duration_above($pdo, 2, 'cpu_usage', 90.0), 4);
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+$dab_ins->execute([95, 60]);
+check('poslední měření je hodinu staré: dobu nad prahem nikdo nezná', bk_metric_duration_above($pdo, 2, 'cpu_usage', 90.0), null);
+
 $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
 $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
 
