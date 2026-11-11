@@ -5889,6 +5889,7 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
         $scheme = curl_getinfo($ch, CURLINFO_SCHEME);
         $http_version_raw = curl_getinfo($ch, CURLINFO_HTTP_VERSION);
 
+        $namelookup_time = curl_getinfo($ch, CURLINFO_NAMELOOKUP_TIME);
         $connect_time = curl_getinfo($ch, CURLINFO_CONNECT_TIME);
         $appconnect_time = curl_getinfo($ch, CURLINFO_APPCONNECT_TIME);
         $starttransfer_time = curl_getinfo($ch, CURLINFO_STARTTRANSFER_TIME);
@@ -5924,9 +5925,11 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
             'http_version' => $http_version
         ];
 
+        $stage_ms = bk_http_stage_ms((float)$namelookup_time, (float)$connect_time, (float)$appconnect_time,
+            (float)$starttransfer_time, (float)$total_time);
         $check_stages['tcp'] = [
             'ok' => $response !== false,
-            'time_ms' => round($connect_time * 1000),
+            'time_ms' => $stage_ms['tcp'],
         ];
 
         // TLS certificate only for successfully established https connections - for
@@ -5936,7 +5939,7 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
             $cert_info = get_ssl_certificate_info($host, $tls_port, min($timeout, 5));
             $check_stages['tls'] = [
                 'ok' => $cert_info !== null,
-                'time_ms' => round(max(0, $appconnect_time - $connect_time) * 1000),
+                'time_ms' => $stage_ms['tls'],
                 'cert' => $cert_info,
             ];
         }
@@ -5949,7 +5952,7 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
         }
         $check_stages['http'] = [
             'ok' => $http_code >= 200 && $http_code < 400,
-            'time_ms' => round($starttransfer_time * 1000),
+            'time_ms' => $stage_ms['http'],
             'status_code' => $http_code,
             'headers' => [
                 'server' => $parsed_headers['server'] ?? null,
@@ -5963,7 +5966,7 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
             $keyword_found = $response !== false && strpos($response, $body_keyword) !== false;
             $check_stages['body'] = [
                 'ok' => $keyword_found,
-                'time_ms' => round(max(0, $total_time - $starttransfer_time) * 1000),
+                'time_ms' => $stage_ms['body'],
                 'keyword_found' => $keyword_found,
             ];
         }
@@ -7074,6 +7077,26 @@ function bk_get_enabled_metrics($monitor, $pdo = null) {
  * purely additive and their failure (missing permissions, missing
  * credentials) never changes the resulting 'status'.
  */
+
+/**
+ * How long each stage of an HTTP check took, in ms, from curl's timers. curl
+ * counts every timer from the start, so the connect time includes its own
+ * name lookup and the first byte includes the connect and the handshake. They
+ * were stored as they came, and the pipeline added them up: a 325 ms answer
+ * read as "Součet fází 445 ms", with "HTTP odpověď 300 ms".
+ *
+ * @return array{tcp:int, tls:int, http:int, body:int}
+ */
+function bk_http_stage_ms(float $namelookup, float $connect, float $appconnect, float $starttransfer, float $total): array {
+    $ms = fn (float $a, float $b): int => (int)round(max(0.0, $a - $b) * 1000);
+    $before_request = $appconnect > 0 ? $appconnect : $connect;
+    return [
+        'tcp' => $ms($connect, $namelookup),
+        'tls' => $appconnect > 0 ? $ms($appconnect, $connect) : 0,
+        'http' => $ms($starttransfer, $before_request),
+        'body' => $ms($total, $starttransfer),
+    ];
+}
 
 /**
  * The host's figures a TeamSpeak check stores with its client counts: CPU, RAM

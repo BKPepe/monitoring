@@ -5329,6 +5329,12 @@ check_true('krátké jméno se hledá celé', bk_process_running('sshd', ['sshd'
 check_false('dlouhé jméno nenajde jiný začátek', bk_process_running('systemd-resolved', ['systemd-network']));
 check_false('chybějící proces chybí', bk_process_running('nginx', ['sshd', 'cron']));
 
+// --- HTTP check stages as differences of curl's timers (R178) ------------------
+check('fáze HTTPS: každá jen svůj kus', bk_http_stage_ms(0.020, 0.050, 0.120, 0.300, 0.325), ['tcp' => 30, 'tls' => 70, 'http' => 180, 'body' => 25]);
+check('fáze HTTP bez TLS: odpověď od spojení', bk_http_stage_ms(0.010, 0.040, 0.0, 0.140, 0.150), ['tcp' => 30, 'tls' => 0, 'http' => 100, 'body' => 10]);
+$hs = bk_http_stage_ms(0.020, 0.050, 0.120, 0.300, 0.325);
+check('součet fází po vyhledání jména je celková doba', array_sum($hs) + 20, 325);
+
 // --- A TeamSpeak check's host figures only from a fresh agent report (R18) -----
 $th_now = 1790000000;
 $th_det = ['cpu' => 41.5, 'ram' => 63, 'hdd' => '70', 'ts3_process' => ['cpu' => 3.2, 'ram_mb' => 120]];
