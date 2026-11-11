@@ -173,3 +173,46 @@ describe('Kruh zdraví bez dat (W1-A4)', () => {
     expect(within(offline).getAllByText('—').length).toBe(2);
   });
 });
+
+describe('Aktivní výstrahy (R65)', () => {
+  // The card is a dashboard tile: on in the saved layout.
+  const layout = () =>
+    Promise.resolve(
+      json({
+        catalog: [{ key: 'alerts', label: 'Aktivní výstrahy', kind: 'panel', available: true }],
+        tiles: [{ key: 'alerts', visible: true, size: 'normal' }],
+      })
+    );
+  const alertsPanel = async () =>
+    (await screen.findByRole('heading', { name: /Aktivní výstrahy/ })).closest('[data-slot="panel"]') as HTMLElement;
+
+  it('bez výstrah, ale se stavem neznámým: žádné „všechny služby jsou online“', async () => {
+    const monitors = [
+      { id: 1, name: 'E-shop', type: 'web', status: 'up', target: 'https://example.test', category: 'Weby' },
+      {
+        id: 3,
+        name: 'Služba routeru',
+        type: 'agent_service',
+        status: 'unknown',
+        target: 'dnsmasq',
+        category: 'Služby',
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(api({ monitors: () => Promise.resolve(json({ monitors })), dashboard_layout: layout }))
+    );
+    renderPage();
+    const panel = await alertsPanel();
+    await waitFor(() => expect(within(panel).getByText(/Stav neznámý: 1/)).toBeTruthy());
+    expect(within(panel).queryByText(/všechny sledované služby jsou online/)).toBeNull();
+  });
+
+  it('nenačtený seznam: karta nemá počet 0', async () => {
+    vi.stubGlobal('fetch', vi.fn(api({ monitors: fail, dashboard_layout: layout })));
+    renderPage();
+    const panel = await alertsPanel();
+    await waitFor(() => expect(within(panel).getByText(/Stav výstrah nelze zjistit/)).toBeTruthy());
+    expect(panel.querySelector('span.figure.rounded-full')).toBeNull();
+  });
+});

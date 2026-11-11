@@ -718,7 +718,8 @@ export function DashboardPage() {
       key="alerts"
       icon={TriangleAlert}
       title={t('dashboard.active_alerts', 'Aktivní výstrahy')}
-      count={monitorsLoading ? undefined : realAlerts.length}
+      // No count from a list that never arrived: "0" there is a zero nobody measured.
+      count={monitorsLoading || monitorsData === null ? undefined : realAlerts.length}
       viewAll={{ to: '/incidents', label: t('nav.incidents', 'Incidenty') }}
       padding="sm"
     >
@@ -728,6 +729,16 @@ export function DashboardPage() {
             t('dashboard.loading_monitors', 'Načítám monitory…')
           ) : monitorsError ? (
             t('dashboard.alerts_unknown', 'Stav výstrah nelze zjistit — seznam monitorů se nenačetl.')
+          ) : counts.unknown > 0 ? (
+            // Nothing alerting is not "all online" while some states are unknown.
+            <>
+              <StatusDot variant="neutral" />
+              {t(
+                'dashboard.no_alerts_some_unknown',
+                { n: counts.unknown },
+                `Žádné aktivní výstrahy. Stav neznámý: ${counts.unknown}.`
+              )}
+            </>
           ) : (
             <>
               <StatusDot variant="up" />

@@ -1067,6 +1067,10 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Žádné aktivní výstrahy — všechny sledované služby jsou online.',
     en: 'No active alerts — all monitored services are online.',
   },
+  'dashboard.no_alerts_some_unknown': {
+    cs: 'Žádné aktivní výstrahy. Stav neznámý: {n}.',
+    en: 'No active alerts. State unknown: {n}.',
+  },
   'dashboard.alerts_unknown': {
     cs: 'Stav výstrah nelze zjistit — seznam monitorů se nenačetl.',
     en: 'Alert status unknown — the monitor list failed to load.',
