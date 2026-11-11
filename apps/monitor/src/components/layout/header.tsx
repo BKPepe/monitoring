@@ -119,15 +119,27 @@ export function Header({
   const countUnknown = findingsState === 'failed' || incidentsState === 'failed';
   const allClearKnown = eventsState === 'ok' && findingsState === 'ok' && incidentsState === 'ok' && alertCount === 0;
 
+  // The server did not keep "read": the alerts would come back on the next
+  // load, so they come back now and the panel says why.
+  const [markReadFailed, setMarkReadFailed] = useState(false);
   const markAllRead = () => {
+    const before = readUpToId;
     const maxId = activeAlerts.reduce((mx, e) => (e.latestId > mx ? e.latestId : mx), readUpToId);
     setReadUpToId(maxId);
+    setMarkReadFailed(false);
     fetch('/status/api.php?action=alerts_read_state', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ readUpToId: maxId }),
-    }).catch(() => {});
+    })
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      })
+      .catch(() => {
+        setReadUpToId(before);
+        setMarkReadFailed(true);
+      });
   };
 
   const [refreshing, setRefreshing] = useState(false);
@@ -349,6 +361,13 @@ export function Header({
                 ) : null}
               </div>
 
+              {markReadFailed && (
+                <ErrorState
+                  size="inline"
+                  className="mt-2"
+                  message={t('header.mark_read_failed', 'Označení jako přečtené se nepodařilo uložit.')}
+                />
+              )}
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
                 {unreadAlerts.length > 0 ? (
                   <button

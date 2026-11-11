@@ -4150,6 +4150,10 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Could not load the discovered services.',
   },
   'header.mark_all_read': { cs: 'Označit vše jako přečtené', en: 'Mark all as read' },
+  'header.mark_read_failed': {
+    cs: 'Označení jako přečtené se nepodařilo uložit.',
+    en: 'Marking as read could not be saved.',
+  },
   'settings.logo_upload_btn': {
     cs: '📤 Nahrát logo (PNG/JPG/WebP, max 2 MB)',
     en: '📤 Upload logo (PNG/JPG/WebP, max 2 MB)',

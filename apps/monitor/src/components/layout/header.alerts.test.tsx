@@ -107,6 +107,33 @@ describe('Zvonek: selhání není „vše OK“ (W1-A)', () => {
     expect(await screen.findAllByText('Výpadek: Web')).toHaveLength(1);
   });
 
+  it('neuložené „přečteno“: upozornění zůstane nepřečtené a panel řekne proč', async () => {
+    const rows = [
+      {
+        id: 100,
+        monitorId: 7,
+        monitorName: 'Web',
+        target: 'web.example.test',
+        time: '05.11.2026 08:00:00',
+        isDown: true,
+        outageEnd: null,
+      },
+    ];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes('action=events')) return Promise.resolve(json({ events: rows }));
+        if (init?.method === 'POST') return Promise.resolve(json({ error: 'DB' }, 500));
+        return Promise.resolve(json({ readUpToId: 0 }));
+      })
+    );
+    openBell();
+    fireEvent.click(await screen.findByRole('button', { name: /Označit vše jako přečtené/ }));
+    expect((await screen.findByRole('alert')).textContent).toContain('nepodařilo uložit');
+    expect(screen.getByRole('button', { name: /Označit vše jako přečtené/ })).toBeTruthy();
+  });
+
   it('počet incidentů se nenačetl: ani prázdné události nejsou „vše OK“', async () => {
     serve(() => json({ events: [] }));
     openBell({ incidentsState: 'failed', openIncidents: null });
