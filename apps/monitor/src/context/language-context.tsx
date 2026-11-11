@@ -1710,6 +1710,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'reports.total_checks_30d': { cs: 'Celkem kontrol ({days} d)', en: 'Total checks ({days} d)' },
   'reports.mttr_label': { cs: 'MTTR (doba obnovení)', en: 'MTTR (recovery time)' },
   'reports.no_outage': { cs: 'Bez výpadku', en: 'No outage' },
+  'reports.mttr_ongoing': { cs: 'Výpadek probíhá', en: 'Outage ongoing' },
+  'reports.not_measured_period': {
+    cs: 'Za posledních {days} dní nic neměřilo.',
+    en: 'Nothing measured in the last {days} days.',
+  },
   'reports.current_status': { cs: 'Aktuální stav', en: 'Current Status' },
   'reports.percentile_title': {
     cs: 'Percentilové Rozložení Latence (p50 / p95 / p99)',

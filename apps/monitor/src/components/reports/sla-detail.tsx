@@ -73,11 +73,15 @@ export function SlaDetail({ item, days }: { item: MonitorSla; days: number }) {
                 and it is not "no outage" either: the block below shows it. */}
             {item.mttrSec !== null
               ? formatDuration(item.mttrSec, lang)
-              : item.lastOutage?.resolved
-                ? t('reports.mttr_unmeasured', 'Nezměřeno')
-                : !item.lastOutage && (item.outageMinutes ?? 0) > 0
-                  ? t('reports.no_confirmed_outage_short', 'Bez potvrzeného výpadku')
-                  : t('reports.no_outage', 'Bez výpadku')}
+              : item.lastOutage && !item.lastOutage.resolved
+                ? t('reports.mttr_ongoing', 'Výpadek probíhá')
+                : item.lastOutage?.resolved && item.lastOutage.end === null
+                  ? t('reports.mttr_unmeasured', 'Nezměřeno')
+                  : item.outageMinutes == null
+                    ? t('reports.not_measured', 'Bez měření')
+                    : item.outageMinutes > 0
+                      ? t('reports.no_confirmed_outage_short', 'Bez potvrzeného výpadku')
+                      : t('reports.no_outage', 'Bez výpadku')}
           </p>
         </div>
         <div className={cell}>
@@ -188,6 +192,11 @@ export function SlaDetail({ item, days }: { item: MonitorSla; days: number }) {
                 'reports.no_confirmed_outage_kept',
                 'Žádný potvrzený výpadek v uchovaných logech (30 dní). Minuty výpadku jsou ze starších dnů, z neúspěšných kontrol vzdálené sondy nebo z mlčení agenta.'
               )}
+        </p>
+      ) : item.outageMinutes == null ? (
+        // Nobody measured the period: "no outage" would be a claim about it.
+        <p className="text-muted-foreground flex items-center gap-1.5">
+          {t('reports.not_measured_period', { days }, `Za posledních ${days} dní nic neměřilo.`)}
         </p>
       ) : (
         <p className="text-muted-foreground flex items-center gap-1.5">

@@ -114,4 +114,22 @@ describe('SlaDetail – minuty výpadku bez potvrzeného výpadku (r024)', () =>
     renderCs(none(0));
     expect(screen.getByText('Žádný výpadek za posledních 30 dní.')).toBeTruthy();
   });
+
+  it('nezměřené období netvrdí, že výpadek nebyl', () => {
+    renderCs({ ...none(0), outageMinutes: null });
+    expect(screen.queryByText(/Žádný výpadek/)).toBeNull();
+    expect(screen.getByText('Za posledních 30 dní nic neměřilo.')).toBeTruthy();
+    expect(screen.getByText('MTTR (doba obnovení)').nextElementSibling?.textContent).toBe('Bez měření');
+  });
+});
+
+describe('SlaDetail – MTTR probíhajícího výpadku (R252)', () => {
+  it('trvající výpadek nemá MTTR „Bez výpadku“', () => {
+    renderCs({
+      ...item({ start: '10.11.2026 08:00:00', end: null, durationSec: 3600, reason: 'Timeout', resolved: false }, null),
+      currentStatus: 'down',
+      outageMinutes: 60,
+    });
+    expect(screen.getByText('MTTR (doba obnovení)').nextElementSibling?.textContent).toBe('Výpadek probíhá');
+  });
 });

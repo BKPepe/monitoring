@@ -4988,6 +4988,7 @@ if ($action === 'sla_report') {
         }
 
         $report = [];
+        $sla_window_start = strtotime('-' . ($days - 1) . ' day', strtotime('today'));
         foreach ($monitors as $m) {
             $mid = (int)$m['id'];
             if ($sla_checks !== null) {
@@ -5013,6 +5014,7 @@ if ($action === 'sla_report') {
             // null (it used to end at its own start, 0 s, and that went into
             // the MTTR).
             $last_outage = null;
+            $out_end_ts = null;
             $out_row = $sla_outage_by_mid[$mid] ?? null;
             if ($out_row) {
                 $out_at = (string)$out_row['checked_at'];
@@ -5034,7 +5036,10 @@ if ($action === 'sla_report') {
 
             // Null, not 0: nobody measured it, so nobody can say it had no outage.
             $outageMinutes = ($sla_sum['pct'] ?? null) !== null ? (int)round($sla_sum['outage'] / 60) : null;
-            $mttr = $last_outage['resolved'] ?? false ? $last_outage['durationSec'] : null;
+            // The recovery time of an outage that ended in this window. One from
+            // 25 days ago was a 7-day report's MTTR.
+            $mttr = ($last_outage['resolved'] ?? false) && $out_end_ts !== null && $out_end_ts >= $sla_window_start
+                ? $last_outage['durationSec'] : null;
 
             $p50 = $sla_pct_by_mid[$mid]['p50'] ?? null;
             $p95 = $sla_pct_by_mid[$mid]['p95'] ?? null;

@@ -684,6 +684,21 @@ check_true('monitor bez logů má p50 null, ne nulu', array_key_exists('p50Ms', 
 check_true('a uptime null, ne 100', array_key_exists('uptimePercent', $sla_by_id[2]) && $sla_by_id[2]['uptimePercent'] === null);
 // R27: no measurement is no outage figure, and the total sums what was measured.
 check_true('a výpadek null, ne nula minut', array_key_exists('outageMinutes', $sla_by_id[2]) && $sla_by_id[2]['outageMinutes'] === null);
+// R252: a 7-day report took its MTTR from an outage 25 days back.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, created_at) VALUES (9252, 'R252', 'web', 'https://r252.example.test', 'up', NOW() - INTERVAL 40 DAY)");
+$r252_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES (9252, ?, NOW() - INTERVAL ? MINUTE)");
+foreach ([[36001, 'up'], [36000, 'down'], [35990, 'down'], [35980, 'up'], [60, 'up']] as [$r252_ago, $r252_st]) {
+    $r252_ins->execute([$r252_st, $r252_ago]);
+}
+$r252_mttr = function (int $days) use ($base, $cookie_jar) {
+    [, $rep] = api_get_auth($base, 'action=sla_report&days=' . $days, $cookie_jar);
+    $row = array_values(array_filter($rep['monitors'] ?? [], fn ($m) => (int)$m['id'] === 9252))[0] ?? [];
+    return array_key_exists('mttrSec', $row) ? $row['mttrSec'] : 'chybí';
+};
+check('MTTR týdenního reportu není z výpadku před 25 dny', $r252_mttr(7), null);
+check('a 30denní report ho má', $r252_mttr(30), 1200);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9252");
+$pdo->exec("DELETE FROM monitors WHERE id = 9252");
 check('celkový výpadek sčítá jen změřené', $sla_pin['totalOutageMinutes'] ?? 'chybí', array_sum(array_filter(array_column($sla_pin['monitors'], 'outageMinutes'), fn ($v) => $v !== null)));
 
 // =======================================================================
