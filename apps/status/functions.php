@@ -19822,9 +19822,10 @@ function bk_router_rec_state_save(PDO $pdo, int $monitor_id, array $items, strin
 
     // Everything that was evaluated and did not fire stops being open. The
     // row itself stays (a mute lives in it, and `last_seen` dates the 90-day
-    // retention), only the "is open" half is cleared.
+    // retention), only the "is open" half is cleared - first_seen with it: a
+    // closed item that opened again showed "trvá od" its very first time.
     $clear = $pdo->prepare(
-        "UPDATE router_rec_state SET active = 0, severity = NULL, first_digest_week = NULL, raised_digest_week = NULL
+        "UPDATE router_rec_state SET active = 0, severity = NULL, first_seen = NULL, first_digest_week = NULL, raised_digest_week = NULL
           WHERE monitor_id = ? AND rec_key = ? AND active = 1"
     );
     foreach ($state as $key => $row) {

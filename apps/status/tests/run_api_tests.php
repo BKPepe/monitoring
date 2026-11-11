@@ -7313,6 +7313,16 @@ $rows = $dg_state();
 check('Digest: vyhodnocená a už nehořící položka se zhasne',
     [$rows[0]['rec_key'], $rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week']],
     ['disk_temp_warm:d:a', 0, null, null]);
+// R53: a closed item that opens again is open since now, not since its very
+// first time ("trvá od" read the first_seen of an earlier episode).
+$pdo->prepare("UPDATE router_rec_state SET first_seen = '2026-01-01 00:00:00' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->execute();
+$pdo->prepare("UPDATE router_rec_state SET active = 1, severity = 'warning' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->execute();
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week,
+    [], ['disk_temp_warm:d:a' => ['active' => 1, 'severity' => 'warning', 'first_digest_week' => $dg_week]] + $state_now);
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'warning'), $dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, [], []);
+check_true('Digest: znovu otevřená položka trvá od teď, ne od prvního výskytu kdysi',
+    (int)$pdo->query("SELECT UNIX_TIMESTAMP(first_seen) FROM router_rec_state WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->fetchColumn() > time() - 600);
+$pdo->prepare("UPDATE router_rec_state SET active = 0, severity = NULL, first_digest_week = NULL WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->execute();
 
 $pdo->prepare("UPDATE router_rec_state SET active = 1, severity = 'warning', first_digest_week = '2026-W30' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->execute();
 $state_now['disk_temp_warm:d:a'] = ['active' => 1, 'severity' => 'warning', 'first_digest_week' => '2026-W30'];
