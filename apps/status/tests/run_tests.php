@@ -5291,6 +5291,14 @@ check('bez výpadku žádný', bk_outage_runs([1 => ['from' => 0, 'segments' => 
 check('trend bez srovnání není „beze změny“', strip_tags(bk_trend_glyph(null)), '—');
 check('trend beze změny zůstává =', strip_tags(bk_trend_glyph('flat')), '=');
 
+// --- Router week across the change of the clock (R154) --------------------------
+$rw_tz = date_default_timezone_get();
+date_default_timezone_set('Europe/Prague');
+check('týden po jarní změně času má i neděli', bk_router_rec_window('2026-03-30')['days'],
+    ['2026-03-23', '2026-03-24', '2026-03-25', '2026-03-26', '2026-03-27', '2026-03-28', '2026-03-29']);
+check('a předchozí týden navazuje', bk_router_rec_window('2026-03-30')['prev_days'][6], '2026-03-22');
+date_default_timezone_set($rw_tz);
+
 // --- A JavaScript string inside an HTML attribute (R331) ----------------------
 foreach (["O'Brien", "x');alert(1);//", 'a"b<c>&d', 'Žluťoučký kůň', ''] as $js_in) {
     $js_out = bk_js_arg($js_in);

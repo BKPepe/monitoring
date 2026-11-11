@@ -18572,7 +18572,9 @@ function bk_router_rec_window(string $end_day): array {
     if ($end === false) {
         $end = strtotime(date('Y-m-d') . ' 00:00:00');
     }
-    $day = fn (int $back): string => date('Y-m-d', $end - $back * 86400);
+    // Calendar days, not 86400-second steps: after the spring change of the
+    // clock those landed an hour early, and a week left out its Sunday.
+    $day = fn (int $back): string => date('Y-m-d', strtotime("-{$back} day", $end));
     $days = $prev = $days30 = [];
     for ($i = 7; $i >= 1; $i--) {
         $days[] = $day($i);
