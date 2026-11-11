@@ -5362,6 +5362,25 @@ check('manifest pro Dependabot = verze z CDN', [$cdn_manifest['echarts'] ?? null
     preg_match('/fontawesome-free@([0-9.]+)\//', BK_CDN_FONTAWESOME, $cdn_m) ? $cdn_m[1] : 'chybí',
 ]);
 
+// --- Every audited action has a label in /app (R302) --------------------------
+// About 25 of them showed their raw code ("router_rec_mute") in the log.
+$au_actions = [];
+foreach (glob(__DIR__ . '/../*.php') as $au_file) {
+    preg_match_all('/bk_audit_log\(\s*\$pdo\s*,\s*(?:\$[a-z_]+\s*\?\s*)?\x27([a-z_0-9]+)\x27(?:\s*:\s*\x27([a-z_0-9]+)\x27)?/',
+        (string)file_get_contents($au_file), $au_m, PREG_SET_ORDER);
+    foreach ($au_m as $au_one) {
+        $au_actions[$au_one[1]] = true;
+        if (!empty($au_one[2])) {
+            $au_actions[$au_one[2]] = true;
+        }
+    }
+}
+$au_spa = (string)file_get_contents(__DIR__ . '/../../monitor/src/components/user-audit-log.tsx');
+$au_missing = array_values(array_filter(array_keys($au_actions), fn (string $a): bool => !str_contains($au_spa, "    {$a}: t('uaudit.")));
+sort($au_missing);
+check_true('auditní akce se v testu najdou', count($au_actions) > 40);
+check('každá auditní akce má v aplikaci popisek', $au_missing, []);
+
 // --- The htmode a router recommendation names (R204) ---------------------------
 check('režim jen se šířkou, kterou generace má: HT80 neexistuje', [
     bk_rec_htmode(4, 40), bk_rec_htmode(4, 80), bk_rec_htmode(5, 80), bk_rec_htmode(6, 160), bk_rec_htmode(7, 320), bk_rec_htmode(null, 80),
