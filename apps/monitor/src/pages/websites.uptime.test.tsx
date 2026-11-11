@@ -116,3 +116,43 @@ describe('Weby: SLA okna s pětisekundovým výpadkem', () => {
     expect(screen.queryByText('rok')).toBeNull();
   });
 });
+
+describe('Weby: limit pro certifikáty je serverový (R68)', () => {
+  it('certifikát za 20 dní při limitu 14 není „brzy vyprší“, ani když přehled selže', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('action=session')) return Promise.resolve(json({ authenticated: false }));
+        if (url.includes('action=websites_overview'))
+          return Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({ error: 'DB' }) } as Response);
+        if (url.includes('action=monitors'))
+          return Promise.resolve(
+            json({
+              sslAlertDays: 14,
+              monitors: [
+                {
+                  id: 4,
+                  name: 'Blog',
+                  type: 'web',
+                  status: 'up',
+                  target: 'https://blog.example.test',
+                  details: { ssl_days_remaining: 20 },
+                },
+              ],
+            })
+          );
+        return Promise.resolve(json({}));
+      })
+    );
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <WebsitesPage />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    expect(await screen.findByText(/Nejbližší expirace za 20 dní/)).toBeTruthy();
+    expect(screen.queryByText(/vyprší do/)).toBeNull();
+  });
+});

@@ -65,7 +65,11 @@ export function WebsitesPage() {
       }
     >
   >({});
-  const [sslAlertDays, setSslAlertDays] = useState(30);
+  // The server's ssl_alert_days, from the monitor list (or the overview).
+  // Null until one of them answers: a 30 of its own counted certificates
+  // under a limit the server does not use (it defaults to 14), and stayed
+  // when the overview failed.
+  const [sslAlertDays, setSslAlertDays] = useState<number | null>(null);
   // The overview carries SLA and the HTTP codes. Its failure used to leave
   // both blank without a word, which read as "no history".
   const [overviewError, setOverviewError] = useState<string | null>(null);
@@ -100,9 +104,10 @@ export function WebsitesPage() {
   const loadWebsites = React.useCallback(() => {
     setLoading(true);
     appApi
-      .getMonitors()
-      .then((rows) => {
-        const list = Array.isArray(rows) ? rows : ((rows as any)?.monitors ?? []);
+      .getMonitorList()
+      .then(({ monitors: rows, sslAlertDays: listDays }) => {
+        if (listDays !== null) setSslAlertDays(listDays);
+        const list = Array.isArray(rows) ? rows : [];
         const httpOnly: WebMonitor[] = list
           .filter((m: any) => {
             const type = (m.type || '').toLowerCase();
@@ -277,7 +282,7 @@ export function WebsitesPage() {
           const days = (w: WebMonitor) => w.details!.ssl_days_remaining as number;
           const expired = withSsl.filter((w) => days(w) <= 0);
           // The same limit cron alerts at (Settings), not a second one of its own.
-          const expiring = withSsl.filter((w) => days(w) <= sslAlertDays);
+          const expiring = sslAlertDays === null ? [] : withSsl.filter((w) => days(w) <= sslAlertDays);
           const soonest = Math.min(...withSsl.map(days));
           if (expired.length > 0) {
             return (
@@ -291,7 +296,7 @@ export function WebsitesPage() {
               />
             );
           }
-          if (expiring.length > 0) {
+          if (expiring.length > 0 && sslAlertDays !== null) {
             return (
               <StatBlock
                 variant="card"
@@ -313,7 +318,8 @@ export function WebsitesPage() {
               icon={Lock}
               label={label}
               value={`${withSsl.length}/${withSsl.length}`}
-              secondary="OK"
+              // "OK" only against a limit the server named.
+              secondary={sslAlertDays === null ? undefined : 'OK'}
               hint={t('websites.ssl_soonest', { days: soonest }, `Nejbližší expirace za ${soonest} dní`)}
             />
           );
@@ -452,7 +458,12 @@ export function WebsitesPage() {
                     );
                   }
                   // Colour only near the alert limit; a valid certificate is plain text.
-                  const cls = days <= 0 ? 'text-down' : days <= sslAlertDays ? 'text-warning' : 'text-foreground';
+                  const cls =
+                    days <= 0
+                      ? 'text-down'
+                      : sslAlertDays !== null && days <= sslAlertDays
+                        ? 'text-warning'
+                        : 'text-foreground';
                   return (
                     <div>
                       {label}
