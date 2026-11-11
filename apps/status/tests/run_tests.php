@@ -5482,6 +5482,13 @@ foreach ([[false, 'bez odpovědi'], ['', 'prázdná odpověď'], ['nope', 'neči
 }
 check('lokalita: skutečná odpověď se složí', bk_location_from_geo('{"status":"success","city":"Frankfurt","countryCode":"DE","org":"Example Hosting GmbH Extra"}'), get_country_emoji('DE') . ' Frankfurt, DE (Example Hosting GmbH)');
 
+// --- The certificate is read where the request ended (R200) --------------------
+// curl follows redirects and reports the last URL's scheme, but the certificate
+// was read on the first URL's host: http://a.cz -> https://www.a.cz read a.cz:443.
+check('certifikát cíle přesměrování', bk_tls_target('http://example.cz/', 'https://www.example.cz/'), ['www.example.cz', 443]);
+check('i s jeho portem', bk_tls_target('https://example.cz/', 'https://example.cz:8443/x'), ['example.cz', 8443]);
+check('bez přesměrování původní adresa', bk_tls_target('https://example.cz:4443/', ''), ['example.cz', 4443]);
+
 // --- The visitor's address behind a proxy of your own (R135) -------------------
 // trusted_proxies promised nginx and HAProxy, but only Cloudflare's header was
 // read: behind nginx every sign-in and lockout saw the proxy's address.

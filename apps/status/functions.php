@@ -5895,6 +5895,20 @@ function get_ssl_certificate_info($host, $port = 443, $timeout = 5) {
 /**
  * Kontrola HTTP/HTTPS webu
  */
+/**
+ * Where a web check reads the certificate: the host and port of the URL the
+ * request ended on. curl follows redirects and reports the last URL's
+ * scheme, so http://a.cz sent on to https://www.a.cz is www.a.cz's.
+ *
+ * @return array{0:?string,1:int}
+ */
+function bk_tls_target(string $url, string $effective_url): array {
+    $final = $effective_url !== '' ? $effective_url : $url;
+    $host = parse_url($final, PHP_URL_HOST);
+    $port = parse_url($final, PHP_URL_PORT);
+    return [is_string($host) && $host !== '' ? $host : null, is_int($port) ? $port : 443];
+}
+
 function check_http($url, $timeout = 5, $body_keyword = null) {
     $start = microtime(true);
 
@@ -5958,6 +5972,7 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
         $starttransfer_time = curl_getinfo($ch, CURLINFO_STARTTRANSFER_TIME);
         $total_time = curl_getinfo($ch, CURLINFO_TOTAL_TIME);
         $header_size = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+        [$tls_host, $tls_port] = bk_tls_target($url, (string)curl_getinfo($ch, CURLINFO_EFFECTIVE_URL));
         curl_close($ch);
 
         $response = $raw_response;
@@ -5997,9 +6012,8 @@ function check_http($url, $timeout = 5, $body_keyword = null) {
 
         // TLS certificate only for successfully established https connections - for
         // an unreachable host a separate SSL attempt would only double the timeout wait.
-        if ($response !== false && stripos((string)$scheme, 'https') !== false && $host) {
-            $tls_port = parse_url($url, PHP_URL_PORT) ?: 443;
-            $cert_info = get_ssl_certificate_info($host, $tls_port, min($timeout, 5));
+        if ($response !== false && stripos((string)$scheme, 'https') !== false && $tls_host !== null) {
+            $cert_info = get_ssl_certificate_info($tls_host, $tls_port, min($timeout, 5));
             $check_stages['tls'] = [
                 'ok' => $cert_info !== null,
                 'time_ms' => $stage_ms['tls'],
