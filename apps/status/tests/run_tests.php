@@ -5317,6 +5317,15 @@ check('výpadek, který běžel už na začátku okna, nemá začátek', bk_outa
     [['monitor_id' => 3, 'started' => null, 'secs' => 60, 'first_down' => 60, 'ongoing' => false]]);
 check('bez výpadku žádný', bk_outage_runs([1 => ['from' => 0, 'segments' => [[0, 60, 'up'], [60, 90, 'warning']]]]), []);
 
+// --- The tile catalogue: a failed count is no count (R237) ---------------------
+// It became 0 and the editor marked a measured metric "nesbírá data"; the
+// failure now reaches the action's catch, which answers 500.
+$dl_src = (string)file_get_contents(__DIR__ . '/../api.php');
+$dl_from = strpos($dl_src, "if (\$action === 'dashboard_layout')");
+$dl_body = $dl_from === false ? '' : substr($dl_src, $dl_from, (int)strpos($dl_src, "\nif (\$action === ", $dl_from + 10) - $dl_from);
+check_true('katalog dlaždic: selhaný počet vzorků není nula', $dl_body !== ''
+    && str_contains($dl_body, 'SELECT COUNT(*) FROM vps_metrics') && !preg_match('/catch \(Throwable \$e\) \{\s*\$count = 0;/', $dl_body));
+
 // --- upload_logo keeps the old logo until the new one is in place (R238) -------
 bk_test_load_functions(__DIR__ . '/../api.php', ['bk_logo_replace']);
 $lg_dir = sys_get_temp_dir() . '/bk_r238_' . getmypid();

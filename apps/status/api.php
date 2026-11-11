@@ -1718,15 +1718,13 @@ if ($action === 'dashboard_layout') {
             'hdd' => ['col' => 'hdd_usage', 'label' => t('metric_label_hdd'), 'unit' => '%'],
         ];
         $measured = [];
+        // A count that failed is no count: it used to become 0, and the editor
+        // marked a measured metric "nesbírá data". The failure goes to the
+        // catch below, which says the catalogue could not be read.
         foreach ($metric_defs as $key => $def) {
-            try {
-                $stmt_m = $pdo->prepare("SELECT COUNT(*) FROM vps_metrics WHERE `{$def['col']}` IS NOT NULL AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND {$dl_scope}");
-                $stmt_m->execute($dl_scope_params);
-                $count = (int)$stmt_m->fetchColumn();
-            } catch (Throwable $e) {
-                $count = 0;
-            }
-            $measured[$key] = ['label' => $def['label'], 'unit' => $def['unit'], 'samples' => $count];
+            $stmt_m = $pdo->prepare("SELECT COUNT(*) FROM vps_metrics WHERE `{$def['col']}` IS NOT NULL AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND {$dl_scope}");
+            $stmt_m->execute($dl_scope_params);
+            $measured[$key] = ['label' => $def['label'], 'unit' => $def['unit'], 'samples' => (int)$stmt_m->fetchColumn()];
         }
 
         // 2. Fixed dashboard panels (not metrics, but page sections).
