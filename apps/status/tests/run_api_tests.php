@@ -3117,6 +3117,25 @@ $post_agent = function (array $extra) use ($base, $agent_payload): int {
     curl_exec($ch);
     return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 };
+// R330: a process list went into last_details as sent, and monitor.php
+// printed its numbers raw.
+check('hlášení se zlým seznamem procesů projde', $post_agent(['top_cpu_processes' => [
+    ['name' => '<img src=x onerror=alert(1)>', 'cpu' => '<script>bk330()</script>', 'ram_mb' => 5, 'extra' => 'pryč'],
+    'jen text', ['cpu' => 3], ['name' => str_repeat('a', 100), 'cpu' => 2.5],
+]]), 200);
+$x330 = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true)['top_cpu_processes'] ?? null;
+check('uloží se jen jméno a dvě čísla', $x330, [
+    ['name' => '<img src=x onerror=alert(1)>', 'cpu' => null, 'ram_mb' => 5],
+    ['name' => str_repeat('a', 64), 'cpu' => 2.5, 'ram_mb' => null],
+]);
+$x330_ch = curl_init($base . '/monitor.php?id=2');
+curl_setopt_array($x330_ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_TIMEOUT => 20]);
+$x330_page = (string)curl_exec($x330_ch);
+check_true('monitor.php proces vypíše escapovaný', str_contains($x330_page, '&lt;img src=x onerror=alert(1)&gt;') && !str_contains($x330_page, '<img src=x'));
+check_true('monitor.php nevypíše skript z čísla', !str_contains($x330_page, 'bk330()'));
+// The report also stored them as process samples; later tests count those.
+$pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2 AND (name LIKE '<img%' OR name LIKE 'aaaa%')");
+
 $lte_events = function (string $type) use ($pdo): int {
     $st = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 2 AND event_type = ?");
     $st->execute([$type]);

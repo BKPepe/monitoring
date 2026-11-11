@@ -785,6 +785,30 @@ function bk_agent_num(array $data, string $key): ?float {
     return is_numeric($value) ? (float)$value : null;
 }
 
+/**
+ * An agent's list of busiest processes, cut to what every agent sends: a name
+ * and two numbers. Other keys, and numbers that are not numbers, go. The list
+ * was stored as it came, and monitor.php printed its numbers raw, so a key
+ * holder could put a script into an admin's page.
+ */
+function bk_agent_process_list(array $data, string $key): ?array {
+    if (!isset($data[$key]) || !is_array($data[$key])) {
+        return null;
+    }
+    $list = [];
+    foreach (array_slice(array_values($data[$key]), 0, 10) as $proc) {
+        if (!is_array($proc)) {
+            continue;
+        }
+        $name = bk_agent_str($proc, 'name', 64);
+        if ($name === null) {
+            continue;
+        }
+        $list[] = ['name' => $name, 'cpu' => bk_agent_num($proc, 'cpu'), 'ram_mb' => bk_agent_num($proc, 'ram_mb')];
+    }
+    return $list;
+}
+
 /** Integer variant of bk_agent_num() - for counters and counts. */
 function bk_agent_int(array $data, string $key): ?int {
     $num = bk_agent_num($data, $key);

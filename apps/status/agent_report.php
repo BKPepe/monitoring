@@ -52,8 +52,8 @@ function bk_agent_report(PDO $pdo, array $data, array $monitor, string $base_url
     $fork_rate = bk_agent_int($data, 'fork_rate');
     $temperature = bk_agent_num($data, 'temperature');
     $zombie_count = bk_agent_int($data, 'zombie_count');
-    $top_cpu_processes = (isset($data['top_cpu_processes']) && is_array($data['top_cpu_processes'])) ? $data['top_cpu_processes'] : null;
-    $top_ram_processes = (isset($data['top_ram_processes']) && is_array($data['top_ram_processes'])) ? $data['top_ram_processes'] : null;
+    $top_cpu_processes = bk_agent_process_list($data, 'top_cpu_processes');
+    $top_ram_processes = bk_agent_process_list($data, 'top_ram_processes');
     $sys_hostname = bk_agent_str($data, 'hostname');
     $sys_kernel = bk_agent_str($data, 'kernel');
     $sys_timezone = bk_agent_str($data, 'timezone');

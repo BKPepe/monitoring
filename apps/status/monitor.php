@@ -591,7 +591,7 @@ foreach ($timeline as $ev) {
                                 <?php foreach ($details['top_cpu_processes'] as $tp): ?>
                                     <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.04); padding-bottom: 0.2rem;">
                                         <span style="font-family: monospace; color: var(--text-primary);"><?php echo htmlspecialchars($tp['name']); ?></span>
-                                        <strong style="color: var(--color-red);"><?php echo $tp['cpu']; ?>%</strong>
+                                        <strong style="color: var(--color-red);"><?php echo bk_num($tp['cpu'] ?? null, ' %', 1); ?></strong>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
@@ -605,7 +605,7 @@ foreach ($timeline as $ev) {
                                 <?php foreach ($details['top_ram_processes'] as $rp): ?>
                                     <div style="display: flex; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.04); padding-bottom: 0.2rem;">
                                         <span style="font-family: monospace; color: var(--text-primary);"><?php echo htmlspecialchars($rp['name']); ?></span>
-                                        <strong style="color: var(--color-green);"><?php echo $rp['ram_mb']; ?> MB</strong>
+                                        <strong style="color: var(--color-green);"><?php echo bk_num($rp['ram_mb'] ?? null, ' MB'); ?></strong>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
