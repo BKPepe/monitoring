@@ -86,7 +86,7 @@ type HistoryState =
  * disclosures: it is a second request per router and most visits never look
  * at it. One answer serves every disk, because the response carries them all.
  */
-function useStorageHistory(monitorId: number | null): { state: HistoryState; load: () => void } {
+function useStorageHistory(monitorId: number | null): { state: HistoryState; load: () => void; retry: () => void } {
   const [state, setState] = React.useState<HistoryState>({ status: 'idle' });
   const asked = React.useRef(false);
 
@@ -103,7 +103,14 @@ function useStorageHistory(monitorId: number | null): { state: HistoryState; loa
       .catch(() => setState({ status: 'error' }));
   }, [monitorId]);
 
-  return { state, load };
+  // A failed load may be asked again: the guard above used to stay set, so
+  // the history could not be loaded until the page was reloaded.
+  const retry = React.useCallback(() => {
+    asked.current = false;
+    load();
+  }, [load]);
+
+  return { state, load, retry };
 }
 
 /** Days of this disk, newest first, as `storage_history` returns them. */
@@ -547,7 +554,7 @@ export function DiskHealthList({
   monitorId?: number | null;
 }) {
   const { t } = useLanguage();
-  const { state, load } = useStorageHistory(monitorId ?? null);
+  const { state, load, retry } = useStorageHistory(monitorId ?? null);
 
   if (disks === undefined) {
     return (
@@ -593,8 +600,8 @@ export function DiskHealthList({
                   )}
                   {state.status === 'error' && (
                     <ErrorState
-                      size="inline"
                       message={t('storage.history_error', 'Historii disku se nepodařilo načíst.')}
+                      onRetry={retry}
                     />
                   )}
                   {state.status === 'ready' && <DiskHistory days={days} />}

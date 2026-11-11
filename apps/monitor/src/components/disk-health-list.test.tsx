@@ -150,6 +150,21 @@ describe('DiskHealthList', () => {
     await waitFor(() => expect(screen.getByText('Historii disku se nepodařilo načíst.')).toBeTruthy());
   });
 
+  it('a failed history can be asked again without reloading the page', async () => {
+    let fail = true;
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(fail ? json({ error: 'boom' }, false, 500) : json(omnia.storageHistory))
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    renderList({ disks: [sda], monitorId: 6 });
+    fireEvent.click(screen.getByText('Historie disku'));
+    await waitFor(() => expect(screen.getByText('Historii disku se nepodařilo načíst.')).toBeTruthy());
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Zkusit znovu' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText('Historii disku se nepodařilo načíst.')).toBeNull());
+  });
+
   it('a counter that has not moved for days says so once the history is loaded', async () => {
     const history = structuredClone(omnia.storageHistory);
     const day = history.disks[0].daily[0];
