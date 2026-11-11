@@ -9,11 +9,22 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { FileText, HelpCircle, ExternalLink, Mail, MessageSquare } from 'lucide-react';
+import { STATUS_API } from '@/api/http-source';
 import { useLanguage } from '@/context/language-context';
 import { versionCommitUrl } from '@/lib/version';
 
+/** Where this install's status API lives, as a full URL (VITE_STATUS_API or /status on this origin). */
+function statusApiBase(): string {
+  try {
+    return new URL(STATUS_API, window.location.origin).href.replace(/\/$/, '');
+  } catch {
+    return STATUS_API;
+  }
+}
+
 export function Footer({ version }: { version: string }) {
   const { t } = useLanguage();
+  const statusBase = statusApiBase();
   const [showDocsModal, setShowDocsModal] = useState(false);
   const [showSupportModal, setShowSupportModal] = useState(false);
 
@@ -101,10 +112,12 @@ export function Footer({ version }: { version: string }) {
               <h4 className="text-foreground text-sm font-semibold">
                 {t('footer.docs_section3_title', '3. Veřejné API & Prometheus Exportér')}
               </h4>
+              {/* This install's own address: the author's domain was written
+                  here, so a self-hoster read the API of somebody else's server. */}
               <p className="bg-muted rounded border border-border p-2 font-mono text-2xs leading-relaxed">
-                GET https://bloodkings.eu/status/api.php?action=public_status
+                GET {statusBase}/api.php?action=public_status
                 <br />
-                GET https://bloodkings.eu/status/metrics.php (Prometheus format)
+                GET {statusBase}/metrics.php (Prometheus format)
               </p>
             </section>
           </div>

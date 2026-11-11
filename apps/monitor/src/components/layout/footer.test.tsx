@@ -28,8 +28,10 @@ describe('Patička: dokumentace API', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Dokumentace' }));
     const dialog = await screen.findByRole('dialog');
 
-    expect(dialog.textContent).toContain('GET https://bloodkings.eu/status/api.php?action=public_status');
-    expect(dialog.textContent).toContain('GET https://bloodkings.eu/status/metrics.php');
+    // R306: this install's own address, not the author's domain.
+    expect(dialog.textContent).toContain(`GET ${window.location.origin}/status/api.php?action=public_status`);
+    expect(dialog.textContent).toContain(`GET ${window.location.origin}/status/metrics.php`);
+    expect(dialog.textContent).not.toContain('bloodkings.eu');
     expect(dialog.textContent).not.toContain('/api/v1/');
   });
 });
