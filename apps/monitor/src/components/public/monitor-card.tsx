@@ -299,8 +299,8 @@ export function PublicMonitorCard({
             return (
               <div className="space-y-1.5">
                 <p className="micro-label">{t('public.hosting_limits', 'Čerpání limitů hostingu')}</p>
-                {bars.map(([k, label]) => (
-                  <UsageBar key={k} label={label} percent={cp[k].percent} detail={cp[k].formatted} />
+                {bars.map(([k, labelKey, fallback]) => (
+                  <UsageBar key={k} label={t(labelKey, fallback)} percent={cp[k].percent} detail={cp[k].formatted} />
                 ))}
               </div>
             );
@@ -490,15 +490,18 @@ function UsageBar({ label, percent, detail }: { label: string; percent: number |
   );
 }
 
-/** cpanel_stats keys in the order the legacy page shows them. */
-const CPANEL_KEYS: [string, string][] = [
-  ['disk', 'Disk'],
-  ['memory', 'RAM'],
-  ['database', 'DB'],
-  ['bandwidth', 'Přenos'],
-  ['inodes', 'Inody'],
-  ['processes', 'Procesy'],
-  ['cpu', 'CPU'],
+/**
+ * cpanel_stats keys in the order the legacy page shows them, with the label's
+ * translation key - the labels were Czech words on the English page too.
+ */
+const CPANEL_KEYS: [string, string, string][] = [
+  ['disk', 'public.cp_disk', 'Disk'],
+  ['memory', 'public.cp_memory', 'RAM'],
+  ['database', 'public.cp_database', 'DB'],
+  ['bandwidth', 'public.cp_bandwidth', 'Přenos'],
+  ['inodes', 'public.cp_inodes', 'Inody'],
+  ['processes', 'public.cp_processes', 'Procesy'],
+  ['cpu', 'public.cp_cpu', 'CPU'],
 ];
 
 function buildRows(

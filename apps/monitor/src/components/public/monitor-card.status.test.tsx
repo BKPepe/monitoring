@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { LanguageProvider } from '@/context/language-context';
 import { PublicMonitorCard, type PublicMonitor } from './monitor-card';
@@ -87,5 +87,23 @@ describe('Veřejná karta: štítek stavu mluví sdíleným slovníkem (PUB-11)'
     // No statusKey (older server) and never checked: waiting, not silent.
     renderCard({ status: 'unknown', lastCheck: null });
     expect(statePill('Čeká na první data')).toBeTruthy();
+  });
+});
+
+describe('PublicMonitorCard: limity hostingu v jazyce stránky (R305)', () => {
+  it('anglická stránka nemá „Přenos“ ani „Inody“', () => {
+    vi.stubGlobal('localStorage', { getItem: (k: string) => (k === 'bk_lang' ? 'en' : null), setItem: () => {} });
+    renderCard({
+      details: {
+        cpanel_stats: {
+          bandwidth: { percent: 12, formatted: '1 GB / 100 GB' },
+          inodes: { percent: 30, formatted: '30 000 / 100 000' },
+        },
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Expand|Show detail|detail/i }));
+    expect(screen.getByText('Bandwidth')).toBeTruthy();
+    expect(screen.getByText('Inodes')).toBeTruthy();
+    expect(screen.queryByText('Přenos')).toBeNull();
   });
 });
