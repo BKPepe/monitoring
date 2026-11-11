@@ -117,6 +117,11 @@ before any upload. So the gitlink moves only to a green commit of agents `main`.
 ### GitHub secrets required:
 1.  `CLOUDFLARE_API_TOKEN` — API token with Pages and Workers deploy permissions.
 2.  `CLOUDFLARE_ACCOUNT_ID` — Your Cloudflare account ID.
+3.  `FTP_SERVER`, `FTP_USERNAME`, `FTP_PASSWORD` — the hosting's FTPS account
+    for the `status`, `app` and `root` deploys.
+4.  `STATUS_CONFIG_PHP` — the whole `config.php` of the hosted dashboard; the
+    status deploy writes it (it is not in the repository) and refuses to
+    deploy when it is not valid PHP.
 
 ---
 
@@ -166,7 +171,7 @@ seeing. The `phpstatic` job in the Quality Gate covers that blind spot:
 Run them locally (tools are not vendored — this app ships without Composer):
 
 ```bash
-phpstan analyse --memory-limit=1G     # or: php phpstan.phar analyse …
+phpstan analyse --memory-limit=2G     # 1G runs out, as in CI; or: php phpstan.phar analyse …
 psalm --taint-analysis --no-cache
 ```
 
