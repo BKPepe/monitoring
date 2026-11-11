@@ -36,6 +36,7 @@ import { formatPercentValue } from '@/lib/utils';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 import { pluralForm } from '@/lib/plural';
 import { syncPublicCanonical } from '@/lib/public-head';
+import { localStamp } from '@/lib/local-stamp';
 import { parsePublicHealth, type PublicHealth } from '@/lib/public-health';
 import { outageDurationText, outageEpisode, outageResolutions, type MonitorOutageFacts } from '@/lib/public-events';
 
@@ -1105,7 +1106,7 @@ function fmtWindow(
   end: string | null | undefined,
   t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
 ): string {
-  const f = (v: string) => v.replace('T', ' ').slice(0, 16);
+  const f = localStamp;
   if (start && end) return `${f(start)} – ${f(end)}`;
   if (start) return t('public.maintenance_from', { from: f(start) }, `od ${f(start)}`);
   return '';

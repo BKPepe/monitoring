@@ -5896,6 +5896,19 @@ function get_ssl_certificate_info($host, $port = 443, $timeout = 5) {
  * Kontrola HTTP/HTTPS webu
  */
 /**
+ * A DATETIME as stored, the app's wall time as strtotime() reads it, in ISO
+ * 8601 with the offset, which a browser in any zone reads as the same moment.
+ * Null for nothing and for something unreadable.
+ */
+function bk_iso_time(?string $value): ?string {
+    if ($value === null || $value === '') {
+        return null;
+    }
+    $ts = strtotime($value);
+    return $ts === false ? null : date('c', $ts);
+}
+
+/**
  * Where a web check reads the certificate: the host and port of the URL the
  * request ended on. curl follows redirects and reports the last URL's
  * scheme, so http://a.cz sent on to https://www.a.cz is www.a.cz's.

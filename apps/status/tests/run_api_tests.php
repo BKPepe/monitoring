@@ -366,7 +366,9 @@ foreach (($mnt_data['monitors'] ?? []) as $m) {
 }
 check_true('zapnutá údržba je v anonymní odpovědi', ($mnt_by_id[1]['maintenance'] ?? null) === true);
 check('popis údržby je veřejný, dokud běží', $mnt_by_id[1]['maintenanceDescription'] ?? null, 'Výměna disku');
-check('konec údržby je veřejný, dokud běží', $mnt_by_id[1]['maintenanceEnd'] ?? null, '2030-01-02 03:00:00');
+// With the server's offset (R221): a bare time was read in the visitor's zone.
+check_true('konec údržby je veřejný, dokud běží, s posunem serveru',
+    preg_match('/^2030-01-02T03:00:00[+-]\d\d:\d\d$/', (string)($mnt_by_id[1]['maintenanceEnd'] ?? '')) === 1);
 
 // Switching the flag off hides the description again even though it stayed in the DB.
 $pdo->exec("UPDATE monitors SET maintenance = 0 WHERE id = 1");

@@ -622,8 +622,11 @@ if ($action === 'monitors') {
                 // stays private.
                 'maintenance' => !empty($r['maintenance']),
                 'maintenanceDescription' => !empty($r['maintenance']) ? ($r['maintenance_description'] ?: null) : null,
-                'maintenanceStart' => (!empty($r['maintenance']) && $r['maintenance_start']) ? $r['maintenance_start'] : null,
-                'maintenanceEnd' => (!empty($r['maintenance']) && $r['maintenance_end']) ? $r['maintenance_end'] : null,
+                // With the server's offset: a bare time was read in the
+                // visitor's own zone, so east of the server an announced window
+                // dropped off the page before it began.
+                'maintenanceStart' => (!empty($r['maintenance']) && $r['maintenance_start']) ? bk_iso_time((string)$r['maintenance_start']) : null,
+                'maintenanceEnd' => (!empty($r['maintenance']) && $r['maintenance_end']) ? bk_iso_time((string)$r['maintenance_end']) : null,
                 'agentLastSeen' => $public_view ? null : ($details['agent_last_seen'] ?? null),
                 'hostname' => $public_view ? null : ($details['hostname'] ?? $r['target']),
                 // What the agent reported, or null. It fell back to the type,

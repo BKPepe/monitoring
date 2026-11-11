@@ -28,6 +28,7 @@ import { formatNumber } from '@/lib/metric-format';
 import type { SparkSample } from '@/lib/sparkline-segments';
 import { monitorStatusKey, statusLabel, statusMeta, type StatusKey } from '@/lib/status';
 import { cn, formatPercent } from '@/lib/utils';
+import { localStamp } from '@/lib/local-stamp';
 import { coverageStart, formatCoverageDay } from '@/lib/window-coverage';
 
 export interface PublicMonitor {
@@ -170,8 +171,8 @@ export function PublicMonitorCard({
                     ? ' ' +
                       t(
                         'public.maintenance_until',
-                        { until: fmtWindowTime(monitor.maintenanceEnd) },
-                        `(do ${fmtWindowTime(monitor.maintenanceEnd)})`
+                        { until: localStamp(monitor.maintenanceEnd) },
+                        `(do ${localStamp(monitor.maintenanceEnd)})`
                       )
                     : ''}
                 </span>
@@ -563,9 +564,4 @@ function fmtStamp(v: string | null, lang: string): string | null {
   return Number.isNaN(at.getTime())
     ? v
     : at.toLocaleString(lang === 'en' ? 'en-GB' : 'cs-CZ', { dateStyle: 'medium', timeStyle: 'short' });
-}
-
-/** "2026-08-17 12:00:00" / ISO -> "2026-08-17 12:00" - drop seconds, keep both source formats. */
-function fmtWindowTime(v: string): string {
-  return v.replace('T', ' ').slice(0, 16);
 }
