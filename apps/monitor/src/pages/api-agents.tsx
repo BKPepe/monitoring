@@ -135,7 +135,7 @@ export function ApiAgentsPage() {
       icon: Terminal,
       desc: t(
         'api_agents.desc_windows',
-        'PowerShell agent pro Windows Server 2016 / 2019 / 2022 s automatickou registrací do Windows Task Scheduler.'
+        'PowerShell agent pro Windows Server 2016 / 2019 / 2022. Do Plánovače úloh ho zaregistruje příkaz z postupu níže, agent sám to nedělá.'
       ),
       steps: ['windows'],
     },

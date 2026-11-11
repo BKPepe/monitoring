@@ -1904,8 +1904,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'A lightweight shell agent built for OpenWrt/LEDE routers. Uses ubus, iwinfo, /proc, and supports secure Remote Actions (confirmation pings).',
   },
   'api_agents.desc_windows': {
-    cs: 'PowerShell agent pro Windows Server 2016 / 2019 / 2022 s automatickou registrací do Windows Task Scheduler.',
-    en: 'A PowerShell agent for Windows Server 2016 / 2019 / 2022 with automatic registration in Windows Task Scheduler.',
+    cs: 'PowerShell agent pro Windows Server 2016 / 2019 / 2022. Do Plánovače úloh ho zaregistruje příkaz z postupu níže, agent sám to nedělá.',
+    en: 'PowerShell agent for Windows Server 2016 / 2019 / 2022. The command in the steps below registers it in Task Scheduler; the agent does not do it itself.',
   },
   'api_agents.desc_cpanel': {
     cs: 'Stáhněte cpanel_stats.php do kořenového adresáře hostingu pro veřejný sběr diskového prostoru, RAM a MySQL zátěže.',

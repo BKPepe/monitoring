@@ -86,3 +86,12 @@ describe('API & Agenti: souhrn verzí jen z nahlášených verzí', () => {
     ).toBeTruthy();
   });
 });
+
+describe('Karta Windows (R323)', () => {
+  it('neslibuje registraci do Plánovače úloh, kterou agent.ps1 sám nedělá', async () => {
+    renderAt('/api-agents?platform=windows');
+    await screen.findAllByText('Windows Server');
+    expect(screen.queryByText(/automatickou registrací/)).toBeNull();
+    expect(screen.getByText(/agent sám to nedělá/)).toBeTruthy();
+  });
+});
