@@ -5177,8 +5177,10 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
 
   // <html lang> decides which phonemes and hyphenation a screen reader uses.
   // It was hardcoded to Czech in index.html, so an English session was still
-  // announced with Czech pronunciation.
-  React.useEffect(() => {
+  // announced with Czech pronunciation. The API requests read it for ?lang=
+  // (http-source uiLang): a layout effect runs before the effects of the
+  // children, so a hook that refetches on a language change asks in the new one.
+  React.useLayoutEffect(() => {
     document.documentElement.lang = lang;
   }, [lang]);
 

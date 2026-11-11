@@ -1,9 +1,12 @@
 import * as React from 'react';
+import { useLanguage } from '@/context/language-context';
 import { httpMetricsSource } from './http-source';
 import type { ChartData, PublicStatus, TimeRange, PublicStatusScope } from './types';
 
 /** Inputs for the device charts. */
 export function useAssetCharts(monitorId: number, range: TimeRange) {
+  // The chart titles come from the server in the page's language (?lang=).
+  const { lang } = useLanguage();
   const [data, setData] = React.useState<ChartData[] | null>(null);
   const [error, setError] = React.useState<Error | null>(null);
   // Bumped by reload(), so the error state's retry refetches without a range change.
@@ -28,7 +31,7 @@ export function useAssetCharts(monitorId: number, range: TimeRange) {
     return () => {
       active = false;
     };
-  }, [monitorId, range, attempt]);
+  }, [monitorId, range, attempt, lang]);
 
   const reload = React.useCallback(() => setAttempt((n) => n + 1), []);
   return { data, error, loading: data === null && error === null, reload };
