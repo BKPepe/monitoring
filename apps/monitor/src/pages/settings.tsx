@@ -566,6 +566,24 @@ export function SettingsPage() {
                   name={t('settings.channel_email', 'E-mail (SMTP)')}
                   {...channelRow('email', 'email')}
                 >
+                  {/* The language of the alerts and digests is not an SMTP setting: it
+                      hid behind the lock that config.php's SMTP puts on the rest. */}
+                  {!isLocked('email_lang') && (
+                    <div className="mb-4 max-w-xs">
+                      <label className={labelCls} htmlFor="email-lang">
+                        {t('settings.email_lang_label', 'Jazyk odchozích e-mailů')}
+                      </label>
+                      <select
+                        id="email-lang"
+                        value={settings.email_lang ?? 'cs'}
+                        onChange={(e) => set('email_lang', e.target.value)}
+                        className={selectCls}
+                      >
+                        <option value="cs">{t('settings.lang_cs', 'Čeština')}</option>
+                        <option value="en">English</option>
+                      </select>
+                    </div>
+                  )}
                   {isLocked('smtp_host') ? (
                     <div className="p-3 rounded-lg bg-info/8 border border-info/25 text-xs text-info flex items-center gap-2">
                       <Lock className="size-4 shrink-0" />
@@ -582,19 +600,6 @@ export function SettingsPage() {
                         )}
                       />
                       <div className="grid gap-4 md:grid-cols-2">
-                        <div>
-                          <label className={labelCls}>
-                            {t('settings.email_lang_label', 'Jazyk odchozích e-mailů')}
-                          </label>
-                          <select
-                            value={settings.email_lang ?? 'cs'}
-                            onChange={(e) => set('email_lang', e.target.value)}
-                            className={selectCls}
-                          >
-                            <option value="cs">{t('settings.lang_cs', 'Čeština')}</option>
-                            <option value="en">English</option>
-                          </select>
-                        </div>
                         <FieldInput
                           ctx={fieldCtx}
                           k="smtp_user"
