@@ -479,6 +479,20 @@ check_true(
 check('nejnovější OK kontrola není obnovení', $ev_rows[0]['isRecovery'] ?? 'chybí', false);
 check('OK kontrola hned po výpadku je obnovení', $ev_rows[1]['isRecovery'] ?? 'chybí', true);
 check('výpadek sám obnovením není', $ev_rows[2]['isRecovery'] ?? 'chybí', false);
+// R292: the log of every monitor promised recoveries and marked none - the
+// fresh tail is contiguous by id, so each monitor's rows in it are its own
+// consecutive checks, interleaved with another monitor's or not.
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+            VALUES (1, 'up', 7, DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
+[, $evf_data] = api_get_auth($base, 'action=events&limit=10', $cookie_jar);
+$evf_rec = [];
+foreach ($evf_data['events'] ?? [] as $e) {
+    if ((int)($e['monitorId'] ?? 0) === 2) {
+        $evf_rec[] = [$e['rawStatus'] ?? null, $e['isRecovery'] ?? null];
+    }
+}
+check('protokol všech monitorů označí obnovení po monitoru', $evf_rec, [['up', false], ['up', true], ['down', false]]);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 1 AND checked_at > DATE_SUB(NOW(), INTERVAL 90 SECOND) AND response_time = 7");
 $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 2");
 $dn_stmt = $pdo->prepare("UPDATE monitors SET status = 'up', last_status_change = ? WHERE id = 1");
 $dn_stmt->execute([date('Y-m-d H:i:s', time() - 1800)]);

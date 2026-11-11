@@ -10,6 +10,7 @@ import { usePageChrome } from '@/components/layout/shell-context';
 import { ErrorState, LoadingState } from '@/components/ui/states';
 import { useLanguage } from '@/context/language-context';
 import type { TimelineEvent } from '@/data/model';
+import { formatDuration } from '@/lib/metric-format';
 
 /** One row of action=events, as the server sends it. */
 interface CheckRow {
@@ -78,7 +79,7 @@ function severityOf(row: CheckRow): TimelineEvent['severity'] {
  * which is how the device page links here.
  */
 export function CheckLogPage() {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const [params, setParams] = useSearchParams();
   const monitorParam = Number(params.get('monitor'));
   const monitorId = Number.isInteger(monitorParam) && monitorParam > 0 ? monitorParam : null;
@@ -130,14 +131,14 @@ export function CheckLogPage() {
     if (state.status !== 'ready') return [];
     return state.rows.map((row) => {
       const label = checkLabel(row, t);
-      const minutes = row.outageDurationSec ? Math.round(row.outageDurationSec / 60) : null;
+      // "30 s", "1 h 5 min": whole minutes made a 30-second outage "0 min".
+      const lasted = row.outageDurationSec != null ? formatDuration(row.outageDurationSec, lang) : null;
       return {
         id: row.id,
         // The whole fleet needs the device in the title; one device does not.
         title: monitorId ? label : `${row.monitorName}: ${label}`,
         detail:
-          (row.errorMsg ?? '') +
-          (minutes !== null ? t('checklog.duration', { min: minutes }, ` (trvání ${minutes} min)`) : ''),
+          (row.errorMsg ?? '') + (lasted !== null ? t('checklog.duration', { d: lasted }, ` (trvání ${lasted})`) : ''),
         at: row.time,
         atIso: row.timeIso ?? null,
         severity: severityOf(row),
@@ -148,7 +149,7 @@ export function CheckLogPage() {
         responseMs: typeof row.responseTime === 'number' ? row.responseTime : null,
       };
     });
-  }, [state, monitorId, t]);
+  }, [state, monitorId, t, lang]);
 
   const current = monitors.find((m) => m.id === monitorId);
   usePageChrome({ onRefresh: reload });

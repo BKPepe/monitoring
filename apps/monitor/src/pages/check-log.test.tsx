@@ -124,6 +124,20 @@ describe('Protokol kontrol (W2-6)', () => {
   });
 });
 
+describe('Protokol kontrol: délka krátkého výpadku (R292)', () => {
+  it('30 sekund není „0 min“', async () => {
+    const short = { ...row(3, 1, 'E-shop', 25, 'down'), outageDurationSec: 30 };
+    stub((url) =>
+      url.includes('action=events')
+        ? json({ events: [row(4, 1, 'E-shop', 26, 'up'), short], statusChange: null })
+        : json({ monitors: [] })
+    );
+    renderPage();
+    expect((await screen.findAllByText(/HTTP status kód: 502 \(trvání 30 s\)/)).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/trvání 0 min/)).toBeNull();
+  });
+});
+
 describe('Protokol kontrol: řádek vzdálené sondy (r024)', () => {
   it('selhaná kontrola sondy uprostřed výpadku ho nerozdělí a pod „Vše“ není výpadek ani úspěch', async () => {
     const probe = { ...row(11, 1, 'E-shop', 24, 'down'), isDown: false, source: 'probe', location: 'Frankfurt' };

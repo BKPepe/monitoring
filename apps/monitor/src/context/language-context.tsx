@@ -4516,7 +4516,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'checklog.unknown': { cs: 'Stav neznámý (agent nehlásí)', en: 'State unknown (agent not reporting)' },
   'checklog.recovered': { cs: 'Obnoveno', en: 'Recovered' },
   'checklog.ok': { cs: 'Kontrola v pořádku', en: 'Check passed' },
-  'checklog.duration': { cs: ' (trvání {min} min)', en: ' (lasted {min} min)' },
+  'checklog.duration': { cs: ' (trvání {d})', en: ' (lasted {d})' },
   'websites.save_btn': { cs: 'Uložit a spustit monitoring', en: 'Save & Start Monitoring' },
   'websites.guest_notice': {
     cs: 'Přehled stavu webů je veřejně přístupný. Pro přidávání nových domén se prosím přihlaste.',

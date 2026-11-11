@@ -2598,15 +2598,24 @@ if ($action === 'events') {
         $rows = array_values($rows_by_id);
 
         // A recovery is an OK check whose IMMEDIATELY PRECEDING check failed.
-        // Only the fresh tail ($recent_rows: one monitor, consecutive ids) has
-        // real neighbours - the older failures merged in above sit next to rows
+        // Only the fresh tail ($recent_rows: every row past an id) has real
+        // neighbours - the older failures merged in above sit next to rows
         // hours apart, so deciding this from the merged list (as the frontend
-        // did) invents recoveries at times when nothing happened. The tail is
+        // did) invents recoveries at times when nothing happened. Without a
+        // monitor filter the tail interleaves monitors, but each one's rows in
+        // it are still its own consecutive checks: read per monitor, the
+        // fleet's log marks recoveries too, and a monitor's oldest row in the
+        // tail, whose predecessor is unknown, never is one. The tail is
         // cron's rows only: a remote probe's (source 'probe') neither recovers
         // an outage nor fails one, so its neighbours are the rows around it.
         $recovery_ids = [];
-        if ($monitor_id > 0) {
-            $own_rows = array_values(array_filter($recent_rows, fn ($r) => ($r['source'] ?? null) !== 'probe'));
+        $own_by_monitor = [];
+        foreach ($recent_rows as $r) {
+            if (($r['source'] ?? null) !== 'probe') {
+                $own_by_monitor[(int)$r['monitor_id']][] = $r;
+            }
+        }
+        foreach ($own_by_monitor as $own_rows) {
             for ($i = 0, $n = count($own_rows) - 1; $i < $n; $i++) {
                 if ($own_rows[$i]['status'] === 'up'
                     && in_array($own_rows[$i + 1]['status'], ['down', 'warning'], true)) {
