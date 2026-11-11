@@ -7,6 +7,7 @@ import { appApi } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
 import { pluralForm } from '@/lib/plural';
+import { formatNumber } from '@/lib/metric-format';
 import { LoadingState, ErrorState } from '@/components/ui/states';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -500,12 +501,10 @@ export function WebsitesPage() {
                           {slaGoal != null && (
                             <span className="font-normal normal-case tracking-normal">
                               (
-                              {t(
-                                'websites.sla_goal',
-                                { goal: formatPercentValue(slaGoal, 1, lang) },
-                                `cíl ${slaGoal} %`
-                              )}
-                              )
+                              {/* A goal is a setting, not a measurement: as many
+                                  decimals as it has - 99.95 read "99,9" with the
+                                  one-decimal rounding of measured values. */}
+                              {t('websites.sla_goal', { goal: formatNumber(slaGoal, lang, 3) }, `cíl ${slaGoal} %`)})
                             </span>
                           )}
                         </p>

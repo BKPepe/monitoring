@@ -50,6 +50,35 @@ describe('Weby: SLA okna s pětisekundovým výpadkem', () => {
     expect(screen.queryByText('100,00 %')).toBeNull();
   });
 
+  it('cíl 99,95 % se ukáže celý, ne jako 99,9 % (R294)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes('action=session')) return Promise.resolve(json({ authenticated: false }));
+        if (url.includes('action=websites_overview'))
+          return Promise.resolve(
+            json({ slaGoal: 99.95, monitors: { 4: { sla7: 99.99, sla30: 99.9, sla365: null, measuredSince: null } } })
+          );
+        if (url.includes('action=monitors'))
+          return Promise.resolve(
+            json({
+              monitors: [{ id: 4, name: 'Blog', type: 'web', status: 'up', target: 'https://blog.example.test' }],
+            })
+          );
+        return Promise.resolve(json({}));
+      })
+    );
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <WebsitesPage />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    expect(await screen.findByText(/cíl 99,95/)).toBeTruthy();
+  });
+
   it.each([
     [1, 'dnes'],
     [3, '3 dny'],
