@@ -1250,11 +1250,13 @@ if ($action === 'discovered_services') {
     try {
         // Already-monitored services are not proposed again - otherwise an
         // imported service stayed in the panel as "unmonitored" (reported: kresd twice).
+        // Names per device: a service imported on one router hid the same
+        // service on every other router for good.
         $existing_names = [];
         $existing_port_asset = [];
         $stmt_ex = $pdo->query("SELECT LOWER(name) AS lname, port, asset_id FROM monitors WHERE archived_at IS NULL");
         while ($ex = $stmt_ex->fetch()) {
-            $existing_names[$ex['lname']] = true;
+            $existing_names[($ex['asset_id'] ?? '') . ':' . $ex['lname']] = true;
             if ($ex['port'] !== null && $ex['asset_id'] !== null) {
                 $existing_port_asset[$ex['asset_id'] . ':' . $ex['port']] = true;
             }
@@ -1272,7 +1274,7 @@ if ($action === 'discovered_services') {
 
                 $asset_id = $row['asset_id'] !== null ? (int)$row['asset_id'] : null;
                 $port = isset($svc['port']) && $svc['port'] !== '' ? (int)$svc['port'] : null;
-                if (isset($existing_names[strtolower((string)$svc['name'])])) continue;
+                if (isset($existing_names[($asset_id ?? '') . ':' . strtolower((string)$svc['name'])])) continue;
                 if ($port !== null && $asset_id !== null && isset($existing_port_asset[$asset_id . ':' . $port])) continue;
 
                 // Target of the future check: the agent's address, else the hostname

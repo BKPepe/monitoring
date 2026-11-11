@@ -3147,6 +3147,19 @@ $post_agent = function (array $extra) use ($base, $agent_payload): int {
     curl_exec($ch);
     return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
 };
+// R157: a service imported on one router hid it on every other.
+$pdo->exec("INSERT INTO assets (id, name) VALUES (9571, 'R157 A'), (9572, 'R157 B')");
+$x157_found = json_encode(['discovered_services' => [['name' => 'kresd157', 'port' => 53, 'type' => 'dns', 'confidence' => 90]]]);
+$pdo->prepare("INSERT INTO monitors (id, name, type, target, status, asset_id, last_details) VALUES
+    (9571, 'R157 router A', 'openwrt', 'a.example.test', 'up', 9571, ?), (9572, 'R157 router B', 'openwrt', 'b.example.test', 'up', 9572, ?)")
+    ->execute([$x157_found, $x157_found]);
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, asset_id) VALUES (9573, 'kresd157', 'port', 'a.example.test', 'up', 9571)");
+[, $x157] = api_get_auth($base, 'action=discovered_services', $cookie_jar);
+$x157_sources = array_values(array_map(fn ($s) => (int)$s['sourceMonitorId'], array_filter($x157['services'] ?? [], fn ($s) => $s['name'] === 'kresd157')));
+check('služba hlídaná na routeru A se routeru B pořád nabídne, routeru A už ne', $x157_sources, [9572]);
+$pdo->exec("DELETE FROM monitors WHERE id IN (9571, 9572, 9573)");
+$pdo->exec("DELETE FROM assets WHERE id IN (9571, 9572)");
+
 // R330: a process list went into last_details as sent, and monitor.php
 // printed its numbers raw.
 check('hlášení se zlým seznamem procesů projde', $post_agent(['top_cpu_processes' => [
