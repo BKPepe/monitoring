@@ -65,6 +65,7 @@ import { useAssetCharts } from '@/api/use-asset-charts';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { useLanguage } from '@/context/language-context';
+import { pluralForm } from '@/lib/plural';
 import { smartToolMissing, smartVerdictTone } from '@/lib/smart-verdict';
 import { cn, formatMs, formatPercent, formatUptime } from '@/lib/utils';
 import { DiscordCard } from '@/components/discord-card';
@@ -1781,6 +1782,24 @@ function TabCount({ n }: { n: number }) {
   return <span className="text-muted-foreground ml-1.5 text-2xs font-mono tabular-nums">{n}</span>;
 }
 
+/**
+ * The router's Wi-Fi clients: its own total, else the sum of the radios that
+ * counted. Null when none of them did - a radio that reports no count used
+ * to add 0, and a router that counted nothing read "Wi-Fi (0 klientů)".
+ */
+export function wifiClientTotal(total: unknown, radios: { clients?: unknown }[]): number | null {
+  const count = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v)
+      ? v
+      : typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v))
+        ? Number(v)
+        : null;
+  const own = count(total);
+  if (own !== null) return own;
+  const counted = radios.map((r) => count(r.clients)).filter((n): n is number => n !== null);
+  return counted.length > 0 ? counted.reduce((a, b) => a + b, 0) : null;
+}
+
 function hasNetworkData(d: Record<string, any>): boolean {
   return (
     d.wan_proto != null ||
@@ -2057,7 +2076,7 @@ function NetworkTab({
   // Rows whose number is also a stored metric: measured every minute, kept for
   // months, and until now readable only as its latest value.
   const history = (key: string) => `/infrastructure/${monitorId}/metric/${monitorId}/${key}`;
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   // One request for the line speed verdict, made only for a router.
   const bottleneck = useWanBottleneck(router ? monitorId : null);
 
@@ -2092,6 +2111,13 @@ function NetworkTab({
   };
 
   const wifi: any[] = Array.isArray(d.wifi_radios) ? d.wifi_radios : [];
+  const wifiClients = wifiClientTotal(d.wifi_clients_count, wifi);
+  const wifiClientsWord = (n: number) =>
+    ({
+      one: t('net.clients_one', 'klient'),
+      few: t('net.clients_few', 'klienti'),
+      other: t('net.clients', 'klientů'),
+    })[pluralForm(lang, n)];
   const lteOverall = lteVerdict(d.lte_rsrp, d.lte_rsrq, d.lte_sinr);
   const logSpan = logWindow(d.log_window_secs);
   const wg: any[] = Array.isArray(d.wireguard_peers) ? d.wireguard_peers : [];
@@ -2124,7 +2150,7 @@ function NetworkTab({
           id={NET_ANCHORS.wifi}
           tabIndex={-1}
           icon={Wifi}
-          title={`Wi-Fi (${d.wifi_clients_count ?? wifi.reduce((s, r) => s + (Number(r.clients) || 0), 0)} ${t('net.clients', 'klientů')})`}
+          title={wifiClients === null ? 'Wi-Fi' : `Wi-Fi (${wifiClients} ${wifiClientsWord(wifiClients)})`}
           className="scroll-mt-20 outline-none"
           bodyClassName="space-y-3"
         >

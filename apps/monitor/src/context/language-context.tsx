@@ -3895,6 +3895,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.reconnects': { cs: 'Reconnecty (od startu)', en: 'Reconnects (since boot)' },
   'net.last_reconnect': { cs: 'Poslední reconnect', en: 'Last reconnect' },
   'net.clients': { cs: 'klientů', en: 'clients' },
+  'net.clients_one': { cs: 'klient', en: 'client' },
+  'net.clients_few': { cs: 'klienti', en: 'clients' },
   'net.wifi6e_known': {
     cs: 'Podpora Wi-Fi 6E: {capable} z {known} klientů, u kterých ji router zná',
     en: 'Wi-Fi 6E support: {capable} of {known} clients the router knows it for',
