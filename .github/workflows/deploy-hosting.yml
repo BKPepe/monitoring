@@ -36,6 +36,10 @@ on:
       # the `decide status` regex below names it too.
       - 'scripts/assemble-agents.sh'
       - 'apps/monitor/**'
+      # The app's dependencies live in the root workspace files: a commit
+      # that only bumps them (a security fix) must still rebuild /app.
+      - 'package.json'
+      - 'package-lock.json'
       - 'root/**'
       - '.github/workflows/deploy-hosting.yml'
       - '.github/workflows/deploy-status.yml'
@@ -130,7 +134,7 @@ jobs:
             echo "$1: $on"
           }
           decide status '^(apps/status/|agents$|scripts/assemble-agents\.sh$|\.github/workflows/deploy-status\.yml$)'
-          decide app '^(apps/monitor/|\.github/workflows/deploy-app\.yml$)'
+          decide app '^(apps/monitor/|package(-lock)?\.json$|\.github/workflows/deploy-app\.yml$)'
           decide root '^(root/|\.github/workflows/deploy-root\.yml$)'
 
   # One part after another. `!cancelled()`: a failed part does not hold back

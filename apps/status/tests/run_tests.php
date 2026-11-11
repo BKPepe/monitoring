@@ -320,6 +320,12 @@ $aa_unwatched = array_values(array_filter($aa_used, fn($s) => !array_filter($aa_
     || $aa_decide === null || !preg_match('~' . $aa_decide . '~', $s)));
 check('změna skriptu, který deploy statusu spouští, deploy statusu spustí',
     [$aa_used !== [], $aa_paths !== [], $aa_decide !== null, $aa_unwatched], [true, true, true, []]);
+// R185: a commit that changes only the root workspace's package files
+// (a dependency bump) rebuilds and deploys /app.
+$aa_app = preg_match("~^\s*decide app '([^']+)'$~m", $aa_hosting, $aa_am) ? $aa_am[1] : null;
+check('bump závislostí v package(-lock).json nasadí /app',
+    array_map(fn ($f) => in_array($f, $aa_paths, true) && $aa_app !== null && preg_match('~' . $aa_app . '~', $f) === 1, ['package.json', 'package-lock.json']),
+    [true, true]);
 
 // --- bk_format_duration --------------------------------------------------
 check_true('trvání je neprázdný text', is_string(bk_format_duration(1800)) && bk_format_duration(1800) !== '');
