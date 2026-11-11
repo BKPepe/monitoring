@@ -17872,11 +17872,14 @@ function bk_rec_wifi_gen_label(?int $gen): string {
  *
  * The suggestion is always "the best prefix the card supports at the width it
  * runs now" (CORE 3.7); a rule that widens the channel passes the width it
- * wants. Never 160 MHz, and on 2.4 GHz never more than 20.
+ * wants. Never 160 MHz, and on 2.4 GHz never more than 20. Null for a width
+ * the generation does not have: HT ends at 40 MHz, and "HT80", a mode no
+ * router accepts, was what a Wi-Fi 4 radio on 5 GHz was told to set.
  */
 function bk_rec_htmode(?int $gen, ?int $width): ?string {
     $prefix = [4 => 'HT', 5 => 'VHT', 6 => 'HE', 7 => 'EHT'];
-    if ($gen === null || !isset($prefix[$gen]) || $width === null || $width <= 0) {
+    $widest = [4 => 40, 5 => 160, 6 => 160, 7 => 320];
+    if ($gen === null || !isset($prefix[$gen]) || $width === null || $width <= 0 || $width > $widest[$gen]) {
         return null;
     }
     return $prefix[$gen] . (string)(int)$width;
@@ -18086,7 +18089,9 @@ function bk_rec_rules_wifi(array $in, array $state): array {
             && $profile['width_mhz'] < 80 && ($profile['supported_width_mhz'] ?? 0) >= 80) {
             $busy_band = $sfx !== null ? bk_rec_week_stat($w, 'wifi_busy_' . $sfx) : ['value' => null, 'days' => 0];
             $busy_val = $busy_band['days'] >= $th['min_days'] ? $busy_band['value'] : null;
-            $suggested = bk_rec_htmode($profile['generation'], 80);
+            // The radio's own generation, or - when that one has no 80 MHz
+            // (Wi-Fi 4) - the best the card supports on this band.
+            $suggested = bk_rec_htmode($profile['generation'], 80) ?? bk_rec_htmode($profile['supported_generation'], 80);
             if ($suggested !== null && ($busy_val === null || $busy_val < $th['wifi_channel_narrow']['busy_below'])) {
                 $items[] = bk_rec_item('wifi_channel_narrow', 'wifi_channel_narrow' . $rk, 'wifi', 'info', $subject,
                     ['band_id' => $band, 'ch' => $ch, 'w' => $profile['width_mhz'], 'suggested' => $suggested]);

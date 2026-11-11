@@ -5311,6 +5311,11 @@ check('výpadek, který běžel už na začátku okna, nemá začátek', bk_outa
     [['monitor_id' => 3, 'started' => null, 'secs' => 60, 'first_down' => 60, 'ongoing' => false]]);
 check('bez výpadku žádný', bk_outage_runs([1 => ['from' => 0, 'segments' => [[0, 60, 'up'], [60, 90, 'warning']]]]), []);
 
+// --- The htmode a router recommendation names (R204) ---------------------------
+check('režim jen se šířkou, kterou generace má: HT80 neexistuje', [
+    bk_rec_htmode(4, 40), bk_rec_htmode(4, 80), bk_rec_htmode(5, 80), bk_rec_htmode(6, 160), bk_rec_htmode(7, 320), bk_rec_htmode(null, 80),
+], ['HT40', null, 'VHT80', 'HE160', 'EHT320', null]);
+
 // --- health.php: the error log check (R281) ------------------------------------
 bk_test_load_functions(__DIR__ . '/../health.php', ['bk_error_log_writable']);
 $el_dir = sys_get_temp_dir() . '/bk_r281_' . getmypid();
