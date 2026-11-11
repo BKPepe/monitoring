@@ -2605,6 +2605,35 @@ function bk_uptime_totals(array $parts): array {
 }
 
 /**
+ * The outages in each monitor's segments (bk_uptime_segments_for): one per run
+ * of down or silent time, so a 20-minute outage checked every minute is one
+ * outage and not twenty. Time nobody measured neither ends nor starts a run.
+ * 'started' is the run's first second, or null when it was already running
+ * when the stretch began.
+ *
+ * @param array<int, array{from:int, segments:list<array{0:int,1:int,2:string}>}> $by_monitor
+ * @return list<array{monitor_id:int, started:?int}>
+ */
+function bk_outage_runs(array $by_monitor): array {
+    $runs = [];
+    foreach ($by_monitor as $mid => $m) {
+        $in_run = false;
+        foreach ($m['segments'] ?? [] as $seg) {
+            $class = (string)$seg[2];
+            if ($class === 'unmeasured') {
+                continue;
+            }
+            $outage = $class === 'down' || $class === 'silent';
+            if ($outage && !$in_run) {
+                $runs[] = ['monitor_id' => (int)$mid, 'started' => (int)$seg[0] > (int)($m['from'] ?? PHP_INT_MIN) ? (int)$seg[0] : null];
+            }
+            $in_run = $outage;
+        }
+    }
+    return $runs;
+}
+
+/**
  * An availability percentage rounded for display, without rounding a failure
  * away: a value below 100 stays below 100 at the given precision (99.954 at
  * one decimal is 99.9, not 100.0). $failed says something failed in the
@@ -14178,20 +14207,16 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     }
     $dg_pct = bk_uptime_totals(array_values($dg_time))['pct'];
     $availability = $dg_pct !== null ? round($dg_pct, 3) : null;
-    // The incident count: 'down' rows, but not a remote probe's (source
-    // 'probe'), which confirms no outage; its rows still count in the checks
-    // above. A query of its own: source is in no index, and in the one above
-    // it would turn the read of idx_logs_regions into a read of every row of
-    // the period, fleet-wide. Here only the 'down' rows are looked up - on
-    // idx_logs_regions, forced: left alone, MySQL 8.4 scanned the whole table
-    // (1.04 M rows against 3,168 index reads on a month of 20 monitors).
-    $stmt_incidents = $pdo->prepare("
-        SELECT COUNT(*) FROM monitor_logs FORCE INDEX (idx_logs_regions)
-        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND status = 'down'
-          AND (source IS NULL OR source <> 'probe') AND {$dg_active}
-    ");
-    $stmt_incidents->execute(array_merge([$days], $dg_active_params));
-    $incident_count = (int)$stmt_incidents->fetchColumn();
+    // The incident count: outages, not 'down' rows. One 20-minute outage was
+    // "Incidenty: 20" and took the score's incident part to 0. Over the same
+    // calendar days as the availability, a monitor at a time: a month of
+    // segments of the whole fleet at once would not fit a hosting's memory.
+    $dg_from = strtotime('-' . ($days - 1) . ' day', strtotime('today'));
+    $dg_runs = [];
+    foreach ($dg_ids as $dg_mid) {
+        array_push($dg_runs, ...bk_outage_runs(bk_uptime_segments_for($pdo, $dg_from, time(), [$dg_mid])));
+    }
+    $incident_count = count($dg_runs);
     $avg_latency = $overall['avg_latency'] !== null ? (int)round($overall['avg_latency']) : null;
 
     // --- Agents (only those that ever actually reported - same logic as index.php) ---
@@ -14644,7 +14669,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     ];
 
     if ($period === 'monthly') {
-        $data['monthly'] = build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $score, $event_counts);
+        $data['monthly'] = build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $score, $event_counts, $dg_runs);
     }
 
     // --- Store the snapshot for the next period (availability, latency, score, regions, ...) ---
@@ -14673,7 +14698,7 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
 /**
  * Extra sections for the monthly report only (SLA, best/worst day, heatmaps, growth).
  */
-function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $score, $event_counts) {
+function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $score, $event_counts, array $outage_runs = []) {
     $sla_goal = (float)get_setting('sla_goal_pct', '99.95');
 
     // Best/worst day (the ratio is computed in PHP, not in ORDER BY - same reason as worst monitors above)
@@ -14705,26 +14730,18 @@ function build_monthly_digest_extras($pdo, $days, $regions, $prev_snapshot, $sco
         if ($worst_region === null || $r['uptime'] < $worst_region['uptime']) $worst_region = $r;
     }
 
-    // Incident heatmap by day of week (aggregated over the whole month): like
-    // the incident count, a remote probe's 'down' rows are not one, and like
-    // it the index is forced (the planner took a full table scan).
-    $stmt_dow = $pdo->prepare("
-        SELECT DAYOFWEEK(checked_at) as dow, COUNT(*) as cnt
-        FROM monitor_logs FORCE INDEX (idx_logs_regions)
-        WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND status = 'down'
-          AND (source IS NULL OR source <> 'probe')
-        GROUP BY DAYOFWEEK(checked_at)
-    ");
-    $stmt_dow->execute([$days]);
-    // MySQL DAYOFWEEK: 1=Sunday..7=Saturday -> mapped to neutral mon-sun keys.
+    // Incident heatmap by day of week: the outages that began in the period, on
+    // the day they began. It counted 'down' rows, so one two-hour outage put
+    // 120 into its day.
     // The keys must stay language-neutral (not Czech day abbreviations), because translation
     // happens at render time (render_digest_html) - otherwise switching email_lang
     // to 'en' would have to change this array's structure, not just the displayed label.
-    $dow_map = [2 => 'mon', 3 => 'tue', 4 => 'wed', 5 => 'thu', 6 => 'fri', 7 => 'sat', 1 => 'sun'];
+    $dow_map = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
     $incident_heatmap = ['mon' => 0, 'tue' => 0, 'wed' => 0, 'thu' => 0, 'fri' => 0, 'sat' => 0, 'sun' => 0];
-    foreach ($stmt_dow->fetchAll() as $row) {
-        $label = $dow_map[(int)$row['dow']] ?? null;
-        if ($label !== null) $incident_heatmap[$label] = (int)$row['cnt'];
+    foreach ($outage_runs as $run) {
+        if ($run['started'] !== null) {
+            $incident_heatmap[$dow_map[(int)date('w', $run['started'])]]++;
+        }
     }
 
     // Latency heatmap - from the regions, coloured by band

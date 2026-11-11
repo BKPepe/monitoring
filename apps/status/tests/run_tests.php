@@ -5277,6 +5277,16 @@ check('úryvek: krátká a obyčejná slova zůstanou čitelná', array_map('bk_
     'Ah', 'Warning', "Ahoj\n", 'pw=hunter hunter',
 ]), ['Ah', 'Warning', 'Ahoj\\n', '••• hunter']);
 
+// --- Outages, not rows (R151, R256) --------------------------------------------
+$or_segs = [[0, 60, 'up'], [60, 120, 'down'], [120, 180, 'down'], [180, 200, 'unmeasured'], [200, 260, 'down'],
+    [260, 300, 'up'], [300, 360, 'silent'], [360, 400, 'maintenance'], [400, 460, 'down']];
+check('výpadky: běh dole i s mezerou v měření je jeden, ticho agenta a další výpadek po údržbě dva další',
+    bk_outage_runs([7 => ['from' => 0, 'segments' => $or_segs]]),
+    [['monitor_id' => 7, 'started' => 60], ['monitor_id' => 7, 'started' => 300], ['monitor_id' => 7, 'started' => 400]]);
+check('výpadek, který běžel už na začátku okna, nemá začátek', bk_outage_runs([3 => ['from' => 60, 'segments' => [[60, 120, 'down'], [120, 180, 'up']]]]),
+    [['monitor_id' => 3, 'started' => null]]);
+check('bez výpadku žádný', bk_outage_runs([1 => ['from' => 0, 'segments' => [[0, 60, 'up'], [60, 90, 'warning']]]]), []);
+
 // --- A JavaScript string inside an HTML attribute (R331) ----------------------
 foreach (["O'Brien", "x');alert(1);//", 'a"b<c>&d', 'Žluťoučký kůň', ''] as $js_in) {
     $js_out = bk_js_arg($js_in);

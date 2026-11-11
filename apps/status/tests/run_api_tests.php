@@ -5924,6 +5924,22 @@ if (isset($cookie_jar)) {
     check('nové servery ze stejné sekundy: pozdější řádek první, pokaždé stejně', $dg_tie_names, ['Souběh B', 'Souběh A']);
     $pdo->exec("DELETE FROM monitor_events WHERE monitor_name LIKE 'Souběh %'");
 
+    // R151, R256: twenty 'down' rows of one outage were twenty incidents.
+    $dg151_base = build_digest_data($pdo, 'monthly', false);
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, created_at) VALUES (9151, 'R151', 'web', 'https://r151.example.test', 'up', NOW() - INTERVAL 1 DAY)");
+    $dg151_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES (9151, ?, FROM_UNIXTIME(?))");
+    $dg151_t0 = time() - 3600;
+    $dg151_ins->execute(['up', $dg151_t0 - 60]);
+    for ($i = 0; $i < 20; $i++) {
+        $dg151_ins->execute(['down', $dg151_t0 + $i * 60]);
+    }
+    $dg151_ins->execute(['up', $dg151_t0 + 1200]);
+    $dg151 = build_digest_data($pdo, 'monthly', false);
+    check('dvacet řádků jednoho výpadku je jeden incident', $dg151['incident_count'] - $dg151_base['incident_count'], 1);
+    check('mapa incidentů dá výpadku jedno políčko', array_sum($dg151['monthly']['incident_heatmap'] ?? []) - array_sum($dg151_base['monthly']['incident_heatmap'] ?? []), 1);
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9151");
+    $pdo->exec("DELETE FROM monitors WHERE id = 9151");
+
     $digest_en = $digest_preview('en');
     check_true('EN digest se vyrenderoval', str_contains($digest_en, 'Weekly Report'));
     // DB data stays in its original language - only the template translates.
