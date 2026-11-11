@@ -2006,12 +2006,21 @@ if ($action === 'process_top') {
             exit;
         }
         $col = $pt_kind === 'ram' ? 'ram_mb' : 'cpu_pct';
+        // The average is over every sampled minute of the window, a minute a
+        // process was not among the top ten counting as zero. Over its own
+        // minutes only, a one-minute spike of 95 % outranked 40 % all day.
+        $stmt_minutes = $pdo->prepare("
+            SELECT COUNT(DISTINCT sampled_at) FROM process_samples
+            WHERE monitor_id = ? AND kind = ? AND sampled_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+        ");
+        $stmt_minutes->execute([$pt_monitor, $pt_kind, $pt_minutes]);
+        $pt_sampled = max(1, (int)$stmt_minutes->fetchColumn());
         // Grouped by process NAME, not pid: a service that restarts keeps
         // eating the same machine under a new pid, and a per-pid ranking would
         // split it into a dozen harmless-looking rows.
         $stmt = $pdo->prepare("
             SELECT name,
-                   AVG({$col}) AS avg_val,
+                   SUM({$col}) AS sum_val,
                    MAX({$col}) AS max_val,
                    COUNT(*) AS samples,
                    MAX(sampled_at) AS last_seen
@@ -2020,7 +2029,7 @@ if ($action === 'process_top') {
               AND sampled_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
               AND {$col} IS NOT NULL
             GROUP BY name
-            ORDER BY avg_val DESC
+            ORDER BY sum_val DESC
             LIMIT 12
         ");
         $stmt->execute([$pt_monitor, $pt_kind, $pt_minutes]);
@@ -2028,7 +2037,7 @@ if ($action === 'process_top') {
         foreach ($stmt->fetchAll() as $r) {
             $rows[] = [
                 'name' => (string)$r['name'],
-                'avg' => round((float)$r['avg_val'], 2),
+                'avg' => round((float)$r['sum_val'] / $pt_sampled, 2),
                 'max' => round((float)$r['max_val'], 2),
                 'samples' => (int)$r['samples'],
                 'lastSeenIso' => date('c', strtotime((string)$r['last_seen'])),
@@ -2038,6 +2047,8 @@ if ($action === 'process_top') {
             'enabled' => true,
             'kind' => $pt_kind,
             'minutes' => $pt_minutes,
+            // The minutes the averages are over: those with any sample.
+            'sampledMinutes' => $pt_sampled,
             'processes' => $rows,
         ], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {

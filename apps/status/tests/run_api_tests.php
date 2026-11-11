@@ -5728,6 +5728,19 @@ if ($logged_in) {
     check('nejžravější je první', $pt['processes'][0]['name'] ?? null, 'hogger');
     check_true('a nese průměr i špičku', ($pt['processes'][0]['max'] ?? 0) >= ($pt['processes'][0]['avg'] ?? 0));
     check_true('pět vzorků pod jedním jménem, ne pět řádků', ($pt['processes'][0]['samples'] ?? 0) === 5);
+    // R300: the average counted only the minutes a process was in the top
+    // ten, so a one-minute spike outranked a load that lasted all day.
+    $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
+    for ($i = 1; $i <= 10; $i++) {
+        $pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb)
+                    VALUES (2, DATE_SUB(NOW(), INTERVAL {$i} MINUTE), 'cpu', 'steady', 300, 40, NULL)");
+    }
+    $pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb)
+                VALUES (2, DATE_SUB(NOW(), INTERVAL 3 MINUTE), 'cpu', 'spike', 400, 95, NULL)");
+    [, $pt2] = api_get_auth($base, 'action=process_top&monitor_id=2&kind=cpu&minutes=1440', $cookie_jar);
+    check('průměr je za celé okno: celodenní zátěž před minutovou špičkou',
+        array_map(fn ($p) => [$p['name'] ?? null, $p['avg'] ?? null, $p['max'] ?? null], $pt2['processes'] ?? []),
+        [['steady', 40, 40], ['spike', 9.5, 95]]);
     $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
 
     // Denní provoz per rozhraní: tabulka ho drží dávno, četl ho jen součet.

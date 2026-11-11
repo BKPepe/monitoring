@@ -2414,8 +2414,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: '1 = alert on the first failed check. One failed check is often a retried connection, a slow DNS answer or a dropped packet. Every one is recorded either way; only the verdict waits.',
   },
   'proctop.hint': {
-    cs: 'Průměr a špička za období, ne jen poslední hlášení. Proces, který si skočí každých deset minut, se ve snímku nikdy neukáže.',
-    en: 'The average and the peak over the window, not just the last report. A process that spikes every ten minutes never shows up in a snapshot.',
+    cs: 'Průměr a špička za období, ne jen poslední hlášení. Průměr je přes všechny minuty období; minuta, kdy proces nebyl mezi deseti největšími, se počítá jako nula, takže krátká špička nepředběhne celodenní zátěž.',
+    en: 'The average and the peak over the window, not just the last report. The average is over every minute of the window; a minute the process was not among the ten largest counts as zero, so a short spike does not outrank a load that lasted all day.',
   },
   'proctop.cpu': { cs: 'Procesor', en: 'Processor' },
   'infra.own_channels': { cs: 'Vlastní kanály pro tenhle monitor', en: 'Channels for this monitor' },
