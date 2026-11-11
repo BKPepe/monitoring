@@ -3906,6 +3906,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   },
   'asset.missing_processes': { cs: 'Neběží hlídané procesy', en: 'Watched processes not running' },
   'asset.ts3_process_title': { cs: 'Proces ts3server', en: 'ts3server process' },
+  'asset.ts3_threads': { cs: '{n} vláken', en: '{n} threads' },
   'asset.tab_network': { cs: 'Síť', en: 'Network' },
   'net.wan_title': { cs: 'WAN připojení', en: 'WAN connection' },
   'net.proto': { cs: 'Protokol', en: 'Protocol' },
@@ -4121,6 +4122,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'net.service_restarts': { cs: 'Restarty služeb (od startu agenta):', en: 'Service restarts (since agent start):' },
   'net.dns_latency': { cs: 'Latence dotazu', en: 'Query latency' },
   'net.oom_kills': { cs: 'OOM kills (od startu)', en: 'OOM kills (since boot)' },
+  'net.tailscale_peers': { cs: '{n} peerů', en: '{n} peers' },
+  'net.ups_battery': { cs: 'baterie {n} %', en: 'battery {n} %' },
   'net.boot_time': { cs: 'Systém běží od', en: 'System up since' },
   'net.usb_devices': { cs: 'USB zařízení', en: 'USB devices' },
   // Rows of release 0.1.7 that are not mapped metrics: the router's own

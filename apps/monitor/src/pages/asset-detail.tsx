@@ -730,7 +730,8 @@ export function AssetDetailPage() {
                   PID {asset.rawDetails.ts3_process.pid ?? '—'}
                   {asset.rawDetails.ts3_process.cpu != null && ` · CPU ${asset.rawDetails.ts3_process.cpu} %`}
                   {asset.rawDetails.ts3_process.ram_mb != null && ` · RAM ${asset.rawDetails.ts3_process.ram_mb} MB`}
-                  {asset.rawDetails.ts3_process.threads != null && ` · ${asset.rawDetails.ts3_process.threads} vláken`}
+                  {asset.rawDetails.ts3_process.threads != null &&
+                    ` · ${t('asset.ts3_threads', { n: asset.rawDetails.ts3_process.threads }, `${asset.rawDetails.ts3_process.threads} vláken`)}`}
                   {asset.rawDetails.ts3_process.uptime_sec != null &&
                     ` · uptime ${Math.round(asset.rawDetails.ts3_process.uptime_sec / 3600)} h`}
                 </p>
@@ -952,7 +953,7 @@ export function AssetDetailPage() {
                             {asset.sslCert.valid_to && (
                               <p>
                                 {t('asset.ssl_valid_until', 'Platnost do:')}{' '}
-                                {new Date(asset.sslCert.valid_to).toLocaleDateString('cs-CZ')}
+                                {new Date(asset.sslCert.valid_to).toLocaleDateString(localeFor(lang))}
                               </p>
                             )}
                           </div>
@@ -2371,7 +2372,7 @@ function NetworkTab({
               label="Tailscale"
               value={
                 d.tailscale_up != null
-                  ? `${d.tailscale_up ? t('common.online', 'Online') : t('common.offline', 'Offline')}${d.tailscale_peers != null ? ` · ${d.tailscale_peers} peerů` : ''}`
+                  ? `${d.tailscale_up ? t('common.online', 'Online') : t('common.offline', 'Offline')}${d.tailscale_peers != null ? ` · ${t('net.tailscale_peers', { n: d.tailscale_peers }, `${d.tailscale_peers} peerů`)}` : ''}`
                   : null
               }
             />
@@ -2630,14 +2631,16 @@ function NetworkTab({
             <Row
               label={t('net.boot_time', 'Systém běží od')}
               value={
-                d.boot_time != null && d.boot_time > 0 ? new Date(d.boot_time * 1000).toLocaleString('cs-CZ') : null
+                d.boot_time != null && d.boot_time > 0
+                  ? new Date(d.boot_time * 1000).toLocaleString(localeFor(lang))
+                  : null
               }
             />
             <Row
               label="UPS"
               value={
                 d.ups_status != null
-                  ? `${d.ups_status}${d.ups_battery_pct != null ? ` · baterie ${d.ups_battery_pct} %` : ''}`
+                  ? `${d.ups_status}${d.ups_battery_pct != null ? ` · ${t('net.ups_battery', { n: d.ups_battery_pct }, `baterie ${d.ups_battery_pct} %`)}` : ''}`
                   : null
               }
             />
@@ -3125,7 +3128,7 @@ function buildDynamicAsset(
   // column and was cut mid-date. The relative part already answers "when", so
   // the absolute one keeps the minute and drops the seconds.
   const stamp = (iso: string) =>
-    new Date(iso).toLocaleString('cs-CZ', {
+    new Date(iso).toLocaleString(localeFor(numLang), {
       day: 'numeric',
       month: 'numeric',
       year: 'numeric',
