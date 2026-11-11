@@ -181,12 +181,17 @@ async function request<T>(action: string, init?: RequestInit): Promise<T> {
     ...init,
   });
 
-  const data = await res.json().catch(() => ({}));
+  // A body that is not JSON was {} - on a 200 (a hosting's page in place of
+  // api.php) that read as an empty list, "0 monitors", or a save that worked.
+  const data = await res.json().catch(() => undefined);
+  if (data === undefined && res.ok) {
+    throw new ApiError(`Server neposlal čitelnou odpověď (HTTP ${res.status}).`, res.status);
+  }
 
   if (!res.ok) {
     throw new ApiError(
-      (data as { error?: string; message?: string }).message ??
-        (data as { error?: string }).error ??
+      (data as { error?: string; message?: string } | undefined)?.message ??
+        (data as { error?: string } | undefined)?.error ??
         `HTTP ${res.status}`,
       res.status
     );
