@@ -204,11 +204,14 @@ function CountTile({
   severity,
   count,
   devices,
+  incomplete,
 }: {
   severity: Severity;
   count: number;
   /** On how many devices. */
   devices: number;
+  /** A source failed: a zero is not "none" (R64). */
+  incomplete: boolean;
 }) {
   const { t } = useLanguage();
   const meta = SEVERITY[severity];
@@ -225,7 +228,9 @@ function CountTile({
         <p className="text-muted-foreground mt-0.5 hidden truncate text-2xs sm:block">
           {count > 0
             ? t('insights.tile_devices', { n: devices }, `zařízení: ${devices}`)
-            : t('insights.tile_none', 'nic takového teď není')}
+            : incomplete
+              ? t('insights.tile_incomplete', 'seznam není úplný')
+              : t('insights.tile_none', 'nic takového teď není')}
         </p>
       </div>
     </div>
@@ -327,9 +332,15 @@ export function InsightsPage() {
       {header}
 
       <div className="grid grid-cols-3 gap-2 sm:gap-3">
-        <CountTile severity="critical" count={data.counts?.critical ?? 0} devices={onDevices('critical')} />
-        <CountTile severity="warning" count={data.counts?.warning ?? 0} devices={onDevices('warning')} />
-        <CountTile severity="info" count={data.counts?.info ?? 0} devices={onDevices('info')} />
+        {(['critical', 'warning', 'info'] as const).map((s) => (
+          <CountTile
+            key={s}
+            severity={s}
+            count={data.counts?.[s] ?? 0}
+            devices={onDevices(s)}
+            incomplete={failedSources}
+          />
+        ))}
       </div>
 
       <SourceErrors data={data} />
@@ -390,7 +401,8 @@ export function InsightsPage() {
         </div>
       )}
 
-      {others > 0 && (
+      {/* "Without findings" only where every source answered. */}
+      {others > 0 && !failedSources && (
         <p className="text-muted-foreground figure text-center text-xs">
           {t('findings.others_clean', { n: others }, `Ostatní zařízení bez nálezů (${others})`)}
         </p>

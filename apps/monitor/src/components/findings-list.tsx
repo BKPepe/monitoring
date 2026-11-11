@@ -275,7 +275,7 @@ export function FindingsList({
           </section>
         ))
       )}
-      {density === 'all' && others > 0 && (
+      {density === 'all' && others > 0 && (data.sourceErrors ?? []).length === 0 && (
         <p className="text-muted-foreground text-xs">
           {t('findings.others_clean', { n: others }, `Ostatní zařízení bez nálezů (${others})`)}
         </p>

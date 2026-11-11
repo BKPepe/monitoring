@@ -5012,6 +5012,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'insights.src_agent': { cs: 'Agenti', en: 'Agents' },
   'insights.tile_devices': { cs: 'zařízení: {n}', en: 'devices: {n}' },
   'insights.tile_none': { cs: 'nic takového teď není', en: 'none right now' },
+  'insights.tile_incomplete': { cs: 'seznam není úplný', en: 'the list is incomplete' },
   'insights.filter_severity': { cs: 'Závažnost', en: 'Severity' },
   'insights.filter_source': { cs: 'Zdroj', en: 'Source' },
   'insights.shown_count': { cs: 'upozornění: {n}', en: 'alerts: {n}' },
