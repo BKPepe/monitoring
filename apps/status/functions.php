@@ -3530,11 +3530,21 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
         }
         // CPU high + wireguard -> WG throughput context
         if (isset($details['cpu']) && floatval($details['cpu']) > 70 && stripos($top_proc_name, 'wireguard') !== false) {
-            $wg_rx = 0; $wg_tx = 0;
-            if (!empty($details['wireguard_peers']) && is_array($details['wireguard_peers'])) {
-                foreach ($details['wireguard_peers'] as $p) { if (isset($p['rx_bytes'])) { $wg_rx += (int)$p['rx_bytes']; } if (isset($p['tx_bytes'])) { $wg_tx += (int)$p['tx_bytes']; } }
+            // The peers' counters run from when the tunnel came up: a total,
+            // not a rate, so the tip no longer calls it throughput. Without a
+            // peer that reported them it says no number - it printed 0 MB.
+            $wg_rx = []; $wg_tx = [];
+            foreach ((array)($details['wireguard_peers'] ?? []) as $p) {
+                if (is_array($p) && is_numeric($p['rx_bytes'] ?? null) && is_numeric($p['tx_bytes'] ?? null)) {
+                    $wg_rx[] = (int)$p['rx_bytes'];
+                    $wg_tx[] = (int)$p['tx_bytes'];
+                }
             }
-            $add('warn', 'knowledge_tip_ow_wg_cpu', $top_proc_cpu, round($wg_rx / 1048576, 1), round($wg_tx / 1048576, 1));
+            if ($wg_rx !== []) {
+                $add('warn', 'knowledge_tip_ow_wg_cpu', $top_proc_cpu, round(array_sum($wg_rx) / 1048576, 1), round(array_sum($wg_tx) / 1048576, 1));
+            } else {
+                $add('warn', 'knowledge_tip_ow_wg_cpu_nocount', $top_proc_cpu);
+            }
         }
         // CPU high + dnsmasq -> DNS query rate context
         if (isset($details['cpu']) && floatval($details['cpu']) > 70 && stripos($top_proc_name, 'dnsmasq') !== false) {

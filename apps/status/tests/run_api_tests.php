@@ -4757,6 +4757,15 @@ check_true('tip pro hostapd bez nahlášeného počtu klientů žádný počet n
     str_contains($hostapd_tips(['wifi_radios' => [['band' => '5GHz', 'clients' => null]]]), 'hostapd')
     && !str_contains($hostapd_tips(['wifi_radios' => [['band' => '5GHz', 'clients' => null]]]), 'Wi-Fi klientů'));
 check_true('nahlášený počet tip sečte', str_contains($hostapd_tips(['wifi_radios' => [['clients' => 3], ['clients' => null], ['clients' => '2']]]), 'Wi-Fi klientů: 5'));
+// R260: WireGuard's counters are totals since the tunnel came up, not
+// "Průchod", and a tunnel without them read "RX 0 MB / TX 0 MB".
+$wg_details = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'wireguard', 'cpu' => 70.0, 'ram_mb' => 2.0]]];
+$wg_tips = fn (array $extra): string => implode(' | ', array_column(bk_get_knowledge_tips($mon_high, $wg_details + $extra, [], 'up', [], $pdo), 'text'));
+check_true('tip pro WireGuard bez čítačů žádné MB nevymyslí',
+    str_contains($wg_tips(['wireguard_peers' => [['rx_bytes' => null]]]), 'WireGuard') && !str_contains($wg_tips(['wireguard_peers' => [['rx_bytes' => null]]]), 'MB'));
+check_true('s čítači řekne, že jde o přenos od spuštění, ne průchod',
+    str_contains($wg_tips(['wireguard_peers' => [['rx_bytes' => 10485760, 'tx_bytes' => 5242880]]]), 'Přeneseno od spuštění tunelů: RX 10 MB / TX 5 MB')
+    && !str_contains($wg_tips(['wireguard_peers' => [['rx_bytes' => 10485760, 'tx_bytes' => 5242880]]]), 'Průchod'));
 
 // --- Knowledge tips: the threshold comes from the monitor's settings ------
 //

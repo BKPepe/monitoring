@@ -745,7 +745,8 @@ return [
     // OpenWrt service-specific knowledge tips
     'knowledge_tip_ow_hostapd_cpu' => 'CPU is loaded by hostapd (%s%%). Wi-Fi clients: %d. Check band utilization.',
     'knowledge_tip_ow_hostapd_cpu_nocount' => 'CPU is loaded by hostapd (%s%%). Check band utilization.',
-    'knowledge_tip_ow_wg_cpu' => 'CPU is loaded by WireGuard (%s%%). Throughput: RX %s MB / TX %s MB.',
+    'knowledge_tip_ow_wg_cpu' => 'CPU is loaded by WireGuard (%s%%). Transferred since the tunnels came up: RX %s MB / TX %s MB.',
+    'knowledge_tip_ow_wg_cpu_nocount' => 'CPU is loaded by WireGuard (%s%%).',
     'knowledge_tip_ow_dns_cpu' => 'CPU is loaded by dnsmasq (%s%%). DNS queries: %d. Consider cache optimization.',
     'knowledge_tip_ow_dns_cpu_nocount' => 'CPU is loaded by dnsmasq (%s%%). Consider cache optimization.',
 
