@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { useLanguage } from '@/context/language-context';
 import { httpMetricsSource } from './http-source';
+import { uiText } from './ui-text';
 import type { ChartData, PublicStatus, TimeRange, PublicStatusScope } from './types';
 
 /** Inputs for the device charts. */
@@ -25,7 +26,7 @@ export function useAssetCharts(monitorId: number, range: TimeRange) {
         if (active) setData(result);
       })
       .catch((err: unknown) => {
-        if (active) setError(err instanceof Error ? err : new Error('Načtení selhalo'));
+        if (active) setError(err instanceof Error ? err : new Error(uiText('Načtení selhalo', 'Loading failed')));
       });
 
     return () => {
@@ -84,7 +85,7 @@ export function usePublicStatus(refreshMs?: number, scope: PublicStatusScope = '
         .catch((err: unknown) => {
           // Deliberately does NOT clear `data`: one failed background refresh
           // must not blank a page that still holds valid last-known state.
-          if (active) setError(err instanceof Error ? err : new Error('Načtení selhalo'));
+          if (active) setError(err instanceof Error ? err : new Error(uiText('Načtení selhalo', 'Loading failed')));
         });
     };
 

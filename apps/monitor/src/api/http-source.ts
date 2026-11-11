@@ -1,6 +1,7 @@
 import { windowFor } from '@/lib/chart-window';
 import { metricTone } from '@/lib/metric-tone';
 import { insertGaps } from '@/lib/series-gaps';
+import { uiLang, uiText } from './ui-text';
 import type {
   ChartData,
   MetricDetail,
@@ -65,15 +66,6 @@ const CHART_METRICS: {
   // line at the bottom, so both bounds come from the data.
   { key: 'temperature_c', title: 'Teplota CPU (°C)', yMax: null, yMin: null },
 ];
-
-/**
- * The UI language for the server's metric labels (charts-22: an English page
- * titled its charts "Využití CPU"). LanguageProvider keeps <html lang> in step
- * with the chosen language, so this module needs no React context.
- */
-function uiLang(): 'cs' | 'en' {
-  return typeof document !== 'undefined' && document.documentElement.lang === 'en' ? 'en' : 'cs';
-}
 
 /** Response of `action=metric_series_batch` - all device charts in one request. */
 interface MetricSeriesBatchResponse {
@@ -145,7 +137,7 @@ export const httpMetricsSource = {
     // PHP encodes an empty map as [], so an array is a real empty answer; a
     // missing or scalar `series` is a broken one.
     if (batch == null || batch.series == null || typeof batch.series !== 'object') {
-      throw new Error('Neplatná odpověď metric_series_batch.');
+      throw new Error(uiText('Neplatná odpověď metric_series_batch.', 'Invalid metric_series_batch answer.'));
     }
 
     const validCharts: ChartData[] = [];
@@ -241,7 +233,7 @@ export const httpMetricsSource = {
     // metric), a broken shape is not - it would surface in the chart as "no
     // data" and hide the actual error.
     if (!Array.isArray(res?.points)) {
-      throw new Error(res?.error ?? 'Neplatná odpověď metric_series.');
+      throw new Error(res?.error ?? uiText('Neplatná odpověď metric_series.', 'Invalid metric_series answer.'));
     }
     return res;
   },
@@ -251,7 +243,7 @@ export const httpMetricsSource = {
       `api.php?action=metric_heatmap&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&days=${days}&lang=${uiLang()}`
     );
     if (!Array.isArray(res?.days)) {
-      throw new Error(res?.error ?? 'Neplatná odpověď metric_heatmap.');
+      throw new Error(res?.error ?? uiText('Neplatná odpověď metric_heatmap.', 'Invalid metric_heatmap answer.'));
     }
     return res;
   },
@@ -267,7 +259,9 @@ export const httpMetricsSource = {
       `api.php?action=metric_correlations&monitor_id=${monitorId}&metric=${encodeURIComponent(metric)}&period=${range}${all ? '&all=1' : ''}&lang=${uiLang()}`
     );
     if (!Array.isArray(res?.correlations)) {
-      throw new Error(res?.error ?? 'Neplatná odpověď metric_correlations.');
+      throw new Error(
+        res?.error ?? uiText('Neplatná odpověď metric_correlations.', 'Invalid metric_correlations answer.')
+      );
     }
     return res;
   },
@@ -275,7 +269,7 @@ export const httpMetricsSource = {
   async getLinkTraffic(monitorId: number, days = 30): Promise<LinkTrafficResponse> {
     const res = await getJson<LinkTrafficResponse>(`api.php?action=link_traffic&monitor_id=${monitorId}&days=${days}`);
     if (!Array.isArray(res?.wan_down_periods)) {
-      throw new Error(res?.error ?? 'Neplatná odpověď link_traffic.');
+      throw new Error(res?.error ?? uiText('Neplatná odpověď link_traffic.', 'Invalid link_traffic answer.'));
     }
     return res;
   },
@@ -287,7 +281,12 @@ export const httpMetricsSource = {
     // null when there's no data yet (new install, dead cron), so they're not
     // required here - defaulting them to a number would fabricate a reading.
     if (typeof raw?.totalMonitors !== 'number') {
-      throw new Error('Neplatná odpověď z /status API (chybí povinná pole).');
+      throw new Error(
+        uiText(
+          'Neplatná odpověď z /status API (chybí povinná pole).',
+          'Invalid answer from the /status API (required fields missing).'
+        )
+      );
     }
     // The verdict as the server gave it. Everything but 'degraded' used to
     // become 'healthy', so a stopped collector's 'unknown' read as all clear;

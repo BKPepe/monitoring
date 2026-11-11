@@ -1,6 +1,7 @@
 import { parseFleetHealth, type FleetHealth } from '@/lib/health';
 import { STATUS_API } from './http-source';
 import { requestSessionRecheck } from './session-recheck';
+import { uiText } from './ui-text';
 import type {
   FindingsResponse,
   OutgoingMessagePage,
@@ -187,7 +188,13 @@ async function request<T>(action: string, init?: RequestInit): Promise<T> {
   // api.php) that read as an empty list, "0 monitors", or a save that worked.
   const data = await res.json().catch(() => undefined);
   if (data === undefined && res.ok) {
-    throw new ApiError(`Server neposlal čitelnou odpověď (HTTP ${res.status}).`, res.status);
+    throw new ApiError(
+      uiText(
+        `Server neposlal čitelnou odpověď (HTTP ${res.status}).`,
+        `The server sent no readable answer (HTTP ${res.status}).`
+      ),
+      res.status
+    );
   }
 
   if (!res.ok) {
@@ -205,7 +212,10 @@ async function request<T>(action: string, init?: RequestInit): Promise<T> {
 function mutate<T>(action: string, body: unknown): Promise<T> {
   if (!csrfToken) {
     // Without a token the server would return 403 — better to fail intelligibly here.
-    throw new ApiError('Chybí CSRF token — načtěte stránku znovu.', 403);
+    throw new ApiError(
+      uiText('Chybí CSRF token — načtěte stránku znovu.', 'The CSRF token is missing - reload the page.'),
+      403
+    );
   }
 
   return request<T>(action, {
@@ -286,7 +296,9 @@ export const appApi = {
     const res = await request<{ success?: boolean }>('logout', { method: 'POST' });
     // A 200 that is not the API's answer (a proxy or hosting challenge page)
     // does not prove the session ended.
-    if (res?.success !== true) throw new ApiError('Odhlášení server nepotvrdil.', 0);
+    if (res?.success !== true) {
+      throw new ApiError(uiText('Odhlášení server nepotvrdil.', 'The server did not confirm the sign-out.'), 0);
+    }
     csrfToken = null;
   },
 
