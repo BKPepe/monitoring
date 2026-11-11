@@ -6082,6 +6082,28 @@ if (isset($cookie_jar)) {
         [$dg202['monitor'] ?? null, intdiv((int)($dg202['duration_sec'] ?? 0), 60), $dg202['reason'] ?? null, $dg202['resolved'] ?? null],
         ['R202 dlouhý', 181, 'HTTP 503', true]);
 
+    // R266: a row that named no place stores the column's default 'Main
+    // Server', so an agent's outage came "z Main Server", and an empty
+    // place left "()" in the summary.
+    $pdo->beginTransaction();
+    $pdo->exec("DELETE FROM monitor_logs");
+    $pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE archived_at IS NULL");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, created_at) VALUES
+        (9266, 'R266 agent', 'web', 'https://r266.example.test', 'up', NOW() - INTERVAL 1 DAY)");
+    $dg266_t0 = time() - 7200;
+    $dg266_rows = [sprintf("(9266, 'up', FROM_UNIXTIME(%d))", $dg266_t0 - 60)];
+    for ($i = 0; $i <= 30; $i++) {
+        $dg266_rows[] = sprintf("(9266, '%s', FROM_UNIXTIME(%d))", $i < 30 ? 'down' : 'up', $dg266_t0 + $i * 60);
+    }
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES " . implode(', ', $dg266_rows));
+    $dg266 = build_digest_data($pdo, 'weekly', false);
+    $pdo->rollBack();
+    $dg266_html = render_digest_html($dg266);
+    check('největší incident bez místa kontroly nemá místo', is_array($dg266['biggest_incident'])
+        && array_key_exists('location', $dg266['biggest_incident']) ? $dg266['biggest_incident']['location'] : 'chybí', null);
+    check_true('souhrn ani karta neříkají Main Server ani ()', $dg266['biggest_incident'] !== null
+        && !str_contains($dg266_html, 'Main Server') && !str_contains(implode(' ', $dg266['executive_summary']), '()'));
+
     // R153: the rules that compare with the tariff never fired in the e-mail.
     $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, wan_plan_down_mbit, last_details) VALUES (9153, 'R153 router', 'openwrt', 'r153.example.test', 'up', 1000, ?)")
         ->execute([json_encode(['agent_version' => '0.1.13', 'agent_last_seen' => time() - 30, 'wan_link_dev' => 'eth2'])]);

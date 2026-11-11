@@ -611,6 +611,7 @@ return [
     'digest_summary_incidents_plural' => '%d incidents',
     'digest_summary_incident_singular' => '1 incident',
     'digest_summary_incident_detail' => 'We recorded %s, the largest on monitor %s (%s).',
+    'digest_summary_incident_detail_noloc' => 'We recorded %s, the largest on monitor %s.',
     'digest_summary_recommended_action' => 'Recommended action: %s',
     'digest_summary_no_critical_action' => 'No critical action is currently needed.',
 

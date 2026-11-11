@@ -612,6 +612,7 @@ return [
     'digest_summary_incidents_plural' => '%d incidentů',
     'digest_summary_incident_singular' => '1 incident',
     'digest_summary_incident_detail' => 'Zaznamenali jsme %s, největší u monitoru %s (%s).',
+    'digest_summary_incident_detail_noloc' => 'Zaznamenali jsme %s, největší u monitoru %s.',
     'digest_summary_recommended_action' => 'Doporučená akce: %s',
     'digest_summary_no_critical_action' => 'Žádná kritická akce není momentálně potřeba.',
 

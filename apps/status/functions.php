@@ -14728,13 +14728,16 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
             $stmt_bi->execute([$bi_run['monitor_id'], $bi_run['first_down']]);
             $bi_row = $stmt_bi->fetch();
         }
+        $bi_from = is_array($bi_row) ? (string)($bi_row['checked_from'] ?? '') : '';
         $stmt_bi_name = $pdo->prepare("SELECT name FROM monitors WHERE id = ?");
         $stmt_bi_name->execute([$bi_run['monitor_id']]);
         $biggest_incident = [
             'monitor' => (string)$stmt_bi_name->fetchColumn(),
-            // Nezaznamenane misto kontroly zustava null - "Main Server"
-            // by tvrdilo, odkud se meril, aniz to kdokoli zapsal.
-            'location' => ($bi_row['checked_from'] ?? '') ?: null,
+            // A place only when a check named one. 'Main Server' is the
+            // column's default, stored for every row that named none: an
+            // agent's report, a heartbeat, the row of a silent agent. The
+            // digest called an agent's outage "z Main Server".
+            'location' => in_array($bi_from, ['', 'Main Server'], true) ? null : $bi_from,
             'reason' => $bi_run['first_down'] === null ? t('digest_incident_agent_silent')
                 : (($bi_row['error_message'] ?? '') ?: t('digest_unspecified_error')),
             'duration_sec' => max(60, $bi_run['secs']), // min. 60 s, the e-mail prints minutes
@@ -14813,7 +14816,10 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         $executive_summary[] = t('digest_summary_no_outages');
     } elseif ($biggest_incident !== null) {
         $incident_phrase = $incident_count > 1 ? sprintf(t('digest_summary_incidents_plural'), $incident_count) : t('digest_summary_incident_singular');
-        $executive_summary[] = sprintf(t('digest_summary_incident_detail'), $incident_phrase, $biggest_incident['monitor'], $biggest_incident['location']);
+        // Without a known place the sentence ended in "()".
+        $executive_summary[] = $biggest_incident['location'] !== null
+            ? sprintf(t('digest_summary_incident_detail'), $incident_phrase, $biggest_incident['monitor'], $biggest_incident['location'])
+            : sprintf(t('digest_summary_incident_detail_noloc'), $incident_phrase, $biggest_incident['monitor']);
     }
     if (!empty($recommendations)) {
         $executive_summary[] = sprintf(t('digest_summary_recommended_action'), $recommendations[0]);
@@ -15319,7 +15325,7 @@ function render_digest_html($data) {
         $status_text = $bi['resolved'] ? t('digest_incident_resolved') : t('digest_incident_ongoing');
         $bi_html = '<div style="background-color:#12121a; border-radius:6px; padding:16px;">'
             . '<div style="font-size:15px; font-weight:bold; color:#ffffff;">' . htmlspecialchars($bi['monitor']) . '</div>'
-            . '<div style="font-size:13px; color:#888896; margin-top:2px;">' . htmlspecialchars($bi['location']) . ' &middot; ' . htmlspecialchars($bi['date']) . '</div>'
+            . '<div style="font-size:13px; color:#888896; margin-top:2px;">' . ($bi['location'] !== null ? htmlspecialchars($bi['location']) . ' &middot; ' : '') . htmlspecialchars($bi['date']) . '</div>'
             . '<div style="font-size:13px; color:#e1e1e6; margin-top:8px;">' . htmlspecialchars($bi['reason']) . '</div>'
             . '<div style="margin-top:10px; font-size:13px;"><span style="color:#888896;">' . htmlspecialchars(t('digest_incident_duration_label')) . '</span> <strong style="color:#ffffff;">' . $dur_min . ' min</strong> &middot; <span style="color:' . $status_color . '; font-weight:bold;">' . htmlspecialchars($status_text) . '</span></div>'
             . '</div>';
