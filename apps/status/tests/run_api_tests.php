@@ -1294,6 +1294,14 @@ if ($logged_in) {
     ], $cookie_jar);
     check('save_monitor vrací 200', $code, 200);
     $new_monitor_id = (int)($res['id'] ?? 0);
+    // R218: a window that ends before it starts never applied and was saved.
+    [$mw_code, $mw_res] = api_post($base, 'action=save_monitor', [
+        'name' => 'Obrácené okno', 'type' => 'web', 'target' => 'https://example.com', 'category' => 'Testy',
+        'maintenance' => 1, 'maintenance_start' => '2030-01-02 10:00:00', 'maintenance_end' => '2030-01-02 08:00:00',
+    ], $cookie_jar);
+    check('save_monitor s obráceným oknem údržby je 400 a nic neuloží',
+        [$mw_code, (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE name = 'Obrácené okno'")->fetchColumn()], [400, 0]);
+    check_true('a řekne proč', str_contains((string)($mw_res['error'] ?? ''), 'Konec údržby'));
     check_true('monitor dostal id', $new_monitor_id > 0);
 
     [$code, $mlist] = api_get_auth($base, 'action=monitors', $cookie_jar);
@@ -5516,6 +5524,10 @@ if ($logged_in) {
         $cookie_jar
     );
     check('toggle_maintenance vrací 200', $tm_code, 200);
+    // R218: a window that ends before it starts never applied and was saved.
+    [$tm_back] = api_post($base, 'action=toggle_maintenance',
+        ['monitor_ids' => [1], 'maintenance' => true, 'maintenance_end' => date('Y-m-d H:i:s', time() - 3600)], $cookie_jar);
+    check('toggle_maintenance s koncem v minulosti je 400', $tm_back, 400);
     check('a přepne oba monitory', $tm_res['changed'] ?? 0, 2);
     [, $tm_list] = api_get_auth($base, 'action=monitors', $cookie_jar);
     $tm_by_id = [];

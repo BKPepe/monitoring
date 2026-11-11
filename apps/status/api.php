@@ -848,6 +848,18 @@ if ($action === 'save_monitor') {
     $maintenance_description = ($maintenance === 1 && !empty($input['maintenance_description'])) ? trim($input['maintenance_description']) : null;
     $maintenance_start = ($maintenance === 1 && !empty($input['maintenance_start'])) ? $input['maintenance_start'] : ($maintenance === 1 ? date('Y-m-d H:i:s') : null);
     $maintenance_end = ($maintenance === 1 && !empty($input['maintenance_end'])) ? $input['maintenance_end'] : null;
+    // A window that ends before it starts never applies: the monitor was
+    // saved "in maintenance" and went on being checked and alerted as usual.
+    if ($maintenance_end !== null) {
+        $mw_from = strtotime((string)$maintenance_start);
+        $mw_to = strtotime((string)$maintenance_end);
+        if ($mw_from === false || $mw_to === false) {
+            bk_api_error(400, 'Okno údržby má neplatné datum.');
+        }
+        if ($mw_to <= $mw_from) {
+            bk_api_error(400, 'Konec údržby musí být později než začátek.');
+        }
+    }
 
     $monitored_processes = !empty($input['monitored_processes']) ? trim($input['monitored_processes']) : null;
     // Preset i prahy zpomaleni: prazdna hodnota znamena "nenastaveno" (NULL),
@@ -1895,6 +1907,16 @@ if ($action === 'toggle_maintenance') {
     $tm_end = trim((string)($tm_input['maintenance_end'] ?? ''));
     if (count($tm_ids) === 0) {
         bk_api_error(400, 'Chybí monitor_ids.');
+    }
+    // The window starts now, so an end that is not later never applies.
+    if ($tm_on && $tm_end !== '') {
+        $tm_to = strtotime($tm_end);
+        if ($tm_to === false) {
+            bk_api_error(400, 'Okno údržby má neplatné datum.');
+        }
+        if ($tm_to <= time()) {
+            bk_api_error(400, 'Konec údržby musí být později než začátek.');
+        }
     }
     try {
         $place = implode(',', array_fill(0, count($tm_ids), '?'));

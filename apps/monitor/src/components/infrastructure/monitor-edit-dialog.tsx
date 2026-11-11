@@ -128,6 +128,17 @@ export function MonitorEditDialog({
       alert(t('infra.heartbeat_interval_required', 'Zadejte, jak často se má úloha ozvat.'));
       return;
     }
+    // The form said so under the fields and saved the window anyway; a
+    // window that ends before it starts never applies.
+    if (
+      form.maintenance &&
+      form.maintenanceStart &&
+      form.maintenanceEnd &&
+      form.maintenanceEnd <= form.maintenanceStart
+    ) {
+      alert(t('infra.maintenance_window_invalid', 'Konec údržby musí být později než začátek.'));
+      return;
+    }
 
     const existingAssetId = editingId != null ? (monitors.find((m) => m.id === editingId)?.assetId ?? null) : null;
 

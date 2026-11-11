@@ -114,6 +114,24 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe('Editor monitoru: okno údržby (R218)', () => {
+  it('obrácené okno neuloží a řekne proč', async () => {
+    const saves = stubApi();
+    const alertMock = vi.fn();
+    vi.stubGlobal('alert', alertMock);
+    renderDialog({
+      monitor: monitor({
+        maintenance: true,
+        maintenanceStart: '2026-11-12 10:00:00',
+        maintenanceEnd: '2026-11-12 08:00:00',
+      }),
+    });
+    save();
+    await waitFor(() => expect(alertMock).toHaveBeenCalledWith('Konec údržby musí být později než začátek.'));
+    expect(saves).toEqual([]);
+  });
+});
+
 describe('Editor monitoru: úprava', () => {
   it('uloží uložené hodnoty zpět, zařízení vezme z aktuálního seznamu a pak se zavře', async () => {
     const saves = stubApi();
