@@ -52,32 +52,40 @@ app.use(
   })
 );
 
-// Helper for caching GET responses with Cloudflare Cache API
-async function withCache(cacheKey: string, ttlSeconds: number, fetcher: () => Promise<any>): Promise<any> {
+// Helper for caching GET responses with Cloudflare Cache API. The fetcher
+// runs once: a failing upstream used to be asked a second time from the
+// catch, doubling the requests and the wait before the error.
+export async function withCache(cacheKey: string, ttlSeconds: number, fetcher: () => Promise<any>): Promise<any> {
+  const cacheUrl = new URL(`https://cache.local/${cacheKey}`);
+  let cache: Cache | null;
   try {
-    const cache = caches.default;
-    const cacheUrl = new URL(`https://cache.local/${cacheKey}`);
+    // The Cache API is missing in local development and can fail; then the
+    // answer is simply not cached.
+    cache = caches.default;
     const cachedResponse = await cache.match(cacheUrl);
-
     if (cachedResponse) {
       return await cachedResponse.json();
     }
-
-    const data = await fetcher();
-
-    // Store in cache
-    const response = new Response(JSON.stringify(data), {
-      headers: {
-        'Content-Type': 'application/json',
-        'Cache-Control': `public, max-age=${ttlSeconds}`,
-      },
-    });
-    await cache.put(cacheUrl, response.clone());
-    return data;
   } catch {
-    // If cache API is not available (e.g. in local development) or fails, fallback to direct fetcher
-    return await fetcher();
+    cache = null;
   }
+
+  const data = await fetcher();
+
+  if (cache) {
+    try {
+      const response = new Response(JSON.stringify(data), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': `public, max-age=${ttlSeconds}`,
+        },
+      });
+      await cache.put(cacheUrl, response.clone());
+    } catch {
+      // A cache that refuses the write costs only the next request.
+    }
+  }
+  return data;
 }
 
 /** Like fetchGitHub, but a 404 is an answer (null: "there is none"), not an error. */
