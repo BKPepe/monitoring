@@ -1951,8 +1951,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Agent authentication and version alerts',
   },
   'api_agents.auth_desc': {
-    cs: 'Při detekci zastaralé verze agenta nebo selhání Remote Action systém vygeneruje varovný incident v sekci Incidenty a odešle e-mailovou/SMS výstrahu administrátorům.',
-    en: 'When an outdated agent version or a failed Remote Action is detected, the system logs a warning incident in the Incidents section and sends an email/SMS alert to administrators.',
+    cs: 'Každé hlášení agenta ověřuje jeho klíč a vzdálené akce se podepisují HMAC-SHA256. Zastaralou verzi agenta ukazuje tato stránka u jeho verze; incident, e-mail ani SMS se kvůli ní ani kvůli neúspěšné vzdálené akci neposílají.',
+    en: 'Every agent report is checked against its key, and remote actions are signed with HMAC-SHA256. An outdated agent shows here next to its version; neither that nor a failed remote action opens an incident or sends an e-mail or SMS.',
   },
   'api_agents.key_hmac_badge': { cs: 'Klíč + HMAC-SHA256', en: 'Key + HMAC-SHA256' },
 

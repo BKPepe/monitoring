@@ -484,7 +484,7 @@ export function ApiAgentsPage() {
           <p className="text-muted-foreground text-xs leading-relaxed">
             {t(
               'api_agents.auth_desc',
-              'Při detekci zastaralé verze agenta nebo selhání Remote Action systém vygeneruje varovný incident v sekci Incidenty a odešle e-mailovou/SMS výstrahu administrátorům.'
+              'Každé hlášení agenta ověřuje jeho klíč a vzdálené akce se podepisují HMAC-SHA256. Zastaralou verzi agenta ukazuje tato stránka u jeho verze; incident, e-mail ani SMS se kvůli ní ani kvůli neúspěšné vzdálené akci neposílají.'
             )}
           </p>
         </Panel>
