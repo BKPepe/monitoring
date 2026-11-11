@@ -836,6 +836,11 @@ const translations: Record<string, { cs: string; en: string }> = {
   'sp.subscribers_none': { cs: 'Zatím žádní odběratelé.', en: 'No subscribers yet.' },
   'sp.subscribers_pending': { cs: 'čeká na potvrzení', en: 'awaiting confirmation' },
   'sp.subscriber_delete': { cs: 'Smazat odběratele', en: 'Delete subscriber' },
+  'sp.subscriber_delete_failed': { cs: 'Odběratele se nepodařilo smazat.', en: 'The subscriber could not be deleted.' },
+  'sp.subscribers_load_failed': {
+    cs: 'Seznam odběratelů se nepodařilo načíst.',
+    en: 'The list of subscribers could not be loaded.',
+  },
   'sp.badge_title': { cs: 'Vložitelný odznak stavu', en: 'Embeddable status badge' },
   'sp.badge_desc': {
     cs: 'SVG obrázek s aktuálním stavem — vložte jako <img> kamkoliv. Obnovuje se po minutě.',

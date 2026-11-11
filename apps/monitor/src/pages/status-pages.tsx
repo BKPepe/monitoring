@@ -61,12 +61,38 @@ export function StatusPagesPage() {
   const [subscribers, setSubscribers] = React.useState<
     { id: number; email: string; lang: string; confirmed: boolean; createdAt: string }[] | null
   >(null);
+  // A failed list or a refused delete is said: the panel used to vanish on a
+  // failed load, and a delete that failed looked done until the list reloaded.
+  const [subsFailed, setSubsFailed] = React.useState(false);
+  const [subDeleteError, setSubDeleteError] = React.useState<string | null>(null);
   const loadSubscribers = React.useCallback(() => {
     fetch('/status/api.php?action=public_subscribers', { credentials: 'include' })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((d) => setSubscribers(Array.isArray(d.subscribers) ? d.subscribers : []))
-      .catch(() => setSubscribers(null));
+      .then((d) => {
+        setSubscribers(Array.isArray(d.subscribers) ? d.subscribers : []);
+        setSubsFailed(false);
+      })
+      .catch(() => setSubsFailed(true));
   }, []);
+  const deleteSubscriber = async (id: number) => {
+    setSubDeleteError(null);
+    try {
+      const res = await fetch('/status/api.php?action=delete_public_subscriber', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    } catch (e) {
+      setSubDeleteError(
+        t('sp.subscriber_delete_failed', 'Odběratele se nepodařilo smazat.') +
+          (e instanceof Error && e.message ? ` (${e.message})` : '')
+      );
+    }
+    loadSubscribers();
+  };
   React.useEffect(() => {
     if (isAdmin) loadSubscribers();
   }, [isAdmin, loadSubscribers]);
@@ -167,17 +193,25 @@ export function StatusPagesPage() {
 
       {/* Public e-mail subscribers - the admin must be able to see and remove
           addresses (manual removal requests, GDPR). */}
-      {isAdmin && subscribers !== null && (
+      {isAdmin && (subscribers !== null || subsFailed) && (
         <Panel
           icon={Mail}
           title={t('sp.subscribers_title', 'Veřejní odběratelé e-mailů')}
-          count={subscribers.length}
+          count={subscribers?.length}
           hint={t(
             'sp.subscribers_desc',
             'Návštěvníci přihlášení k upozorněním na výpadky (double opt-in). Smazání = okamžité odhlášení.'
           )}
         >
-          {subscribers.length === 0 ? (
+          {subsFailed && (
+            <ErrorState
+              message={t('sp.subscribers_load_failed', 'Seznam odběratelů se nepodařilo načíst.')}
+              onRetry={loadSubscribers}
+              className="mb-2"
+            />
+          )}
+          {subDeleteError && <ErrorState size="inline" message={subDeleteError} className="mb-2" />}
+          {subscribers === null ? null : subscribers.length === 0 ? (
             <p className="text-muted-foreground text-xs">{t('sp.subscribers_none', 'Zatím žádní odběratelé.')}</p>
           ) : (
             <ul className="divide-border divide-y">
@@ -190,15 +224,7 @@ export function StatusPagesPage() {
                   <span className="text-muted-foreground">{sub.lang}</span>
                   <button
                     type="button"
-                    onClick={async () => {
-                      await fetch('/status/api.php?action=delete_public_subscriber', {
-                        method: 'POST',
-                        credentials: 'include',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ id: sub.id }),
-                      }).catch(() => {});
-                      loadSubscribers();
-                    }}
+                    onClick={() => void deleteSubscriber(sub.id)}
                     aria-label={t('sp.subscriber_delete', 'Smazat odběratele')}
                     className="text-muted-foreground hover:text-down focus-visible:ring-ring ml-auto rounded-md p-1 transition-colors focus-visible:ring-2 focus-visible:outline-none"
                   >
