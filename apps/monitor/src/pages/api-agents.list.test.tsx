@@ -75,6 +75,23 @@ describe('API a agenti: seznam agentů', () => {
     expect(screen.getByText('v0.1.11')).toBeTruthy();
   });
 
+  it('aktivní je agent, který hlásí, ne monitor ve stavu up (R295)', async () => {
+    show(() =>
+      json({
+        monitors: [
+          monitor(1, 'Router bez WAN', 'openwrt', { status: 'down', agentSilent: false }),
+          monitor(2, 'Tichý server', 'vps', { status: 'up', agentSilent: true }),
+          monitor(3, 'Nikdy nehlásil', 'vps', { status: 'unknown', agentSilent: null }),
+        ],
+      })
+    );
+    const pill = async (name: string) =>
+      ((await screen.findByText(name)).closest('div.flex') as HTMLElement).textContent ?? '';
+    expect(await pill('Router bez WAN')).toContain('Aktivní');
+    expect(await pill('Tichý server')).toContain('Neaktivní');
+    expect(await pill('Nikdy nehlásil')).toContain('Aktivita neznámá');
+  });
+
   it('agent je, kdo se hlásí; typ TS/MC ani jméno z něj agenta nedělá', async () => {
     show(() =>
       json({

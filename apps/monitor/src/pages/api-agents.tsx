@@ -370,8 +370,20 @@ export function ApiAgentsPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-semibold">{a.name}</p>
                       <Pill size="sm">{a.type}</Pill>
-                      <Pill size="sm" dot tone={a.status === 'up' ? 'up' : 'down'}>
-                        {a.status === 'up' ? t('infra.active_since', 'Aktivní') : t('api_agents.inactive', 'Neaktivní')}
+                      {/* Whether the AGENT reports (agentSilent), not the monitor's
+                          state: a router whose WAN is down still reports through
+                          its backup and was called "Neaktivní". Unknown when the
+                          silence detection is off or it never reported. */}
+                      <Pill
+                        size="sm"
+                        dot
+                        tone={a.agentSilent === false ? 'up' : a.agentSilent === true ? 'down' : 'neutral'}
+                      >
+                        {a.agentSilent === false
+                          ? t('infra.active_since', 'Aktivní')
+                          : a.agentSilent === true
+                            ? t('api_agents.inactive', 'Neaktivní')
+                            : t('api_agents.activity_unknown', 'Aktivita neznámá')}
                       </Pill>
                     </div>
 

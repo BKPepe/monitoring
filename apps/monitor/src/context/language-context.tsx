@@ -1938,6 +1938,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'api_agents.load_failed': { cs: 'Seznam agentů se nepodařilo načíst.', en: 'Failed to load the list of agents.' },
   'api_agents.no_agents': { cs: 'Žádní registrovaní agenti v databázi.', en: 'No registered agents in the database.' },
   'api_agents.inactive': { cs: 'Neaktivní', en: 'Inactive' },
+  'api_agents.activity_unknown': { cs: 'Aktivita neznámá', en: 'Activity unknown' },
   'api_agents.version_outdated': {
     cs: 'v{version} (Neaktuální — Doporučeno v{latest})',
     en: 'v{version} (Outdated — Recommended v{latest})',
