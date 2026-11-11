@@ -1740,25 +1740,28 @@ function overviewPlan(
 }
 
 /**
- * Monitor events as vertical markers in the charts - an outage or restart is
- * visible right where the metric jumped. MySQL datetimes are parsed via the
- * 'T' variant (Safari cannot handle a bare 'YYYY-MM-DD HH:MM').
+ * Where an outage began and ended, as vertical markers in the charts - visible
+ * right where the metric jumped. From the machine-readable time: `at` is the
+ * API's "d.m.Y H:i:s", which Date.parse() reads as NaN, so no marker was ever
+ * drawn. Only the changes: every failed check of a long outage would be a
+ * line of its own, and a routine pass marks nothing. A remote probe's row is
+ * a measurement, not a change of state.
  */
-function eventMarkers(events: TimelineEvent[]): { t: number; label: string; severity: 'alert' | 'info' }[] {
-  return events
-    .map((e) => {
-      const ms = Date.parse(String(e.at).replace(' ', 'T'));
-      return Number.isNaN(ms)
-        ? null
-        : {
-            t: ms,
-            label: e.title,
-            // The severity the event list already carries, so an outage
-            // marker stands out from a routine note.
-            severity: e.severity === 'down' || e.severity === 'warning' ? ('alert' as const) : ('info' as const),
-          };
-    })
-    .filter((e): e is { t: number; label: string; severity: 'alert' | 'info' } => e != null);
+export function eventMarkers(events: TimelineEvent[]): { t: number; label: string; severity: 'alert' | 'info' }[] {
+  const timed = events
+    .filter((e) => !e.probe && e.atIso)
+    .map((e) => ({ e, ms: Date.parse(String(e.atIso)) }))
+    .filter((x) => !Number.isNaN(x.ms))
+    .sort((a, b) => a.ms - b.ms);
+  const out: { t: number; label: string; severity: 'alert' | 'info' }[] = [];
+  let wasDown = false;
+  for (const { e, ms } of timed) {
+    const down = e.severity === 'down';
+    if (down && !wasDown) out.push({ t: ms, label: e.title, severity: 'alert' });
+    if (e.severity === 'up' && e.resolution === 'Resolved') out.push({ t: ms, label: e.title, severity: 'info' });
+    if (down || e.severity === 'up') wasDown = down;
+  }
+  return out;
 }
 
 /** The router has its own cards and its own recommendations. */
