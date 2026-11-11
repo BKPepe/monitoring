@@ -5822,20 +5822,31 @@ if ($action === 'metric_detail') {
         $related = [];
         $mon_type = strtolower((string)$mon['type']);
         try {
-            $stmt_latest = $pdo->prepare("SELECT * FROM vps_metrics WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 1");
+            // A few readings, not one: a counter's chip shows its latest
+            // increment, as its chart does, not the total since boot, and the
+            // readings' cadence tells an increment across a gap (none).
+            $stmt_latest = $pdo->prepare("SELECT * FROM vps_metrics WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 6");
             $stmt_latest->execute([(int)$mon['id']]);
-            $latest = $stmt_latest->fetch();
-            if ($latest) {
+            $recent = array_reverse($stmt_latest->fetchAll());
+            $latest = $recent === [] ? null : $recent[count($recent) - 1];
+            $recent_ts = array_map(fn($r) => (int)strtotime((string)$r['checked_at']), $recent);
+            if ($latest !== null) {
                 foreach ($map as $rkey => $rdef) {
                     if ($rkey === $metric) continue;
                     if (!empty($rdef['only']) && !in_array($mon_type, $rdef['only'], true)) continue;
                     $col = $rdef['col'];
                     if (!array_key_exists($col, $latest) || $latest[$col] === null) continue;
+                    $is_counter = !empty($rdef['counter']);
+                    $value = (float)$latest[$col];
+                    if ($is_counter) {
+                        $deltas = bk_counter_deltas(array_map(fn($r) => $r[$col] === null ? null : (float)$r[$col], $recent), $recent_ts);
+                        $value = $deltas[count($deltas) - 1];
+                    }
                     $related[] = [
                         'key' => $rkey,
-                        'label' => bk_metric_label($rkey, $rdef['label']),
+                        'label' => bk_metric_label($rkey, $rdef['label'], $is_counter),
                         'unit' => $rdef['unit'],
-                        'latest' => (float)$latest[$col],
+                        'latest' => $value,
                     ];
                 }
             }

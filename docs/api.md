@@ -818,7 +818,8 @@ computes them from the very points it draws, so after switching the period they
 cannot describe a different window than the chart. `thresholds.critical: null`
 means no threshold is set and no band is drawn; `related` only contains metrics
 the monitor actually reported in its latest measurement, so a link never leads
-into an empty chart.
+into an empty chart. A counter's `latest` is its latest increment, as its chart
+draws it, not the total since boot; `null` when that increment is unknown.
 
 ### `action=process_history`
 

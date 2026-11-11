@@ -258,8 +258,11 @@ export interface MetricDetail {
   thresholds: { warning: number | null; critical: number | null };
   /** Which of the thresholds is derived rather than configured by an admin. */
   thresholdsDerived?: { warning: boolean; critical: boolean };
-  /** Only metrics this monitor actually reported in its latest measurement. */
-  related: { key: string; label: string; unit: string; latest: number }[];
+  /**
+   * Only metrics this monitor actually reported in its latest measurement.
+   * A counter's latest is its latest increment, null when that is unknown.
+   */
+  related: { key: string; label: string; unit: string; latest: number | null }[];
   events: { t: number; type: string; label: string }[];
 }
 

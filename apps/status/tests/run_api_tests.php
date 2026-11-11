@@ -3653,6 +3653,12 @@ check('a vrátí měření cílového monitoru, ne sourozencova', count($sib['po
 check('metric_detail ukazuje ten správný monitor', $sib_detail['monitor']['name'] ?? null, 'Cílový monitor');
 [, $sib_corr] = api_get_auth($base, 'action=metric_correlations&monitor_id=92&metric=cpu&period=24h', $cookie_jar);
 check('metric_correlations počítá z jeho vzorků', $sib_corr['samples'] ?? 0, 3);
+// A counter's chip showed the lifetime total next to a chart of increments (R278).
+$pdo->exec("UPDATE vps_metrics SET fw_dropped = CASE WHEN checked_at < DATE_SUB(NOW(), INTERVAL 150 SECOND) THEN 999990
+    WHEN checked_at < DATE_SUB(NOW(), INTERVAL 90 SECOND) THEN 1000000 ELSE 1000040 END WHERE monitor_id = 92");
+[, $sib_detail] = api_get_auth($base, 'action=metric_detail&monitor_id=92&metric=cpu', $cookie_jar);
+$sib_fw = array_values(array_filter($sib_detail['related'] ?? [], fn ($r) => ($r['key'] ?? '') === 'fw_dropped'))[0] ?? [];
+check('čip čítače ukazuje poslední přírůstek jako graf, ne součet od startu', $sib_fw['latest'] ?? 'chybí', 40);
 $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 92");
 $pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
 $pdo->exec("DELETE FROM assets WHERE id = 92");

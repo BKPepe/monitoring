@@ -800,6 +800,8 @@ počítá z týchž bodů, které kreslí, takže po přepnutí období nemůžo
 jiné okno než graf. `thresholds.critical: null` znamená, že práh nastavený
 není a pásmo se v grafu nekreslí; `related` obsahuje jen metriky, které
 monitor v posledním měření skutečně hlásil, aby proklik nevedl do prázdna.
+U čítače je `latest` jeho poslední přírůstek, jak ho kreslí graf, ne součet od
+startu; `null`, když přírůstek není známý.
 
 ### `action=process_history`
 
