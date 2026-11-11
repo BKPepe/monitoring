@@ -87,15 +87,21 @@ Run both projects at once, or separately:
 
 ## ☁️ Cloudflare Worker API endpoints
 
-The worker aggregates, filters and caches (1 hour) requests to the GitHub API to
-stay under rate limits:
+The worker (`apps/worker`) serves the landing page's data and caches what it
+asks GitHub and the status API, to stay under their rate limits:
 
-*   `GET /api/stats` — Aggregated repo stats (stars, forks, contributors, issues).
+*   `GET /api/stats` — Aggregated repo stats (stars, forks, contributors, issues); cached 1 hour.
 *   `GET /api/versions` — Latest release of the monitoring server (`monitoring: null` before the first release).
-*   `GET /api/agents` — Agent versions read from the published scripts (null + 503 when unreadable).
-*   `GET /api/changelog` — Version history formatted for a timeline.
-*   `GET /api/status` — Proxies status and response times of the main monitoring nodes.
+*   `GET /api/agents` — Agent versions read from the published scripts (null + 503 when unreadable); cached 1 hour.
+*   `GET /api/changelog` — Version history formatted for a timeline; cached 30 minutes.
+*   `GET /api/contributors` — The contributor list for the About page; cached 1 hour.
+*   `GET /api/status` — The status API's public summary (status, nodes, latency); cached 5 minutes.
 *   `GET /api/test?url=<url>` — One HTTP GET to the given address from Cloudflare's edge: status code, response time and redirect target (used by the Playground).
+*   `GET /api/watchdog` — The external watchdog's verdict on the status API now, and whether its alert channel is set; `POST /api/watchdog/test` sends a test alert (needs `WATCHDOG_TEST_TOKEN`).
+
+Every 5 minutes (a cron trigger in `wrangler.jsonc`) the watchdog checks the
+status API at `WATCHDOG_TARGET_URL` and alerts `WATCHDOG_DISCORD_WEBHOOK` when
+it fails. More in [apps/worker/README.md](apps/worker/README.md).
 
 ---
 
