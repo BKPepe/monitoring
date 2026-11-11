@@ -4661,8 +4661,13 @@ if ($action === 'regions') {
                 'checks' => $checks,
                 'upChecks' => (int)$r['up_checks'],
                 'downChecks' => (int)$r['down_checks'],
-                // One failed check in 20 000 is 99.995: never "100 %".
-                'successRate' => $checks > 0 ? bk_uptime_pct_round(((int)$r['up_checks'] / $checks) * 100, 2) : null,
+                // A warning answered: it is a success here, as in the uptime
+                // figures - counted as a failure, ten checks with one slow
+                // answer read 90 % next to "0 selhání". One failed check in
+                // 20 000 is 99.995: never "100 %".
+                'successRate' => $checks > 0
+                    ? bk_uptime_pct_round((($checks - (int)$r['down_checks']) / $checks) * 100, 2, (int)$r['down_checks'] > 0)
+                    : null,
                 // Average via NULLIF(...,0): a zero response is not a measurement.
                 'avgResponseMs' => $r['avg_response'] !== null ? round((float)$r['avg_response']) : null,
                 'monitors' => (int)$r['monitors'],

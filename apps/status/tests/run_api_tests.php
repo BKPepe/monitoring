@@ -8884,6 +8884,25 @@ try {
     $fs_clear_caches();
 }
 
+// R277: a warning is an answered check. Counted as a failure, ten checks with
+// one slow answer read 90 % next to "0 selhání".
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES (9277, 'R277', 'web', 'https://example.com/r277', 'up', 'Test')");
+    $sr_rows = [];
+    for ($i = 1; $i <= 10; $i++) {
+        $sr_rows[] = sprintf("(9277, '%s', 120, NOW() - INTERVAL %d MINUTE, 'R277 region')", $i === 5 ? 'warning' : 'up', $i);
+    }
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, checked_from) VALUES " . implode(',', $sr_rows));
+    $fs_clear_caches();
+    [, $sr_reg] = api_get_auth($base, 'action=regions&days=7', $cookie_jar);
+    $sr_region = array_values(array_filter($sr_reg['regions'] ?? [], fn ($r) => ($r['location'] ?? null) === 'R277 region'))[0] ?? [];
+    check('místa měření: varování je zodpovězená kontrola, ne selhání', [(float)($sr_region['successRate'] ?? 0), $sr_region['downChecks'] ?? null], [100.0, 0]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9277");
+    $pdo->exec("DELETE FROM monitors WHERE id = 9277");
+    $fs_clear_caches();
+}
+
 // A failed check another location answered OK within the same second has no
 // outage second of its own: the day's rollup says 0 s of down and the 30-day
 // figure is exactly 100. The strip marks that day red, so the legacy card and
