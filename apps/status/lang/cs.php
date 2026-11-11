@@ -94,6 +94,11 @@ return [
     'event_fallback_unknown_stale' => 'Agent nehlásí, výsledek kontroly není známý.',
     'audit_check_ok' => 'KONTROLA OK',
     'audit_check_rt' => ' (odezva %d ms)',
+    'audit_source_cron' => 'Cron serveru',
+    'audit_source_agent' => 'Agent na zařízení',
+    'audit_source_probe' => 'Sonda %s',
+    'audit_source_heartbeat' => 'Heartbeat',
+    'audit_source_unknown' => 'Zdroj neuveden',
     // C-12: the findings feed's attention reasons, worded once on the server.
     'finding_status_down' => 'Nedostupný',
     'finding_status_warning' => 'Hlásí varování',

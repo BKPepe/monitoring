@@ -5208,7 +5208,7 @@ if ($action === 'audit_logs') {
         // dozen minutes, older error rows fall out of the window and the trail
         // then lies that all is OK. The latest down/warning rows are therefore
         // always mixed in.
-        $audit_cols = "l.id, l.checked_at as time, l.monitor_id, l.status, l.response_time, l.error_message, m.name as monitor_name, m.type as monitor_type";
+        $audit_cols = "l.id, l.checked_at as time, l.monitor_id, l.status, l.response_time, l.error_message, l.source, l.checked_from, m.name as monitor_name, m.type as monitor_type";
         [$al_active, $al_active_params] = bk_active_monitor_sql($pdo, 'l.monitor_id');
         $al_bind = function (PDOStatement $st, int $last_limit) use ($al_active_params): void {
             $pos = 1;
@@ -5266,7 +5266,15 @@ if ($action === 'audit_logs') {
                 'statusKey' => $al_label['key'],
                 'statusLabel' => $al_label['label'],
                 'statusTone' => $al_label['tone'],
-                'user' => 'Systémový Agent (Cron)',
+                // Who wrote the row. Every row used to name the cron, also an
+                // agent's report or a remote probe's check.
+                'user' => match ((string)($r['source'] ?? '')) {
+                    'cron' => t('audit_source_cron'),
+                    'agent' => t('audit_source_agent'),
+                    'probe' => sprintf(t('audit_source_probe'), (string)($r['checked_from'] ?? '?')),
+                    'heartbeat' => t('audit_source_heartbeat'),
+                    default => t('audit_source_unknown'),
+                },
             ];
         }
         echo bk_json_safe(['logs' => $logs]);
@@ -7412,8 +7420,8 @@ if ($action === 'wan_settings_save') {
  *
  * The `audit_log` table is filled from 62 places and the legacy admin has
  * its own page over it, but React never showed it: its "log" called
- * `audit_logs` (with an "s"), which is cron check results with a hardcoded
- * "System Agent (Cron)" user. Filters for sign-ins and config changes
+ * `audit_logs` (with an "s"), which is check results, then all with a
+ * hardcoded "System Agent (Cron)" user. Filters for sign-ins and config changes
  * could therefore never find anything.
  *
  * Admin-only: it contains who signed in from where, including failed

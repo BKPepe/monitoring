@@ -10060,6 +10060,21 @@ try {
     $w2_al_m = array_values(array_filter($w2_al['logs'] ?? [], fn ($l) => str_contains((string)($l['action'] ?? ''), 'W2 v údržbě')))[0] ?? [];
     check('C-11: protokol kontrol - údržba se jmenuje údržba', [$w2_al_m['action'] ?? null, $w2_al_m['statusKey'] ?? null], ['ÚDRŽBA: W2 v údržbě', 'maintenance']);
     check_false('C-11: a bez „(Odezva  ms)“, když se odezva neměřila', str_contains((string)($w2_al_m['details'] ?? ''), ' ms)'));
+    // Every row named the cron as its author, also an agent's or a probe's (R57).
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, checked_from, source) VALUES
+                (190, 'up', 30, NOW(), 'Main Server', 'agent'), (190, 'up', 40, NOW(), 'Frankfurt', 'probe'),
+                (190, 'up', 50, NOW(), 'Main Server', 'cron'), (190, 'up', 60, NOW(), 'Main Server', NULL)");
+    $w2_src_first = (int)$pdo->lastInsertId();
+    [, $w2_al2] = api_get_auth($base, 'action=audit_logs&limit=10', $cookie_jar);
+    $w2_users = [];
+    foreach ($w2_al2['logs'] ?? [] as $w2_l) {
+        if ((int)($w2_l['id'] ?? 0) >= $w2_src_first) {
+            $w2_users[(int)$w2_l['id'] - $w2_src_first] = $w2_l['user'] ?? null;
+        }
+    }
+    ksort($w2_users);
+    check('protokol kontrol jmenuje zdroj řádku: agent, sonda, cron, neuvedený',
+        $w2_users, [0 => 'Agent na zařízení', 1 => 'Sonda Frankfurt', 2 => 'Cron serveru', 3 => 'Zdroj neuveden']);
     [, $w2_mons] = api_get_auth($base, 'action=monitors', $cookie_jar);
     $w2_key = [];
     foreach ($w2_mons["monitors"] ?? [] as $w2_mon) {

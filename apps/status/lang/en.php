@@ -93,6 +93,11 @@ return [
     'event_fallback_unknown_stale' => 'The agent is not reporting, the check result is unknown.',
     'audit_check_ok' => 'CHECK OK',
     'audit_check_rt' => ' (response %d ms)',
+    'audit_source_cron' => 'Server cron',
+    'audit_source_agent' => 'Agent on the device',
+    'audit_source_probe' => 'Probe %s',
+    'audit_source_heartbeat' => 'Heartbeat',
+    'audit_source_unknown' => 'Source not recorded',
     // C-12: the findings feed's attention reasons, worded once on the server.
     'finding_status_down' => 'Down',
     'finding_status_warning' => 'Reports a warning',
