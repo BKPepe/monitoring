@@ -14383,7 +14383,10 @@ function bk_digest_router_facts(PDO $pdo, array $routers): array {
 function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $days = ($period === 'monthly') ? 30 : 7;
     $site_title = get_setting('site_title', 'Blood Kings Status');
-    $range_from = date('d.m.Y', strtotime("-$days days"));
+    // The period's calendar days, today included, like the SLA report: the
+    // header said "-7 days" to today, eight dates over seven days of figures.
+    $dg_from = strtotime('-' . ($days - 1) . ' day', strtotime('today'));
+    $range_from = date('d.m.Y', $dg_from);
     $range_to = date('d.m.Y');
 
     // --- Main server / hub location (excluded from regions, same logic as index.php) ---
@@ -14426,7 +14429,6 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     // "Incidenty: 20" and took the score's incident part to 0. Over the same
     // calendar days as the availability, a monitor at a time: a month of
     // segments of the whole fleet at once would not fit a hosting's memory.
-    $dg_from = strtotime('-' . ($days - 1) . ' day', strtotime('today'));
     $dg_runs = [];
     foreach ($dg_ids as $dg_mid) {
         array_push($dg_runs, ...bk_outage_runs(bk_uptime_segments_for($pdo, $dg_from, time(), [$dg_mid])));

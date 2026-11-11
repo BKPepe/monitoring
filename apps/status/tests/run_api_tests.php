@@ -6054,6 +6054,11 @@ if (isset($cookie_jar)) {
     $pdo->rollBack();
     check_true('bez měření digest netvrdí, že výpadek nebyl', !in_array(t('digest_summary_no_outages'), $dg250['executive_summary'], true));
 
+    // R267: the header named eight dates over seven days of availability.
+    check('hlavička souhrnu: tolik dat, kolik dní pokrývá dostupnost',
+        [build_digest_data($pdo, 'weekly', false)['range_from'], build_digest_data($pdo, 'monthly', false)['range_from']],
+        [date('d.m.Y', strtotime('-6 day', strtotime('today'))), date('d.m.Y', strtotime('-29 day', strtotime('today')))]);
+
     // R202: the biggest incident came from the first 2000 'down' rows sorted
     // by monitor id, so a flapping monitor with a lower id hid a longer
     // outage. Only these two monitors count here, the rest is archived.
