@@ -712,7 +712,7 @@ try {
     // bk_schema_migrations_version() there. Thanks to this, migrations run
     // only once, not on every request: the version is stored after a run
     // without a real error.
-    define('BK_SCHEMA_VERSION', '20261101r024');
+    define('BK_SCHEMA_VERSION', '20261111r215');
 
     $bk_current_schema = false;
     $bk_schema_rows = [];

@@ -34,7 +34,7 @@ if (count(get_included_files()) === 1) {
  * fails every request that is due to migrate on the redeclaration.
  */
 function bk_schema_migrations_version(): string {
-    return '20261101r024';
+    return '20261111r215';
 }
 
 /**
@@ -756,6 +756,35 @@ function bk_schema_migrations(): array {
         // the regions, but never confirms an outage, splits one or gives it
         // its reason.
         "ALTER TABLE monitor_logs ADD COLUMN source VARCHAR(16) DEFAULT NULL",
+
+        // A fresh install got monitor_logs.checked_at indexed twice and the
+        // foreign key on monitors.asset_id twice (20261111r215): schema.sql
+        // named them otherwise than the steps above, so to MySQL they were
+        // not already there. Only a database holding the named copy loses the
+        // other one; whatever the server answers is logged, as for the key.
+        'duplicate checked_at index and asset_id key' => static function (PDO $pdo): void {
+            if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) !== 'mysql') {
+                return;
+            }
+            try {
+                $single = $pdo->query("SELECT INDEX_NAME FROM information_schema.STATISTICS
+                    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'monitor_logs'
+                    GROUP BY INDEX_NAME HAVING COUNT(*) = 1 AND MAX(COLUMN_NAME) = 'checked_at'")->fetchAll(PDO::FETCH_COLUMN);
+                if (in_array('idx_logs_checked_at', $single, true) && in_array('checked_at', $single, true)) {
+                    $pdo->exec("ALTER TABLE monitor_logs DROP INDEX `checked_at`");
+                }
+                $keys = $pdo->query("SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+                    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'monitors' AND COLUMN_NAME = 'asset_id'
+                    AND REFERENCED_TABLE_NAME = 'assets'")->fetchAll(PDO::FETCH_COLUMN);
+                if (in_array('fk_monitors_asset_id', $keys, true)) {
+                    foreach (array_diff($keys, ['fk_monitors_asset_id']) as $key) {
+                        $pdo->exec('ALTER TABLE monitors DROP FOREIGN KEY `' . str_replace('`', '', (string)$key) . '`');
+                    }
+                }
+            } catch (PDOException $e) {
+                error_log('[db] migration: a duplicate checked_at index or asset_id key was not dropped: ' . $e->getMessage());
+            }
+        },
 
         // Last, on the finished schema: the data fixes this database has not
         // had yet (bk_data_fixes_run).

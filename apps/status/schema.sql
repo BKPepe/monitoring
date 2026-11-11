@@ -117,7 +117,8 @@ CREATE TABLE IF NOT EXISTS `monitors` (
   `log_lines_enabled` TINYINT(1) NOT NULL DEFAULT 1,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX (`agent_key`),
-  FOREIGN KEY (`asset_id`) REFERENCES `assets`(`id`) ON DELETE SET NULL
+  -- Named as the migration names it, which then finds it there (1826).
+  CONSTRAINT `fk_monitors_asset_id` FOREIGN KEY (`asset_id`) REFERENCES `assets`(`id`) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `monitor_events` (
@@ -146,7 +147,8 @@ CREATE TABLE IF NOT EXISTS `monitor_logs` (
   -- NULL = starší řádek. Řádek sondy výpadek nepotvrdí, nerozdělí ani mu nedá důvod.
   `source` VARCHAR(16) DEFAULT NULL,
   FOREIGN KEY (`monitor_id`) REFERENCES `monitors`(`id`) ON DELETE CASCADE,
-  INDEX (`checked_at`),
+  -- Named as the migration names it, which then finds it there (1061).
+  INDEX `idx_logs_checked_at` (`checked_at`),
   INDEX (`monitor_id`, `checked_at`),
   -- Krycí index pro základnu odezvy (AVG/STDDEV nad 30 dny, status='up').
   -- Dotaz si s ním vystačí a k řádkům vůbec nesáhne.

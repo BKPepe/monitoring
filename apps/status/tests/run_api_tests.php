@@ -8232,9 +8232,25 @@ $old_speedtest->execute(['2026-09-03 05:00:00', 940.25, 48.5, 'librespeed']);
 // Those rows are older than both speed test fixes.
 $forget_data_fix('speedtest-source-turris');
 $forget_data_fix('speedtest-below-0.1-mbps');
+// A fresh install from the older schema.sql held the checked_at index and the
+// asset_id foreign key twice, an unnamed copy next to the migration's (R215).
+$r215_keys = function () use ($pdo, $db_name): array {
+    $ix = $pdo->prepare("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'monitor_logs'
+        GROUP BY INDEX_NAME HAVING COUNT(*) = 1 AND MAX(COLUMN_NAME) = 'checked_at' ORDER BY INDEX_NAME");
+    $ix->execute([$db_name]);
+    $fk = $pdo->prepare("SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'monitors'
+        AND COLUMN_NAME = 'asset_id' AND REFERENCED_TABLE_NAME = 'assets' ORDER BY CONSTRAINT_NAME");
+    $fk->execute([$db_name]);
+    return [$ix->fetchAll(PDO::FETCH_COLUMN), $fk->fetchAll(PDO::FETCH_COLUMN)];
+};
+if (!in_array('checked_at', $r215_keys()[0], true)) {
+    $pdo->exec("CREATE INDEX `checked_at` ON monitor_logs (checked_at)");
+}
+$pdo->exec("ALTER TABLE monitors ADD CONSTRAINT `monitors_ibfk_r215` FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE SET NULL");
 $force_schema_bump();
 api_get($base, 'action=public_status');
 check_true('migrace routerového vydání doběhla', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn() !== 'test-old');
+check('migrace nechá jen pojmenovaný index checked_at a cizí klíč asset_id', $r215_keys(), [['idx_logs_checked_at'], ['fk_monitors_asset_id']]);
 check('migrace doplní starší databázi sloupce metrik, monitoru i měření rychlosti', [
     $column_exists('vps_metrics', 'wifi_busy_5g'), $column_exists('vps_metrics', 'wan_link_flaps'), $column_exists('vps_metrics', 'clock_skew_s'),
     $column_exists('monitors', 'wan_plan_ok_pct'), $column_exists('monitors', 'wan_probe_enabled'),

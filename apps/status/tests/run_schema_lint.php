@@ -68,7 +68,43 @@ foreach (array_unique($tbl_matches[1] ?? []) as $table) {
     }
 }
 
-// --- 3. Verze ------------------------------------------------------------
+// --- 3. Indexy a cizí klíče ----------------------------------------------
+//
+// The migrations run once over a fresh import too. An index or foreign key
+// they add under a name schema.sql gives another name (or none) on the same
+// columns is not "already there" to MySQL, so a fresh install got two copies,
+// each kept up on every write (R215). Same columns, same name.
+preg_match_all('/CREATE TABLE IF NOT EXISTS `(\w+)`\s*\((.*?)\n\)\s*ENGINE/s', $schema_src, $sch_tables, PREG_SET_ORDER);
+$schema_keys = [];
+foreach ($sch_tables as [, $table, $body]) {
+    preg_match_all('/^\s*(?:UNIQUE\s+)?(?:INDEX|KEY)\s*(?:`?(\w+)`?\s*)?\(([^)]*)\)/m', $body, $km, PREG_SET_ORDER);
+    foreach ($km as $k) {
+        $schema_keys[$table][] = ['index', $k[1], strtolower(str_replace(['`', ' '], '', $k[2]))];
+    }
+    preg_match_all('/^\s*(?:CONSTRAINT\s+`?(\w+)`?\s+)?FOREIGN KEY\s*\(`?(\w+)`?\)/m', $body, $fm, PREG_SET_ORDER);
+    foreach ($fm as $f) {
+        $schema_keys[$table][] = ['fk', $f[1], strtolower($f[2])];
+    }
+}
+preg_match_all('/CREATE (?:UNIQUE )?INDEX (\w+) ON (\w+) \(([^)]*)\)/i', $migrations_src, $mi, PREG_SET_ORDER);
+preg_match_all('/ALTER TABLE (\w+) ADD CONSTRAINT (\w+) FOREIGN KEY \((\w+)\)/i', $migrations_src, $mf, PREG_SET_ORDER);
+$mig_keys = array_merge(
+    array_map(fn ($m) => ['index', $m[2], $m[1], strtolower(str_replace(['`', ' '], '', $m[3]))], $mi),
+    array_map(fn ($m) => ['fk', $m[1], $m[2], strtolower($m[3])], $mf)
+);
+if ($mig_keys === []) {
+    $problems[] = 'migrations.php nemá žádný CREATE INDEX ani cizí klíč - lint by nic neověřil';
+}
+foreach ($mig_keys as [$kind, $table, $name, $cols]) {
+    foreach ($schema_keys[$table] ?? [] as [$s_kind, $s_name, $s_cols]) {
+        if ($s_kind === $kind && $s_cols === $cols && $s_name !== $name) {
+            $problems[] = ($kind === 'fk' ? 'cizí klíč' : 'index') . " {$table}({$cols}) je v migracích jako {$name}, v schema.sql jako "
+                . ($s_name === '' ? 'nepojmenovaný' : $s_name) . ' - čerstvá instalace by ho měla dvakrát';
+        }
+    }
+}
+
+// --- 4. Verze ------------------------------------------------------------
 //
 // schema.sql stores no version: one written halfway through the file marked
 // a cut-off import as finished (R214), and one equal to BK_SCHEMA_VERSION
