@@ -3179,6 +3179,26 @@ check_true('monitor.php nevypíše skript z čísla', !str_contains($x330_page, 
 // The report also stored them as process samples; later tests count those.
 $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2 AND (name LIKE '<img%' OR name LIKE 'aaaa%')");
 
+// R163: monitors.port is the ServerQuery port; the agent's counts pair by the voice port.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, port, status, agent_key) VALUES (9163, 'R163 TS', 'teamspeak', 'ts163.example.test', 10011, 'up', 'k163-agent-key')");
+$x163_post = function (string $target) use ($pdo, $base): ?int {
+    $pdo->prepare("UPDATE monitors SET target = ?, last_details = NULL WHERE id = 9163")->execute([$target]);
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_TIMEOUT => 20,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_POSTFIELDS => json_encode(['agent_key' => 'k163-agent-key', 'cpu' => 5.0, 'teamspeak_servers' => [
+            ['port' => 9987, 'clients_online' => 5, 'clients_max' => 32, 'name' => 'Výchozí'],
+            ['port' => 8200, 'clients_online' => 2, 'clients_max' => 16, 'name' => 'Jiný port'],
+        ]])]);
+    curl_exec($ch);
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 9163")->fetchColumn(), true)['ts3_clients_online'] ?? null;
+};
+check('cíl bez portu páruje výchozí hlasový port, ne port ServerQuery', $x163_post('ts163.example.test'), 5);
+check('cíl s portem páruje ten hlasový port', $x163_post('ts163.example.test:8200'), 2);
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 9163");
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9163");
+$pdo->exec("DELETE FROM monitors WHERE id = 9163");
+
 // R164: comm keeps 15 characters, so a longer watched name was always missing.
 $x164_saved = $pdo->query("SELECT monitored_processes FROM monitors WHERE id = 2")->fetchColumn();
 $pdo->exec("UPDATE monitors SET monitored_processes = 'systemd-resolved, sshd' WHERE id = 2");

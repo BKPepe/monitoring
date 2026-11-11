@@ -817,8 +817,11 @@ function bk_agent_report(PDO $pdo, array $data, array $monitor, string $base_url
     
         // Process the TeamSpeak statistics from the agent (when sent)
         if (isset($data['teamspeak_servers']) && is_array($data['teamspeak_servers'])) {
-            $m_port = $monitor['port'] ?: 9987;
-            $parts = explode(':', $monitor['target']);
+            // The voice port, as check_teamspeak() reads it: from the target, or
+            // TeamSpeak's default. monitors.port is the ServerQuery port the check
+            // connects to, and pairing by it (10011) matched no voice server.
+            $m_port = 9987;
+            $parts = explode(':', (string)$monitor['target']);
             if (count($parts) === 2) {
                 $m_port = intval($parts[1]);
             }
