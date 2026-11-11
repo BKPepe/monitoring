@@ -147,6 +147,9 @@ export function SettingsPage() {
   const [savedSettings, setSavedSettings] = useState<SettingsMap>({});
   const [envLocked, setEnvLocked] = useState<string[]>([]);
   const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>({});
+  // The settings never arrived: the form is not shown. Shown empty, its save
+  // wrote the defaults over every switch the server held (alerts included).
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -154,11 +157,13 @@ export function SettingsPage() {
       const res = await fetch(`${API_BASE}?action=get_settings`, { credentials: 'include' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setSettings(data.settings ?? {});
-      setSavedSettings(data.settings ?? {});
+      if (!data || typeof data.settings !== 'object' || data.settings === null) throw new Error('invalid answer');
+      setSettings(data.settings);
+      setSavedSettings(data.settings);
       setEnvLocked(data.envLocked ?? []);
+      setLoadFailed(false);
     } catch {
-      setError(t('settings.load_error', 'Nepodařilo se načíst nastavení z API.'));
+      setLoadFailed(true);
     } finally {
       setLoading(false);
     }
@@ -294,6 +299,15 @@ export function SettingsPage() {
 
   if (loading) {
     return <LoadingState size="page" label={t('settings.loading', 'Načítání nastavení…')} />;
+  }
+
+  if (loadFailed) {
+    return (
+      <ErrorState
+        message={t('settings.load_error', 'Nepodařilo se načíst nastavení z API.')}
+        onRetry={() => void fetchSettings()}
+      />
+    );
   }
 
   // FieldInput is defined at module level (see below) - when it lived inside
