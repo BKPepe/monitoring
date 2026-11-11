@@ -148,7 +148,10 @@ export function ApiAgentsPage() {
         'api_agents.desc_cpanel',
         'Stáhněte cpanel_stats.php do kořenového adresáře hostingu pro veřejný sběr diskového prostoru, RAM a MySQL zátěže.'
       ),
-      command: `wget -O cpanel_stats.php ${window.location.origin}/status/cpanel_stats.php`,
+      // The source, not this server's copy: here the script runs, and asked
+      // without its key it answers 403 instead of handing out its code.
+      command:
+        'wget -O cpanel_stats.php https://raw.githubusercontent.com/BKPepe/monitoring/main/apps/status/cpanel_stats.php',
       extraNote: t(
         'api_agents.note_cpanel',
         'URL k souboru s vaším tajným klíčem následně zadejte v detailu monitoru v záložce Nastavení Webu.'

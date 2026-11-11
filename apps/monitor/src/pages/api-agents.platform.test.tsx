@@ -76,4 +76,13 @@ describe('API & Agenti: souhrn verzí jen z nahlášených verzí', () => {
     expect(await screen.findByText('Verze nehlášena: 1 z 2')).toBeTruthy();
     expect(screen.queryByText(/Všichni agenti aktuální/)).toBeNull();
   });
+
+  it('cPanel stahuje zdrojový soubor, ne výstup skriptu z tohoto serveru (R98)', async () => {
+    renderAt('/api-agents?platform=cpanel');
+    expect(
+      await screen.findByText(
+        'wget -O cpanel_stats.php https://raw.githubusercontent.com/BKPepe/monitoring/main/apps/status/cpanel_stats.php'
+      )
+    ).toBeTruthy();
+  });
 });
