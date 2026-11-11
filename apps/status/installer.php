@@ -356,7 +356,11 @@ function bk_install_render_config(string $template, array $cfg, string $stamp): 
     $out = $template;
     foreach ($values as $const => $value) {
         $line = "define('" . $const . "', " . var_export($value, true) . ");";
-        $out = preg_replace_callback("/^define\\('" . $const . "',[^\\n]*\\);[ \\t]*$/m", static fn (): string => $line, $out, -1, $count);
+        // A template saved with CRLF (an editor on Windows, an FTP client in
+        // ASCII mode) has "\r" before each "\n": the line did not match, and
+        // the install failed with "config.sample.php chybí". The "\r" stays.
+        $out = preg_replace_callback("/^define\\('" . $const . "',[^\\r\\n]*\\);[ \\t]*(\\r?)$/m",
+            static fn (array $m): string => $line . $m[1], $out, -1, $count);
         if ($out === null || $count !== 1) {
             return null;
         }

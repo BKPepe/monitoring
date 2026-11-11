@@ -4600,6 +4600,10 @@ check('SQL: neukončený komentář spolkne zbytek, nic z něj se nespustí', bk
 $in_plain = ['host' => 'db.example.com', 'port' => 3306, 'database' => 'd', 'user' => 'u', 'password' => 'p', 'timezone' => ''];
 $in_no_tz = bk_install_render_config($in_sample, $in_plain, 'x');
 check_true('config: bez pásma zůstane TIMEZONE ze vzoru', is_string($in_no_tz) && str_contains($in_no_tz, "define('TIMEZONE', 'Europe/Prague');"));
+// R239: a template with CRLF line ends failed with "config.sample.php chybí".
+$in_crlf = bk_install_render_config(str_replace("\n", "\r\n", $in_sample), $in_plain, 'x');
+check_true('config: šablona s CRLF se vyplní, konce řádků zůstanou',
+    is_string($in_crlf) && str_contains($in_crlf, "define('DB_HOST', 'db.example.com');\r\n") && !str_contains($in_crlf, "heslo_databaze"));
 check('config: define dvakrát nebo šablona bez <?php = žádný soubor', [
     bk_install_render_config($in_sample . "\ndefine('DB_HOST', 'other');\n", $in_plain, 'x'),
     bk_install_render_config(substr($in_sample, strlen("<?php\n")), $in_plain, 'x'),
