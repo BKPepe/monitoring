@@ -10827,6 +10827,20 @@ try {
         [$rt_prom_code, (bool)preg_match('/^bloodkings_monitor_response_time_ms\{name="R2 web",type="web"\} 200$/m', $rt_prom)], [200, true]);
     check_false('R2: a TeamSpeak po výpadku žádnou 0 ms nemá',
         str_contains($rt_prom, 'bloodkings_monitor_response_time_ms{name="R2 TeamSpeak"'));
+    // R58: an unknown state was exported as down, and a silent agent's last
+    // CPU as current.
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES
+                (263, 'R58 neznámý', 'agent_service', 'dnsmasq', 'unknown', 'Test', NULL),
+                (264, 'R58 tichý', 'vps', 'vps-r58.example.com', 'down', 'Test', '" . json_encode(['cpu' => 42, 'agent_last_seen' => time() - 86400]) . "'),
+                (265, 'R58 živý', 'vps', 'vps-r58b.example.com', 'up', 'Test', '" . json_encode(['cpu' => 17, 'agent_last_seen' => time() - 60]) . "')");
+    [, , $rt_prom58] = bk_raw_request($base . '/metrics.php?token=' . $rt_token);
+    check('R58: neznámý stav nemá vzorek, tichý agent nemá „aktuální“ CPU, živý ano', [
+        str_contains($rt_prom58, 'bloodkings_monitor_up{name="R58 neznámý"'),
+        str_contains($rt_prom58, 'bloodkings_vps_cpu_percent{name="R58 tichý"}'),
+        str_contains($rt_prom58, 'bloodkings_vps_agent_last_seen_timestamp{name="R58 tichý"}'),
+        str_contains($rt_prom58, 'bloodkings_vps_cpu_percent{name="R58 živý"} 17'),
+    ], [false, false, true, true]);
+    $pdo->exec("DELETE FROM monitors WHERE id IN (263, 264, 265)");
 
     // The deleted PHP node (node_client.php) sent 0 for a failed check; a
     // result that sends nothing used to be stored as 0 too. An 'up' result is

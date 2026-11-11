@@ -90,9 +90,14 @@ try {
         $response_times[$row['monitor_id']] = $row['response_time'];
     }
 
-    $lines[] = '# HELP bloodkings_monitor_up Stav monitoru (1 = up, 0 = down). Monitor v udrzbe ma hodnotu 1.';
+    $lines[] = '# HELP bloodkings_monitor_up Stav monitoru (1 = up, 0 = down). Monitor v udrzbe ma hodnotu 1, monitor s neznamym stavem vzorek nema.';
     $lines[] = '# TYPE bloodkings_monitor_up gauge';
     foreach ($monitors as $m) {
+        // An unknown or paused state is no measurement: no sample, which a
+        // Prometheus rule reads as absent. A 0 told it the monitor was down.
+        if (in_array($m['status'], ['unknown', 'paused', ''], true)) {
+            continue;
+        }
         $labels = prom_labels(['name' => $m['name'], 'type' => $m['type'], 'category' => $m['category']]);
         $up = in_array($m['status'], ['up', 'maintenance'], true) ? 1 : 0;
         $lines[] = 'bloodkings_monitor_up' . $labels . ' ' . $up;
@@ -124,10 +129,21 @@ try {
         'uptime' => ['bloodkings_vps_uptime_seconds', 'Uptime serveru v sekundach (hlaseno agentem).'],
         'agent_last_seen' => ['bloodkings_vps_agent_last_seen_timestamp', 'Unix cas posledniho hlaseni agenta.'],
     ];
+    // A silent agent's last report is not "Aktualni": its values go out only
+    // while the report is younger than the agent offline timeout (at least
+    // 10 minutes; 50 when the detection is off). agent_last_seen itself always
+    // goes out - it is the honest timestamp a rule can compare.
+    $offline_mins = (int)get_setting('agent_offline_timeout', '50');
+    $vps_max_age = max(600, ($offline_mins > 0 ? $offline_mins : 50) * 60);
     $vps_values = [];
     foreach ($monitors as $m) {
         $details = bk_monitor_details($m);
+        $seen = is_numeric($details['agent_last_seen'] ?? null) ? (int)$details['agent_last_seen'] : null;
+        $fresh = $seen !== null && time() - $seen <= $vps_max_age;
         foreach ($vps_metric_defs as $key => $def) {
+            if ($key !== 'agent_last_seen' && !$fresh) {
+                continue;
+            }
             if (isset($details[$key]) && is_numeric($details[$key])) {
                 $vps_values[$key][] = [$m['name'], (float)$details[$key]];
             }
