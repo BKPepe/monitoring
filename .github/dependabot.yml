@@ -13,12 +13,17 @@ updates:
       prefix: "deps"
 
   # apps/status CDN libs (ECharts, FontAwesome, QRCode) - bump PR requires
-  # updating the matching BK_CDN_* constant in functions.php
+  # updating the matching BK_CDN_* constant in functions.php. The manifest
+  # names the versions the CDN URLs load; ECharts stays on 5.x (see the
+  # comment above the constants), so a 5.x fix opens a PR and 6 does not.
   - package-ecosystem: "npm"
     directory: "/apps/status"
     schedule:
       interval: "weekly"
       day: "monday"
+    ignore:
+      - dependency-name: "echarts"
+        versions: [">=6"]
     open-pull-requests-limit: 5
     labels:
       - "dependencies"

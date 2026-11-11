@@ -5353,6 +5353,15 @@ $cp_src = (string)file_get_contents(__DIR__ . '/../functions.php');
 $cp_fn = substr($cp_src, (int)strpos($cp_src, 'function check_cpanel('), 6000);
 check('obě cesty check_cpanel skládají odpověď stejně', substr_count($cp_fn, 'return bk_cpanel_up_result($data, $duration);'), 2);
 
+// --- The Dependabot manifest names what the CDN loads (R126) -------------------
+// It said echarts 6.1.0 while BK_CDN_ECHARTS loads 5.5.1, so a 5.x fix never
+// opened a PR. Every library in it must match its BK_CDN_* URL.
+$cdn_manifest = json_decode((string)file_get_contents(__DIR__ . '/../package.json'), true)['dependencies'] ?? [];
+check('manifest pro Dependabot = verze z CDN', [$cdn_manifest['echarts'] ?? null, $cdn_manifest['@fortawesome/fontawesome-free'] ?? null], [
+    preg_match('/echarts@([0-9.]+)\//', BK_CDN_ECHARTS, $cdn_m) ? $cdn_m[1] : 'chybí',
+    preg_match('/fontawesome-free@([0-9.]+)\//', BK_CDN_FONTAWESOME, $cdn_m) ? $cdn_m[1] : 'chybí',
+]);
+
 // --- The htmode a router recommendation names (R204) ---------------------------
 check('režim jen se šířkou, kterou generace má: HT80 neexistuje', [
     bk_rec_htmode(4, 40), bk_rec_htmode(4, 80), bk_rec_htmode(5, 80), bk_rec_htmode(6, 160), bk_rec_htmode(7, 320), bk_rec_htmode(null, 80),
