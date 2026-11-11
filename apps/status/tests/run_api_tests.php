@@ -5940,6 +5940,14 @@ if (isset($cookie_jar)) {
     $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9151");
     $pdo->exec("DELETE FROM monitors WHERE id = 9151");
 
+    // R250: with nothing measured, "no outage" followed "cannot be judged".
+    $pdo->beginTransaction();
+    $pdo->exec("DELETE FROM monitor_logs");
+    $pdo->exec("DELETE FROM uptime_daily");
+    $dg250 = build_digest_data($pdo, 'weekly', false);
+    $pdo->rollBack();
+    check_true('bez měření digest netvrdí, že výpadek nebyl', !in_array(t('digest_summary_no_outages'), $dg250['executive_summary'], true));
+
     $digest_en = $digest_preview('en');
     check_true('EN digest se vyrenderoval', str_contains($digest_en, 'Weekly Report'));
     // DB data stays in its original language - only the template translates.

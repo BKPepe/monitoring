@@ -14610,7 +14610,9 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     } elseif ($trend_latency === 'up') {
         $executive_summary[] = t('digest_summary_latency_worsened');
     }
-    if ($incident_count === 0) {
+    // "No outage" only about a period somebody measured: with nothing measured
+    // it followed "stav nelze posoudit".
+    if ($incident_count === 0 && $availability !== null) {
         $executive_summary[] = t('digest_summary_no_outages');
     } elseif ($biggest_incident !== null) {
         $incident_phrase = $incident_count > 1 ? sprintf(t('digest_summary_incidents_plural'), $incident_count) : t('digest_summary_incident_singular');
