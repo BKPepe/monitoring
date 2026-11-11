@@ -526,17 +526,12 @@ function buildRows(
       add(t('public.f_version', 'Verze'), d.version);
       add(t('public.f_motd', 'Popis (MOTD)'), d.motd, false);
       break;
-    case 'teamspeak': {
+    // The public details are an allowlist (bk_public_monitor_details): the
+    // ts3server process and the router's radios stay with signed-in users,
+    // so the card has no rows for them.
+    case 'teamspeak':
       add(t('public.f_version', 'Verze'), d.version);
-      const proc = d.ts3_process;
-      if (proc && typeof proc === 'object') {
-        if (proc.uptime_sec != null) {
-          add(t('public.f_process_uptime', 'Uptime procesu'), formatDuration(Number(proc.uptime_sec), t));
-        }
-        if (proc.ram_mb != null) add('RAM', `${proc.ram_mb} MB`);
-      }
       break;
-    }
     case 'discord':
       // members je seznam online lidi (jmeno + stav), ne cislo.
       if (Array.isArray(d.members)) {
@@ -549,11 +544,6 @@ function buildRows(
     case 'openwrt':
       add(t('public.f_model', 'Model'), d.model);
       add(t('public.f_os', 'Systém'), d.os, false);
-      // Radios: the agent reports an empty array on a router without wireless
-      // hardware - that is an answer, not a gap, so no row appears.
-      if (Array.isArray(d.wifi_radios) && d.wifi_radios.length > 0) {
-        add('Wi-Fi', t('public.f_radios', { n: d.wifi_radios.length }, `${d.wifi_radios.length} rádia`));
-      }
       break;
   }
 
@@ -578,15 +568,4 @@ function fmtStamp(v: string | null, lang: string): string | null {
 /** "2026-08-17 12:00:00" / ISO -> "2026-08-17 12:00" - drop seconds, keep both source formats. */
 function fmtWindowTime(v: string): string {
   return v.replace('T', ' ').slice(0, 16);
-}
-
-function formatDuration(
-  secs: number,
-  t: (key: string, params?: Record<string, string | number> | string, fallback?: string) => string
-): string {
-  const days = Math.floor(secs / 86400);
-  const hours = Math.floor((secs % 86400) / 3600);
-  if (days > 0) return t('public.duration_dh', { d: days, h: hours }, `${days} d ${hours} h`);
-  const mins = Math.floor((secs % 3600) / 60);
-  return t('public.duration_hm', { h: hours, m: mins }, `${hours} h ${mins} min`);
 }
