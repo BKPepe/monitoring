@@ -5311,6 +5311,15 @@ check('výpadek, který běžel už na začátku okna, nemá začátek', bk_outa
     [['monitor_id' => 3, 'started' => null, 'secs' => 60, 'first_down' => 60, 'ongoing' => false]]);
 check('bez výpadku žádný', bk_outage_runs([1 => ['from' => 0, 'segments' => [[0, 60, 'up'], [60, 90, 'warning']]]]), []);
 
+// --- health.php: the error log check (R281) ------------------------------------
+bk_test_load_functions(__DIR__ . '/../health.php', ['bk_error_log_writable']);
+$el_dir = sys_get_temp_dir() . '/bk_r281_' . getmypid();
+@mkdir($el_dir);
+check('error log: bez souboru (log serveru) i syslog jsou v pořádku', [bk_error_log_writable(''), bk_error_log_writable('syslog')], [true, true]);
+check_true('ještě nevytvořený soubor v zapisovatelném adresáři je v pořádku', bk_error_log_writable($el_dir . '/php_errors.log'));
+check_false('soubor v adresáři, který neexistuje, ne', bk_error_log_writable($el_dir . '/neni/php_errors.log'));
+@rmdir($el_dir);
+
 // --- Digest averages without the agents that measure nothing (R51) ------------
 check('průměr CPU vynechá agenta, který CPU neměří (60 a nic je 60, ne 30)',
     bk_digest_avg([['cpu_usage' => 60], ['cpu_usage' => null], ['cpu_usage' => '20.0']], 'cpu_usage'), 40.0);

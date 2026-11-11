@@ -35,6 +35,19 @@ if (!$is_cli) {
 $checks = [];
 $all_ok = true;
 
+/**
+ * Whether PHP can write its error log. Empty or "syslog" is no file: the
+ * messages go to the server's log. A file PHP has not created yet (it does so
+ * on the first message) is writable when its directory is. The check used to
+ * test /tmp when no file was set, and failed on a log that did not exist yet.
+ */
+function bk_error_log_writable(string $path): bool {
+    if ($path === '' || $path === 'syslog') {
+        return true;
+    }
+    return file_exists($path) ? is_writable($path) : is_dir(dirname($path)) && is_writable(dirname($path));
+}
+
 function add_check(&$checks, &$all_ok, $name, $ok, $detail = '') {
     $checks[] = ['name' => $name, 'ok' => $ok, 'detail' => $detail];
     if (!$ok) $all_ok = false;
@@ -125,8 +138,11 @@ foreach ($agent_files as $af) {
 }
 
 // 5. Writable check (error_log)
-$log_ok = is_writable(ini_get('error_log') ?: '/tmp');
-add_check($checks, $all_ok, 'Error log writable', $log_ok, $log_ok ? ini_get('error_log') : 'Cannot write to error_log');
+$log_path = (string)ini_get('error_log');
+$log_ok = bk_error_log_writable($log_path);
+add_check($checks, $all_ok, 'Error log writable', $log_ok, $log_ok
+    ? ($log_path !== '' ? $log_path : 'server log')
+    : 'Cannot write to error_log (' . $log_path . ')');
 
 // Output
 $result = [
