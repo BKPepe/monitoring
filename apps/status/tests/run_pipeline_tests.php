@@ -712,6 +712,13 @@ if (function_exists('bk_digest_router_facts_lines')) {
         'clients' => null, 'clients_gen' => null, 'noise_week' => null, 'busy_week' => null,
     ]], 'disks' => []]);
     check('nezměřené údaje se vynechávají, ne nulují', $sparse[0], '2,4 GHz');
+    // Czech plural: 1 klient, 2-4 klienti, 0 and 5+ klientů.
+    $dg_clients = fn (int $n): string => bk_digest_router_facts_lines(['radios' => [[
+        'band' => '5GHz', 'channel' => null, 'generation' => null, 'width_mhz' => null, 'encryption' => null,
+        'clients' => $n, 'clients_gen' => null, 'noise_week' => null, 'busy_week' => null,
+    ]], 'disks' => []])[0];
+    check('počet klientů ve správném tvaru, i nula', array_map($dg_clients, [0, 1, 2, 4, 5]),
+        ['5 GHz · 0 klientů', '5 GHz · 1 klient', '5 GHz · 2 klienti', '5 GHz · 4 klienti', '5 GHz · 5 klientů']);
 }
 
 if (function_exists('bk_rec_days_with_data')) {

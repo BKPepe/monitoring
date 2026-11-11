@@ -15120,7 +15120,8 @@ function bk_digest_router_facts_lines(array $facts): array {
         }
         if (($radio['clients'] ?? null) !== null) {
             $clients = (int)$radio['clients'];
-            $key = $clients === 1 ? 'digest_fact_clients_1' : ($clients < 5 ? 'digest_fact_clients_few' : 'digest_fact_clients_many');
+            // Czech: 1 klient, 2-4 klienti, 0 and 5+ klientů. "< 5" made it "0 klienti".
+            $key = $clients === 1 ? 'digest_fact_clients_1' : ($clients >= 2 && $clients <= 4 ? 'digest_fact_clients_few' : 'digest_fact_clients_many');
             $gens = [];
             foreach (['wifi7' => 7, 'wifi6' => 6, 'wifi5' => 5, 'wifi4' => 4] as $gk => $gn) {
                 $n = $radio['clients_gen'][$gk] ?? null;
