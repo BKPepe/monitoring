@@ -36,7 +36,7 @@ function issueKindLabel(type: string, t: (key: string, fallback?: string) => str
 }
 
 export function CollectionIssuesBanner({ monitors }: { monitors: ApiMonitor[] }) {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
 
   const rows = monitors.flatMap((m) => (m.collectionIssues ?? []).map((issue) => ({ monitor: m, issue })));
 
@@ -69,7 +69,8 @@ export function CollectionIssuesBanner({ monitors }: { monitors: ApiMonitor[] })
               <span className="text-down font-medium">{issue.message}</span>
               {issue.since && (
                 <span className="text-muted-foreground font-mono text-2xs">
-                  ({t('collection.since', 'od')} {new Date(issue.since).toLocaleString('cs-CZ')})
+                  ({t('collection.since', 'od')}{' '}
+                  {new Date(issue.since).toLocaleString(lang === 'cs' ? 'cs-CZ' : 'en-GB')})
                 </span>
               )}
             </div>

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { LanguageProvider } from '@/context/language-context';
 import type { ApiMonitor } from '@/api/app-api';
@@ -26,7 +26,19 @@ const RELEASE_TYPES: [string, string][] = [
 ];
 
 describe('CollectionIssuesBanner', () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('writes the time an issue started in the page language, not always in Czech (R303)', () => {
+    vi.stubGlobal('localStorage', { getItem: (k: string) => (k === 'bk_lang' ? 'en' : null), setItem: () => {} });
+    renderBanner([
+      { type: 'agent_silent', message: 'The agent has not reported for 51 minutes', since: '2026-11-05T12:00:00' },
+    ]);
+    expect(screen.getByText(/05\/11\/2026/)).toBeTruthy();
+    expect(screen.queryByText(/5\. 11\. 2026/)).toBeNull();
+  });
 
   it('names the kind of every new collection issue next to the server sentence', () => {
     for (const [type, label] of RELEASE_TYPES) {
