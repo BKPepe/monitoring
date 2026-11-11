@@ -39,6 +39,8 @@ import { SignalReading } from '@/components/signal-reading';
 import { AvailabilityWindows } from '@/components/availability-windows';
 import { NotificationLog } from '@/components/notification-log';
 import { MaintenanceToggle, useMaintenanceToggle } from '@/components/maintenance-toggle';
+import { maintenanceState } from '@/lib/maintenance';
+import { useNow } from '@/components/charts/use-chart-theme';
 import { OverflowMenu, type OverflowMenuItem } from '@/components/ui/overflow-menu';
 import { useSession } from '@/api/use-session';
 import { InterfaceTrafficDaily } from '@/components/interface-traffic-daily';
@@ -515,6 +517,8 @@ export function AssetDetailPage() {
       el?.focus({ preventScroll: true });
     });
   }, []);
+  // Ticks, so a scheduled maintenance window turns active on the page too.
+  const now = useNow();
 
   if (idNum === null) return <NotFoundPage />;
 
@@ -565,6 +569,8 @@ export function AssetDetailPage() {
   // A router's and a server's third tab is about their disks (W2-3); its
   // header and content follow the tab's name, not the web target's (V-14).
   const isStorage = isRouter || isServerKind(asset.kind);
+  // A window announced for later is not maintenance yet (R291).
+  const maintState = maintenanceState(rawMonitor, now);
 
   return (
     <div className="space-y-6">
@@ -574,7 +580,8 @@ export function AssetDetailPage() {
         subtitle={asset.subtitle}
         breadcrumb={asset.breadcrumb}
         statusKey={asset.statusKey}
-        maintenance={rawMonitor?.maintenance === true}
+        maintenance={maintState}
+        maintenanceStart={rawMonitor?.maintenanceStart ?? null}
         archived={asset.archived}
         health={
           serverInsights
@@ -593,7 +600,8 @@ export function AssetDetailPage() {
               <div className="hidden md:block">
                 <MaintenanceToggle
                   monitorId={Number(asset.id)}
-                  active={rawMonitor?.maintenance === true}
+                  active={maintState !== 'none'}
+                  scheduled={maintState === 'scheduled'}
                   onChanged={() => setReloadToken((n) => n + 1)}
                 />
               </div>
@@ -602,7 +610,8 @@ export function AssetDetailPage() {
                 under the title and pushed the tabs a screen down (W2-2). */}
             <PhoneActions
               asset={asset}
-              maintenanceActive={rawMonitor?.maintenance === true}
+              maintenanceActive={maintState !== 'none'}
+              maintenanceScheduled={maintState === 'scheduled'}
               onChanged={() => setReloadToken((n) => n + 1)}
             />
           </div>
@@ -1124,16 +1133,23 @@ function HeroActions({ asset }: { asset: AssetDetail }) {
 function PhoneActions({
   asset,
   maintenanceActive,
+  maintenanceScheduled,
   onChanged,
 }: {
   asset: AssetDetail;
   maintenanceActive: boolean;
+  maintenanceScheduled: boolean;
   onChanged: () => void;
 }) {
   const { t } = useLanguage();
   const { isAdmin } = useSession();
   const remote = useRemoteActions(asset);
-  const maintenance = useMaintenanceToggle({ monitorId: Number(asset.id), active: maintenanceActive, onChanged });
+  const maintenance = useMaintenanceToggle({
+    monitorId: Number(asset.id),
+    active: maintenanceActive,
+    scheduled: maintenanceScheduled,
+    onChanged,
+  });
   if (asset.archived) return null;
 
   const items: OverflowMenuItem[] = [];

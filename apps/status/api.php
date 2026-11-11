@@ -679,8 +679,10 @@ if ($action === 'monitors') {
                 $monitors[$mid]['notes'] = $r['notes'];
                 $monitors[$mid]['maintenance'] = (bool)$r['maintenance'];
                 $monitors[$mid]['maintenanceDescription'] = $r['maintenance_description'];
-                $monitors[$mid]['maintenanceStart'] = $r['maintenance_start'];
-                $monitors[$mid]['maintenanceEnd'] = $r['maintenance_end'];
+                // With the offset, as the public fields (the form takes the
+                // wall time from the front of it, monitor-form toLocalInput).
+                $monitors[$mid]['maintenanceStart'] = bk_iso_time($r['maintenance_start'] === null ? null : (string)$r['maintenance_start']);
+                $monitors[$mid]['maintenanceEnd'] = bk_iso_time($r['maintenance_end'] === null ? null : (string)$r['maintenance_end']);
                 $monitors[$mid]['monitoredProcesses'] = $r['monitored_processes'];
                 $monitors[$mid]['cpuThreshold'] = (int)($r['cpu_threshold'] ?? BK_DEFAULT_THRESHOLDS['cpu']);
                 $monitors[$mid]['ramThreshold'] = (int)($r['ram_threshold'] ?? BK_DEFAULT_THRESHOLDS['ram']);

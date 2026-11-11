@@ -13,10 +13,13 @@ import { appApi } from '@/api/app-api';
 export function useMaintenanceToggle({
   monitorId,
   active,
+  scheduled = false,
   onChanged,
 }: {
   monitorId: number;
   active: boolean;
+  /** The window is announced but has not begun: switching off cancels the plan. */
+  scheduled?: boolean;
   onChanged?: () => void;
 }) {
   const { t } = useLanguage();
@@ -50,7 +53,11 @@ export function useMaintenanceToggle({
     busy,
     error,
     toggle,
-    label: active ? t('maint.end', 'Ukončit údržbu') : t('maint.start', 'Zapnout údržbu'),
+    label: !active
+      ? t('maint.start', 'Zapnout údržbu')
+      : scheduled
+        ? t('maint.cancel_plan', 'Zrušit naplánovanou údržbu')
+        : t('maint.end', 'Ukončit údržbu'),
   };
 }
 
@@ -65,14 +72,16 @@ export function useMaintenanceToggle({
 export function MaintenanceToggle({
   monitorId,
   active,
+  scheduled = false,
   onChanged,
 }: {
   monitorId: number;
   active: boolean;
+  scheduled?: boolean;
   /** Called after a successful change so the page can reload its state. */
   onChanged?: () => void;
 }) {
-  const maintenance = useMaintenanceToggle({ monitorId, active, onChanged });
+  const maintenance = useMaintenanceToggle({ monitorId, active, scheduled, onChanged });
 
   if (!maintenance.allowed) return null;
 
@@ -80,7 +89,7 @@ export function MaintenanceToggle({
     <span className="inline-flex flex-col items-end gap-1">
       <Button
         size="sm"
-        variant={active ? 'primary' : 'outline'}
+        variant={active && !scheduled ? 'primary' : 'outline'}
         disabled={maintenance.busy}
         onClick={() => void maintenance.toggle()}
         className="gap-1.5"

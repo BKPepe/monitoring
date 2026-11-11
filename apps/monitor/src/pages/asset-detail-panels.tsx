@@ -22,6 +22,8 @@ import { statusLabel, statusMeta, type StatusKey } from '@/lib/status';
 import { wanLinkState } from '@/lib/wan-link';
 import { bandLabel, radioGenerationLabel } from '@/lib/wifi-profile';
 import { cn } from '@/lib/utils';
+import { localStamp } from '@/lib/local-stamp';
+import type { MaintenanceState } from '@/lib/maintenance';
 
 /**
  * The NetPulse "Device detail" pieces of the asset page: the header card, the
@@ -66,6 +68,7 @@ export function AssetHeaderPanel({
   breadcrumb,
   statusKey,
   maintenance,
+  maintenanceStart,
   archived,
   health,
   actions,
@@ -75,7 +78,9 @@ export function AssetHeaderPanel({
   subtitle: string;
   breadcrumb: string[];
   statusKey: StatusKey;
-  maintenance: boolean;
+  maintenance: MaintenanceState;
+  /** When a scheduled window begins, as the server sent it. */
+  maintenanceStart: string | null;
   archived: boolean;
   health: AssetHealthState;
   /** The desktop buttons and the phone's overflow menu. */
@@ -129,7 +134,18 @@ export function AssetHeaderPanel({
             <Pill tone={PILL[meta.variant]} dot pulse={statusKey === 'up'}>
               {statusLabel(statusKey, t)}
             </Pill>
-            {maintenance && <Pill tone="info">{t('common.maintenance', 'Údržba')}</Pill>}
+            {maintenance === 'active' && <Pill tone="info">{t('common.maintenance', 'Údržba')}</Pill>}
+            {maintenance === 'scheduled' && (
+              <Pill tone="neutral">
+                {maintenanceStart
+                  ? t(
+                      'asset.maintenance_scheduled',
+                      { from: localStamp(maintenanceStart) },
+                      `Údržba od ${localStamp(maintenanceStart)}`
+                    )
+                  : t('asset.maintenance_scheduled_bare', 'Naplánovaná údržba')}
+              </Pill>
+            )}
             {archived && <Pill tone="neutral">{t('asset.archived_pill', 'Archivováno')}</Pill>}
           </div>
         </div>

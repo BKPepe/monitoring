@@ -2452,6 +2452,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Erases every measurement, log row and daily aggregate of this monitor. Irreversible. Type the exact monitor name to confirm.',
   },
   'infra.clear_history_done': { cs: 'Historie smazána.', en: 'History erased.' },
+  'maint.cancel_plan': { cs: 'Zrušit naplánovanou údržbu', en: 'Cancel scheduled maintenance' },
   'maint.end': { cs: 'Ukončit údržbu', en: 'End maintenance' },
   'maint.prompt': {
     cs: 'Popis údržby (nepovinné, uvidí ho i veřejná stránka):',
@@ -4950,6 +4951,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'dashboard.device_temp': { cs: 'Teplota', en: 'Temp.' },
   'asset.breadcrumb': { cs: 'Umístění', en: 'Location' },
   'asset.archived_pill': { cs: 'Archivováno', en: 'Archived' },
+  'asset.maintenance_scheduled': { cs: 'Údržba od {from}', en: 'Maintenance from {from}' },
+  'asset.maintenance_scheduled_bare': { cs: 'Naplánovaná údržba', en: 'Scheduled maintenance' },
   'asset.health_caption': { cs: 'Zdraví: {name}', en: 'Health: {name}' },
   'asset.health_failed': {
     cs: 'Skóre zdraví se nepodařilo zjistit.',
