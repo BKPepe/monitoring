@@ -697,8 +697,6 @@ return [
     'net_insight_ups_battery' => 'The UPS is running on battery - %d %% capacity left.',
     'net_insight_ups_battery_nopct' => 'The UPS is running on battery - mains power lost.',
     'net_insight_ups_battery_detail' => 'The server runs only until the battery drains - check the power feed.',
-    'net_insight_wan_reconnects' => 'WAN disconnected %d times in the last 7 days.',
-    'net_insight_wan_reconnects_detail' => 'Frequent WAN drops may indicate an ISP, cable, or router issue.',
     'net_insight_conntrack_high' => 'Conntrack table is %s%% full.',
     'net_insight_conntrack_detail' => 'When the conntrack table fills up, new connections will be dropped. Consider increasing nf_conntrack_max.',
     'net_insight_wifi_noise' => 'Wi-Fi %s has high interference (noise %d dBm).',

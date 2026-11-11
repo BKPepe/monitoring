@@ -225,6 +225,22 @@ if (function_exists('bk_get_network_insights')) {
     $ni_oom = fn (array $extra): int => count(bk_get_network_insights($ni_pdo, ['id' => 2], array_merge(['oom_kills' => 3], $extra)));
     check('OOM z posledních 24 h se hlásí', $ni_oom(['oom_kill_at' => time() - 3600]), 1);
     check('týden starý OOM už ne', [$ni_oom(['oom_kill_at' => time() - 7 * 86400]), $ni_oom([])], [0, 0]);
+
+    // R108: an insight counted 'status_changed_down' in monitor_events, a
+    // type nobody stores (the timeline derives it), so it never fired. Every
+    // event type the insights count is one log_monitor_event() writes.
+    $ni_src = (string)file_get_contents(__DIR__ . '/../functions.php');
+    $ni_from = strpos($ni_src, 'function bk_get_network_insights(');
+    $ni_body = substr($ni_src, $ni_from, (int)strpos($ni_src, "\nfunction ", $ni_from + 10) - $ni_from);
+    preg_match_all("/event_type = '([a-z0-9_]+)'/", $ni_body, $ni_types);
+    $ni_writers = '';
+    foreach (glob(__DIR__ . '/../*.php') as $ni_file) {
+        $ni_writers .= (string)file_get_contents($ni_file);
+    }
+    $ni_unwritten = array_values(array_filter(array_unique($ni_types[1]),
+        fn (string $type): bool => !preg_match("/log_monitor_event\\([^;]*'" . preg_quote($type, '/') . "'/", $ni_writers)));
+    check_true('postřehy počítají nějaké typy událostí', count($ni_types[1]) > 0);
+    check('a jen ty, které někdo zapisuje', $ni_unwritten, []);
 }
 
 // =======================================================================

@@ -698,8 +698,6 @@ return [
     'net_insight_ups_battery' => 'UPS běží na baterii - zbývá %d %% kapacity.',
     'net_insight_ups_battery_nopct' => 'UPS běží na baterii - výpadek napájení.',
     'net_insight_ups_battery_detail' => 'Server poběží jen do vybití baterie - zkontrolujte napájení.',
-    'net_insight_wan_reconnects' => 'WAN se za posledních 7 dní odpojila %d×.',
-    'net_insight_wan_reconnects_detail' => 'Časté výpadky WAN mohou značit problém s ISP, kabelem nebo routerem.',
     'net_insight_conntrack_high' => 'Conntrack tabulka je z %s %% zaplněná.',
     'net_insight_conntrack_detail' => 'Při zaplnění conntrack tabulky budou nová spojení odmítnuta. Zvažte zvýšení nf_conntrack_max.',
     'net_insight_wifi_noise' => 'Wi-Fi %s má vysoké rušení (noise %d dBm).',

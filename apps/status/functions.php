@@ -4260,30 +4260,10 @@ function bk_get_network_insights($pdo, $monitor, $details) {
     if (!is_array($details)) return $insights;
     $monitor_id = $monitor['id'];
 
-    // WAN reconnect frequency (7d rolling window)
-    try {
-        $stmt = $pdo->prepare("SELECT COUNT(*) AS cnt FROM monitor_events WHERE monitor_id = ? AND event_type = 'status_changed_down' AND occurred_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)");
-        $stmt->execute([$monitor_id]);
-        $row = $stmt->fetch();
-        $down_count = (int)($row['cnt'] ?? 0);
-        if ($down_count >= 5) {
-            $insights[] = [
-                'type' => 'network',
-                'icon' => 'fa-rotate',
-                'color' => 'var(--color-red)',
-                'text' => sprintf(t('net_insight_wan_reconnects'), $down_count),
-                'detail' => t('net_insight_wan_reconnects_detail'),
-            ];
-        } elseif ($down_count >= 2) {
-            $insights[] = [
-                'type' => 'network',
-                'icon' => 'fa-rotate',
-                'color' => 'var(--color-orange, #f39c12)',
-                'text' => sprintf(t('net_insight_wan_reconnects'), $down_count),
-                'detail' => t('net_insight_wan_reconnects_detail'),
-            ];
-        }
-    } catch (PDOException $e) {}
+    // How often the WAN dropped is the agent counter's insight below
+    // ('wan_reconnected'). A second one here counted 'status_changed_down' in
+    // monitor_events, a type the timeline derives and nobody stores, so it
+    // never fired.
 
     // Conntrack table pressure
     if (isset($details['conntrack_pct']) && $details['conntrack_pct'] !== null) {
