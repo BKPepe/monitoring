@@ -8915,7 +8915,32 @@ function bk_render_daily_reminder(array $report): array {
  * Czech only, like every other webhook text in this file: the e-mail follows
  * the recipient's language, a shared Discord channel has no recipient to ask.
  */
-function bk_daily_reminder_text(array $report): string {
+/**
+ * Escapes text for a Telegram message sent with parse_mode Markdown, the
+ * legacy flavour the alerts use: outside an entity, "_", "*", "`" and "[" get
+ * a backslash. Unescaped, a monitor named "web_api" or an error quoting
+ * "public_status" left an unpaired "_", and Telegram refused the whole
+ * message with HTTP 400 while the test button, sent as plain text, passed.
+ */
+function bk_telegram_md(string $text): string {
+    return addcslashes($text, '_*`[');
+}
+
+/**
+ * The Telegram text of an alert: bold labels, and everything that comes from
+ * outside (the name, the status, the error) escaped for Markdown.
+ */
+function bk_alert_telegram_text(string $emoji, string $name, string $status_text, string $time, string $error_msg): string {
+    return "$emoji *Blood Kings Alert*:\n*Monitor:* " . bk_telegram_md($name)
+        . "\n*Status:* " . bk_telegram_md(strtoupper($status_text)) . "\n*Čas:* $time"
+        . ($error_msg !== '' ? "\n*Detaily:* " . bk_telegram_md($error_msg) : '');
+}
+
+/**
+ * The reminder as one chat text. $telegram: the Markdown variant for
+ * Telegram, with its own bold and every name escaped (bk_telegram_md()).
+ */
+function bk_daily_reminder_text(array $report, bool $telegram = false): string {
     $parts = [];
     foreach (array_slice($report['outages'], 0, 5) as $item) {
         $parts[] = '• ' . $item['name'] . ' – ' . strtoupper($item['status'])
@@ -8930,6 +8955,9 @@ function bk_daily_reminder_text(array $report): string {
     $shown = count($parts);
     if ($report['problem_count'] > $shown) {
         $parts[] = '… a dalších ' . ($report['problem_count'] - $shown) . ' v aplikaci.';
+    }
+    if ($telegram) {
+        return "🔔 *Denní připomínka: pořád je něco rozbité*\n" . implode("\n", array_map('bk_telegram_md', $parts));
     }
     return "🔔 **Denní připomínka: pořád je něco rozbité**\n" . implode("\n", $parts);
 }
@@ -9033,7 +9061,7 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
     // Priority 0 on Pushover: the reminder is a summary of what is already
     // known, not a page. The outage itself paged when it happened.
     $shared = bk_send_shared_channels($pdo, 'daily_reminder', 'daily_reminder', $text,
-        'Blood Kings: denní připomínka', 0, true);
+        'Blood Kings: denní připomínka', 0, bk_daily_reminder_text($report, true));
     $result['channels'] += $shared['sent'];
 
     // "Sent" means at least one message really left. Without this the cron
@@ -9049,13 +9077,15 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
  * Sends one text through the shared channels of the global settings -
  * Discord, Slack, Telegram and Pushover - and logs each attempt with its
  * delivery result. A channel without settings is skipped, not counted.
- * $telegram_markdown only for a text written for it: an unpaired "_" (as in
- * a URL's "public_status") makes Telegram refuse a Markdown message.
+ * $telegram_markdown: the same message written for Telegram's Markdown, with
+ * everything from outside escaped (bk_telegram_md()). Without it Telegram
+ * gets $text as plain text: an unpaired "_" (as in a URL's "public_status")
+ * makes Telegram refuse a Markdown message.
  *
  * @return array{attempted: int, sent: int, failed: int}
  */
 function bk_send_shared_channels(PDO $pdo, string $status, string $kind, string $text, string $pushover_title,
-                                 int $pushover_priority, bool $telegram_markdown): array {
+                                 int $pushover_priority, ?string $telegram_markdown): array {
     $count = ['attempted' => 0, 'sent' => 0, 'failed' => 0];
     $log = function (string $channel, ?string $recipient, bool $ok) use ($pdo, $status, $kind, &$count): void {
         bk_log_notification($pdo, null, $status, $channel, $recipient, $ok,
@@ -9074,7 +9104,8 @@ function bk_send_shared_channels(PDO $pdo, string $status, string $kind, string 
     $tg_token = (string)get_setting('telegram_bot_token', '');
     $tg_chat = (string)get_setting('telegram_chat_id', '');
     if ($tg_token !== '' && $tg_chat !== '') {
-        $tg_body = ['chat_id' => $tg_chat, 'text' => $text] + ($telegram_markdown ? ['parse_mode' => 'Markdown'] : []);
+        $tg_body = $telegram_markdown === null ? ['chat_id' => $tg_chat, 'text' => $text]
+            : ['chat_id' => $tg_chat, 'text' => $telegram_markdown, 'parse_mode' => 'Markdown'];
         $log('telegram', $tg_chat, send_webhook_post('https://api.telegram.org/bot' . $tg_token . '/sendMessage',
             (string)json_encode($tg_body, JSON_UNESCAPED_UNICODE)));
     }
@@ -9126,7 +9157,7 @@ function bk_send_admin_notice(PDO $pdo, string $status, callable $render, int $p
     // The shared channels belong to nobody, so they speak the global language.
     [$shared_subject, , $shared_text] = $rendered((string)get_setting('email_lang', 'cs'));
     $shared = bk_send_shared_channels($pdo, $status, 'admin_notice', $shared_text,
-        $shared_subject, $pushover_priority, false);
+        $shared_subject, $pushover_priority, null);
     foreach (['attempted', 'sent', 'failed'] as $k) {
         $count[$k] += $shared[$k];
     }
@@ -9899,7 +9930,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
     }
 
     if (!empty($telegram_token) && !empty($telegram_chat)) {
-        $tg_msg = "$emoji *Blood Kings Alert*:\n*Monitor:* $name\n*Status:* " . strtoupper($status_text) . "\n*Čas:* $time" . (!empty($error_msg) ? "\n*Detaily:* $error_msg" : "");
+        $tg_msg = bk_alert_telegram_text($emoji, (string)$name, $status_text, $time, (string)$error_msg);
         $tg_url = "https://api.telegram.org/bot" . $telegram_token . "/sendMessage";
         $payload = [
             "chat_id" => $telegram_chat,

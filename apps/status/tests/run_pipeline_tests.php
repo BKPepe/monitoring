@@ -1247,7 +1247,7 @@ if (function_exists('bk_notification_problems')) {
 bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_send_daily_reminder', 'bk_daily_reminder_collect', 'bk_daily_reminder_select',
     'bk_daily_reminder_recipients', 'bk_daily_reminder_scoped', 'bk_alert_audience', 'bk_subscription_effective',
-    'bk_daily_reminder_due', 'bk_daily_reminder_text',
+    'bk_daily_reminder_due', 'bk_daily_reminder_text', 'bk_telegram_md',
     'bk_render_daily_reminder', 'render_email_wrapper', 'bk_log_notification', 'bk_send_shared_channels',
     'bk_recipient_lang', 'bk_render_per_lang',
     'bk_heartbeat_evaluate', 'bk_alert_color_class', 'bk_format_duration_secs',
@@ -1797,7 +1797,7 @@ bk_test_load_functions(__DIR__ . '/../db.php', ['bk_config_output_excerpt']);
 bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_self_check_url', 'bk_site_origin', 'bk_self_check_quote', 'bk_self_check_verdict', 'bk_self_check_step',
     'bk_self_check_message',
-    'bk_send_admin_notice', 'bk_send_shared_channels', 'send_pushover_alert',
+    'bk_send_admin_notice', 'bk_send_shared_channels', 'send_pushover_alert', 'bk_alert_telegram_text',
 ]);
 
 if (function_exists('bk_self_check_verdict')) {
@@ -1960,6 +1960,37 @@ if (function_exists('bk_send_admin_notice') && $dr_pdo instanceof PDO) {
         ['attempted' => 0, 'sent' => 0, 'unknown' => 0, 'failed' => 0]);
     $dr_pdo->exec("UPDATE users SET role = 'admin', phone = NULL, whatsapp_apikey = NULL, whatsapp_notifications = 0 WHERE id = 1");
     $GLOBALS['bk_test_callmebot_answer'] = null;
+}
+
+// --- Telegram's Markdown ------------------------------------------------
+// The alerts and the reminder go to Telegram with parse_mode Markdown. An
+// unescaped "_" in a monitor's name or an error made Telegram refuse the
+// message (HTTP 400), while the test button, sent as plain text, passed.
+if (function_exists('bk_alert_telegram_text') && function_exists('bk_daily_reminder_text')) {
+    check('Markdown pro Telegram: _ * ` [ dostanou zpětné lomítko', bk_telegram_md('web_api *x* `y` [z]'),
+        'web\_api \*x\* \`y\` \[z]');
+    check('alert: tučné popisky zůstanou, název a chyba jsou escapované',
+        bk_alert_telegram_text('🔴', 'web_api', 'DOWN', '11.11.2026 10:00:00', 'HTTP 500 z /status/public_status'),
+        "🔴 *Blood Kings Alert*:\n*Monitor:* web\\_api\n*Status:* DOWN\n*Čas:* 11.11.2026 10:00:00\n*Detaily:* HTTP 500 z /status/public\\_status");
+    check_false('alert bez chyby nemá řádek Detaily', str_contains(bk_alert_telegram_text('🟢', 'a', 'UP', 't', ''), 'Detaily'));
+    $tg_report = ['outages' => [['name' => 'db_main', 'status' => 'down', 'duration_secs' => null]],
+        'silent' => [], 'incidents' => [], 'problem_count' => 1];
+    check('připomínka pro Telegram: vlastní tučné písmo a escapovaný název', bk_daily_reminder_text($tg_report, true),
+        "🔔 *Denní připomínka: pořád je něco rozbité*\n• db\\_main – DOWN");
+    check_true('ostatní kanály dostanou název beze změny', str_contains(bk_daily_reminder_text($tg_report), '• db_main – DOWN'));
+}
+if (function_exists('bk_send_shared_channels') && $dr_pdo instanceof PDO) {
+    $tg_saved = $GLOBALS['system_settings'];
+    $GLOBALS['system_settings'] = ['telegram_bot_token' => '123:abc', 'telegram_chat_id' => '-100200300'] + $tg_saved;
+    $GLOBALS['bk_test_webhooks'] = [];
+    bk_send_shared_channels($dr_pdo, 'daily_reminder', 'daily_reminder', 'prostý text', 'x', 0, '*md* a\_b');
+    bk_send_shared_channels($dr_pdo, 'daily_reminder', 'daily_reminder', 'prostý text', 'x', 0, null);
+    $tg_sent = array_map(fn (array $w): array => (array)json_decode($w['payload'], true), $GLOBALS['bk_test_webhooks']);
+    check('Telegram: Markdown jen pro text psaný pro něj, jinak prostý text',
+        [$tg_sent[0]['text'] ?? null, $tg_sent[0]['parse_mode'] ?? null, $tg_sent[1]['text'] ?? null, $tg_sent[1]['parse_mode'] ?? null],
+        ['*md* a\_b', 'Markdown', 'prostý text', null]);
+    $GLOBALS['system_settings'] = $tg_saved;
+    $dr_pdo->exec('DELETE FROM notification_log');
 }
 
 // --- cron: the reminder really is wired in --------------------------------
