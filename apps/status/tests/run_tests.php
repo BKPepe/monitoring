@@ -5362,6 +5362,15 @@ check('manifest pro Dependabot = verze z CDN', [$cdn_manifest['echarts'] ?? null
     preg_match('/fontawesome-free@([0-9.]+)\//', BK_CDN_FONTAWESOME, $cdn_m) ? $cdn_m[1] : 'chybí',
 ]);
 
+// --- A 2FA code typed with a space is the same code (R226) ---------------------
+$tt_secret = bk_totp_generate_secret();
+$tt_code = bk_totp_calculate($tt_secret, floor(time() / 30));
+check('kód 2FA s mezerou uprostřed i na krajích projde, jiný ne', [
+    bk_totp_verify_code($tt_secret, substr($tt_code, 0, 3) . ' ' . substr($tt_code, 3)),
+    bk_totp_verify_code($tt_secret, ' ' . $tt_code . ' '),
+    bk_totp_verify_code($tt_secret, '000 000') && $tt_code !== '000000',
+], [true, true, false]);
+
 // --- Every audited action has a label in /app (R302) --------------------------
 // About 25 of them showed their raw code ("router_rec_mute") in the log.
 $au_actions = [];

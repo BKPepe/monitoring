@@ -15871,9 +15871,11 @@ function bk_totp_generate_secret($length = 16) {
 }
 
 function bk_totp_verify_code($secret, $code, $discrepancy = 1) {
-    if (empty($secret) || empty($code)) return false;
+    // Spaces anywhere go: an authenticator shows "123 456", the form's
+    // placeholder too, and a code typed that way was refused as wrong.
+    $code = (string)preg_replace('/\s+/', '', (string)$code);
+    if (empty($secret) || $code === '') return false;
     $timeStep = floor(time() / 30);
-    $code = trim($code);
     for ($i = -$discrepancy; $i <= $discrepancy; $i++) {
         if (hash_equals(bk_totp_calculate($secret, $timeStep + $i), $code)) {
             return true;
