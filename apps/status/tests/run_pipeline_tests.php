@@ -226,6 +226,19 @@ if (function_exists('bk_get_network_insights')) {
     check('OOM z posledních 24 h se hlásí', $ni_oom(['oom_kill_at' => time() - 3600]), 1);
     check('týden starý OOM už ne', [$ni_oom(['oom_kill_at' => time() - 7 * 86400]), $ni_oom([])], [0, 0]);
 
+    // R274: the count is of the last 500 log lines, not of 24 hours.
+    $ni_log = fn (array $d): string => (string)(array_values(array_filter(bk_get_network_insights($ni_pdo, ['id' => 2], $d),
+        fn (array $i): bool => ($i['icon'] ?? '') === 'fa-file-lines'))[0]['text'] ?? '');
+    check('chyby v logu: okno z hlášení agenta, bez něj 500 řádků, nikdy 24 hodin', [
+        $ni_log(['log_errors_24h' => 80, 'log_window_secs' => 18000]),
+        $ni_log(['log_errors_24h' => 80, 'log_window_secs' => 600]),
+        $ni_log(['log_errors_24h' => 80]),
+    ], [
+        'Systémový log hlásí 80 chyb za posledních 5 h.',
+        'Systémový log hlásí 80 chyb za posledních 10 min.',
+        'Systémový log hlásí 80 chyb v posledních 500 řádcích.',
+    ]);
+
     // R272: the LTE insight's detail spoke of a missing SIM for every reason,
     // also with the modem's interface down.
     $ni_lte = fn (array $d): string => (string)(array_values(array_filter(bk_get_network_insights($ni_pdo, ['id' => 2], $d),

@@ -1262,8 +1262,8 @@ function bk_metric_column_map(): array {
     'ram_total_mb' => ['col' => 'ram_total_mb', 'unit' => 'MB', 'label' => 'Celková paměť'],
     'wan_link_mbit' => ['col' => 'wan_link_mbit', 'unit' => 'Mbit/s', 'label' => 'Rychlost linky WAN'],
     'wan_uptime' => ['col' => 'wan_uptime_secs', 'unit' => 's', 'label' => 'Doba spojení WAN'],
-    'log_errors_24h' => ['col' => 'log_errors_24h', 'unit' => '', 'label' => 'Chyby v logu za 24 h'],
-    'log_warnings_24h' => ['col' => 'log_warnings_24h', 'unit' => '', 'label' => 'Varování v logu za 24 h'],
+    'log_errors_24h' => ['col' => 'log_errors_24h', 'unit' => '', 'label' => 'Chyby v posledních řádcích logu'],
+    'log_warnings_24h' => ['col' => 'log_warnings_24h', 'unit' => '', 'label' => 'Varování v posledních řádcích logu'],
     'btrfs_errors' => ['col' => 'btrfs_errors', 'unit' => '', 'label' => 'Chyby Btrfs'],
     'sqm_download_kbps' => ['col' => 'sqm_download_kbps', 'unit' => 'kbit/s', 'label' => 'SQM limit stahování'],
     'sqm_upload_kbps' => ['col' => 'sqm_upload_kbps', 'unit' => 'kbit/s', 'label' => 'SQM limit odesílání'],
@@ -1371,7 +1371,7 @@ function bk_metric_labels_en(): array {
     'ram_used_mb' => 'Used memory', 'ram_free_mb' => 'Free memory',
     'ram_available_mb' => 'Available memory', 'ram_total_mb' => 'Total memory',
     'wan_link_mbit' => 'WAN link speed', 'wan_uptime' => 'WAN connection time',
-    'log_errors_24h' => 'Log errors in 24 h', 'log_warnings_24h' => 'Log warnings in 24 h',
+    'log_errors_24h' => 'Errors in the latest log lines', 'log_warnings_24h' => 'Warnings in the latest log lines',
     'btrfs_errors' => 'Btrfs errors',
     'sqm_download_kbps' => 'SQM download limit', 'sqm_upload_kbps' => 'SQM upload limit',
     'fw_accepted' => 'Firewall - accepted', 'fw_dropped' => 'Firewall - dropped', 'fw_rejected' => 'Firewall - rejected',
@@ -4392,14 +4392,20 @@ function bk_get_network_insights($pdo, $monitor, $details) {
         }
     }
 
-    // Error rate in the system log
+    // Error rate in the system log. "24h" in the key is historic: the agent
+    // counts the last 500 lines of logread's ring buffer, which can span ten
+    // minutes or three days, and says how far back they reach
+    // (log_window_secs, agent 0.1.8). The text names that span, never 24 h.
     if (isset($details['log_errors_24h']) && (int)$details['log_errors_24h'] >= 50) {
         $le = (int)$details['log_errors_24h'];
+        $lw = is_numeric($details['log_window_secs'] ?? null) && (int)$details['log_window_secs'] >= 0 ? (int)$details['log_window_secs'] : null;
         $insights[] = [
             'type' => 'network',
             'icon' => 'fa-file-lines',
             'color' => $le >= 200 ? 'var(--color-red)' : 'var(--color-orange, #f39c12)',
-            'text' => sprintf(t('net_insight_log_errors'), $le),
+            'text' => $lw === null ? sprintf(t('net_insight_log_errors'), $le)
+                : sprintf(t('net_insight_log_errors_window'), $le,
+                    $lw >= 3600 ? round($lw / 3600) . ' h' : max(1, (int)round($lw / 60)) . ' min'),
             'detail' => t('net_insight_log_errors_detail'),
         ];
     }
