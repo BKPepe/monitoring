@@ -3156,7 +3156,7 @@ function bk_tip_findings(array $tips, array $reasons): array {
         }
     }
     $repeats = ['knowledge_tip_cpu_high' => 'CPU', 'knowledge_tip_ram_high' => 'RAM', 'knowledge_tip_hdd_high' => 'Disk',
-        'knowledge_tip_ssl_expiring' => 'ssl'];
+        'knowledge_tip_ssl_expiring' => 'ssl', 'knowledge_tip_ssl_expired' => 'ssl'];
     $out = [];
     $seen = [];
     foreach ($tips as $tip) {
@@ -3473,9 +3473,18 @@ function bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enab
             }
         }
         if ($ssl_enabled && isset($check_stages['tls']['cert']['days_remaining'])) {
+            // The alert window of the settings (ssl_alert_days), not 14/30 of
+            // its own, and an expired certificate is said to be expired - it
+            // was "brzy expiruje".
             $days = (int)$check_stages['tls']['cert']['days_remaining'];
-            if ($days < 14) $add('critical', 'knowledge_tip_ssl_expiring');
-            elseif ($days < 30) $add('warn', 'knowledge_tip_ssl_expiring');
+            $ssl_alert_days = max(1, (int)get_setting('ssl_alert_days', '14'));
+            if ($days <= 0) {
+                $add('critical', 'knowledge_tip_ssl_expired');
+            } elseif ($days <= $ssl_alert_days) {
+                $add('critical', 'knowledge_tip_ssl_expiring');
+            } elseif ($days <= 2 * $ssl_alert_days) {
+                $add('warn', 'knowledge_tip_ssl_expiring');
+            }
         }
     }
 

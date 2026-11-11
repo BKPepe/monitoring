@@ -365,6 +365,7 @@ return [
     'knowledge_tip_web_tls_fail' => 'TLS/SSL handshake failed - the certificate may be invalid, expired, or misconfigured.',
     'knowledge_tip_web_http_fail' => 'The server responded, but with an error status code - check the application logs.',
     'knowledge_tip_ssl_expiring' => 'The certificate is expiring soon - renew it before it lapses, or browsers will flag the connection as untrusted.',
+    'knowledge_tip_ssl_expired' => 'The certificate has expired - browsers now flag the connection as untrusted. Renew it as soon as you can.',
     'knowledge_tip_ts3_availability' => 'The server is unreachable - check whether the TeamSpeak process is running and the network is healthy.',
     'knowledge_tip_ts3_process' => 'The ts3server process isn\'t running on the linked VPS agent even though the agent is online - the server likely crashed.',
     'knowledge_tip_ts3_serverquery' => 'ServerQuery isn\'t responding - management and deeper metrics (channels, groups) are unavailable, though voice may still work.',

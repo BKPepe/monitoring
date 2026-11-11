@@ -366,6 +366,7 @@ return [
     'knowledge_tip_web_tls_fail' => 'Problém s TLS/SSL handshake - certifikát může být neplatný, expirovaný nebo špatně nakonfigurovaný.',
     'knowledge_tip_web_http_fail' => 'Server odpověděl, ale s chybovým stavovým kódem - zkontrolujte aplikační logy.',
     'knowledge_tip_ssl_expiring' => 'Certifikát brzy expiruje - obnovte ho, než vyprší, jinak prohlížeče začnou hlásit nedůvěryhodné spojení.',
+    'knowledge_tip_ssl_expired' => 'Certifikát už vypršel - prohlížeče teď hlásí nedůvěryhodné spojení. Obnovte ho co nejdřív.',
     'knowledge_tip_ts3_availability' => 'Server je nedostupný - zkontrolujte, zda TeamSpeak proces běží a síť je v pořádku.',
     'knowledge_tip_ts3_process' => 'Proces ts3server na propojeném VPS agentovi neběží, i když je agent online - server pravděpodobně spadl.',
     'knowledge_tip_ts3_serverquery' => 'ServerQuery neodpovídá - správa a hlubší metriky (kanály, skupiny) jsou nedostupné, i když hlas může fungovat dál.',

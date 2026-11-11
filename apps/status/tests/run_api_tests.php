@@ -4757,6 +4757,21 @@ check_true('tip pro hostapd bez nahlášeného počtu klientů žádný počet n
     str_contains($hostapd_tips(['wifi_radios' => [['band' => '5GHz', 'clients' => null]]]), 'hostapd')
     && !str_contains($hostapd_tips(['wifi_radios' => [['band' => '5GHz', 'clients' => null]]]), 'Wi-Fi klientů'));
 check_true('nahlášený počet tip sečte', str_contains($hostapd_tips(['wifi_radios' => [['clients' => 3], ['clients' => null], ['clients' => '2']]]), 'Wi-Fi klientů: 5'));
+// R261: the SSL tip had its own 14/30 days instead of ssl_alert_days, and
+// called an expired certificate "brzy expiruje".
+$ssl_mon = ['id' => 2, 'name' => 'W', 'status' => 'up', 'type' => 'web'];
+$ssl_tip = function (int $days, string $alert_days) use ($ssl_mon, $pdo): string {
+    $GLOBALS['system_settings']['ssl_alert_days'] = $alert_days;
+    // null enabled metrics = every area on; [] would switch the SSL card off.
+    $tips = bk_get_knowledge_tips($ssl_mon, [], ['tls' => ['ok' => true, 'cert' => ['days_remaining' => $days]]], 'up', null, $pdo);
+    unset($GLOBALS['system_settings']['ssl_alert_days']);
+    $ssl = array_values(array_filter($tips, fn ($t) => str_contains((string)$t['text'], 'ertifikát')));
+    return $ssl ? $ssl[0]['severity'] . ':' . (str_contains((string)$ssl[0]['text'], 'vypršel') ? 'expired' : 'expiring') : 'none';
+};
+check('tip SSL se řídí nastavením ssl_alert_days a prošlý certifikát nazve prošlým',
+    [$ssl_tip(20, '21'), $ssl_tip(20, '7'), $ssl_tip(40, '14'), $ssl_tip(0, '14'), $ssl_tip(-3, '14')],
+    ['critical:expiring', 'none', 'none', 'critical:expired', 'critical:expired']);
+
 // R260: WireGuard's counters are totals since the tunnel came up, not
 // "Průchod", and a tunnel without them read "RX 0 MB / TX 0 MB".
 $wg_details = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'wireguard', 'cpu' => 70.0, 'ram_mb' => 2.0]]];
