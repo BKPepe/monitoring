@@ -1203,7 +1203,9 @@ function bk_metric_column_map(): array {
     'temperature_c' => ['col' => 'temperature_c', 'unit' => '°C', 'label' => 'Teplota CPU'],
     // Columns stored for years that no chart ever read (audit 2026-08-05):
     'zombie_count' => ['col' => 'zombie_count', 'unit' => '', 'label' => 'Zombie procesy'],
-    'fork_rate' => ['col' => 'fork_rate', 'unit' => '/s', 'label' => 'Fork rate'],
+    // A count since the agent's previous report, not a rate: "/s" made it read
+    // 60-300 times too high.
+    'fork_rate' => ['col' => 'fork_rate', 'unit' => '', 'label' => 'Nové procesy od minulého hlášení'],
     'wifi_clients' => ['col' => 'wifi_clients_total', 'unit' => '', 'label' => 'Wi-Fi klienti'],
     // Clients per band. The total alone could not say how many were on 2.4 GHz;
     // the server sums each band from the radios every OpenWrt agent reports.
@@ -1339,7 +1341,7 @@ function bk_metric_labels_en(): array {
     'ts_clients' => 'TeamSpeak clients', 'discord_presence' => 'Online on Discord', 'mc_players' => 'Players online',
     'ts_process_cpu' => 'TS3 process CPU', 'ts_process_ram' => 'TS3 process RAM',
     'net_ipv4' => 'IPv4 traffic (all interfaces)', 'net_ipv6' => 'IPv6 traffic (all interfaces)',
-    'temperature_c' => 'CPU temperature', 'zombie_count' => 'Zombie processes', 'fork_rate' => 'Fork rate',
+    'temperature_c' => 'CPU temperature', 'zombie_count' => 'Zombie processes', 'fork_rate' => 'New processes since the last report',
     'wifi_clients' => 'Wi-Fi clients',
     'wifi_clients_24g' => 'Wi-Fi clients on 2.4 GHz', 'wifi_clients_5g' => 'Wi-Fi clients on 5 GHz',
     'wifi_clients_6g' => 'Wi-Fi clients on 6 GHz',

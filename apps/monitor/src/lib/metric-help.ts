@@ -328,7 +328,7 @@ export function metricHelp(key: string, t: TranslateFn): MetricHelp | null {
       ),
     },
     fork_rate: {
-      what: t('help.fork_rate_what', 'Kolik nových procesů systém spouští za sekundu.'),
+      what: t('help.fork_rate_what', 'Kolik nových procesů systém spustil od minulého hlášení agenta.'),
       how: t('help.fork_rate_how', 'Hodnota processes v /proc/stat, rozdíl mezi hlášeními.'),
       source: agent,
       caveat: t('help.fork_rate_caveat', 'Náhlý skok často znamená smyčku ve skriptu nebo restartující se službu.'),

@@ -5329,6 +5329,9 @@ check_true('krátké jméno se hledá celé', bk_process_running('sshd', ['sshd'
 check_false('dlouhé jméno nenajde jiný začátek', bk_process_running('systemd-resolved', ['systemd-network']));
 check_false('chybějící proces chybí', bk_process_running('nginx', ['sshd', 'cron']));
 
+// --- The fork count is a count, not a rate (R249) -------------------------------
+check('počet nových procesů nemá jednotku za sekundu', [bk_metric_column_map()['fork_rate']['unit'] ?? 'chybí', !empty(bk_metric_column_map()['fork_rate']['counter'])], ['', false]);
+
 // --- Escalation message (R248) --------------------------------------------------
 $esc_outage = bk_escalation_text(['title' => 'Výpadek: Web', 'monitor_id' => 4, 'monitor_name' => 'Web'], 15, 1800);
 $esc_manual = bk_escalation_text(['title' => 'Plánované práce', 'monitor_id' => null, 'monitor_name' => null], 15, 1800);

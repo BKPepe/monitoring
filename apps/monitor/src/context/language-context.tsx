@@ -2702,8 +2702,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Zombies consume nothing themselves, but a growing count means a parent process is not reaping its children.',
   },
   'help.fork_rate_what': {
-    cs: 'Kolik nových procesů systém spouští za sekundu.',
-    en: 'How many new processes the system starts per second.',
+    cs: 'Kolik nových procesů systém spustil od minulého hlášení agenta.',
+    en: 'How many new processes the system started since the agent last reported.',
   },
   'help.fork_rate_how': {
     cs: 'Hodnota processes v /proc/stat, rozdíl mezi hlášeními.',
