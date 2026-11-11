@@ -5456,6 +5456,7 @@ $th_det = ['cpu' => 41.5, 'ram' => 63, 'hdd' => '70', 'ts3_process' => ['cpu' =>
 check('čerstvé hlášení agenta dá čísla stroje i procesu', bk_ts3_host_metrics($th_det + ['agent_last_seen' => $th_now - 60], $th_now), [41.5, 63.0, 70.0, 3.2, 120.0]);
 check('hlášení staré hodinu nic nedá', bk_ts3_host_metrics($th_det + ['agent_last_seen' => $th_now - 3600], $th_now), [null, null, null, null, null]);
 check('bez agenta nic', bk_ts3_host_metrics(['cpu' => 41.5], $th_now), [null, null, null, null, null]);
+check('čísla půjčená od agenta stroje platí podle jeho hlášení (R48)', bk_ts3_host_metrics($th_det + ['borrowed_agent_last_seen' => $th_now - 60], $th_now), [41.5, 63.0, 70.0, 3.2, 120.0]);
 
 // --- The fork count is a count, not a rate (R249) -------------------------------
 check('počet nových procesů nemá jednotku za sekundu', [bk_metric_column_map()['fork_rate']['unit'] ?? 'chybí', !empty(bk_metric_column_map()['fork_rate']['counter'])], ['', false]);

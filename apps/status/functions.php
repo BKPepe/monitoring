@@ -6799,10 +6799,14 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
     $avail_status = ['up' => 'ok', 'warning' => 'ok', 'down' => 'fail'][$current_status] ?? 'na';
     $areas[] = ['key' => 'availability', 'label' => 'Dostupnost', 'weight_pct' => 35, 'score_pct' => $avail_status === 'ok' ? 100 : 0, 'status' => $avail_status];
 
+    // A dead agent's last report says nothing about the process or the load
+    // now, so the two areas built on it score only a fresh one.
+    $agent_fresh = is_array($agent_data) && bk_agent_data_fresh($agent_data, time());
+
     // TeamSpeak process (20 %) - only when an agent is attached and reports ts3_process
-    if (is_array($agent_data) && isset($agent_data['ts3_process']) && is_array($agent_data['ts3_process'])) {
+    if ($agent_fresh && isset($agent_data['ts3_process']) && is_array($agent_data['ts3_process'])) {
         $areas[] = ['key' => 'process', 'label' => 'TeamSpeak proces', 'weight_pct' => 20, 'score_pct' => 100, 'status' => 'ok'];
-    } elseif (is_array($agent_data) && !empty($agent_data['cpu'])) {
+    } elseif ($agent_fresh && !empty($agent_data['cpu'])) {
         // The agent is attached but found no ts3server process
         $areas[] = ['key' => 'process', 'label' => 'TeamSpeak proces', 'weight_pct' => 20, 'score_pct' => 0, 'status' => 'fail'];
     } else {
@@ -6834,7 +6838,7 @@ function build_teamspeak_health_areas($monitor, $current_status, $check_stages, 
     }
 
     // VPS performance (10 %) - only when the agent reports cpu/ram
-    if (is_array($agent_data) && isset($agent_data['cpu'], $agent_data['ram'])) {
+    if ($agent_fresh && isset($agent_data['cpu'], $agent_data['ram'])) {
         $eff_perf = bk_monitor_thresholds($pdo instanceof PDO ? $pdo : null, (array)$monitor);
         $cpu_threshold = (float)($eff_perf['cpu'] ?? 90);
         $ram_threshold = (float)($eff_perf['ram'] ?? 95);
@@ -7147,6 +7151,16 @@ function bk_http_stage_ms(float $namelookup, float $connect, float $appconnect, 
 }
 
 /**
+ * Whether the agent figures in $details come from a report at most
+ * $max_age_secs old: the monitor's own agent's, or the one of the machine's
+ * agent they were borrowed from (bk_enrich_monitor_details). No time, no.
+ */
+function bk_agent_data_fresh(array $details, int $now, int $max_age_secs = 660): bool {
+    $seen = (int)($details['agent_last_seen'] ?? $details['borrowed_agent_last_seen'] ?? 0);
+    return $seen > 0 && $now - $seen <= $max_age_secs;
+}
+
+/**
  * The host's figures a TeamSpeak check stores with its client counts: CPU, RAM
  * and disk of the machine, and the ts3server process, from the agent's last
  * report. Only from a fresh one: cron copied a dead agent's last values every
@@ -7155,8 +7169,7 @@ function bk_http_stage_ms(float $namelookup, float $connect, float $appconnect, 
  * @return array{0:?float,1:?float,2:?float,3:?float,4:?float} cpu, ram, hdd, process cpu, process ram (MB)
  */
 function bk_ts3_host_metrics(array $details, int $now, int $max_age_secs = 660): array {
-    $seen = (int)($details['agent_last_seen'] ?? 0);
-    if ($seen <= 0 || $now - $seen > $max_age_secs) {
+    if (!bk_agent_data_fresh($details, $now, $max_age_secs)) {
         return [null, null, null, null, null];
     }
     $num = fn ($v): ?float => is_numeric($v) ? (float)$v : null;
@@ -20098,6 +20111,11 @@ function bk_enrich_monitor_details($pdo, $monitor, &$details, bool $system = fal
             if (!isset($details['ram_total_mb']) && isset($sib_det['ram_total_mb'])) $details['ram_total_mb'] = $sib_det['ram_total_mb'];
             if (!isset($details['ram_used_mb']) && isset($sib_det['ram_used_mb'])) $details['ram_used_mb'] = $sib_det['ram_used_mb'];
             if (!isset($details['ram_available_mb']) && isset($sib_det['ram_available_mb'])) $details['ram_available_mb'] = $sib_det['ram_available_mb'];
+            // The time of the report they came from, so a reader can tell
+            // them from a dead agent's last values (bk_agent_data_fresh).
+            if (is_numeric($sib_det['agent_last_seen'] ?? null)) {
+                $details['borrowed_agent_last_seen'] = (int)$sib_det['agent_last_seen'];
+            }
         }
     }
 }

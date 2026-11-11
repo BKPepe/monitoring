@@ -3791,6 +3791,23 @@ check('TS3: bez čísla verze se nehodnotí', $tv_area('3.13.7', 'neznámá'), [
 check('TS3: bez hlášené verze se nehodnotí', $tv_area('3.13.7', null), ['na', 0]);
 unset($GLOBALS['system_settings']['ts3_latest_version']);
 
+// --- TeamSpeak's process and VPS areas score only a fresh agent report (R48) -----
+// A dead agent's last report kept "TeamSpeak proces" and "Výkon VPS" at ok.
+$ta_areas = function (array $agent): array {
+    $out = [];
+    foreach (build_teamspeak_health_areas(['id' => 1, 'type' => 'teamspeak'], 'up', [], $agent, null) as $area) {
+        if (in_array($area['key'], ['process', 'vps'], true)) {
+            $out[$area['key']] = $area['status'];
+        }
+    }
+    return $out;
+};
+$ta_agent = ['cpu' => 10, 'ram' => 20, 'ts3_process' => ['pid' => 7]];
+check('TS3: čerstvé hlášení agenta se hodnotí', $ta_areas($ta_agent + ['agent_last_seen' => time() - 60]), ['process' => 'ok', 'vps' => 'ok']);
+check('TS3: čerstvé půjčené od agenta stroje taky', $ta_areas($ta_agent + ['borrowed_agent_last_seen' => time() - 60]), ['process' => 'ok', 'vps' => 'ok']);
+check('TS3: hlášení staré hodinu se nehodnotí', $ta_areas($ta_agent + ['agent_last_seen' => time() - 3600]), ['process' => 'na', 'vps' => 'na']);
+check('TS3: proces chybí jen podle čerstvého hlášení', $ta_areas(['cpu' => 10, 'ram' => 20, 'agent_last_seen' => time() - 3600]), ['process' => 'na', 'vps' => 'na']);
+
 // --- A tip names who loaded the machine over the whole period (R147) ------------
 // The duration is in minutes, the tip's process history wants seconds: the window
 // came out 60× too short, and the tip fell back on who is busy this very minute.
@@ -3835,7 +3852,7 @@ $pdo->exec("DELETE FROM monitors WHERE id = 16016");
 $pdo->exec("DELETE FROM monitors WHERE id IN (148, 149, 150)");
 $pdo->exec("DELETE FROM assets WHERE id = 148");
 $pdo->exec("INSERT INTO assets (id, name) VALUES (148, 'R82 stroj')");
-$bd_agent = json_encode(['cpu' => 12, 'ts3_process' => ['pid' => 1]]);
+$bd_agent = json_encode(['cpu' => 12, 'ts3_process' => ['pid' => 1], 'agent_last_seen' => 1790000000]);
 $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, agent_key, last_details, asset_id) VALUES
     (148, 'R82 agent', 'vps', 'r82.example.test', 'up', 'Test', 'r82-key', ?, 148)")->execute([$bd_agent]);
 $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, asset_id) VALUES
@@ -3848,6 +3865,7 @@ check('monitor bez stroje si od cizího agenta nic nepůjčí', $bd_foreign, [])
 $bd_own = [];
 bk_enrich_monitor_details($pdo, $bd_row(150), $bd_own, true);
 check('monitor na stejném stroji ano', [$bd_own['cpu'] ?? null, $bd_own['ts3_process'] ?? null], [12, ['pid' => 1]]);
+check('a s časem hlášení, ze kterého jsou (R48)', $bd_own['borrowed_agent_last_seen'] ?? null, 1790000000);
 $pdo->exec("DELETE FROM monitors WHERE id IN (148, 149, 150)");
 $pdo->exec("DELETE FROM assets WHERE id = 148");
 
