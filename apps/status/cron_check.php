@@ -395,22 +395,8 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
             $ts3_agent_details = bk_monitor_details($monitor);
             // Cron has no session and reads every monitor.
             bk_enrich_monitor_details($pdo, $monitor, $ts3_agent_details, true);
-            $ts3_process_cpu = null;
-            $ts3_process_ram = null;
-            // Without agent metrics it stays NULL - fictional zeros would make
-            // the overview look like a completely idle machine.
-            $ts3_host_cpu = null;
-            $ts3_host_ram = null;
-            $ts3_host_hdd = null;
-            if (is_array($ts3_agent_details)) {
-                $ts3_host_cpu = $ts3_agent_details['cpu'] ?? null;
-                $ts3_host_ram = $ts3_agent_details['ram'] ?? null;
-                $ts3_host_hdd = $ts3_agent_details['hdd'] ?? null;
-                if (isset($ts3_agent_details['ts3_process']) && is_array($ts3_agent_details['ts3_process'])) {
-                    $ts3_process_cpu = $ts3_agent_details['ts3_process']['cpu'] ?? null;
-                    $ts3_process_ram = $ts3_agent_details['ts3_process']['ram_mb'] ?? null;
-                }
-            }
+            [$ts3_host_cpu, $ts3_host_ram, $ts3_host_hdd, $ts3_process_cpu, $ts3_process_ram] =
+                bk_ts3_host_metrics(is_array($ts3_agent_details) ? $ts3_agent_details : [], time());
             $stmt_ts3_metrics = $pdo->prepare("
                 INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, ts_clients_online, ts_clients_max, ts_process_cpu, ts_process_ram)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)

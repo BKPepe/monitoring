@@ -5329,6 +5329,13 @@ check_true('krátké jméno se hledá celé', bk_process_running('sshd', ['sshd'
 check_false('dlouhé jméno nenajde jiný začátek', bk_process_running('systemd-resolved', ['systemd-network']));
 check_false('chybějící proces chybí', bk_process_running('nginx', ['sshd', 'cron']));
 
+// --- A TeamSpeak check's host figures only from a fresh agent report (R18) -----
+$th_now = 1790000000;
+$th_det = ['cpu' => 41.5, 'ram' => 63, 'hdd' => '70', 'ts3_process' => ['cpu' => 3.2, 'ram_mb' => 120]];
+check('čerstvé hlášení agenta dá čísla stroje i procesu', bk_ts3_host_metrics($th_det + ['agent_last_seen' => $th_now - 60], $th_now), [41.5, 63.0, 70.0, 3.2, 120.0]);
+check('hlášení staré hodinu nic nedá', bk_ts3_host_metrics($th_det + ['agent_last_seen' => $th_now - 3600], $th_now), [null, null, null, null, null]);
+check('bez agenta nic', bk_ts3_host_metrics(['cpu' => 41.5], $th_now), [null, null, null, null, null]);
+
 // --- The fork count is a count, not a rate (R249) -------------------------------
 check('počet nových procesů nemá jednotku za sekundu', [bk_metric_column_map()['fork_rate']['unit'] ?? 'chybí', !empty(bk_metric_column_map()['fork_rate']['counter'])], ['', false]);
 

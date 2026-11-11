@@ -7075,6 +7075,25 @@ function bk_get_enabled_metrics($monitor, $pdo = null) {
  * credentials) never changes the resulting 'status'.
  */
 
+/**
+ * The host's figures a TeamSpeak check stores with its client counts: CPU, RAM
+ * and disk of the machine, and the ts3server process, from the agent's last
+ * report. Only from a fresh one: cron copied a dead agent's last values every
+ * minute, and the chart drew a flat line as if they had been measured.
+ *
+ * @return array{0:?float,1:?float,2:?float,3:?float,4:?float} cpu, ram, hdd, process cpu, process ram (MB)
+ */
+function bk_ts3_host_metrics(array $details, int $now, int $max_age_secs = 660): array {
+    $seen = (int)($details['agent_last_seen'] ?? 0);
+    if ($seen <= 0 || $now - $seen > $max_age_secs) {
+        return [null, null, null, null, null];
+    }
+    $num = fn ($v): ?float => is_numeric($v) ? (float)$v : null;
+    $proc = is_array($details['ts3_process'] ?? null) ? $details['ts3_process'] : [];
+    return [$num($details['cpu'] ?? null), $num($details['ram'] ?? null), $num($details['hdd'] ?? null),
+        $num($proc['cpu'] ?? null), $num($proc['ram_mb'] ?? null)];
+}
+
 function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null, $sq_password = null, $filetransfer_port = null) {
     // Splitting the voice port from the query port (e.g. host:voice_port)
     $voice_port = 9987;
