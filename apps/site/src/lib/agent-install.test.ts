@@ -108,6 +108,14 @@ describe('instalace agenta na webu', () => {
     expect(html).not.toMatch(/agent\.py --register|agent\.ps1 --register/);
   });
 
+  // R137: the agent keeps .refused, .prev and loglines-off next to itself,
+  // and the uninstall left them behind.
+  it('odinstalace na OpenWrt smaže i soubory, které si agent vede vedle sebe', async () => {
+    const html = unescape(await render('en', 'full'));
+    expect(html).toContain('/usr/bin/agent_openwrt.sh.*');
+    expect(html).toContain('/usr/bin/agent_openwrt.loglines-off');
+  });
+
   it('nestahuje ani neregistruje proti produkci autora a neslibuje systemd', async () => {
     for (const lang of ['en', 'cs'] as const) {
       for (const variant of ['full', 'compact'] as const) {

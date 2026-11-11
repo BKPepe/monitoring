@@ -162,7 +162,9 @@ const panels: {
     scripts: [source('agent_openwrt.sh')],
     remove: [
       `( crontab -l 2>/dev/null | grep -v agent_openwrt.sh || true ) | crontab -`,
-      'rm -f /usr/bin/agent_openwrt.sh /usr/bin/agent_openwrt.cfg',
+      // The agent keeps state next to itself: agent_openwrt.sh.refused (an
+      // update it rolled back), .prev (mid-update) and loglines-off.
+      'rm -f /usr/bin/agent_openwrt.sh /usr/bin/agent_openwrt.sh.* /usr/bin/agent_openwrt.cfg /usr/bin/agent_openwrt.loglines-off',
       'rm -rf /var/run/status-agent-openwrt /tmp/status-agent-openwrt*',
     ].join('\n'),
   },
