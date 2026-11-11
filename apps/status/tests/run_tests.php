@@ -5482,6 +5482,13 @@ foreach ([[false, 'bez odpovědi'], ['', 'prázdná odpověď'], ['nope', 'neči
 }
 check('lokalita: skutečná odpověď se složí', bk_location_from_geo('{"status":"success","city":"Frankfurt","countryCode":"DE","org":"Example Hosting GmbH Extra"}'), get_country_emoji('DE') . ' Frankfurt, DE (Example Hosting GmbH)');
 
+// --- Discord's status breakdown counts every member the widget lists (R301) ----
+// It was counted in the app from the 15 members kept for the list, next to the
+// total online count.
+$dc_members = array_merge(array_fill(0, 12, ['status' => 'online']), array_fill(0, 6, ['status' => 'idle']),
+    [['status' => 'dnd'], ['status' => 'Online'], []]);
+check('rozpad stavů ze všech členů widgetu', bk_discord_status_counts($dc_members), ['online' => 14, 'idle' => 6, 'dnd' => 1]);
+
 // --- The certificate is read where the request ended (R200) --------------------
 // curl follows redirects and reports the last URL's scheme, but the certificate
 // was read on the first URL's host: http://a.cz -> https://www.a.cz read a.cz:443.

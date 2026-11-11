@@ -418,6 +418,8 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
                 'instant_invite' => $check_result['instant_invite'] ?? null,
                 'voice_channels' => $check_result['voice_channels'] ?? [],
                 'members' => $check_result['members'] ?? [],
+                'members_by_status' => $check_result['members_by_status'] ?? null,
+                'members_listed' => $check_result['members_listed'] ?? null,
                 'api_fallback' => false
             ], JSON_UNESCAPED_UNICODE);
 

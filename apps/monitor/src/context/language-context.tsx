@@ -3685,6 +3685,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     cs: 'Widget vrací jen právě připojené členy (nejvýš 100), ne celý seznam serveru — počet členů celkem odsud zjistit nelze.',
     en: 'The widget returns only currently connected members (at most 100), not the full roster — total member count cannot be derived from it.',
   },
+  'discord.by_status_of': { cs: 'z {n} vypsaných', en: 'of {n} listed' },
   'discord.status_online': { cs: 'Online', en: 'Online' },
   'discord.status_idle': { cs: 'Nepřítomen', en: 'Idle' },
   'discord.status_dnd': { cs: 'Nerušit', en: 'Do not disturb' },

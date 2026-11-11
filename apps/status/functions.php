@@ -7513,6 +7513,23 @@ function check_teamspeak($host, $port = 10011, $timeout = 3, $sq_username = null
 /**
  * Discord Guild Widget API Check
  */
+/**
+ * How many of the members a Discord widget lists are online, idle, dnd...
+ * Counted over every one of them (the widget lists up to 100), before the
+ * list kept in the details is cut to 15. A member without a status is
+ * online, as the list reads it.
+ *
+ * @return array<string, int>
+ */
+function bk_discord_status_counts(array $members): array {
+    $counts = [];
+    foreach ($members as $m) {
+        $status = strtolower((string)(is_array($m) ? ($m['status'] ?? 'online') : 'online'));
+        $counts[$status] = ($counts[$status] ?? 0) + 1;
+    }
+    return $counts;
+}
+
 function check_discord($guild_id, $timeout = 3) {
     $start = microtime(true);
     $url = "https://discord.com/api/guilds/" . urlencode($guild_id) . "/widget.json";
@@ -7613,7 +7630,11 @@ function check_discord($guild_id, $timeout = 3) {
         'name' => $data['name'] ?? null,
         'instant_invite' => $data['instant_invite'] ?? null,
         'voice_channels' => $voice_channels,
-        'members' => array_slice($members_list, 0, 15) // Zobrazit max 15 členů pro úsporu místa
+        'members' => array_slice($members_list, 0, 15), // Zobrazit max 15 členů pro úsporu místa
+        // Over every listed member, not the 15 kept above: the app put a
+        // breakdown of those 15 next to the whole online count.
+        'members_by_status' => bk_discord_status_counts($members_list),
+        'members_listed' => count($members_list),
     ];
 }
 

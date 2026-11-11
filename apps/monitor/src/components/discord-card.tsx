@@ -33,11 +33,18 @@ export function DiscordCard({ d, status, since }: { d: Record<string, any>; stat
   const presence = typeof d.presence_count === 'number' ? d.presence_count : null;
 
   // Bots cannot be told from humans via the widget API, so no such claim is made.
-  const byStatus = members.reduce<Record<string, number>>((acc, m) => {
-    const key = (m.status ?? 'unknown').toLowerCase();
-    acc[key] = (acc[key] ?? 0) + 1;
-    return acc;
-  }, {});
+  // The breakdown comes from the server, over every member the widget listed:
+  // counted here from the 15 the details keep, it sat next to the whole
+  // online count (R301). Without it, nothing is counted.
+  const byStatus: Record<string, number> =
+    d.members_by_status && typeof d.members_by_status === 'object' && !Array.isArray(d.members_by_status)
+      ? Object.fromEntries(
+          Object.entries(d.members_by_status as Record<string, unknown>).filter(
+            (e): e is [string, number] => typeof e[1] === 'number'
+          )
+        )
+      : {};
+  const listed = typeof d.members_listed === 'number' ? d.members_listed : null;
 
   const statusLabel: Record<string, string> = {
     online: t('discord.status_online', 'Online'),
@@ -96,6 +103,10 @@ export function DiscordCard({ d, status, since }: { d: Record<string, any>; stat
                   {statusLabel[key] ?? key}: {count}
                 </span>
               ))}
+              {/* The widget lists at most 100: the breakdown may cover fewer than are online. */}
+              {listed !== null && presence !== null && listed < presence && (
+                <span>{t('discord.by_status_of', { n: listed }, `z ${listed} vypsaných`)}</span>
+              )}
             </div>
           )}
         </StatBlock>
