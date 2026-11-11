@@ -65,6 +65,7 @@ import { useAssetCharts } from '@/api/use-asset-charts';
 import { appApi, type ApiMonitor } from '@/api/app-api';
 import { CollectionIssuesBanner } from '@/components/collection-issues-banner';
 import { useLanguage } from '@/context/language-context';
+import { smartToolMissing, smartVerdictTone } from '@/lib/smart-verdict';
 import { cn, formatMs, formatPercent, formatUptime } from '@/lib/utils';
 import { DiscordCard } from '@/components/discord-card';
 import { MinecraftCard } from '@/components/minecraft-card';
@@ -999,19 +1000,20 @@ export function AssetDetailPage() {
                     {!Array.isArray(asset.rawDetails?.storage_disks) && (
                       <div className="bg-inset space-y-2 rounded-lg border border-border p-4 md:col-span-2">
                         <p className="font-semibold text-sm">
-                          {t('asset.smart_status', 'SMART SSD Health & NVMe Opotřebení Disku')}
+                          {t('asset.smart_status', 'Stav SMART / S.M.A.R.T. Disku')}
                         </p>
                         {(() => {
                           // "N/A (smartctl missing)" is not a healthy state - it is a missing
                           // tool and the admin should know what to install.
                           const raw = asset.smartStatus ?? null;
-                          const missingTool = !raw || /n\/a|chyb|not available|unavailable|missing/i.test(raw);
+                          const missingTool = smartToolMissing(raw);
+                          const tone = smartVerdictTone(raw);
                           return (
                             <>
                               <p
                                 className={cn(
                                   'text-xs font-medium font-mono',
-                                  missingTool ? 'text-warning' : 'text-up'
+                                  tone === 'up' ? 'text-up' : tone === 'down' ? 'text-down' : 'text-warning'
                                 )}
                               >
                                 {raw ?? t('asset.smart_no_data', 'Nejsou dostupná data (agent SMART nehlásí).')}
@@ -1022,10 +1024,7 @@ export function AssetDetailPage() {
                                       'asset.smart_install_hint',
                                       'Pro sledování zdraví disku nainstalujte na cílovém stroji smartmontools (Debian/Ubuntu: apt install smartmontools, OpenWrt: opkg install smartmontools) a agent hodnoty začne hlásit sám.'
                                     )
-                                  : t(
-                                      'asset.smart_desc',
-                                      'Sledování opotřebení NVMe buněk, chyb a realokovaných sektorů z rozhraní smartctl.'
-                                    )}
+                                  : t('asset.smart_desc', 'Souhrnný verdikt SMART, jak ho agent poslal.')}
                               </p>
                             </>
                           );

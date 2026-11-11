@@ -1456,8 +1456,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'No data available (SMART agent not reporting).',
   },
   'asset.smart_desc': {
-    cs: 'Sledování opotřebení NVMe buněk, zaoceánovaných chyb a reallocated sektorů z rozhraní smartctl.',
-    en: 'Tracking NVMe cell wear, uncorrectable errors, and reallocated sectors via the smartctl interface.',
+    cs: 'Souhrnný verdikt SMART, jak ho agent poslal.',
+    en: 'The summary SMART verdict as the agent sent it.',
   },
   'asset.edit_monitor_title': { cs: 'Upravit nastavení monitoru', en: 'Edit Monitor Settings' },
   'asset.system_timeline': { cs: 'Systémové události (30 dní)', en: 'System Events (30 days)' },
