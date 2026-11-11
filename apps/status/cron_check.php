@@ -331,7 +331,10 @@ function bk_cron_check_monitor(PDO $pdo, array $monitor, ?callable $check = null
 
         if (bk_agent_backup_says_up((string)$type, $details_decoded, $monitor, time())) {
             $new_status = 'up';
-            $error_msg = 'Přímé spojení selhalo, službu potvrdil agent na stejném stroji';
+            // The check's own error, not a guessed cause: a TS3 that connected
+            // and sent no ServerQuery greeting failed after the connection.
+            $error_msg = 'Kontrola selhala (' . mb_strimwidth((string)($check_result['error'] ?? 'bez důvodu'), 0, 160, '…', 'UTF-8')
+                . '), službu ale potvrdil agent na stejném stroji';
             // Only what the fallback adds - the rest of last_details is merged
             // in below from a fresh read, not from this copy.
             $fallback_details = [

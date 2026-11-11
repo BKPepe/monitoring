@@ -1049,6 +1049,8 @@ check_false('web agent nikdy nezachrání (nginx na 443 s mrtvým PHP je výpade
 check_false('port monitor agent nezachrání', bk_agent_backup_says_up('port', $all_ports, ['port' => 80], $now));
 check_true('TeamSpeak s voice portem v čerstvém hlášení je up',
     bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [9987]], ['target' => 'ts.x.cz', 'port' => 10011], $now));
+check_false('naslouchající ServerQuery port za TeamSpeak neručí, jen hlasový (R345)',
+    bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [10011]], ['target' => 'ts.x.cz', 'port' => 10011], $now));
 check_true('voice port se bere z cíle host:port',
     bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [9988]], ['target' => 'ts.x.cz:9988'], $now));
 check_true('Docker agent hlásí po 300 s, hlášení staré 6 minut ještě platí',

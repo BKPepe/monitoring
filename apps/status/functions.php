@@ -6144,8 +6144,11 @@ function bk_agent_backup_says_up(string $type, array $agent, array $monitor, int
     }
 
     if ($type === 'teamspeak') {
+        // The voice port only. The ServerQuery port (monitors.port, 10011)
+        // is the one the direct check talks to, not the service people use,
+        // and it vouched for a server whose voice port was gone.
         $parts = explode(':', (string)($monitor['target'] ?? ''));
-        $service_ports = [count($parts) === 2 ? (int)$parts[1] : 9987, (int)($monitor['port'] ?? 0) ?: 10011];
+        $service_ports = [count($parts) === 2 ? (int)$parts[1] : 9987];
         $process_pattern = '/ts3|teamspeak/i';
     } elseif ($type === 'minecraft') {
         $service_ports = [(int)($monitor['port'] ?? 0) ?: 25565];

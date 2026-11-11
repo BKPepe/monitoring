@@ -4218,7 +4218,7 @@ try {
     $cm_d = $cm_details(951);
     check('cron: záloha přes agenta drží hru nahoře a říká proč',
         [$cm_status(951), $cm_last_log(951)['error_message'] ?? null, $cm_d['api_fallback'] ?? null, $cm_d['last_error'] ?? null, $cm_d['ports'] ?? null],
-        ['up', 'Přímé spojení selhalo, službu potvrdil agent na stejném stroji', true, 'Timeout', [22, 25565]]);
+        ['up', 'Kontrola selhala (Timeout), službu ale potvrdil agent na stejném stroji', true, 'Timeout', [22, 25565]]);
     // ...never for a web: a site that serves no pages is down for visitors.
     $cm_set_details(952, ['agent_last_seen' => time() - 60, 'ports' => [80, 443]]);
     $cm_run(952, $cm_check([1 => $cm_down('HTTP 502'), 2 => $cm_down('HTTP 502')]));
