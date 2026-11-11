@@ -1783,6 +1783,22 @@ function TabCount({ n }: { n: number }) {
 }
 
 /**
+ * A TeamSpeak monitor's connected clients and slots: the ServerQuery check's
+ * own count, else the one the agent paired with this monitor by its voice
+ * port. Null without both numbers - the first of the agent's servers is not
+ * necessarily this one.
+ */
+export function ts3ClientCounts(
+  details: Record<string, any> | null | undefined
+): { online: number; max: number } | null {
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const own = { online: num(details?.clients_online), max: num(details?.clients_max) };
+  const paired = { online: num(details?.ts3_clients_online), max: num(details?.ts3_clients_max) };
+  const pick = own.online != null && own.max != null ? own : paired;
+  return pick.online != null && pick.max != null ? { online: pick.online, max: pick.max } : null;
+}
+
+/**
  * The router's Wi-Fi clients: its own total, else the sum of the radios that
  * counted. Null when none of them did - a radio that reports no count used
  * to add 0, and a router that counted nothing read "Wi-Fi (0 klientů)".
@@ -3160,10 +3176,7 @@ function buildDynamicAsset(
     ) ?? null;
 
   const isTS3 = isTeamSpeakMonitor(m);
-  const ts3Servers = Array.isArray(m.details?.teamspeak_servers) ? m.details.teamspeak_servers[0] : null;
-  const ts3Clients: number | null = m.details?.ts3_clients ?? ts3Servers?.clients_online ?? null;
-  const ts3Max: number | null = m.details?.ts3_max ?? ts3Servers?.clients_max ?? null;
-  const hasTs3Counts = ts3Clients != null && ts3Max != null;
+  const ts3Counts = ts3ClientCounts(m.details);
   // The SoC temperature is read by its payload key (G22) and the CPU tile says
   // which core was busy while the all-core average stayed calm.
   const os = (m.os ?? '').trim();
@@ -3236,15 +3249,15 @@ function buildDynamicAsset(
             },
           ]
         : []),
-      ...(isTS3 && hasTs3Counts
+      ...(isTS3 && ts3Counts
         ? [
             {
               key: 'ts3_clients',
               label: t('asset.ts3_clients', 'Připojení klienti TS3'),
               value: t(
                 'asset.ts3_clients_value',
-                { online: ts3Clients, max: ts3Max },
-                `${ts3Clients} / ${ts3Max} uživatelů`
+                { online: ts3Counts.online, max: ts3Counts.max },
+                `${ts3Counts.online} / ${ts3Counts.max} uživatelů`
               ),
               tone: 'latency' as const,
             },
