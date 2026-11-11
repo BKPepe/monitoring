@@ -731,6 +731,8 @@ return [
     'digest_event_wan_ipv6_restored' => 'WAN has a public IPv6 again',
     'net_insight_lte_backup' => 'LTE backup is not working: %s.',
     'net_insight_lte_backup_detail' => 'The interface to the modem is up, but without a working SIM the modem never registers to the network - the backup would not take over when WAN fails.',
+    'net_insight_lte_backup_detail_down' => 'The modem interface is not running - the backup would not take over if the WAN went down. Check that it is enabled and the modem is attached.',
+    'net_insight_lte_backup_detail_unregistered' => 'The modem has not registered with the mobile network - the backup would not take over if the WAN went down. Check the signal and the APN settings.',
     'net_insight_wan_down' => 'The primary link (WAN) is down or has no carrier.',
     'net_insight_wan_no_internet' => 'The primary link (WAN) is up, but not even a ping gets out through it.',
     'net_insight_wan_detail' => 'The router reports through the LTE backup, so nobody would otherwise notice the main line is dead. Check the cable, the ISP modem and the gateway.',

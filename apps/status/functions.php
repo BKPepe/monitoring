@@ -4468,7 +4468,14 @@ function bk_get_network_insights($pdo, $monitor, $details) {
             'icon' => 'fa-sim-card',
             'color' => 'var(--color-red)',
             'text' => sprintf(t('net_insight_lte_backup'), t($reason_keys[$lte_backup['reason']] ?? 'net_insight_lte_reason_not_connected')),
-            'detail' => t('net_insight_lte_backup_detail'),
+            // The detail follows the reason: the SIM sentence ("the modem's
+            // interface runs, but without a working SIM...") came with every
+            // one, also with the interface down.
+            'detail' => t(match ($lte_backup['reason']) {
+                'interface_down' => 'net_insight_lte_backup_detail_down',
+                'not_connected' => 'net_insight_lte_backup_detail_unregistered',
+                default => 'net_insight_lte_backup_detail',
+            }),
         ];
     }
 

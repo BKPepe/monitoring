@@ -732,6 +732,8 @@ return [
     'digest_event_wan_ipv6_restored' => 'WAN má opět veřejnou IPv6',
     'net_insight_lte_backup' => 'LTE záloha nefunguje: %s.',
     'net_insight_lte_backup_detail' => 'Rozhraní k modemu běží, ale bez funkční SIM se modem do sítě nepřihlásí - při výpadku WAN by záloha nenaskočila.',
+    'net_insight_lte_backup_detail_down' => 'Rozhraní k modemu neběží - při výpadku WAN by záloha nenaskočila. Zkontrolujte, zda je zapnuté a modem připojený.',
+    'net_insight_lte_backup_detail_unregistered' => 'Modem se nepřihlásil do mobilní sítě - při výpadku WAN by záloha nenaskočila. Zkontrolujte signál a nastavení APN.',
     'net_insight_wan_down' => 'Primární připojení (WAN) je vypnuté nebo bez linky.',
     'net_insight_wan_no_internet' => 'Primární připojení (WAN) je nahoře, ale ven přes něj neprojde ani ping.',
     'net_insight_wan_detail' => 'Router hlásí přes LTE zálohu, takže výpadek hlavní linky by jinak nikdo nepoznal. Zkontrolujte kabel, modem poskytovatele a bránu.',

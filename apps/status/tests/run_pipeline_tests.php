@@ -226,6 +226,15 @@ if (function_exists('bk_get_network_insights')) {
     check('OOM z posledních 24 h se hlásí', $ni_oom(['oom_kill_at' => time() - 3600]), 1);
     check('týden starý OOM už ne', [$ni_oom(['oom_kill_at' => time() - 7 * 86400]), $ni_oom([])], [0, 0]);
 
+    // R272: the LTE insight's detail spoke of a missing SIM for every reason,
+    // also with the modem's interface down.
+    $ni_lte = fn (array $d): string => (string)(array_values(array_filter(bk_get_network_insights($ni_pdo, ['id' => 2], $d),
+        fn (array $i): bool => ($i['icon'] ?? '') === 'fa-sim-card'))[0]['detail'] ?? '');
+    check_true('LTE dole: detail mluví o rozhraní, ne o SIM',
+        str_contains($ni_lte(['lte_up' => false]), 'Rozhraní k modemu neběží') && !str_contains($ni_lte(['lte_up' => false]), 'SIM'));
+    check_true('nepřihlášený modem: detail o síti', str_contains($ni_lte(['lte_up' => true, 'lte_connected' => false]), 'nepřihlásil'));
+    check_true('chybějící SIM: detail o SIM', str_contains($ni_lte(['lte_up' => true, 'lte_sim_state' => 'no_sim']), 'SIM'));
+
     // R108: an insight counted 'status_changed_down' in monitor_events, a
     // type nobody stores (the timeline derives it), so it never fired. Every
     // event type the insights count is one log_monitor_event() writes.
