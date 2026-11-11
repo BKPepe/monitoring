@@ -19537,7 +19537,10 @@ function bk_router_rec_render(array $item): array {
                 $range = $life === null ? t('rr_wear_range_unknown')
                     : ($life >= 11 ? t('rr_wear_range_over')
                         : sprintf(t('rr_wear_range'), bk_rec_num(((int)$life - 1) * 10), bk_rec_num((int)$life * 10)));
-                $eol = t('rr_emmc_eol_' . (string)(int)($p['pre_eol'] ?? 1));
+                // Wear can come from life_a/b alone; no pre-EOL reading is
+                // no verdict on the reserve blocks, not "normal".
+                $pre_eol = $p['pre_eol'] ?? null;
+                $eol = t('rr_emmc_eol_' . (is_int($pre_eol) && $pre_eol >= 1 && $pre_eol <= 3 ? (string)$pre_eol : 'unknown'));
                 $measured = sprintf(t('rr_disk_wear_high_measured_emmc'), $name, $range, $eol);
             } else {
                 // Any `attr*` source is a vendor attribute read, not a

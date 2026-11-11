@@ -1865,6 +1865,14 @@ check('pre-EOL 2 varování, 3 selhání',
 check('eMMC na konci životnosti se nepřipomíná každou hodinu',
     $sd_types(bk_storage_alert_eval([$sd_emmc(3)], $sd_e3['states'], $sd_now + 7200)), []);
 
+// Wear from life_a/b with no pre-EOL reading said "rezervní bloky: v normě" (R52).
+$ew_text = fn (?int $pre_eol): string => (string)bk_with_email_lang('cs', fn (): array => bk_router_rec_render(
+    bk_rec_item('disk_wear_high', 'disk_wear_high:d:mmc', 'storage', 'warning', ['kind' => 'disk', 'disk_key' => 'mmc', 'name' => 'mmcblk0'],
+        ['disk' => 'mmcblk0', 'name' => 'mmcblk0', 'variant' => 'emmc', 'life' => 9, 'pre_eol' => $pre_eol])))['measured'];
+check_true('eMMC bez hlášení rezervních bloků netvrdí, že jsou v normě',
+    str_contains($ew_text(null), 'rezervní bloky: nehlášeno') && !str_contains($ew_text(null), 'v normě'));
+check_true('s hlášením 1 jsou v normě', str_contains($ew_text(1), 'rezervní bloky: v normě'));
+
 // The disk identity is a hash of transport, port, model and size, so an
 // identical replacement lands on the same row. Its power-on hours give it
 // away, and the old drive's baselines must not judge the new one.

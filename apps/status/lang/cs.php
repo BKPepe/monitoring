@@ -836,6 +836,7 @@ return [
     'rr_emmc_eol_1' => 'v normě',
     'rr_emmc_eol_2' => 'z 80 % spotřebované',
     'rr_emmc_eol_3' => 'téměř vyčerpané',
+    'rr_emmc_eol_unknown' => 'nehlášeno',
     'rr_disk_smart_failing_title' => 'Disk %1$s selhává',
     'rr_disk_smart_failing_measured' => 'Disk %1$s neprošel vlastní kontrolou SMART (%2$s).',
     'rr_disk_smart_failing_action' => 'Zálohujte data hned a disk vyměňte. Na tento disk už nespoléhejte.',

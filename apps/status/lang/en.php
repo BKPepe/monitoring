@@ -834,6 +834,7 @@ return [
     'rr_emmc_eol_1' => 'normal',
     'rr_emmc_eol_2' => '80 % consumed',
     'rr_emmc_eol_3' => 'nearly exhausted',
+    'rr_emmc_eol_unknown' => 'not reported',
     'rr_disk_smart_failing_title' => 'Disk %1$s is failing',
     'rr_disk_smart_failing_measured' => 'Disk %1$s failed its own SMART check (%2$s).',
     'rr_disk_smart_failing_action' => 'Back up the data now and replace the disk. Do not rely on it any more.',
