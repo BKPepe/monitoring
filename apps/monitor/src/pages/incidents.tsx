@@ -611,7 +611,9 @@ export function IncidentsPage() {
                           <p className="text-muted-foreground figure text-2xs">
                             {t('common.target', 'Cíl')}: {inc.target}
                           </p>
-                          <p className="text-down text-xs font-medium">{inc.reason}</p>
+                          <p className="text-down text-xs font-medium">
+                            {inc.reason ?? t('incidents.reason_unknown', 'Důvod se nezaznamenal.')}
+                          </p>
                           <p className="text-muted-foreground figure flex flex-wrap gap-x-3 gap-y-0.5 text-2xs">
                             <span>
                               {t('incidents.outage_start', 'Začátek výpadku')}:{' '}

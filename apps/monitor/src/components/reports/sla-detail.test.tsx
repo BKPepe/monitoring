@@ -53,6 +53,12 @@ describe('SlaDetail – poslední výpadek (R143)', () => {
     expect(mttr?.textContent).toBe('Nezměřeno');
   });
 
+  it('výpadek bez zaznamenaného důvodu si žádný nevymyslí (R55)', () => {
+    renderCs(item({ start: '29.10.2026 09:00:00', end: null, durationSec: 600, reason: null, resolved: false }, null));
+    expect(screen.getByText(/Důvod se nezaznamenal/)).toBeTruthy();
+    expect(screen.queryByText(/Port neodpovídá/)).toBeNull();
+  });
+
   it('trvající výpadek běží „dosud“ s délkou od začátku', () => {
     renderCs(
       item({ start: '29.10.2026 08:00:00', end: null, durationSec: 10_800, reason: 'HTTP 503', resolved: false }, null)

@@ -3708,7 +3708,10 @@ if ($action === 'incidents') {
                 'started_at' => date('d.m.Y H:i:s', $start_ts),
                 'resolved_at' => null,
                 'duration_secs' => max(0, time() - $start_ts),
-                'reason' => ($inc_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: 'Cílový port neodpovídá',
+                // Null when the check stored no reason (a remote probe's row,
+                // typically): "Cílový port neodpovídá" was a cause made up,
+                // and only in Czech. The page says the reason is unknown.
+                'reason' => ($inc_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: null,
             ];
         }
 
@@ -5058,7 +5061,8 @@ if ($action === 'sla_report') {
                     'start' => date('d.m.Y H:i:s', $out_start),
                     'end' => $resolved && $out_end_ts !== null ? date('d.m.Y H:i:s', $out_end_ts) : null,
                     'durationSec' => $out_end_ts !== null ? max(0, $out_end_ts - $out_start) : null,
-                    'reason' => $out_row['error_message'] ?: 'Port neodpovídá',
+                    // Null, not a made-up "Port neodpovídá" (see incidents).
+                    'reason' => $out_row['error_message'] ?: null,
                     'resolved' => $resolved,
                 ];
             }

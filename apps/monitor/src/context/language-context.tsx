@@ -1071,6 +1071,7 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'No active alerts — all monitored services are online.',
   },
   'incidents.some_unknown': { cs: 'Stav neznámý: {n}', en: 'State unknown: {n}' },
+  'incidents.reason_unknown': { cs: 'Důvod se nezaznamenal.', en: 'No reason was recorded.' },
   'incidents.no_outage_some_unknown': {
     cs: 'Žádný výpadek ani otevřený incident. Stav některých monitorů ale není známý: {n}.',
     en: 'No outage and no open incident. The state of some monitors is unknown, though: {n}.',

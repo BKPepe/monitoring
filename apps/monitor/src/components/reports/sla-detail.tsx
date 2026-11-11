@@ -13,7 +13,8 @@ export interface OutageDetail {
   end: string | null;
   /** null = no measured end (see `end`). */
   durationSec: number | null;
-  reason: string;
+  /** Null when the check stored no reason. */
+  reason: string | null;
   resolved: boolean;
 }
 
@@ -171,7 +172,7 @@ export function SlaDetail({ item, days }: { item: MonitorSla; days: number }) {
           </p>
           <p>
             <span className="text-muted-foreground">{t('reports.reason_label', 'Důvod:')}</span>{' '}
-            {item.lastOutage.reason}
+            {item.lastOutage.reason ?? t('incidents.reason_unknown', 'Důvod se nezaznamenal.')}
           </p>
         </div>
       ) : (item.outageMinutes ?? 0) > 0 ? (

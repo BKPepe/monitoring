@@ -1110,6 +1110,13 @@ check_true(
 );
 // R275: the duration goes out in seconds; it was Czech text in the wrong
 // forms ("1 dní, 2 hodin") that an English page printed as it came.
+// R55: a check that stored no reason got a made-up one, in Czech only.
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES (96, 'down', NULL, NOW())");
+[, $oi_noreason] = api_get_auth($base, 'action=incidents', $cookie_jar);
+$oi_nr = $oi_find($oi_noreason);
+check('výpadek bez zaznamenaného důvodu má důvod null, ne vymyšlený',
+    is_array($oi_nr) && array_key_exists('reason', $oi_nr) ? $oi_nr['reason'] : 'chybí', null);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 96 AND error_message IS NULL");
 check_true('délka výpadku je v sekundách, ne český text',
     is_int($oi_row['duration_secs'] ?? null) && $oi_row['duration_secs'] > 10000 && !array_key_exists('duration_text', $oi_row ?? []));
 
