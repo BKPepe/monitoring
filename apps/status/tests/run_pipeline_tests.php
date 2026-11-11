@@ -2002,6 +2002,27 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_ts3_parse_kv_line', 'bk_ts3_parse_list_response', 'bk_ts3_escape_decode', 'bk_ts3_escape_encode',
 ]);
 if (function_exists('check_teamspeak')) {
+    // R21, R46: the cPanel exporter, run as PHP runs it, with a fake uapi on PATH.
+    $cpx_dir = sys_get_temp_dir() . '/bk_cpx_' . getmypid();
+    @mkdir($cpx_dir);
+    $cpx_run = function (?string $uapi_json) use ($cpx_dir): array {
+        $uapi = $cpx_dir . '/uapi';
+        file_put_contents($uapi, $uapi_json === null ? "#!/bin/sh\nexit 1\n" : "#!/bin/sh\ncat <<'EOF'\n{$uapi_json}\nEOF\n");
+        chmod($uapi, 0755);
+        $cmd = 'STATS_KEY=cpx-key PATH=' . escapeshellarg($cpx_dir . ':' . getenv('PATH')) . ' ' . escapeshellarg(PHP_BINARY)
+            . ' -r ' . escapeshellarg('$_GET["key"] = "cpx-key"; include ' . var_export(__DIR__ . '/../cpanel_stats.php', true) . ';');
+        return json_decode((string)shell_exec($cmd), true) ?: [];
+    };
+    $cpx = $cpx_run(json_encode(['result' => ['data' => [['name' => 'diskusage', 'count' => '12', 'max' => 'unlimited', 'units' => 'GB']]]]));
+    check('cPanel: neomezený disk nemá procento, ne 0', [array_key_exists('percent', $cpx['disk'] ?? []) ? $cpx['disk']['percent'] : 'chybí',
+        str_contains($cpx['disk']['formatted'] ?? '', 'Bez limitu'), array_key_exists('source', $cpx['disk'] ?? [])], [null, true, false]);
+    check_true('cPanel: záložní paměť je označená jako za celý server', ($cpx['memory'] ?? null) === null || ($cpx['memory']['source'] ?? null) === 'meminfo');
+    $cpx2 = $cpx_run(null);
+    check('cPanel: bez UAPI je disk za celý server a řekne to', [$cpx2['disk']['source'] ?? null, str_contains($cpx2['disk']['formatted'] ?? '', 'celý disk serveru')],
+        ['filesystem', true]);
+    @unlink($cpx_dir . '/uapi');
+    @rmdir($cpx_dir);
+
     // R10: a count the server did not send stays unknown.
     $mc_check = function (string $mode): array {
         $proc = proc_open([PHP_BINARY, __DIR__ . '/fixtures/mc_slp_server.php', $mode], [1 => ['pipe', 'w']], $pipes);

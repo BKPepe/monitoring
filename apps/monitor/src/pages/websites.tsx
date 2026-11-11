@@ -547,7 +547,23 @@ export function WebsitesPage() {
                         <Server aria-hidden="true" className="size-3" />{' '}
                         {t('websites.cpanel_resources', 'Zdroje hostingu (sdílené účtem):')}
                       </span>
-                      <span className="text-up">UAPI OK</span>
+                      {/* "UAPI OK" was printed whatever the exporter sent: figures of
+                          the whole server from its fallbacks, or nothing at all. */}
+                      {(() => {
+                        const cp = web.details.cpanel_stats;
+                        const figures = [cp.disk, cp.memory, cp.cpu, cp.processes, cp.database, cp.bandwidth].filter(
+                          (f): f is { source?: string } => f != null
+                        );
+                        return figures.length === 0 ? (
+                          <span className="text-warning">{t('websites.cpanel_empty', 'Bez hodnot')}</span>
+                        ) : figures.some((f) => f.source) ? (
+                          <span className="text-warning">
+                            {t('websites.cpanel_server_wide', 'Část hodnot za celý server')}
+                          </span>
+                        ) : (
+                          <span className="text-up">UAPI OK</span>
+                        );
+                      })()}
                     </div>
                     <div className="grid grid-cols-2 gap-1.5">
                       {(

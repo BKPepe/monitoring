@@ -138,7 +138,9 @@ if ($output) {
             $struct = [
                 'used' => $used_val,
                 'limit' => $limit_val,
-                'percent' => $percent !== null ? floatval($percent) : 0,
+                // Null when it could not be computed (no limit, or an unknown
+                // one): 0 drew a green bar and went into the history as 0 %.
+                'percent' => $percent !== null ? floatval($percent) : null,
                 'formatted' => $formatted_str
             ];
             
@@ -171,11 +173,13 @@ if (!$stats['disk']) {
         $used = $total - $free;
         $pct = round(($used / $total) * 100, 2);
         
+        // The whole filesystem, not the account: said so, like the CPU below.
         $stats['disk'] = [
             'used' => $used,
             'limit' => $total,
             'percent' => $pct,
-            'formatted' => round($used / 1024 / 1024 / 1024, 2) . " GB / " . round($total / 1024 / 1024 / 1024, 2) . " GB"
+            'formatted' => round($used / 1024 / 1024 / 1024, 2) . " GB / " . round($total / 1024 / 1024 / 1024, 2) . " GB (celý disk serveru)",
+            'source' => 'filesystem'
         ];
     }
 }
@@ -194,7 +198,8 @@ if (!$stats['memory']) {
                 'used' => $used,
                 'limit' => $total,
                 'percent' => $pct,
-                'formatted' => format_cpanel_bytes($used) . " / " . format_cpanel_bytes($total)
+                'formatted' => format_cpanel_bytes($used) . " / " . format_cpanel_bytes($total) . " (celý server)",
+                'source' => 'meminfo'
             ];
         }
     }

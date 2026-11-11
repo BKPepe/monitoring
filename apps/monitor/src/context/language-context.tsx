@@ -1711,6 +1711,8 @@ const translations: Record<string, { cs: string; en: string }> = {
   'reports.mttr_label': { cs: 'MTTR (doba obnovení)', en: 'MTTR (recovery time)' },
   'reports.no_outage': { cs: 'Bez výpadku', en: 'No outage' },
   'reports.mttr_ongoing': { cs: 'Výpadek probíhá', en: 'Outage ongoing' },
+  'websites.cpanel_empty': { cs: 'Bez hodnot', en: 'No figures' },
+  'websites.cpanel_server_wide': { cs: 'Část hodnot za celý server', en: 'Some figures are server-wide' },
   'reports.not_measured_period': {
     cs: 'Za posledních {days} dní nic neměřilo.',
     en: 'Nothing measured in the last {days} days.',
