@@ -115,7 +115,9 @@ function bk_agent_report(PDO $pdo, array $data, array $monitor, string $base_url
     // links apart on the web.
     $ow_net_lte = bk_agent_num($data, 'net_lte');
     $ow_wan_l3_device = bk_agent_str($data, 'wan_l3_device', 32);
-    $heavy_op_interval_hours = bk_agent_int($data, 'heavy_op_interval_hours') ?? 24;
+    // What the agent sent, or null: an agent that sends none (agent.sh) got
+    // an invented 24, and the device page printed "Kontrola 1× za 24h".
+    $heavy_op_interval_hours = bk_agent_int($data, 'heavy_op_interval_hours');
 
     // OpenWrt Round 2 - mwan3, SQM, LTE, services, WAN reconnect, packages/logs
     $ow_mwan3_policies = (isset($data['mwan3_policies']) && is_array($data['mwan3_policies'])) ? $data['mwan3_policies'] : null;

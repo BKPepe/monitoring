@@ -3407,6 +3407,11 @@ $null_row = $pdo->query("SELECT cpu_usage, ram_usage, hdd_usage FROM vps_metrics
 check('neznámé hodnoty zůstanou NULL, ne nula', [$null_row['cpu_usage'] ?? 'chybí', $null_row['ram_usage'] ?? 'chybí', $null_row['hdd_usage'] ?? 'chybí'], ['chybí', 'chybí', 'chybí']);
 check_true('a řádek se opravdu uložil', array_key_exists('cpu_usage', $null_row) && $null_row['cpu_usage'] === null);
 check('hlášení bez klíče se dál odmítne', $post_agent(['agent_key' => '']), 400);
+// R59: an agent that sends no heavy-operation interval (agent.sh) got an
+// invented 24, and the device page printed "Kontrola 1× za 24h".
+$post_agent(['heavy_op_interval_hours' => null]);
+$hoi = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true);
+check('neposlaný interval těžkých operací zůstane neznámý, ne 24', is_array($hoi) ? ($hoi['heavy_op_interval_hours'] ?? null) : 'chybí', null);
 
 // --- Remote Action result: its own POST, one list of states -------------------------
 //

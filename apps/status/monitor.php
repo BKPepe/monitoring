@@ -645,10 +645,10 @@ foreach ($timeline as $ev) {
                     <?php endif; ?>
                     <?php if (!empty($details['cloud_provider']) || !empty($details['virtualization'])): ?><div class="ao-sidebar-row"><span class="k">Provider</span><span class="v"><?php echo htmlspecialchars(($details['cloud_provider'] ?? '') . (!empty($details['virtualization']) ? ' (' . $details['virtualization'] . ')' : '')); ?></span></div><?php endif; ?>
                     <?php if (isset($details['upgradable_packages']) || !empty($details['installed_packages'])): ?>
-                        <?php $ho_h = (int)($details['heavy_op_interval_hours'] ?? 24); ?>
+                        <?php $ho_h = is_numeric($details['heavy_op_interval_hours'] ?? null) ? (int)$details['heavy_op_interval_hours'] : null; ?>
                         <div class="ao-sidebar-row">
                             <span class="k">Balíčky</span>
-                            <span class="v" data-tooltip="Kontrola balíčků se spouští 1× za <?php echo $ho_h; ?>h pro úsporu CPU a diskového I/O.">
+                            <span class="v"<?php if ($ho_h !== null): ?> data-tooltip="Kontrola balíčků se spouští 1× za <?php echo $ho_h; ?>h pro úsporu CPU a diskového I/O."<?php endif; ?>>
                                 <?php if (!empty($details['installed_packages'])): ?><?php echo (int)$details['installed_packages']; ?> nainstalováno<?php endif; ?>
                                 <?php if (isset($details['upgradable_packages'])): ?> (<?php echo (int)$details['upgradable_packages']; ?> k aktualizaci)<?php endif; ?>
                                 <i class="fas fa-clock" style="color: var(--color-blue, #58a6ff); font-size: 0.72rem; margin-left: 0.25rem;"></i>
@@ -732,13 +732,15 @@ foreach ($timeline as $ev) {
 
             <!-- RELATED SERVICES -->
             <?php if (!empty($details['discovered_services']) && is_array($details['discovered_services'])): ?>
-            <?php $heavy_op_hours = (int)($details['heavy_op_interval_hours'] ?? 24); ?>
+            <?php $heavy_op_hours = is_numeric($details['heavy_op_interval_hours'] ?? null) ? (int)$details['heavy_op_interval_hours'] : null; ?>
             <div class="ao-section">
                 <div class="ao-section-title" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
                     <span><i class="fas fa-cubes"></i> <?php echo htmlspecialchars(t('ao_related_services')); ?></span>
+                    <?php if ($heavy_op_hours !== null): ?>
                     <span style="font-size: 0.68rem; font-weight: 500; text-transform: none; color: var(--text-muted); background: rgba(255,255,255,0.05); padding: 0.2rem 0.5rem; border-radius: 4px; border: 1px solid rgba(255,255,255,0.08);" data-tooltip="Detekce služeb se spouští 1× za <?php echo $heavy_op_hours; ?>h pro úsporu CPU a paměti.">
                         <i class="fas fa-clock" style="color: var(--color-blue, #58a6ff); margin-right: 0.2rem;"></i> Kontrola 1× za <?php echo $heavy_op_hours; ?>h
                     </span>
+                    <?php endif; ?>
                 </div>
                 <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 0.65rem;">
                     <?php foreach ($details['discovered_services'] as $svc):
