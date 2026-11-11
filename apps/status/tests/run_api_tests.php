@@ -3587,6 +3587,14 @@ $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 92");
 $pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
 $pdo->exec("DELETE FROM assets WHERE id = 92");
 
+// R97: nothing stored opened the form with every section unticked.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, enabled_metrics) VALUES (9097, 'R97 web', 'web', 'https://r97.example.test', 'up', NULL), (9098, 'R97 vlastní', 'web', 'https://r98.example.test', 'up', '[\"headers\"]')");
+[, $r97_list] = api_get_auth($base, 'action=monitors', $cookie_jar);
+$r97 = array_column($r97_list['monitors'] ?? [], 'enabledMetrics', 'id');
+check('bez uložené sady přijde doporučená, ne prázdná', $r97[9097] ?? null, ['check_pipeline', 'response_breakdown', 'ssl_card']);
+check('uložená sada zůstává, jak je', $r97[9098] ?? null, ['headers']);
+$pdo->exec("DELETE FROM monitors WHERE id IN (9097, 9098)");
+
 // R36: a list showed the last response ever measured and a silent agent's load.
 $pdo->exec("INSERT INTO monitors (id, name, type, target, status) VALUES (9360, 'R36', 'vps', 'r36.example.test', 'up')");
 $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (9360, 'up', 42, NOW())");

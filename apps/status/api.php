@@ -713,7 +713,12 @@ if ($action === 'monitors') {
                 $monitors[$mid]['ts3FiletransferPort'] = $r['ts3_filetransfer_port'] ? (int)$r['ts3_filetransfer_port'] : null;
                 $monitors[$mid]['rconPort'] = $r['rcon_port'] ? (int)$r['rcon_port'] : null;
                 $monitors[$mid]['rconPasswordSet'] = (bool)$r['rcon_password_set'];
-                $monitors[$mid]['enabledMetrics'] = $r['enabled_metrics'] ? (json_decode($r['enabled_metrics'], true) ?: []) : [];
+                // The set in effect, the recommended one when nothing is stored: an
+                // empty list opened the form with every box unticked, and saving
+                // one tick stored a one-item list that hid every other section.
+                // The monitor's own set, so no preset: the form edits that one.
+                $mon_sections = ['type' => $monitors[$mid]['type'] ?? '', 'enabled_metrics' => $r['enabled_metrics']];
+                $monitors[$mid]['enabledMetrics'] = bk_get_enabled_metrics($mon_sections, $pdo) ?? [];
                 $monitors[$mid]['remoteActionsEnabled'] = (bool)$r['remote_actions_enabled'];
                 $monitors[$mid]['allowedActions'] = $r['allowed_actions'] ? explode(',', $r['allowed_actions']) : [];
                 // Agent update offer: compares the version from the last report

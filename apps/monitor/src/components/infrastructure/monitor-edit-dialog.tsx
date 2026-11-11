@@ -482,7 +482,7 @@ export function MonitorEditDialog({
                   <p className="text-2xs mt-0.5">
                     {t(
                       'infra.service_profiles_desc',
-                      'Zvolte, které sekce se pro tento monitor zobrazí veřejně i v administraci. Doporučené položky jsou zapnuty.'
+                      'Řídí, které sekce ukáže veřejná stránka index.php a pro které oblasti se počítají tipy a zjištění. Rozložení stránek v /app nemění. Doporučené položky jsou zapnuty.'
                     )}
                   </p>
                 </div>

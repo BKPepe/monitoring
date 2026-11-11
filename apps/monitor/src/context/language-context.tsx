@@ -4215,8 +4215,8 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'Displayed Dashboard Sections (Service Profiles):',
   },
   'infra.service_profiles_desc': {
-    cs: 'Zvolte, které sekce se pro tento monitor zobrazí veřejně i v administraci. Doporučené položky jsou zapnuty.',
-    en: 'Choose which sections are shown for this monitor, both publicly and in administration. Recommended items are enabled.',
+    cs: 'Řídí, které sekce ukáže veřejná stránka index.php a pro které oblasti se počítají tipy a zjištění. Rozložení stránek v /app nemění. Doporučené položky jsou zapnuty.',
+    en: 'Sets which sections the public index.php page shows and which areas the tips and findings cover. It does not change the layout of /app. Recommended items are on.',
   },
   'infra.body_keyword_placeholder': { cs: 'Např. Blood Kings', en: 'e.g. Blood Kings' },
   'infra.last_report': { cs: 'Poslední report:', en: 'Last report:' },
