@@ -9113,11 +9113,14 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
         'Blood Kings: denní připomínka', 0, bk_daily_reminder_text($report, true));
     $result['channels'] += $shared['sent'];
 
-    // "Sent" means at least one message really left. Without this the cron
-    // would stamp the day as done even when every channel refused, and the
-    // next attempt would be tomorrow.
+    // "Sent" means at least one message really left. It decides what cron
+    // prints, not whether the day counts as done: cron stamps the day either
+    // way, so a reminder that every channel refused is not retried before
+    // tomorrow - one decision a day, and the outgoing message log says how
+    // it ended (see the block in cron.php). 'not_sent' covers both nobody to
+    // send to and every channel refusing; the log rows tell them apart.
     $result['sent'] = $result['emails'] > 0 || $result['channels'] > 0;
-    $result['reason'] = $result['sent'] ? 'sent' : 'no_recipient';
+    $result['reason'] = $result['sent'] ? 'sent' : 'not_sent';
 
     return $result;
 }
