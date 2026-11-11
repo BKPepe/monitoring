@@ -14814,7 +14814,12 @@ function render_email_wrapper($title, $subtitle, $accent_color, $body_html) {
 }
 
 function bk_trend_glyph($direction, $good_when_up = true) {
-    if ($direction === null || $direction === 'flat') {
+    // Nothing to compare with is not "no change": the first digest after an
+    // install read "=" for every figure.
+    if ($direction === null) {
+        return '<span style="color:#888896;">—</span>';
+    }
+    if ($direction === 'flat') {
         return '<span style="color:#888896;">=</span>';
     }
     $is_good = ($direction === 'up' && $good_when_up) || ($direction === 'down' && !$good_when_up);
