@@ -5304,6 +5304,13 @@ check('výpadek, který běžel už na začátku okna, nemá začátek', bk_outa
     [['monitor_id' => 3, 'started' => null, 'secs' => 60, 'first_down' => 60, 'ongoing' => false]]);
 check('bez výpadku žádný', bk_outage_runs([1 => ['from' => 0, 'segments' => [[0, 60, 'up'], [60, 90, 'warning']]]]), []);
 
+// --- Digest averages without the agents that measure nothing (R51) ------------
+check('průměr CPU vynechá agenta, který CPU neměří (60 a nic je 60, ne 30)',
+    bk_digest_avg([['cpu_usage' => 60], ['cpu_usage' => null], ['cpu_usage' => '20.0']], 'cpu_usage'), 40.0);
+check('nikdo neměří: průměr není', bk_digest_avg([['cpu_usage' => null], []], 'cpu_usage'), null);
+check('buňka tabulky: číslo s %, nic jako pomlčka', [bk_digest_pct_cell(42.5), bk_digest_pct_cell('7'), bk_digest_pct_cell(null)],
+    ['42.5%', '7%', '—']);
+
 // --- Digest trend without a comparison (R17) -----------------------------------
 check('trend bez srovnání není „beze změny“', strip_tags(bk_trend_glyph(null)), '—');
 check('trend beze změny zůstává =', strip_tags(bk_trend_glyph('flat')), '=');

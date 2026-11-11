@@ -14665,8 +14665,8 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
     $avg_cpu = null;
     $avg_ram = null;
     if (!empty($agent_health)) {
-        $avg_cpu = round(array_sum(array_column($agent_health, 'cpu_usage')) / count($agent_health), 1);
-        $avg_ram = round(array_sum(array_column($agent_health, 'ram_usage')) / count($agent_health), 1);
+        $avg_cpu = bk_digest_avg($agent_health, 'cpu_usage');
+        $avg_ram = bk_digest_avg($agent_health, 'ram_usage');
     }
     $trend_cpu = bk_trend_direction($avg_cpu, $prev_snapshot['avg_cpu'] ?? null, 1);
     $trend_ram = bk_trend_direction($avg_ram, $prev_snapshot['avg_ram'] ?? null, 1);
@@ -14756,9 +14756,10 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         }
     }
     foreach ($agent_health as $ah) {
-        if ($ah['cpu_usage'] >= $ah['cpu_threshold']) $recommendations[] = sprintf(t('digest_cpu_high'), $ah['name'], $ah['cpu_threshold']);
-        if ($ah['ram_usage'] >= $ah['ram_threshold']) $recommendations[] = sprintf(t('digest_ram_high'), $ah['name'], $ah['ram_threshold']);
-        if ($ah['hdd_usage'] >= $ah['hdd_threshold']) $recommendations[] = sprintf(t('digest_hdd_high'), $ah['name'], $ah['hdd_threshold']);
+        // Nothing measured is no reading above a limit (null >= 0 is true in PHP).
+        if (is_numeric($ah['cpu_usage']) && $ah['cpu_usage'] >= $ah['cpu_threshold']) $recommendations[] = sprintf(t('digest_cpu_high'), $ah['name'], $ah['cpu_threshold']);
+        if (is_numeric($ah['ram_usage']) && $ah['ram_usage'] >= $ah['ram_threshold']) $recommendations[] = sprintf(t('digest_ram_high'), $ah['name'], $ah['ram_threshold']);
+        if (is_numeric($ah['hdd_usage']) && $ah['hdd_usage'] >= $ah['hdd_threshold']) $recommendations[] = sprintf(t('digest_hdd_high'), $ah['name'], $ah['hdd_threshold']);
     }
     if ($dns_failures > 0) {
         $recommendations[] = sprintf(t('digest_dns_failing'), $dns_failures);
@@ -15300,9 +15301,9 @@ function render_digest_html($data) {
         foreach ($data['agent_health'] as $ah) {
             $ah_html .= bk_email_report_table_row([
                 ['html' => htmlspecialchars($ah['name'])],
-                ['html' => $ah['cpu_usage'] . '%'],
-                ['html' => $ah['ram_usage'] . '%'],
-                ['html' => $ah['hdd_usage'] . '%'],
+                ['html' => bk_digest_pct_cell($ah['cpu_usage'])],
+                ['html' => bk_digest_pct_cell($ah['ram_usage'])],
+                ['html' => bk_digest_pct_cell($ah['hdd_usage'])],
             ]);
         }
         $ah_html .= '</tbody></table>';
@@ -15549,6 +15550,27 @@ function send_digest_report_inner($pdo, $period = 'weekly') {
         ];
     });
     return bk_digest_deliver($admins, $render);
+}
+
+/**
+ * The average of one column over the digest's agents, without the ones that
+ * do not measure it: a TeamSpeak server without an agent or a cPanel account
+ * without CloudLinux has no CPU, and read as 0 % it halved the average (60 %
+ * and nothing made 30 %). Null when none of them measured it.
+ */
+function bk_digest_avg(array $rows, string $col): ?float {
+    $vals = [];
+    foreach ($rows as $row) {
+        if (isset($row[$col]) && is_numeric($row[$col])) {
+            $vals[] = (float)$row[$col];
+        }
+    }
+    return $vals === [] ? null : round(array_sum($vals) / count($vals), 1);
+}
+
+/** A percentage cell of the digest's agent table: a dash for nothing measured, never a bare "%". */
+function bk_digest_pct_cell($value): string {
+    return is_numeric($value) ? $value . '%' : '—';
 }
 
 /**
