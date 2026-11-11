@@ -1798,6 +1798,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_self_check_url', 'bk_site_origin', 'bk_self_check_quote', 'bk_self_check_verdict', 'bk_self_check_step',
     'bk_self_check_message',
     'bk_send_admin_notice', 'bk_send_shared_channels', 'send_pushover_alert', 'bk_alert_telegram_text',
+    'bk_alert_discord_description',
 ]);
 
 if (function_exists('bk_self_check_verdict')) {
@@ -1978,6 +1979,12 @@ if (function_exists('bk_alert_telegram_text') && function_exists('bk_daily_remin
     check('připomínka pro Telegram: vlastní tučné písmo a escapovaný název', bk_daily_reminder_text($tg_report, true),
         "🔔 *Denní připomínka: pořád je něco rozbité*\n• db\\_main – DOWN");
     check_true('ostatní kanály dostanou název beze změny', str_contains(bk_daily_reminder_text($tg_report), '• db_main – DOWN'));
+}
+// Discord's embed is no HTML: "&" and "'" stay as they are.
+if (function_exists('bk_alert_discord_description')) {
+    check('Discord: název a chyba bez HTML entit',
+        bk_alert_discord_description("Kuba & Pepa's web", 'DOWN', '11.11.2026 10:00:00', 'HTTP 500 "<b>"'),
+        "**Monitor:** Kuba & Pepa's web\n**Status:** DOWN\n**Čas:** 11.11.2026 10:00:00\n**Detaily:** HTTP 500 \"<b>\"");
 }
 if (function_exists('bk_send_shared_channels') && $dr_pdo instanceof PDO) {
     $tg_saved = $GLOBALS['system_settings'];

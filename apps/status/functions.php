@@ -8937,6 +8937,15 @@ function bk_alert_telegram_text(string $emoji, string $name, string $status_text
 }
 
 /**
+ * The description of an alert's Discord embed. Plain text: the embed is no
+ * HTML, so htmlspecialchars() showed "A &amp; B" and "&#039;" as written.
+ */
+function bk_alert_discord_description(string $name, string $status_text, string $time, string $error_msg): string {
+    return "**Monitor:** " . $name . "\n**Status:** " . strtoupper($status_text) . "\n**Čas:** " . $time
+        . ($error_msg !== '' ? "\n**Detaily:** " . $error_msg : '');
+}
+
+/**
  * The reminder as one chat text. $telegram: the Markdown variant for
  * Telegram, with its own bold and every name escaped (bk_telegram_md()).
  */
@@ -9895,7 +9904,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
         $payload = [
             "embeds" => [[
                 "title" => "Blood Kings Status Alert",
-                "description" => "**Monitor:** " . htmlspecialchars($name) . "\n**Status:** " . strtoupper($status_text) . "\n**Čas:** " . $time . (!empty($error_msg) ? "\n**Detaily:** " . htmlspecialchars($error_msg) : ""),
+                "description" => bk_alert_discord_description((string)$name, $status_text, $time, (string)$error_msg),
                 "color" => $color
             ]]
         ];
