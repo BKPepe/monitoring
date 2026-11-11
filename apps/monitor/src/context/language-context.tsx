@@ -3160,12 +3160,12 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'How long it takes to resolve a domain name.',
   },
   'help.dns_latency_ms_how': {
-    cs: 'Skutečný dotaz na lokální resolver a změření času.',
-    en: 'A real query to the local resolver, timed.',
+    cs: 'Router a agent.sh pošlou skutečný dotaz přes nslookup a změří čas. Agent v Pythonu a agent pro Windows se ptají systémového resolveru, který může odpovědět ze své mezipaměti.',
+    en: 'The router and agent.sh send a real query with nslookup and time it. The Python and Windows agents ask the system resolver, which may answer from its cache.',
   },
   'help.dns_latency_ms_caveat': {
-    cs: 'Vyžaduje nslookup i time; kde chybí, zůstává hodnota prázdná.',
-    en: 'It needs both nslookup and time; where either is missing, the value stays empty.',
+    cs: 'Na routeru a v agent.sh je potřeba nslookup; kde chybí, hodnota zůstává prázdná. Čas z mezipaměti systému bývá kratší, takže hodnoty různých agentů nejsou přímo srovnatelné.',
+    en: 'The router and agent.sh need nslookup; where it is missing, the value stays empty. A time from the system cache tends to be shorter, so the figures of different agents are not directly comparable.',
   },
   'help.tcp_retrans_what': {
     cs: 'Kolik TCP segmentů se muselo poslat znovu.',
