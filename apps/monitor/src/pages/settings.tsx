@@ -326,6 +326,9 @@ export function SettingsPage() {
     togglePasswordVisibility,
     envLockedTitle: t('settings.env_locked_title', 'Definováno v config.php / prostředí'),
   };
+  // A key config.php defines wins over the database: its control is locked,
+  // or the save reported success and the reload brought the old value back.
+  const lockBadge = (key: string) => (isLocked(key) ? <EnvBadge title={fieldCtx.envLockedTitle} /> : null);
 
   // The props every channel row shares; `test` names the server's test for
   // the channels it can send a test through.
@@ -630,11 +633,15 @@ export function SettingsPage() {
                         />
                         <FieldInput ctx={fieldCtx} k="smtp_port" label="SMTP Port" placeholder="587" />
                         <div>
-                          <label className={labelCls}>{t('settings.smtp_secure_label', 'SMTP Zabezpečení')}</label>
+                          <label className={labelCls}>
+                            {t('settings.smtp_secure_label', 'SMTP Zabezpečení')}
+                            {lockBadge('smtp_secure')}
+                          </label>
                           <select
                             value={settings.smtp_secure ?? 'tls'}
                             onChange={(e) => set('smtp_secure', e.target.value)}
                             className={selectCls}
+                            disabled={isLocked('smtp_secure')}
                           >
                             <option value="ssl">SSL (Port 465)</option>
                             <option value="tls">TLS (Port 587)</option>
@@ -659,11 +666,15 @@ export function SettingsPage() {
                   {...channelRow('sms')}
                 >
                   <div className="max-w-xs">
-                    <label className={labelCls}>{t('settings.sms_gateway_label', 'Placená SMS brána')}</label>
+                    <label className={labelCls}>
+                      {t('settings.sms_gateway_label', 'Placená SMS brána')}
+                      {lockBadge('sms_gateway_type')}
+                    </label>
                     <select
                       value={settings.sms_gateway_type ?? ''}
                       onChange={(e) => set('sms_gateway_type', e.target.value)}
                       className={selectCls}
+                      disabled={isLocked('sms_gateway_type')}
                     >
                       <option value="">{t('settings.sms_gateway_none', 'Žádná (SMS notifikace vypnuty)')}</option>
                       <option value="twilio">Twilio</option>
@@ -789,6 +800,7 @@ export function SettingsPage() {
                     checked={switchOn(settings, 'agent_notifications_enabled')}
                     onChange={(e) => set('agent_notifications_enabled', e.target.checked ? '1' : '0')}
                     className="rounded border-border"
+                    disabled={isLocked('agent_notifications_enabled')}
                   />
                   {/* One switch silences every agent-measured alert (functions.php
                         $bk_agent_statuses), not only the CPU/RAM/HDD limits the old
@@ -798,6 +810,7 @@ export function SettingsPage() {
                       'settings.agent_alerts_label',
                       'Upozornění z agentů: WAN, LTE, disky, firewall, DNS a limity CPU/RAM/HDD'
                     )}
+                    {lockBadge('agent_notifications_enabled')}
                   </span>
                 </label>
                 <label className="flex items-center gap-2 text-xs cursor-pointer">
@@ -806,9 +819,11 @@ export function SettingsPage() {
                     checked={switchOn(settings, 'agent_notify_admin_only')}
                     onChange={(e) => set('agent_notify_admin_only', e.target.checked ? '1' : '0')}
                     className="rounded border-border"
+                    disabled={isLocked('agent_notify_admin_only')}
                   />
                   <span>
                     {t('settings.agent_admin_only_label', 'Upozornění z agentů doručovat pouze administrátorům')}
+                    {lockBadge('agent_notify_admin_only')}
                   </span>
                 </label>
                 <p className={hintCls}>
@@ -837,9 +852,11 @@ export function SettingsPage() {
                   checked={switchOn(settings, 'escalation_enabled')}
                   onChange={(e) => set('escalation_enabled', e.target.checked ? '1' : '0')}
                   className="mt-0.5 rounded border-border"
+                  disabled={isLocked('escalation_enabled')}
                 />
                 <span className="font-medium text-foreground">
                   {t('settings.escalation_enabled_label', 'Zapnout eskalaci')}
+                  {lockBadge('escalation_enabled')}
                 </span>
               </label>
               {/* Outside the label: the help button inside it would also toggle the box. */}
@@ -906,9 +923,11 @@ export function SettingsPage() {
                   checked={switchOn(settings, 'daily_reminder_enabled')}
                   onChange={(e) => set('daily_reminder_enabled', e.target.checked ? '1' : '0')}
                   className="border-border mt-0.5 rounded"
+                  disabled={isLocked('daily_reminder_enabled')}
                 />
                 <span className="text-foreground font-medium">
                   {t('settings.reminder_enabled_label', 'Posílat denní připomínku')}
+                  {lockBadge('daily_reminder_enabled')}
                 </span>
               </label>
               <HelpHint
@@ -1095,7 +1114,8 @@ export function SettingsPage() {
                     type="file"
                     accept="image/png,image/jpeg,image/webp"
                     className="hidden"
-                    disabled={logoUploading}
+                    // The upload saves custom_logo_url, which config.php would override.
+                    disabled={logoUploading || isLocked('custom_logo_url')}
                     onChange={(e) => {
                       handleLogoUpload(e.target.files?.[0] ?? null);
                       e.target.value = '';
@@ -1124,10 +1144,12 @@ export function SettingsPage() {
               <div>
                 <label className={labelCls}>
                   {t('settings.nav_links_label', 'Vlastní odkazy v menu (JSON formát)')}
+                  {lockBadge('custom_nav_links')}
                 </label>
                 <textarea
                   value={settings.custom_nav_links ?? ''}
                   onChange={(e) => set('custom_nav_links', e.target.value)}
+                  disabled={isLocked('custom_nav_links')}
                   className={`${inputCls} font-mono`}
                   rows={2}
                   placeholder='[{"name": "Hlavní Web", "url": "https://example.com"}]'
@@ -1216,6 +1238,15 @@ interface FieldInputProps {
   envLockedTitle: string;
 }
 
+/** The mark of a setting config.php defines, which the form cannot change. */
+function EnvBadge({ title }: { title: string }) {
+  return (
+    <span className="ml-1.5 inline-flex items-center gap-0.5 text-3xs text-info" title={title}>
+      <Lock className="size-2.5" /> ENV
+    </span>
+  );
+}
+
 /**
  * One settings field. Must live at module level - a component created inside
  * a render function gets a new identity on every repaint and React throws
@@ -1241,11 +1272,7 @@ function SettingsField({
     <div className={className}>
       <label className={labelCls}>
         {label}
-        {locked && (
-          <span className="ml-1.5 inline-flex items-center gap-0.5 text-3xs text-info" title={envLockedTitle}>
-            <Lock className="size-2.5" /> ENV
-          </span>
-        )}
+        {locked && <EnvBadge title={envLockedTitle} />}
       </label>
       <div className="relative">
         <input
