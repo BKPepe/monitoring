@@ -1108,6 +1108,10 @@ check_true(
     'začátek výpadku je pád monitoru, ne poslední kontrola',
     $oi_start !== false && (time() - $oi_start->getTimestamp()) > 7000
 );
+// R275: the duration goes out in seconds; it was Czech text in the wrong
+// forms ("1 dní, 2 hodin") that an English page printed as it came.
+check_true('délka výpadku je v sekundách, ne český text',
+    is_int($oi_row['duration_secs'] ?? null) && $oi_row['duration_secs'] > 10000 && !array_key_exists('duration_text', $oi_row ?? []));
 
 [$oi_res_code, $oi_res] = api_post($base, 'action=incident_action', ['id' => $oi_id, 'op' => 'resolve'], $cookie_jar);
 check('incident trvajícího výpadku jde uzavřít', $oi_res_code, 200);

@@ -271,7 +271,7 @@ describe('Veřejná stránka: seznam služeb se neposouvá pod rukama', () => {
             monitorId: 1,
             createdAt: '26.09.2026 09:00:00',
             resolvedAt: null,
-            durationText: null,
+            durationSecs: null,
             updates: [],
           },
         ],

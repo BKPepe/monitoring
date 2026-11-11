@@ -27,6 +27,7 @@ import { Pill } from '@/components/ui/pill';
 import { appApi } from '@/api/app-api';
 import { useSession } from '@/api/use-session';
 import { useLanguage } from '@/context/language-context';
+import { formatDuration } from '@/lib/metric-format';
 import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
 import { ongoingIncidentCount } from '@/lib/ongoing-incidents';
 import { pluralForm } from '@/lib/plural';
@@ -624,7 +625,9 @@ export function IncidentsPage() {
                             )}
                             <span>
                               {t('incidents.duration', 'Doba trvání')}:{' '}
-                              <span className="text-warning font-semibold">{inc.duration_text}</span>
+                              <span className="text-warning font-semibold">
+                                {typeof inc.duration_secs === 'number' ? formatDuration(inc.duration_secs, lang) : '—'}
+                              </span>
                             </span>
                           </p>
                           {/* The newest note of the incident this outage opened - the
@@ -748,7 +751,9 @@ export function IncidentsPage() {
                             )}
                             <span>
                               {t('incidents.duration', 'Doba trvání')}:{' '}
-                              <span className="text-warning font-semibold">{inc.durationText}</span>
+                              <span className="text-warning font-semibold">
+                                {typeof inc.durationSecs === 'number' ? formatDuration(inc.durationSecs, lang) : '—'}
+                              </span>
                             </span>
                           </p>
                         </div>
@@ -810,7 +815,8 @@ export function IncidentsPage() {
                           </span>
                         )}
                         <span className="text-foreground font-semibold">
-                          {t('incidents.duration', 'Doba trvání')}: {inc.durationText}
+                          {t('incidents.duration', 'Doba trvání')}:{' '}
+                          {typeof inc.durationSecs === 'number' ? formatDuration(inc.durationSecs, lang) : '—'}
                         </span>
                       </p>
                       {inc.postmortem && (

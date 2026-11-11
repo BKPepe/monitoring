@@ -66,7 +66,7 @@ const incident = (id: number, title: string, status: string, monitorId: number |
   monitorId,
   createdAt: '23.09.2026 09:00:12',
   resolvedAt: status === 'resolved' ? '23.09.2026 09:30:00' : null,
-  durationText: status === 'resolved' ? '30 min' : null,
+  durationSecs: status === 'resolved' ? 1800 : null,
   updates: [],
   postmortem: null,
 });

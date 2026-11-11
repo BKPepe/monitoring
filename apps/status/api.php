@@ -3613,17 +3613,8 @@ SVG;
 }
 
 // 2c2. Incidents and outages from the DB (incidents and monitor_logs)
-function bk_duration_text(int $diff): string {
-    $diff = max(0, $diff);
-    $days_d = floor($diff / 86400);
-    $hours_d = floor(($diff % 86400) / 3600);
-    $mins_d = floor(($diff % 3600) / 60);
-    $parts = [];
-    if ($days_d > 0) $parts[] = "$days_d dní";
-    if ($hours_d > 0) $parts[] = "$hours_d hodin";
-    $parts[] = "$mins_d minut";
-    return implode(', ', $parts);
-}
+// A duration goes out in seconds and the app formats it in the reader's
+// language. It was a Czech text, in the wrong forms: "1 dní, 2 hodin".
 
 if ($action === 'incidents') {
     try {
@@ -3716,7 +3707,7 @@ if ($action === 'incidents') {
                 'severity' => 'down',
                 'started_at' => date('d.m.Y H:i:s', $start_ts),
                 'resolved_at' => null,
-                'duration_text' => bk_duration_text(time() - $start_ts),
+                'duration_secs' => max(0, time() - $start_ts),
                 'reason' => ($inc_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: 'Cílový port neodpovídá',
             ];
         }
@@ -3766,7 +3757,7 @@ if ($action === 'incidents') {
                 'postmortem' => $r['postmortem'],
                 'createdAt' => date('d.m.Y H:i:s', $start_ts),
                 'resolvedAt' => $r['resolved_at'] ? date('d.m.Y H:i:s', $end_ts) : null,
-                'durationText' => bk_duration_text($end_ts - $start_ts),
+                'durationSecs' => max(0, $end_ts - $start_ts),
                 'updates' => $updates,
             ];
         }

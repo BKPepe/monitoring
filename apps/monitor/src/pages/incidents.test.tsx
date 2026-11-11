@@ -26,7 +26,7 @@ const api = (url: string): Response => {
           severity: 'down',
           reason: 'Agent routeru neodpovídá',
           started_at: '15.09.2026 08:41:06',
-          duration_text: '2 hodin',
+          duration_secs: 7200,
           acknowledgedBy: 'admin',
         },
       ],
@@ -38,7 +38,7 @@ const api = (url: string): Response => {
           monitorId: 7,
           acknowledgedBy: 'admin',
           createdAt: '15.09.2026 08:41:06',
-          durationText: '2 hodin',
+          durationSecs: 7200,
           updates: [{ status: 'investigating', message: 'Incident převzal: admin', at: '15.09.2026 08:45:00' }],
         },
       ],
@@ -69,7 +69,7 @@ const apiClosedIncident = (url: string): Response => {
           severity: 'down',
           reason: 'Agent routeru neodpovídá',
           started_at: '15.09.2026 08:41:06',
-          duration_text: '3 hodin',
+          duration_secs: 10800,
           acknowledgedBy: null,
         },
       ],
@@ -81,7 +81,7 @@ const apiClosedIncident = (url: string): Response => {
           monitorId: 7,
           createdAt: '15.09.2026 08:41:06',
           resolvedAt: '15.09.2026 10:02:00',
-          durationText: '1 hodina',
+          durationSecs: 3600,
           updates: [{ status: 'resolved', message: '[admin] Incident uzavřen ručně.', at: '15.09.2026 10:02:00' }],
         },
       ],
@@ -110,6 +110,9 @@ describe('IncidentsPage', () => {
     );
 
     const notesButton = await screen.findByRole('button', { name: /poznámky a akce|notes & actions/i });
+    // R275: the duration arrives in seconds and reads "2 h", not "2 hodin".
+    expect(screen.getAllByText('2 h').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/hodin/)).toBeNull();
     // Counted once: the outage row and the incident it opened are one outage.
     expect(screen.getByText(/^1 probíhající$|^1 ongoing$/i)).toBeTruthy();
     // No second card titled after the incident.

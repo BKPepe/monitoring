@@ -2,6 +2,7 @@ import { CheckCircle2, Siren } from 'lucide-react';
 import { IconTile } from '@/components/ui/icon-tile';
 import { Pill } from '@/components/ui/pill';
 import { useLanguage } from '@/context/language-context';
+import { formatDuration } from '@/lib/metric-format';
 import { cn } from '@/lib/utils';
 
 interface IncidentUpdate {
@@ -20,7 +21,8 @@ export interface PublicIncident {
   monitorId?: number | null;
   createdAt: string;
   resolvedAt: string | null;
-  durationText: string | null;
+  /** Seconds; the page formats it in the reader's language. */
+  durationSecs: number | null;
   /** Resolution progress (investigating -> identified -> ...) from incident_updates. */
   updates?: IncidentUpdate[];
   /** The post-resolution summary - the admin writes it precisely for the public. */
@@ -35,7 +37,7 @@ export interface PublicIncident {
  * ground and the red edge; the chip still carries the word.
  */
 export function IncidentList({ incidents }: { incidents: readonly PublicIncident[] }) {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   return (
     <ul className="flex flex-col gap-2">
       {incidents.map((inc) => {
@@ -58,11 +60,11 @@ export function IncidentList({ incidents }: { incidents: readonly PublicIncident
               </div>
               {/* Without seconds: with them the range wrapped mid-time on a narrow
                   display. Minute precision is enough here - the duration is stated
-                  by durationText. */}
+                  by durationSecs. */}
               <p className="figure text-muted-foreground text-xs">
                 {noSeconds(inc.createdAt)}
                 {resolved && inc.resolvedAt
-                  ? ` → ${noSeconds(inc.resolvedAt)}${inc.durationText ? ` (${inc.durationText})` : ''}`
+                  ? ` → ${noSeconds(inc.resolvedAt)}${inc.durationSecs != null ? ` (${formatDuration(inc.durationSecs, lang)})` : ''}`
                   : ''}
               </p>
               {/* Resolution progress - the same timeline the admin sees. A status

@@ -20,7 +20,7 @@ const incident = (id: number, title: string, status: string) => ({
   impact: 'major',
   createdAt: '25.09.2026 09:40:00',
   resolvedAt: status === 'resolved' ? '25.09.2026 09:55:00' : null,
-  durationText: status === 'resolved' ? '15 min' : null,
+  durationSecs: status === 'resolved' ? 900 : null,
   updates: [],
 });
 
