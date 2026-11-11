@@ -1342,17 +1342,17 @@ function channelState(
     case 'email':
       // An empty SMTP host is not "off": the server falls back to PHP mail().
       return locked('smtp_host') || has('smtp_host') ? 'set' : 'default';
-    case 'sms':
+    case 'sms': {
       // The gateway type alone says nothing: a fresh install has none, an
       // older one still holds the 'twilio' row schema.sql used to seed.
-      // Only the credentials make the channel work (V-04).
-      return (saved.sms_gateway_type ?? '').trim() === 'smsbrana'
-        ? has('smsbrana_user', 'smsbrana_password')
-          ? 'set'
-          : 'unset'
-        : has('twilio_sid', 'twilio_token', 'twilio_from')
-          ? 'set'
-          : 'unset';
+      // Only the credentials make the channel work (V-04) - and only for the
+      // gateway chosen: with "Žádná" the server sends no SMS, whatever
+      // credentials are left from before, and the row said "Nastaveno".
+      const gateway = (saved.sms_gateway_type ?? '').trim();
+      if (gateway === 'smsbrana') return has('smsbrana_user', 'smsbrana_password') ? 'set' : 'unset';
+      if (gateway === 'twilio') return has('twilio_sid', 'twilio_token', 'twilio_from') ? 'set' : 'unset';
+      return 'unset';
+    }
     case 'discord':
       return has('discord_webhook_url') ? 'set' : 'unset';
     case 'slack':

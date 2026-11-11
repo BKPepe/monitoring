@@ -97,6 +97,12 @@ describe('Nastavení → Notifikace: kanály po řádcích (W2-11)', () => {
     expect(within(row('E-mail \\(SMTP\\)')).queryByText('Nastaveno')).toBeNull();
   });
 
+  it('brána „Žádná“ se zbylými údaji Twilia není „Nastaveno“ (R296)', async () => {
+    serveSettings({ sms_gateway_type: '', twilio_sid: 'AC1', twilio_token: 'tok', twilio_from: '+420700000000' });
+    await openTab(/Notifikace/);
+    expect(within(row('SMS Gateway Notifikace')).getByText('Nenastaveno')).toBeTruthy();
+  });
+
   it('Test je jen u nastaveného kanálu a výsledek se ukáže na jeho řádku', async () => {
     const test = vi.spyOn(appApi, 'testNotification').mockResolvedValue({ ok: false, message: 'HTTP 404' });
     serveSettings({ discord_webhook_url: 'https://discord.example.test/api/webhooks/1' });
