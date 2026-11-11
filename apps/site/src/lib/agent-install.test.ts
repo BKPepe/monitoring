@@ -110,6 +110,13 @@ describe('instalace agenta na webu', () => {
 
   // R137: the agent keeps .refused, .prev and loglines-off next to itself,
   // and the uninstall left them behind.
+  // R325: the badge is the newest published script's version, while the steps
+  // download from the visitor's own server, which may serve an older release.
+  it('verze u záložky je nejnovější vydaná, ne ta, kterou stáhne vlastní server', async () => {
+    expect(await render('cs', 'full')).toMatch(/<dt[^>]*>Nejnovější verze<\/dt>/);
+    expect(await render('en', 'full')).toMatch(/<dt[^>]*>Latest version<\/dt>/);
+  });
+
   it('odinstalace na OpenWrt smaže i soubory, které si agent vede vedle sebe', async () => {
     const html = unescape(await render('en', 'full'));
     expect(html).toContain('/usr/bin/agent_openwrt.sh.*');

@@ -13,7 +13,9 @@
 // troubleshooting checks; "compact" (home page) links to them instead.
 //
 // Versions come from the worker's /api/agents, which reads the published
-// scripts; until it answers, and when it fails, the badge shows a dash.
+// scripts; until it answers, and when it fails, the badge shows a dash. They
+// are the newest release's: the steps download from the visitor's own
+// server, which may serve an older one, so the badge says "latest".
 import { AGENTS_SOURCE_URL } from '../config';
 import type { Lang } from '../i18n';
 import {
@@ -36,7 +38,7 @@ const app = (key: keyof typeof APP_LABELS) => APP_LABELS[key][lang];
 const t = cs
   ? {
       tabs: 'Platforma agenta',
-      version: 'Verze',
+      version: 'Nejnovější verze',
       needs: 'Potřebuje',
       readFirst: 'Nejdřív si přečtěte skript',
       install: 'Instalace',
@@ -73,7 +75,7 @@ const t = cs
     }
   : {
       tabs: 'Agent platform',
-      version: 'Version',
+      version: 'Latest version',
       needs: 'Needs',
       readFirst: 'Read the script first',
       install: 'Install',

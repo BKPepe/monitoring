@@ -5,8 +5,9 @@
  * repository (the `agents` submodule). The worker kept reading the old
  * apps/status paths, which no longer exist on GitHub, so every version came
  * back "unknown" - and the catch branch handed out an invented 1.7.0/1.3.0.
- * The versions are now read from the published scripts themselves, so what
- * the page shows is what `curl` downloads.
+ * The versions are now read from the published scripts themselves: the
+ * newest release. The install steps download from the visitor's own server,
+ * which may serve an older one, so the page calls this the latest version.
  */
 export const AGENT_SOURCE_REPO = 'https://github.com/BKPepe/monitoring-agent';
 export const AGENT_SOURCE_BASE = 'https://raw.githubusercontent.com/BKPepe/monitoring-agent/main/vps-agent/';
