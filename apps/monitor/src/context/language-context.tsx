@@ -738,6 +738,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'public.stat_online': { cs: 'Online', en: 'Online' },
   'public.stat_down': { cs: 'Mimo provoz', en: 'Down' },
   'public.stat_uptime': { cs: 'Dostupnost 30 dní', en: 'Availability, 30 days' },
+  'public.regions_all': { cs: 'Zobrazit všechna místa ({n})', en: 'Show all places ({n})' },
   'public.regions': { cs: 'Místa měření', en: 'Measurement locations' },
   'public.loading_services': { cs: 'Načítám služby…', en: 'Loading services…' },
   'public.uncategorised': { cs: 'Ostatní', en: 'Other' },

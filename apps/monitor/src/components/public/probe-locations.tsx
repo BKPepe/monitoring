@@ -1,3 +1,4 @@
+import * as React from 'react';
 import { Radio } from 'lucide-react';
 import { Panel } from '@/components/ui/panel';
 import { useLanguage } from '@/context/language-context';
@@ -21,7 +22,10 @@ export interface ProbeRegion {
  */
 export function ProbeLocations({ regions }: { regions: readonly ProbeRegion[] }) {
   const { t, lang } = useLanguage();
-  const shown = regions.slice(0, 9);
+  // Nine at first; the count in the header is all of them, so the rest is
+  // one click away rather than silently left out.
+  const [all, setAll] = React.useState(false);
+  const shown = all ? regions : regions.slice(0, 9);
   return (
     <Panel icon={Radio} title={t('public.regions', 'Místa měření')} count={regions.length}>
       <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -62,6 +66,15 @@ export function ProbeLocations({ regions }: { regions: readonly ProbeRegion[] })
           );
         })}
       </ul>
+      {shown.length < regions.length && (
+        <button
+          type="button"
+          onClick={() => setAll(true)}
+          className="text-link focus-visible:ring-ring mt-3 rounded-sm text-xs font-medium hover:underline focus-visible:ring-2 focus-visible:outline-none"
+        >
+          {t('public.regions_all', { n: regions.length }, `Zobrazit všechna místa (${regions.length})`)}
+        </button>
+      )}
     </Panel>
   );
 }
