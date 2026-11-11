@@ -15708,6 +15708,29 @@ function bk_check_location(PDO $pdo, ?callable $lookup = null): string {
 }
 
 /**
+ * The answer of a cPanel exporter that said "ok", the same for the cURL path
+ * and the one without cURL. The exporter sends the CPU (UAPI StatsBar) too;
+ * the path without cURL dropped it, so the CPU history stayed empty.
+ *
+ * @param array<string, mixed> $data the exporter's JSON
+ * @return array<string, mixed>
+ */
+function bk_cpanel_up_result(array $data, ?int $duration): array {
+    return [
+        'status' => 'up',
+        'response_time' => $duration,
+        'error' => null,
+        'disk' => $data['disk'] ?? null,
+        'memory' => $data['memory'] ?? null,
+        'processes' => $data['processes'] ?? null,
+        'database' => $data['database'] ?? null,
+        'bandwidth' => $data['bandwidth'] ?? null,
+        'postgresql' => $data['postgresql'] ?? null,
+        'cpu' => $data['cpu'] ?? null,
+    ];
+}
+
+/**
  * Checks the cPanel status endpoint and loads the statistics
  */
 function check_cpanel($url, $timeout = 5) {
@@ -15744,21 +15767,7 @@ function check_cpanel($url, $timeout = 5) {
         if ($http_code === 200) {
             $data = json_decode($response, true);
             if ($data && isset($data['status']) && $data['status'] === 'ok') {
-                return [
-                    'status' => 'up',
-                    'response_time' => $duration,
-                    'error' => null,
-                    'disk' => $data['disk'] ?? null,
-                    'memory' => $data['memory'] ?? null,
-                    'processes' => $data['processes'] ?? null,
-                    'database' => $data['database'] ?? null,
-                    'bandwidth' => $data['bandwidth'] ?? null,
-                    'postgresql' => $data['postgresql'] ?? null,
-                    // cpanel_stats.php exportuje i cpuusage (uapi StatsBar) - bez
-                    // without this passthrough cron always read $cp_res['cpu'] as null
-                    // a do vps_metrics zapisoval CPU trvale 0.0.
-                    'cpu' => $data['cpu'] ?? null
-                ];
+                return bk_cpanel_up_result($data, $duration);
             } else {
                 return [
                     'status' => 'down',
@@ -15800,17 +15809,7 @@ function check_cpanel($url, $timeout = 5) {
         
         $data = json_decode($response, true);
         if ($data && isset($data['status']) && $data['status'] === 'ok') {
-            return [
-                'status' => 'up',
-                'response_time' => $duration,
-                'error' => null,
-                'disk' => $data['disk'] ?? null,
-                'memory' => $data['memory'] ?? null,
-                'processes' => $data['processes'] ?? null,
-                'database' => $data['database'] ?? null,
-                'bandwidth' => $data['bandwidth'] ?? null,
-                'postgresql' => $data['postgresql'] ?? null
-            ];
+            return bk_cpanel_up_result($data, $duration);
         } else {
             return [
                 'status' => 'down',

@@ -5345,6 +5345,14 @@ check('podařené nahrání: jen nové logo a v něm nový obsah',
 array_map('unlink', glob($lg_dir . '/*') ?: []);
 @rmdir($lg_dir);
 
+// --- cPanel: both transport paths hand over the CPU (R206) ---------------------
+check('cPanel bez cURL i s ním předá CPU z exportéru',
+    [bk_cpanel_up_result(['status' => 'ok', 'cpu' => ['percent' => 12.5]], 80)['cpu'], bk_cpanel_up_result(['status' => 'ok'], 80)['cpu']],
+    [['percent' => 12.5], null]);
+$cp_src = (string)file_get_contents(__DIR__ . '/../functions.php');
+$cp_fn = substr($cp_src, (int)strpos($cp_src, 'function check_cpanel('), 6000);
+check('obě cesty check_cpanel skládají odpověď stejně', substr_count($cp_fn, 'return bk_cpanel_up_result($data, $duration);'), 2);
+
 // --- The htmode a router recommendation names (R204) ---------------------------
 check('režim jen se šířkou, kterou generace má: HT80 neexistuje', [
     bk_rec_htmode(4, 40), bk_rec_htmode(4, 80), bk_rec_htmode(5, 80), bk_rec_htmode(6, 160), bk_rec_htmode(7, 320), bk_rec_htmode(null, 80),
