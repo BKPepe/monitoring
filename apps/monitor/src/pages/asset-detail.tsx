@@ -272,7 +272,9 @@ export function AssetDetailPage() {
         let match: ApiMonitor | undefined = list.find((m: ApiMonitor) => Number(m.id) === idNum);
         if (!match) {
           // An archived monitor is out of the live list; its history stays readable here.
-          const archivedList = await appApi.getArchivedMonitors().catch(() => [] as ApiMonitor[]);
+          // A failed archive query is a failed load, not "not found": the
+          // error goes to the catch below, as the live list's does.
+          const archivedList = await appApi.getArchivedMonitors();
           if (!active) return;
           match = archivedList.find((m) => Number(m.id) === idNum);
         }

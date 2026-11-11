@@ -143,6 +143,22 @@ describe('Detail zařízení: jeden prostor id (W1-D2)', () => {
     expect(await screen.findByRole('heading', { name: /Turris Omnia/ })).toBeTruthy();
   });
 
+  it('selhaný dotaz na archiv je chyba načtení, ne „nenalezeno“ (R219)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).includes('archived=1')
+            ? ({ ok: false, status: 500, json: () => Promise.resolve({ error: 'DB' }) } as Response)
+            : api(String(input))
+        )
+      )
+    );
+    renderDetail('/infrastructure/42');
+    expect(await screen.findByText(/Detail zařízení se nepodařilo načíst/)).toBeTruthy();
+    expect(screen.queryByText('Zařízení nenalezeno')).toBeNull();
+  });
+
   it('asset_id bez monitoru se stejným id je „nenalezeno“, ne cizí zařízení', async () => {
     // Before: the fallback matched NAS by its asset_id 7.
     renderDetail('/infrastructure/7');
