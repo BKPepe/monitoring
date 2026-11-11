@@ -4773,6 +4773,14 @@ check('bez prořezání je pruned false', $ph['pruned'] ?? null, false);
 [, $ph_empty] = api_get_auth($base, 'action=process_history&monitor_id=2&kind=cpu&at=' . ($now_ts - 86400 * 3) . '&radius=5', $cookie_jar);
 check('okno bez záznamů vrátí prázdno, ne chybu', $ph_empty['samples'] ?? null, []);
 check('a pořád hlásí, že sběr běží', $ph_empty['enabled'] ?? null, true);
+// R120: "pruned" came only from the rows returned, so an empty window of a
+// thinned stretch said "nothing ran" instead of "only peaks were kept".
+$ph_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('process_history_peak_after_days', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+$ph_set->execute(['2']);
+[, $ph_thin] = api_get_auth($base, 'action=process_history&monitor_id=2&kind=cpu&at=' . ($now_ts - 86400 * 3) . '&radius=5', $cookie_jar);
+[, $ph_recent] = api_get_auth($base, 'action=process_history&monitor_id=2&kind=cpu&at=' . $now_ts . '&radius=10', $cookie_jar);
+check('prázdné okno ve prořezané době je pruned, čerstvé ne', [$ph_thin['samples'] ?? null, $ph_thin['pruned'] ?? null, $ph_recent['pruned'] ?? null], [[], true, false]);
+$ph_set->execute(['0']);
 
 [$code] = api_get_auth($base, 'action=process_history&monitor_id=2&kind=cpu', $cookie_jar);
 check('bez času vrací 400, ne prázdný seznam', $code, 400);

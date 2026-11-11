@@ -5983,18 +5983,25 @@ if ($action === 'process_history') {
         $rows = $stmt->fetchAll();
 
         // The window bounds are reported by the database, so the UI displays the
-        // same time the search really used.
+        // same time the search really used. So is whether the window reaches
+        // into the stretch cron thins to peaks (bk_prune_process_samples): an
+        // empty answer there is "nothing notable", and it returns no row that
+        // could say so.
+        $ph_keep_days = max(0, (int)get_setting('process_history_days', '30'));
+        $ph_peak_after = max(0, (int)get_setting('process_history_peak_after_days', '0'));
+        $ph_thinning = $ph_peak_after > 0 && $ph_peak_after < $ph_keep_days;
         $stmt_win = $pdo->prepare(
             "SELECT DATE_SUB(FROM_UNIXTIME(?), INTERVAL ? MINUTE) AS win_from,
-                    DATE_ADD(FROM_UNIXTIME(?), INTERVAL ? MINUTE) AS win_to"
+                    DATE_ADD(FROM_UNIXTIME(?), INTERVAL ? MINUTE) AS win_to,
+                    DATE_SUB(FROM_UNIXTIME(?), INTERVAL ? MINUTE) < DATE_SUB(NOW(), INTERVAL ? DAY) AS win_thinned"
         );
-        $stmt_win->execute([$around, $radius, $around, $radius]);
+        $stmt_win->execute([$around, $radius, $around, $radius, $around, $radius, $ph_peak_after]);
         $win = $stmt_win->fetch() ?: [];
         $from = $win['win_from'] ?? null;
         $to = $win['win_to'] ?? null;
 
         $samples = [];
-        $pruned = false;
+        $pruned = $ph_thinning && (int)($win['win_thinned'] ?? 0) === 1;
         foreach ($rows as $r) {
             if (($r['kept_reason'] ?? '') === 'peak') {
                 $pruned = true;
