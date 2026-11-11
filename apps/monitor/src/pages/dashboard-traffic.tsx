@@ -174,8 +174,11 @@ export default function DashboardTraffic({
                 variant="plain"
                 size="xs"
                 label={t('rsvc.wan_latency', 'Odezva k bráně')}
-                value={gatewayLatencyMs == null ? null : formatNumber(gatewayLatencyMs, lang, 0)}
+                // From the router's last report: as old as its traffic, so it
+                // goes when "Aktuální" goes (R66).
+                value={!fresh || gatewayLatencyMs == null ? null : formatNumber(gatewayLatencyMs, lang, 0)}
                 secondary="ms"
+                hint={fresh ? undefined : t('dashboard.no_fresh_sample', 'bez čerstvého měření')}
               />
             ) : (
               <StatBlock
