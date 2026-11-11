@@ -239,6 +239,16 @@ if (function_exists('bk_get_network_insights')) {
         'Systémový log hlásí 80 chyb v posledních 500 řádcích.',
     ]);
 
+    // R205: a failed traffic query was swallowed, and link_traffic answered
+    // 200 with no interfaces - a router that transferred nothing.
+    bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_get_interface_traffic_stats']);
+    try {
+        bk_get_interface_traffic_stats($ni_pdo, 2);
+        check_true('selhaný dotaz na provoz rozhraní se nespolkne', false);
+    } catch (PDOException $e) {
+        check_true('selhaný dotaz na provoz rozhraní se nespolkne', true);
+    }
+
     // R272: the LTE insight's detail spoke of a missing SIM for every reason,
     // also with the modem's interface down.
     $ni_lte = fn (array $d): string => (string)(array_values(array_filter(bk_get_network_insights($ni_pdo, ['id' => 2], $d),

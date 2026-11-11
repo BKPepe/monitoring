@@ -16921,6 +16921,9 @@ function bk_get_link_traffic($pdo, int $monitor_id, array $details, int $days = 
 
 /**
  * Fetches cumulative transferred data (RX/TX bytes and packets) for all of a monitor's interfaces over several periods.
+ *
+ * A failed query throws. It was swallowed "best-effort", and link_traffic
+ * answered 200 with no interfaces - a router that transferred nothing.
  */
 function bk_get_interface_traffic_stats($pdo, $monitor_id) {
     $result = [];
@@ -16997,7 +17000,10 @@ function bk_get_interface_traffic_stats($pdo, $monitor_id) {
                 ],
             ];
         }
-    } catch (PDOException $e) { /* best-effort */ }
+    } catch (PDOException $e) {
+        // The callers log it: api.php answers 500, monitor.php shows nothing.
+        throw $e;
+    }
     return $result;
 }
 

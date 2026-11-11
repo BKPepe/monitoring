@@ -90,7 +90,12 @@ try {
 $health_dots = bk_get_30day_health_dots($pdo, $monitor_id);
 $card_profile = bk_get_type_card_profile($monitor['type']);
 $timeline = bk_get_monitor_timeline($pdo, $monitor_id, 30);
-$iface_traffic_stats = bk_get_interface_traffic_stats($pdo, $monitor_id);
+try {
+    $iface_traffic_stats = bk_get_interface_traffic_stats($pdo, $monitor_id);
+} catch (PDOException $e) {
+    error_log('[monitor.php] interface traffic unavailable: ' . $e->getMessage());
+    $iface_traffic_stats = [];
+}
 
 // Asset siblings
 $asset_siblings = [];
