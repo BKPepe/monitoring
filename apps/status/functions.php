@@ -2138,7 +2138,7 @@ function bk_process_escalations(PDO $pdo, ?int $now = null): array {
         // The payload carries both `content` and `text`: Discord reads the first,
         // Slack the second, and both ignore an unknown key. One channel covers both.
         $sent = send_webhook_post($webhook, json_encode(['content' => $text, 'text' => $text], JSON_UNESCAPED_UNICODE));
-        $delivery = $sent ? 'sent' : (($GLOBALS['last_webhook_delivery'] ?? null) === 'unknown' ? 'unknown' : 'failed');
+        $delivery = bk_webhook_logged_delivery($sent);
         $send_error = $sent ? null : ($GLOBALS['last_webhook_error'] ?? null);
         bk_log_notification($pdo, $incident['monitor_id'] !== null ? (int)$incident['monitor_id'] : null,
             'escalation', 'escalation_webhook', null, $delivery !== 'failed', $send_error, 'escalation',
@@ -9213,16 +9213,19 @@ function bk_send_daily_reminder(PDO $pdo, ?int $now = null): array {
  * gets $text as plain text: an unpaired "_" (as in a URL's "public_status")
  * makes Telegram refuse a Markdown message.
  *
- * @return array{attempted: int, sent: int, failed: int}
+ * @return array{attempted: int, sent: int, unknown: int, failed: int}
  */
 function bk_send_shared_channels(PDO $pdo, string $status, string $kind, string $text, string $pushover_title,
                                  int $pushover_priority, ?string $telegram_markdown): array {
-    $count = ['attempted' => 0, 'sent' => 0, 'failed' => 0];
-    $log = function (string $channel, ?string $recipient, bool $ok) use ($pdo, $status, $kind, &$count): void {
+    $count = ['attempted' => 0, 'sent' => 0, 'unknown' => 0, 'failed' => 0];
+    // A webhook's delivery comes from its answer (a timeout is unknown);
+    // Pushover's sender says only yes or no.
+    $log = function (string $channel, ?string $recipient, bool $ok, bool $webhook = true) use ($pdo, $status, $kind, &$count): void {
+        $delivery = $webhook ? bk_webhook_logged_delivery($ok) : ($ok ? 'sent' : 'failed');
         bk_log_notification($pdo, null, $status, $channel, $recipient, $ok,
-            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), $kind, delivery: $ok ? 'sent' : 'failed');
+            $ok ? null : ($GLOBALS['last_webhook_error'] ?? null), $kind, delivery: $delivery);
         $count['attempted']++;
-        $count[$ok ? 'sent' : 'failed']++;
+        $count[$delivery]++;
     };
     $discord = (string)get_setting('discord_webhook_url', '');
     if ($discord !== '') {
@@ -9244,7 +9247,7 @@ function bk_send_shared_channels(PDO $pdo, string $status, string $kind, string 
     $po_token = (string)get_setting('pushover_api_token', '');
     if ($po_user !== '' && $po_token !== '') {
         $log('pushover', null, (bool)send_pushover_alert($po_user, $po_token, $pushover_title,
-            mb_strimwidth($text, 0, 900, '…', 'UTF-8'), $pushover_priority));
+            mb_strimwidth($text, 0, 900, '…', 'UTF-8'), $pushover_priority), false);
     }
     return $count;
 }
@@ -9289,7 +9292,7 @@ function bk_send_admin_notice(PDO $pdo, string $status, callable $render, int $p
     [$shared_subject, , $shared_text] = $rendered((string)get_setting('email_lang', 'cs'));
     $shared = bk_send_shared_channels($pdo, $status, 'admin_notice', $shared_text,
         $shared_subject, $pushover_priority, null);
-    foreach (['attempted', 'sent', 'failed'] as $k) {
+    foreach (['attempted', 'sent', 'unknown', 'failed'] as $k) {
         $count[$k] += $shared[$k];
     }
     return $count;
@@ -10030,7 +10033,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             $discord_ok,
             $discord_ok ? null : ($GLOBALS['last_webhook_error'] ?? null),
             'alert',
-            delivery: $discord_ok ? 'sent' : 'failed'
+            delivery: bk_webhook_logged_delivery($discord_ok)
         );
     }
 
@@ -10046,7 +10049,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             $slack_ok,
             $slack_ok ? null : ($GLOBALS['last_webhook_error'] ?? null),
             'alert',
-            delivery: $slack_ok ? 'sent' : 'failed'
+            delivery: bk_webhook_logged_delivery($slack_ok)
         );
     }
 
@@ -10068,7 +10071,7 @@ function trigger_notifications($pdo, $monitor, $new_status, $error_msg = '') {
             $tg_ok,
             $tg_ok ? null : ($GLOBALS['last_webhook_error'] ?? null),
             'alert',
-            delivery: $tg_ok ? 'sent' : 'failed'
+            delivery: bk_webhook_logged_delivery($tg_ok)
         );
     }
 
@@ -10121,6 +10124,18 @@ function bk_webhook_delivery(bool $answered, int $code, bool $body_sent): string
         return $body_sent ? 'unknown' : 'failed';
     }
     return $code >= 200 && $code < 300 ? 'sent' : 'failed';
+}
+
+/**
+ * The delivery to log for the webhook send_webhook_post() just posted: a
+ * timeout after the whole message left is `unknown`, not `failed` - the
+ * endpoint may have posted it. Every path that logs a webhook reads it here.
+ */
+function bk_webhook_logged_delivery(bool $ok): string {
+    if ($ok) {
+        return 'sent';
+    }
+    return ($GLOBALS['last_webhook_delivery'] ?? null) === 'unknown' ? 'unknown' : 'failed';
 }
 
 /**

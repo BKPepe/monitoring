@@ -1876,8 +1876,11 @@ if (function_exists('send_webhook_post')) {
 } else {
     function send_webhook_post($url, $payload_json): bool {
         $GLOBALS['bk_test_webhooks'][] = ['url' => (string)$url, 'payload' => (string)$payload_json];
-        $ok = !str_contains((string)$url, 'telegram');
-        $GLOBALS['last_webhook_error'] = $ok ? null : 'HTTP 400';
+        // A "timeout" URL: the whole message left and no answer came.
+        $timeout = str_contains((string)$url, 'timeout');
+        $ok = !$timeout && !str_contains((string)$url, 'telegram');
+        $GLOBALS['last_webhook_error'] = $ok ? null : ($timeout ? 'Operation timed out' : 'HTTP 400');
+        $GLOBALS['last_webhook_delivery'] = $ok ? 'sent' : ($timeout ? 'unknown' : 'failed');
         return $ok;
     }
 }
@@ -1886,7 +1889,7 @@ bk_test_load_functions(__DIR__ . '/../functions.php', [
     'bk_self_check_url', 'bk_site_origin', 'bk_self_check_quote', 'bk_self_check_verdict', 'bk_self_check_step',
     'bk_self_check_message',
     'bk_send_admin_notice', 'bk_send_shared_channels', 'send_pushover_alert', 'bk_alert_telegram_text',
-    'bk_alert_discord_description', 'bk_alert_sms_body',
+    'bk_alert_discord_description', 'bk_alert_sms_body', 'bk_webhook_logged_delivery',
 ]);
 
 if (function_exists('bk_self_check_verdict')) {
@@ -2040,6 +2043,14 @@ if (function_exists('bk_send_admin_notice') && $dr_pdo instanceof PDO) {
     check_false('webhooky dostaly text, ne HTML', str_contains($GLOBALS['bk_test_webhooks'][0]['payload'] ?? '<', '<p'));
     // "public_status" in the URL: an unpaired "_" makes Telegram refuse Markdown.
     check_false('Telegram bez Markdownu', str_contains($GLOBALS['bk_test_webhooks'][1]['payload'] ?? 'parse_mode', 'parse_mode'));
+
+    // A webhook that timed out after the whole message left may have posted it:
+    // logged and counted as unconfirmed, as the escalations do, not failed (R349).
+    $dr_pdo->exec('DELETE FROM notification_log');
+    $GLOBALS['system_settings']['discord_webhook_url'] = 'https://discord.invalid/timeout';
+    $sc_n = bk_send_admin_notice($dr_pdo, 'self_check_failed', fn (): array => bk_self_check_message('failed', $sc_state), 1);
+    check('vypršený webhook je nepotvrzený, ne neodeslaný', [$sc_n['unknown'], $sc_n['failed'],
+        $dr_pdo->query("SELECT delivery FROM notification_log WHERE channel = 'discord'")->fetchColumn()], [2, 1, 'unknown']);
 
     // Nobody to tell: nothing attempted, and the caller can say so.
     $dr_pdo->exec("UPDATE users SET role = 'user' WHERE id = 1");
