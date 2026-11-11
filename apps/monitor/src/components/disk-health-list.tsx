@@ -489,7 +489,9 @@ function DiskHistory({ days }: { days: StorageHistoryDay[] }) {
       unit: '°C',
     },
     {
-      label: t('storage.written_total', 'Zapsáno za život disku'),
+      // What the router wrote each day (hostWrittenBytes), not the disk's
+      // lifetime total the label used to promise.
+      label: t('storage.written_daily', 'Zapsáno za den'),
       points: days.map((d) => ({ t: at(d), v: d.hostWrittenBytes === null ? null : d.hostWrittenBytes / 1073741824 })),
       tone: 'disk',
       unit: 'GB',

@@ -177,6 +177,7 @@ const translations: Record<string, { cs: string; en: string }> = {
   'storage.kind_hdd': { cs: 'HDD (rotační)', en: 'HDD (spinning)' },
   'storage.smart_age': { cs: 'SMART změřen {ago}', en: 'SMART read {ago}' },
   'storage.reading_ago': { cs: 'před {span}', en: '{span} ago' },
+  'storage.written_daily': { cs: 'Zapsáno za den', en: 'Written per day' },
   'storage.temperature': { cs: 'Teplota', en: 'Temperature' },
   'storage.temp_limit': { cs: 'limit {limit} °C', en: 'limit {limit} °C' },
   'storage.power_on': { cs: 'Doba provozu', en: 'Power-on time' },

@@ -184,6 +184,18 @@ describe('DiskHealthList', () => {
     expect(screen.queryAllByText('beze změny 4 dní')).toHaveLength(1);
   });
 
+  it('the daily writes chart is named for a day, not for the disk`s life (R299)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(json(omnia.storageHistory)))
+    );
+    renderList({ disks: [sda], monitorId: 6 });
+    fireEvent.click(screen.getByText('Historie disku'));
+    const details = screen.getByText('Historie disku').closest('details') as HTMLElement;
+    await waitFor(() => expect(details.textContent).toContain('Zapsáno za den'));
+    expect(details.textContent).not.toContain('Zapsáno za život disku');
+  });
+
   it('the 7-day write average marks a day a router restart cut short', async () => {
     const history = structuredClone(omnia.storageHistory);
     const day = history.disks[0].daily[0];
