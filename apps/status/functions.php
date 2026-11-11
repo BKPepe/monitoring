@@ -3153,6 +3153,19 @@ function bk_slug_ascii(string $text): string {
     return strtolower(strtr($text, $map));
 }
 
+/**
+ * A value as a JavaScript string argument inside an HTML attribute, e.g.
+ * onclick="f(<?php echo bk_js_arg($x); ?>)". htmlspecialchars alone is not
+ * enough there: the browser decodes &#039; back into a quote before the
+ * script runs, so a name with an apostrophe broke out of the string.
+ */
+function bk_js_arg($value): string {
+    return htmlspecialchars(
+        (string)json_encode((string)$value, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE),
+        ENT_QUOTES
+    );
+}
+
 function bk_num($value, string $unit = '', int $decimals = 0): string {
     if ($value === null || $value === '' || !is_numeric($value)) {
         return '—';

@@ -1536,9 +1536,9 @@ $site_title = get_setting('site_title', 'Blood Kings');
                                                     <a href="#" onclick="if (confirm('Opravdu chcete kompletně vymazat historii měření, response grafy a logy pro tento monitor?')) bkPostAction({clear_history: '1', id: <?php echo (int)$mon['id']; ?>}); return false;" class="btn btn-warning btn-sm" title="Vymazat historii a logy"><i class="fas fa-eraser"></i></a>
                                                     <a href="#" onclick="if (confirm('Opravdu chcete smazat tento monitor?')) bkPostAction({delete_monitor: '1', id: <?php echo (int)$mon['id']; ?>}); return false;" class="btn btn-danger btn-sm" title="Smazat"><i class="fas fa-trash"></i></a>
                                                     <?php if (!empty($mon['agent_key'])): ?>
-                                                        <button id="agent-btn-<?php echo $mon['id']; ?>" class="btn btn-success btn-sm" onclick="showAgentInstructions('<?php echo $mon['agent_key']; ?>', '<?php echo htmlspecialchars($mon['name']); ?>', '<?php echo htmlspecialchars($mon['type']); ?>')" title="Klíč a instalace agenta"><i class="fas fa-terminal"></i></button>
+                                                        <button id="agent-btn-<?php echo $mon['id']; ?>" class="btn btn-success btn-sm" onclick="showAgentInstructions(<?php echo bk_js_arg($mon['agent_key']); ?>, <?php echo bk_js_arg($mon['name']); ?>, <?php echo bk_js_arg($mon['type']); ?>)" title="Klíč a instalace agenta"><i class="fas fa-terminal"></i></button>
                                                     <?php elseif ($mon['type'] === 'cpanel'): ?>
-                                                        <button class="btn btn-success btn-sm" onclick="showCpanelInstructions('<?php echo htmlspecialchars($mon['name']); ?>')" title="Nastavení cPanel monitoringu"><i class="fas fa-info-circle"></i></button>
+                                                        <button class="btn btn-success btn-sm" onclick="showCpanelInstructions(<?php echo bk_js_arg($mon['name']); ?>)" title="Nastavení cPanel monitoringu"><i class="fas fa-info-circle"></i></button>
                                                     <?php endif; ?>
                                                 </div>
                                             </td>
@@ -2329,7 +2329,7 @@ wget -O docker-compose.agent.yml <?php echo bk_link_origin() . str_replace('admi
                             <label><?php echo htmlspecialchars(t('profile_picker_heading')); ?></label>
                             <div class="profile-picker-grid" id="profile-picker-grid">
                                 <?php foreach ($service_profiles as $p_type => $p_profile): ?>
-                                    <button type="button" class="profile-picker-card<?php echo $p_type === $current_profile_type ? ' active' : ''; ?>" data-type="<?php echo htmlspecialchars($p_type); ?>" onclick="selectProfileType('<?php echo htmlspecialchars($p_type); ?>')">
+                                    <button type="button" class="profile-picker-card<?php echo $p_type === $current_profile_type ? ' active' : ''; ?>" data-type="<?php echo htmlspecialchars($p_type); ?>" onclick="selectProfileType(<?php echo bk_js_arg($p_type); ?>)">
                                         <i class="fas <?php echo htmlspecialchars($p_profile['icon']); ?>"></i>
                                         <span><?php echo htmlspecialchars($p_profile['label']); ?></span>
                                     </button>
@@ -2531,7 +2531,7 @@ wget -O docker-compose.agent.yml <?php echo bk_link_origin() . str_replace('admi
                                     <label style="font-weight: 600; display: block; margin-bottom: 0.5rem;">Vyvolat akci nyní</label>
                                     <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
                                         <?php foreach ($ra_action_labels as $ra_key => $ra_label): if (!in_array($ra_key, $ra_allowed, true)) continue; ?>
-                                            <button type="button" class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.4rem 0.75rem;" onclick="triggerRemoteAction(<?php echo (int)$edit_monitor['id']; ?>, '<?php echo htmlspecialchars($ra_key, ENT_QUOTES); ?>', '<?php echo htmlspecialchars($ra_label, ENT_QUOTES); ?>')"><?php echo htmlspecialchars($ra_label); ?></button>
+                                            <button type="button" class="btn btn-secondary" style="font-size: 0.8rem; padding: 0.4rem 0.75rem;" onclick="triggerRemoteAction(<?php echo (int)$edit_monitor['id']; ?>, <?php echo bk_js_arg($ra_key); ?>, <?php echo bk_js_arg($ra_label); ?>)"><?php echo htmlspecialchars($ra_label); ?></button>
                                         <?php endforeach; ?>
                                     </div>
 

@@ -5277,6 +5277,15 @@ check('úryvek: krátká a obyčejná slova zůstanou čitelná', array_map('bk_
     'Ah', 'Warning', "Ahoj\n", 'pw=hunter hunter',
 ]), ['Ah', 'Warning', 'Ahoj\\n', '••• hunter']);
 
+// --- A JavaScript string inside an HTML attribute (R331) ----------------------
+foreach (["O'Brien", "x');alert(1);//", 'a"b<c>&d', 'Žluťoučký kůň', ''] as $js_in) {
+    $js_out = bk_js_arg($js_in);
+    check_true("JS argument nemá v atributu syrovou uvozovku ani závorku: {$js_in}", strpbrk($js_out, "'\"<>") === false);
+    check("JS argument se po dekódování atributu přečte zpět: {$js_in}", json_decode(html_entity_decode($js_out, ENT_QUOTES)), $js_in);
+}
+$js_admin = (string)file_get_contents(__DIR__ . '/../admin.php');
+check('admin.php nemá v onclick escapovaný řetězec v apostrofech', preg_match_all("/onclick=\"[^\"]*'<\?php echo htmlspecialchars\(/", $js_admin), 0);
+
 // --- What the geolocation API answered (bk_location_from_geo) ------------------
 foreach ([[false, 'bez odpovědi'], ['', 'prázdná odpověď'], ['nope', 'nečitelná odpověď'], ['{"status":"fail","message":"quota"}', 'odmítnutí'], ['{"status":"success","city":"Prague"}', 'bez země']] as [$geo_in, $geo_why]) {
     check("lokalita: {$geo_why} nic nevymyslí", bk_location_from_geo($geo_in), null);
