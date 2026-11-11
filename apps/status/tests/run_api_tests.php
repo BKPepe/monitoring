@@ -6054,6 +6054,34 @@ if (isset($cookie_jar)) {
     $pdo->rollBack();
     check_true('bez měření digest netvrdí, že výpadek nebyl', !in_array(t('digest_summary_no_outages'), $dg250['executive_summary'], true));
 
+    // R202: the biggest incident came from the first 2000 'down' rows sorted
+    // by monitor id, so a flapping monitor with a lower id hid a longer
+    // outage. Only these two monitors count here, the rest is archived.
+    $pdo->beginTransaction();
+    $pdo->exec("DELETE FROM monitor_logs");
+    $pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE archived_at IS NULL");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, created_at) VALUES
+        (9201, 'R202 kolísající', 'web', 'https://r202a.example.test', 'up', NOW() - INTERVAL 1 DAY),
+        (9203, 'R202 dlouhý', 'web', 'https://r202b.example.test', 'up', NOW() - INTERVAL 1 DAY)");
+    $dg202_t = time();
+    $dg202_rows = [];
+    // 9201: 2001 'down' rows a second apart, half an hour of outage.
+    for ($i = 0; $i <= 2001; $i++) {
+        $dg202_rows[] = sprintf("(9201, '%s', NULL, FROM_UNIXTIME(%d))", $i < 2001 ? 'down' : 'up', $dg202_t - 2400 + $i);
+    }
+    // 9203: three hours down, checked every minute, the first row with its reason.
+    $dg202_t0 = $dg202_t - 4 * 3600;
+    $dg202_rows[] = sprintf("(9203, 'up', NULL, FROM_UNIXTIME(%d))", $dg202_t0 - 60);
+    for ($i = 0; $i <= 181; $i++) {
+        $dg202_rows[] = sprintf("(9203, '%s', %s, FROM_UNIXTIME(%d))", $i < 181 ? 'down' : 'up', $i === 0 ? "'HTTP 503'" : 'NULL', $dg202_t0 + $i * 60);
+    }
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES " . implode(', ', $dg202_rows));
+    $dg202 = build_digest_data($pdo, 'weekly', false)['biggest_incident'] ?? [];
+    $pdo->rollBack();
+    check('největší incident je nejdelší výpadek, ne první podle id: kde, jak dlouho, proč, vyřešený',
+        [$dg202['monitor'] ?? null, intdiv((int)($dg202['duration_sec'] ?? 0), 60), $dg202['reason'] ?? null, $dg202['resolved'] ?? null],
+        ['R202 dlouhý', 181, 'HTTP 503', true]);
+
     // R153: the rules that compare with the tariff never fired in the e-mail.
     $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, wan_plan_down_mbit, last_details) VALUES (9153, 'R153 router', 'openwrt', 'r153.example.test', 'up', 1000, ?)")
         ->execute([json_encode(['agent_version' => '0.1.13', 'agent_last_seen' => time() - 30, 'wan_link_dev' => 'eth2'])]);

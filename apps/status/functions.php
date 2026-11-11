@@ -2634,25 +2634,39 @@ function bk_uptime_totals(array $parts): array {
  * of down or silent time, so a 20-minute outage checked every minute is one
  * outage and not twenty. Time nobody measured neither ends nor starts a run.
  * 'started' is the run's first second, or null when it was already running
- * when the stretch began.
+ * when the stretch began. 'secs' is its outage time (a gap nobody measured
+ * not included), 'first_down' the start of its first down segment (null for
+ * an agent's silence alone), 'ongoing' whether it still runs at the end.
  *
  * @param array<int, array{from:int, segments:list<array{0:int,1:int,2:string}>}> $by_monitor
- * @return list<array{monitor_id:int, started:?int}>
+ * @return list<array{monitor_id:int, started:?int, secs:int, first_down:?int, ongoing:bool}>
  */
 function bk_outage_runs(array $by_monitor): array {
     $runs = [];
     foreach ($by_monitor as $mid => $m) {
-        $in_run = false;
+        $cur = null;
         foreach ($m['segments'] ?? [] as $seg) {
             $class = (string)$seg[2];
             if ($class === 'unmeasured') {
                 continue;
             }
-            $outage = $class === 'down' || $class === 'silent';
-            if ($outage && !$in_run) {
-                $runs[] = ['monitor_id' => (int)$mid, 'started' => (int)$seg[0] > (int)($m['from'] ?? PHP_INT_MIN) ? (int)$seg[0] : null];
+            if ($class !== 'down' && $class !== 'silent') {
+                if ($cur !== null) {
+                    $cur['ongoing'] = false;
+                    $runs[] = $cur;
+                    $cur = null;
+                }
+                continue;
             }
-            $in_run = $outage;
+            $cur ??= ['monitor_id' => (int)$mid, 'started' => (int)$seg[0] > (int)($m['from'] ?? PHP_INT_MIN) ? (int)$seg[0] : null,
+                'secs' => 0, 'first_down' => null, 'ongoing' => true];
+            $cur['secs'] += (int)$seg[1] - (int)$seg[0];
+            if ($class === 'down' && $cur['first_down'] === null) {
+                $cur['first_down'] = (int)$seg[0];
+            }
+        }
+        if ($cur !== null) {
+            $runs[] = $cur;
         }
     }
     return $runs;
@@ -14688,54 +14702,45 @@ function build_digest_data($pdo, $period = 'weekly', $save_snapshot = true) {
         if ($perf_worst === null || $r['avg_latency'] > $perf_worst['avg_latency']) $perf_worst = $r;
     }
 
-    // --- Biggest incident (approximation: contiguous runs of 'down' rows, a gap > 15 min = a new incident) ---
-    // Without a remote probe's rows (source 'probe'): its 'down' starts no
-    // incident and gives none its reason, as in the incident count above.
-    $stmt_down = $pdo->prepare("
-        SELECT l.monitor_id, m.name, l.checked_at, l.checked_from, l.error_message, m.status as current_status
-        FROM monitor_logs l
-        JOIN monitors m ON m.id = l.monitor_id
-        WHERE l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND l.status = 'down'
-          AND (l.source IS NULL OR l.source <> 'probe') AND m.archived_at IS NULL
-        ORDER BY l.monitor_id ASC, l.checked_at ASC
-        LIMIT 2000
-    ");
-    $stmt_down->execute([$days]);
-    $down_rows = $stmt_down->fetchAll();
-
-    $streaks = [];
-    $cur = null;
-    foreach ($down_rows as $row) {
-        $ts = strtotime($row['checked_at']);
-        if ($cur === null || $cur['monitor_id'] !== $row['monitor_id'] || ($ts - $cur['last_ts']) > 900) {
-            if ($cur !== null) $streaks[] = $cur;
-            $cur = [
-                'monitor_id' => $row['monitor_id'], 'name' => $row['name'],
-                'first_ts' => $ts, 'last_ts' => $ts,
-                'checked_from' => $row['checked_from'], 'error_message' => $row['error_message'],
-                'current_status' => $row['current_status'],
-            ];
-        } else {
-            $cur['last_ts'] = $ts;
+    // --- Biggest incident: the longest of the outages counted above ---
+    // It was pieced together from the first 2000 'down' rows sorted by
+    // monitor id, so one flapping monitor pushed every monitor with a higher
+    // id out, and an agent's silence, which writes no 'down' rows, never
+    // counted. Now it is the longest run of outage time, from the same runs
+    // the incident count and the availability read.
+    $biggest_incident = null;
+    $bi_run = null;
+    foreach ($dg_runs as $run) {
+        if ($bi_run === null || $run['secs'] > $bi_run['secs']) {
+            $bi_run = $run;
         }
     }
-    if ($cur !== null) $streaks[] = $cur;
-
-    $biggest_incident = null;
-    foreach ($streaks as $s) {
-        $dur = max(60, $s['last_ts'] - $s['first_ts']); // min. 60s, jde jen o aproximaci
-        if ($biggest_incident === null || $dur > $biggest_incident['duration_sec']) {
-            $biggest_incident = [
-                'monitor' => $s['name'],
-                // Nezaznamenane misto kontroly zustava null - "Main Server"
-                // by tvrdilo, odkud se meril, aniz to kdokoli zapsal.
-                'location' => $s['checked_from'] ?: null,
-                'reason' => $s['error_message'] ?: t('digest_unspecified_error'),
-                'duration_sec' => $dur,
-                'resolved' => $s['current_status'] !== 'down',
-                'date' => date('d.m.Y', $s['first_ts']),
-            ];
+    if ($bi_run !== null) {
+        // The row that put the monitor down: the last 'down' row at or before
+        // its first down second, from before the window when it ran into it.
+        $bi_row = false;
+        if ($bi_run['first_down'] !== null) {
+            $stmt_bi = $pdo->prepare("
+                SELECT checked_from, error_message FROM monitor_logs
+                WHERE monitor_id = ? AND status = 'down' AND checked_at <= FROM_UNIXTIME(?)
+                ORDER BY checked_at DESC, id DESC LIMIT 1
+            ");
+            $stmt_bi->execute([$bi_run['monitor_id'], $bi_run['first_down']]);
+            $bi_row = $stmt_bi->fetch();
         }
+        $stmt_bi_name = $pdo->prepare("SELECT name FROM monitors WHERE id = ?");
+        $stmt_bi_name->execute([$bi_run['monitor_id']]);
+        $biggest_incident = [
+            'monitor' => (string)$stmt_bi_name->fetchColumn(),
+            // Nezaznamenane misto kontroly zustava null - "Main Server"
+            // by tvrdilo, odkud se meril, aniz to kdokoli zapsal.
+            'location' => ($bi_row['checked_from'] ?? '') ?: null,
+            'reason' => $bi_run['first_down'] === null ? t('digest_incident_agent_silent')
+                : (($bi_row['error_message'] ?? '') ?: t('digest_unspecified_error')),
+            'duration_sec' => max(60, $bi_run['secs']), // min. 60 s, the e-mail prints minutes
+            'resolved' => !$bi_run['ongoing'],
+            'date' => date('d.m.Y', $bi_run['started'] ?? $dg_from),
+        ];
     }
 
     // --- Recommendations (reused as the "warnings" count too) ---

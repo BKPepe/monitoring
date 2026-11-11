@@ -565,6 +565,7 @@ return [
     'digest_incident_duration_label' => 'Trvání:',
     'digest_section_biggest_incident' => 'Největší incident',
     'digest_unspecified_error' => 'Nespecifikovaná chyba',
+    'digest_incident_agent_silent' => 'Agent přestal posílat data.',
     'digest_perf_avg_latency' => 'Průměrná latence',
     'digest_perf_best' => 'Nejlepší region',
     'digest_perf_worst' => 'Nejhorší region',

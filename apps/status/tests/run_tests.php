@@ -5297,9 +5297,11 @@ $or_segs = [[0, 60, 'up'], [60, 120, 'down'], [120, 180, 'down'], [180, 200, 'un
     [260, 300, 'up'], [300, 360, 'silent'], [360, 400, 'maintenance'], [400, 460, 'down']];
 check('výpadky: běh dole i s mezerou v měření je jeden, ticho agenta a další výpadek po údržbě dva další',
     bk_outage_runs([7 => ['from' => 0, 'segments' => $or_segs]]),
-    [['monitor_id' => 7, 'started' => 60], ['monitor_id' => 7, 'started' => 300], ['monitor_id' => 7, 'started' => 400]]);
+    [['monitor_id' => 7, 'started' => 60, 'secs' => 180, 'first_down' => 60, 'ongoing' => false],
+     ['monitor_id' => 7, 'started' => 300, 'secs' => 60, 'first_down' => null, 'ongoing' => false],
+     ['monitor_id' => 7, 'started' => 400, 'secs' => 60, 'first_down' => 400, 'ongoing' => true]]);
 check('výpadek, který běžel už na začátku okna, nemá začátek', bk_outage_runs([3 => ['from' => 60, 'segments' => [[60, 120, 'down'], [120, 180, 'up']]]]),
-    [['monitor_id' => 3, 'started' => null]]);
+    [['monitor_id' => 3, 'started' => null, 'secs' => 60, 'first_down' => 60, 'ongoing' => false]]);
 check('bez výpadku žádný', bk_outage_runs([1 => ['from' => 0, 'segments' => [[0, 60, 'up'], [60, 90, 'warning']]]]), []);
 
 // --- Digest trend without a comparison (R17) -----------------------------------

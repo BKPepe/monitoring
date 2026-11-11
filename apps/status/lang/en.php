@@ -564,6 +564,7 @@ return [
     'digest_incident_duration_label' => 'Duration:',
     'digest_section_biggest_incident' => 'Biggest Incident',
     'digest_unspecified_error' => 'Unspecified error',
+    'digest_incident_agent_silent' => 'The agent stopped reporting.',
     'digest_perf_avg_latency' => 'Average latency',
     'digest_perf_best' => 'Best region',
     'digest_perf_worst' => 'Worst region',
