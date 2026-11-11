@@ -327,6 +327,12 @@ check('bump závislostí v package(-lock).json nasadí /app',
     array_map(fn ($f) => in_array($f, $aa_paths, true) && $aa_app !== null && preg_match('~' . $aa_app . '~', $f) === 1, ['package.json', 'package-lock.json']),
     [true, true]);
 
+// R242: the Cloudflare deploy runs one at a time, so an older build that
+// finishes later cannot overwrite a newer one.
+$cf_wf = (string)@file_get_contents($aa_wf . 'deploy.yml');
+check('deploy na Cloudflare má vlastní frontu a běžící nezruší',
+    [preg_match('~^concurrency:\n  group: [\w-]+\n  cancel-in-progress: false$~m', $cf_wf)], [1]);
+
 // --- bk_format_duration --------------------------------------------------
 check_true('trvání je neprázdný text', is_string(bk_format_duration(1800)) && bk_format_duration(1800) !== '');
 

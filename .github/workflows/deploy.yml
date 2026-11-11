@@ -5,6 +5,13 @@ on:
     branches:
       - main
 
+# One deploy at a time, the newest waiting: two pushes close together could
+# finish in either order, and an older build that finished last overwrote
+# the newer one on Cloudflare. A run already deploying is not cancelled.
+concurrency:
+  group: deploy-cloudflare
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
