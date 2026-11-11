@@ -14088,6 +14088,9 @@ function bk_metric_context($pdo, $monitor_id, $metric_column, $current_value) {
 
 /**
  * Asset Overview - 30 daily health dots (green/yellow/red).
+ *
+ * A day is green only when a check answered up or warning: rows that say
+ * 'unknown' or 'paused' measured nothing, so such a day has no data.
  */
 function bk_get_30day_health_dots($pdo, $monitor_id) {
     $dots = [];
@@ -14096,6 +14099,7 @@ function bk_get_30day_health_dots($pdo, $monitor_id) {
             SELECT DATE(checked_at) as d,
                    SUM(status = 'down') as down_cnt,
                    SUM(status = 'maintenance') as maint_cnt,
+                   SUM(status IN ('up', 'warning')) as checked_cnt,
                    COUNT(*) as total
             FROM monitor_logs
             WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
@@ -14113,7 +14117,8 @@ function bk_get_30day_health_dots($pdo, $monitor_id) {
                 $r = $by_date[$date];
                 if ($r['down_cnt'] > 0) $status = 'down';
                 elseif ($r['maint_cnt'] > 0 && $r['maint_cnt'] >= $r['total'] * 0.5) $status = 'maintenance';
-                else $status = 'up';
+                elseif ($r['checked_cnt'] > 0) $status = 'up';
+                else $status = 'none';
             } else {
                 $status = 'none';
             }

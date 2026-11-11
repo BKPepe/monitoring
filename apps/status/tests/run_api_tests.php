@@ -3817,6 +3817,17 @@ $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 147");
 $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 147");
 $pdo->exec("DELETE FROM monitors WHERE id = 147");
 
+// --- A day of only unknown rows has no health dot colour (R16) -------------------
+// A heartbeat that never pinged logs 'unknown' every minute; the dot said "up".
+$pdo->exec("DELETE FROM monitors WHERE id = 16016");
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES (16016, 'R16 heartbeat', 'heartbeat', 'r16', 'unknown', 'Test')");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+    (16016, 'unknown', NULL, NOW() - INTERVAL 2 DAY), (16016, 'unknown', NULL, NOW() - INTERVAL 2 DAY + INTERVAL 1 MINUTE),
+    (16016, 'unknown', NULL, NOW() - INTERVAL 1 DAY), (16016, 'up', 20, NOW() - INTERVAL 1 DAY + INTERVAL 1 MINUTE)");
+$hd_dots = array_slice(array_column(bk_get_30day_health_dots($pdo, 16016), 'status'), -3, 2);
+check('den jen s neznámým stavem je bez dat, den s kontrolou je v pořádku', $hd_dots, ['none', 'up']);
+$pdo->exec("DELETE FROM monitors WHERE id = 16016");
+
 // --- Borrowed agent data comes from the same asset only (R82) ---------------------
 // Two more lookups used to follow, by target address and for any agent reporting
 // ts3_process. They ordered by a column monitors does not have, so they never
