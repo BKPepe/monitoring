@@ -340,6 +340,10 @@ foreach (['cpu' => 'CPU', 'ram' => 'RAM', 'hdd' => 'disk'] as $key => $label) {
     check_false("nezměřené {$label} není nula", ($agent[$key] ?? null) === 0 || ($agent[$key] ?? null) === 0.0);
 }
 check('naměřená odezva se vrací', (int)($by_id[1]['responseMs'] ?? 0), 120);
+// R56: an OS nobody reported is null; it fell back to the monitor's type,
+// so a page said "OS: web" or "OS: openwrt".
+check('nenahlášený OS je null, ne typ monitoru',
+    [array_key_exists('os', $by_id[1] ?? []), $by_id[1]['os'] ?? 'chybí', $by_id[2]['os'] ?? 'chybí'], [true, 'chybí', 'chybí']);
 
 // Anonymous access must not see the network topology.
 check_true(

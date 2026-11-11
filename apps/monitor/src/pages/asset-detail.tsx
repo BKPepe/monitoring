@@ -3167,7 +3167,7 @@ function buildDynamicAsset(
   // The SoC temperature is read by its payload key (G22) and the CPU tile says
   // which core was busy while the all-core average stayed calm.
   const os = (m.os ?? '').trim();
-  const osLabel = os !== '' && os !== 'web' && os !== m.type ? os : null;
+  const osLabel = os !== '' ? os : null;
   const socTemp = socTemperatureC(m.details ?? {});
   const coreHint = busiestCoreHint(m.details ?? {}, m.cpu ?? null, t);
 
@@ -3187,9 +3187,10 @@ function buildDynamicAsset(
     name: m.name,
     kind: m.type.toUpperCase(),
     // Mockup: "OpenWrt 23.05.3 · 192.168.1.1 · Prague, CZ" - the OS first
-    // when the agent reports it (for websites m.os merely echoes the type, skip it).
-    // `m.os` arrived as a single space from agents that could not read the
-    // system name (G24): trimmed away, or the subtitle started with " · ".
+    // when the agent reports it; the API sends null otherwise (it used to
+    // echo the monitor's type). `m.os` arrived as a single space from agents
+    // that could not read the system name (G24): trimmed away, or the
+    // subtitle started with " · ".
     subtitle: [osLabel, m.target, m.category ?? 'Monitory'].filter(Boolean).join(' · '),
     status,
     statusKey: monitorStatusKey(m),

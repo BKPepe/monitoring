@@ -626,7 +626,9 @@ if ($action === 'monitors') {
                 'maintenanceEnd' => (!empty($r['maintenance']) && $r['maintenance_end']) ? $r['maintenance_end'] : null,
                 'agentLastSeen' => $public_view ? null : ($details['agent_last_seen'] ?? null),
                 'hostname' => $public_view ? null : ($details['hostname'] ?? $r['target']),
-                'os' => $details['os'] ?? $r['type'],
+                // What the agent reported, or null. It fell back to the type,
+                // so a page said "OS: teamspeak" or "OS: vps".
+                'os' => is_string($details['os'] ?? null) && trim($details['os']) !== '' ? trim($details['os']) : null,
                 'details' => $details_out,
                 // Outages of data COLLECTION (not of the service) - the frontend MUST
                 // show them, silently dropping data is forbidden (see bk_get_collection_issues).
