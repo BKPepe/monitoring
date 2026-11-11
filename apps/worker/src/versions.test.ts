@@ -38,3 +38,22 @@ describe('/api/versions', () => {
     expect(body.error).toMatch(/502/);
   });
 });
+
+// R230: the changelog's dates were Czech text ("24. září 2026") on the
+// English page too. The Worker sends the day, the page formats it.
+describe('/api/changelog', () => {
+  it('posílá den vydání jako ISO, ne český text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json([
+          { tag_name: 'v0.3.0', name: 'v0.3.0', published_at: '2026-09-24T10:00:00Z', body: '', html_url: 'x' },
+        ])
+      )
+    );
+    const res = await worker.fetch(new Request('https://api.bloodkings.eu/api/changelog'), {}, undefined);
+    const body = (await res.json()) as { date: string | null }[];
+    expect(res.status).toBe(200);
+    expect(body[0].date).toBe('2026-09-24');
+  });
+});

@@ -199,11 +199,9 @@ app.get('/api/changelog', async (c) => {
       return releases.map((release: any) => ({
         tag: release.tag_name,
         title: release.name || release.tag_name,
-        date: new Date(release.published_at).toLocaleDateString('cs-CZ', {
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric',
-        }),
+        // The day (ISO, as /api/versions sends it), not a Czech text: the
+        // English changelog showed "24. září 2026". The page formats it.
+        date: typeof release.published_at === 'string' ? release.published_at.slice(0, 10) : null,
         body: release.body,
         url: release.html_url,
         author: {

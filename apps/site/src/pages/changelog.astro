@@ -30,6 +30,7 @@ import Layout from '../layouts/Layout.astro';
   <script>
     import { fetchReleases, escapeHtml, renderReleaseBody, initials, type Release } from '../lib/github';
 
+    import { formatReleaseDate } from '../lib/release';
     // Releasy jdou přes worker (token + cache), ne přímo z api.github.com.
     async function loadChangelog() {
       const loader = document.getElementById('changelog-loading');
@@ -70,7 +71,7 @@ import Layout from '../layouts/Layout.astro';
             <div class="release-header">
               <span class="badge badge-accent">${escapeHtml(release.tag)}</span>
               <h2>${escapeHtml(release.title)}</h2>
-              <span class="release-date">${escapeHtml(release.date)}</span>
+              <span class="release-date">${escapeHtml(formatReleaseDate(release.date ?? '', 'en') ?? '')}</span>
             </div>
 
             <div class="release-body">

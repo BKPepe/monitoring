@@ -16,7 +16,8 @@ export interface Contributor {
 export interface Release {
   tag: string;
   title: string;
-  date: string;
+  /** The day it was published (YYYY-MM-DD, UTC); the page formats it. */
+  date: string | null;
   body: string;
   url: string;
   author: { name: string; url: string };
