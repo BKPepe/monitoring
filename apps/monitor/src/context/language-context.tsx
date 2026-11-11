@@ -4124,7 +4124,14 @@ const translations: Record<string, { cs: string; en: string }> = {
     en: 'The router masked addresses, MACs and device names before sending.',
   },
   'net.entropy': { cs: 'Entropie', en: 'Entropy' },
-  'net.service_restarts': { cs: 'Restarty služeb (od startu agenta):', en: 'Service restarts (since agent start):' },
+  'net.service_restarts': {
+    cs: 'Zmínky o startu služeb v logu routeru:',
+    en: 'Service start mentions in the router log:',
+  },
+  'net.service_restarts_note': {
+    cs: 'Řádky se slovem „start“ v kruhovém bufferu logu; počítá se i start při bootu, nejsou to restarty.',
+    en: 'Lines with the word "start" in the log ring buffer; a start at boot counts too, these are not restarts.',
+  },
   'net.dns_latency': { cs: 'Latence dotazu', en: 'Query latency' },
   'net.oom_kills': { cs: 'OOM kills (od startu)', en: 'OOM kills (since boot)' },
   'net.tailscale_peers': { cs: '{n} peerů', en: '{n} peers' },

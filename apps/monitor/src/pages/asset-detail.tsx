@@ -2651,14 +2651,23 @@ function NetworkTab({
             <Row label="Btrfs errors" value={d.btrfs_errors != null && d.btrfs_errors > 0 ? d.btrfs_errors : null} />
             {restarts.length > 0 && (
               <div className="pt-1.5 text-xs">
+                {/* The agent counts the lines of the router's log buffer that
+                    name the service and the word "start" (agent_openwrt.sh):
+                    a boot's starts count too, so these are no restarts. */}
                 <p className="text-muted-foreground mb-1">
-                  {t('net.service_restarts', 'Restarty služeb (od startu agenta):')}
+                  {t('net.service_restarts', 'Zmínky o startu služeb v logu routeru:')}
                 </p>
                 {restarts.map(([name, cnt]) => (
                   <p key={name} className="font-mono">
                     {name}: {String(cnt)}×
                   </p>
                 ))}
+                <p className="text-muted-foreground mt-1 text-2xs">
+                  {t(
+                    'net.service_restarts_note',
+                    'Řádky se slovem „start“ v kruhovém bufferu logu; počítá se i start při bootu, nejsou to restarty.'
+                  )}
+                </p>
               </div>
             )}
           </Section>
