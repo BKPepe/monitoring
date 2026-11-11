@@ -1,9 +1,16 @@
 <?php
 /**
  * cPanel Resource Exporter for Blood Kings Status Monitoring
- * 
- * Place this file into the root of your cPanel site (e.g. public_html/cpanel_stats.php).
- * And set the token in STATS_KEY below. The key must match the monitor's configuration.
+ *
+ * Place this file into the root of your cPanel site (e.g. public_html/cpanel_stats.php)
+ * and give it a key - not in this file, which a re-download overwrites, but
+ * in cpanel_config.php next to it:
+ *
+ *     <?php define('STATS_KEY', 'a-long-random-secret');
+ *
+ * (or the STATS_KEY environment variable). The monitor's cpanel_stats_url
+ * then ends with ?key=a-long-random-secret. Without a key every request
+ * gets 403.
  */
 
 // Load the key from an external config file when present (prevents overwrite on git deploy)
