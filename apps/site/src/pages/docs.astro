@@ -164,7 +164,13 @@ const groups = [
           <pre><code>curl -s "https://your-server/status/api.php?action=collection_health"</code></pre>
         </div>
         <p>The response carries <code>stale: true</code> once the last run is older than the configured limit - and also when the collector has never run at all, because "no data" is not the same as "all good".</p>
-        <p>A Cloudflare Worker checks that endpoint every five minutes. It runs outside the monitored host on purpose: a watchdog sharing a machine with the thing it watches dies with it. Point it at a Discord webhook once and it will speak up on its own:</p>
+        <p>A Cloudflare Worker checks that endpoint every five minutes. It runs outside the monitored host on purpose: a watchdog sharing a machine with the thing it watches dies with it.</p>
+        <p>The Worker is not in the release ZIP: it lives in <code>apps/worker</code> of the repository, and you deploy it to your own Cloudflare account. Without a target it watches bloodkings.eu, the author's server, so give it yours first:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>cd apps/worker &amp;&amp; npx wrangler deploy
+npx wrangler secret put WATCHDOG_TARGET_URL   # https://your-server/status/api.php?action=collection_health</code></pre>
+        </div>
+        <p>Point it at a Discord webhook once and it will speak up on its own:</p>
         <div class="docs-code-wrapper">
           <pre><code>cd apps/worker &amp;&amp; npx wrangler secret put WATCHDOG_DISCORD_WEBHOOK</code></pre>
         </div>

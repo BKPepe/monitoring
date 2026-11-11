@@ -164,7 +164,13 @@ const groups = [
           <pre><code>curl -s "https://vas-server/status/api.php?action=collection_health"</code></pre>
         </div>
         <p>Odpověď má <code>stale: true</code>, jakmile je poslední běh starší než nastavený limit - a také tehdy, když cron neběžel ještě ani jednou, protože „žádná data" není totéž co „vše v pořádku".</p>
-        <p>Ten endpoint kontroluje Cloudflare Worker každých pět minut. Běží mimo hlídaný server záměrně: hlídač na stejném stroji umře spolu s tím, co hlídá. Stačí mu jednou nastavit Discord webhook a ozve se sám:</p>
+        <p>Ten endpoint kontroluje Cloudflare Worker každých pět minut. Běží mimo hlídaný server záměrně: hlídač na stejném stroji umře spolu s tím, co hlídá.</p>
+        <p>Worker v release ZIPu není: leží v <code>apps/worker</code> v repozitáři a nasadíte ho do vlastního účtu Cloudflare. Bez cíle hlídá bloodkings.eu, server autora, takže mu nejdřív dejte ten svůj:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>cd apps/worker &amp;&amp; npx wrangler deploy
+npx wrangler secret put WATCHDOG_TARGET_URL   # https://vas-server/status/api.php?action=collection_health</code></pre>
+        </div>
+        <p>Stačí mu jednou nastavit Discord webhook a ozve se sám:</p>
         <div class="docs-code-wrapper">
           <pre><code>cd apps/worker &amp;&amp; npx wrangler secret put WATCHDOG_DISCORD_WEBHOOK</code></pre>
         </div>
