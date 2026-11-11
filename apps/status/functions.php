@@ -15400,11 +15400,14 @@ function render_digest_html($data) {
 
         // Incident heatmap - coloured table cells (e-mail clients cannot do CSS grid).
         // $day is the neutral key (mon/tue/...) from build_monthly_digest_extras() -
-        // the displayed label is translated only here via digest_day_*.
+        // the displayed label is translated only here. The keys are named in
+        // full: none of them existed, and the e-mail showed "digest_day_mon".
+        $day_keys = ['mon' => 'digest_day_mon', 'tue' => 'digest_day_tue', 'wed' => 'digest_day_wed',
+            'thu' => 'digest_day_thu', 'fri' => 'digest_day_fri', 'sat' => 'digest_day_sat', 'sun' => 'digest_day_sun'];
         $hm_html = '<table style="width:100%; border-collapse:collapse;"><tr>';
         foreach ($mo['incident_heatmap'] as $day => $cnt) {
             $bgcolor = $cnt === 0 ? '#1ec773' : ($cnt <= 2 ? '#f39c12' : '#ef233c');
-            $hm_html .= '<td bgcolor="' . $bgcolor . '" style="background-color:' . $bgcolor . '; text-align:center; font-size:11px; color:#0f0f13; font-weight:bold; padding:8px 0;">' . htmlspecialchars(t('digest_day_' . $day)) . '<br>' . $cnt . '</td>';
+            $hm_html .= '<td bgcolor="' . $bgcolor . '" style="background-color:' . $bgcolor . '; text-align:center; font-size:11px; color:#0f0f13; font-weight:bold; padding:8px 0;">' . htmlspecialchars(t($day_keys[$day])) . '<br>' . $cnt . '</td>';
         }
         $hm_html .= '</tr></table>';
         $body .= bk_email_section(t('digest_section_incident_heatmap'), $hm_html);

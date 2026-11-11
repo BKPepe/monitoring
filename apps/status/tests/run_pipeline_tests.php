@@ -712,6 +712,13 @@ if (function_exists('bk_digest_router_facts_lines')) {
         'clients' => null, 'clients_gen' => null, 'noise_week' => null, 'busy_week' => null,
     ]], 'disks' => []]);
     check('nezměřené údaje se vynechávají, ne nulují', $sparse[0], '2,4 GHz');
+    // The monthly heatmap's day labels: none of the keys existed, and the
+    // e-mail showed "digest_day_mon" in both languages.
+    $dg_days = ['digest_day_mon', 'digest_day_tue', 'digest_day_wed', 'digest_day_thu', 'digest_day_fri', 'digest_day_sat', 'digest_day_sun'];
+    check('dny v heatmapě česky a anglicky', [
+        bk_with_email_lang('cs', fn (): string => implode(' ', array_map('t', $dg_days))),
+        bk_with_email_lang('en', fn (): string => implode(' ', array_map('t', $dg_days))),
+    ], ['Po Út St Čt Pá So Ne', 'Mon Tue Wed Thu Fri Sat Sun']);
     // Czech plural: 1 klient, 2-4 klienti, 0 and 5+ klientů.
     $dg_clients = fn (int $n): string => bk_digest_router_facts_lines(['radios' => [[
         'band' => '5GHz', 'channel' => null, 'generation' => null, 'width_mhz' => null, 'encryption' => null,
