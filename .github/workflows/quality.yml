@@ -1,0 +1,254 @@
+name: "Quality Gate"
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Souběžné běhy nad stejnou větví se ruší - poslední commit je ten, který nás zajímá.
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (lint, format, types, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          # The runner image caches an older 22.x, and astro 7.4 refuses
+          # anything below 22.23.4. Every workflow takes the newest 22 so they
+          # all build on the same runtime.
+          check-latest: true
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Druha sit pod `npm ci`. Ta prvni chyti rozejity lock jen podle verze
+      # npm - npm 10 v CI ho odmitne, npm 11 (bezne na vyvojarskem stroji)
+      # ho toleruje, takze rozdil projde revizi a spadne az po pushi na vsech
+      # workflow najednou. Tahle kontrola je na verzi npm nezavisla a jde
+      # spustit lokalne pres `npm run check:lock` jeste pred commitem.
+      - name: Soulad package.json a package-lock.json
+        run: npm run check:lock
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier (formát)
+        run: npm run format:check
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Unit testy SPA (vitest)
+        run: npm run test:react
+
+      # The site and the worker show the live status and the agent versions;
+      # these tests keep a failure from ever reading as an all-clear and an
+      # outage returning null instead of invented numbers.
+      - name: Unit testy webu a workeru (vitest)
+        run: npm run test -w apps/site && npm run test -w apps/worker
+
+      # The files served at the bloodkings.eu root (root/): the .htaccess merge
+      # that must never touch the game portal's own lines, robots.txt rules,
+      # sitemap and security.txt generation, and the static error pages.
+      - name: Testy kořenových souborů bloodkings.eu (node --test)
+        run: node --test root/*.test.mjs
+
+      - name: Build všech workspace aplikací
+        run: npm run build
+
+      # Prvni nacteni aplikace hlida rozpocet velikosti: jeden import na
+      # urovni modulu dokaze vratit knihovnu do vstupniho balíku a nikdo
+      # by si toho nevsiml, dokud si uzivatel nestezuje na pomale nacitani.
+      # Detektor mrtveho kodu pokryval jen PHP, takze v TypeScriptu se
+      # nastradaly komponenty, ktere nikdo neimportuje. Bundler je z balicku
+      # vyhodi, ale ctou se pri revizi a udrzuji pri refaktoru.
+      - name: Nepoužité exporty v SPA
+        run: npm run check:exports
+
+      # Slovnik ma pres 1400 klicu a mrtve se v nem hromadi tise - rucni sken
+      # jich jednou nasel 86 a o dva dny pozdeji dalsi 4. Dynamicke klice
+      # zakazuje i18n test, takze literalni sken je spolehlivy.
+      - name: Mrtvé překladové klíče
+        run: npm run check:i18n-dead
+
+      # Surova paleta Tailwindu (text-emerald-400, bg-slate-900) nema svetlou
+      # variantu ani zmereny kontrast - v SPA jde kazda barva pres tokeny.
+      # Jednou se jich nastradalo 389; grep je drzi na nule.
+      - name: Surová paleta v SPA
+        run: npm run check:palette
+
+      - name: Rozpočet velikosti buildu
+        run: npm run check:bundle
+
+  php:
+    name: PHP (testy, lint, mrtvý kód)
+    runs-on: ubuntu-latest
+    steps:
+      # Agent linty ctou soubory ze submodulu `agents` - bez nej by nemely co
+      # kontrolovat a tise by prosly.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          # Musi odpovidat produkci (cPanel ea-php84) - testovat na jine
+          # verzi znamena netestovat to, co uzivatelum opravdu bezi.
+          php-version: '8.4'
+          # No PHP coverage yet. While the suites tested eval()'d copies of
+          # the functions, which Xdebug credits to tests/, the number never
+          # reached functions.php. run_tests.php now requires functions.php
+          # itself (only run_pipeline_tests.php still copies functions.php,
+          # to stub the senders), so it would. The single helpers the suites
+          # still copy out of db.php and other files stay credited to tests/,
+          # and api.php is otherwise reached only over HTTP in the api job.
+          # Turning coverage on is a change of its own.
+          coverage: none
+          extensions: mbstring, curl, pdo
+
+      # The whole PHP gate in one command, the same one the deploy and
+      # `npm run test:php` run: php -l, both suites, every run_*_lint.php it
+      # finds (each says in its header why it exists) and dead code. Each
+      # check is a log group, a failed one an error annotation, and the run
+      # goes on to the end. The API suite runs in the api job below against
+      # MySQL; here it is skipped, and the summary says so.
+      #
+      # The agents' own checks (syntax, ShellCheck, Worker units, Docker e2e)
+      # run in the agents repo's test.yml on the very commit the gitlink pins,
+      # and deploy-status.yml uploads nothing unless they passed there. Only
+      # the agent lints here are this repo's rules about the agents.
+      - name: PHP brána (run_all.php)
+        run: php apps/status/tests/run_all.php
+
+  api:
+    name: API integrační testy (api.php nad MySQL)
+    runs-on: ubuntu-latest
+    # api.php je monolit nad databází - jediný způsob, jak otestovat jeho
+    # dotazy a názvy sloupců, je opravdu ho zavolat. Přesně tahle třída
+    # chyb (setting_key vs key_name) tu už jednou shodila endpoint na 500.
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: bk_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptest"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      # The agent contract section posts the agents' golden payloads
+      # (agents/tests/golden) to agent_api.php; without the submodule it fails.
+      - uses: actions/checkout@v7
+        with:
+          submodules: true
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, curl, pdo, pdo_mysql
+
+      - name: Integrační testy api.php
+        env:
+          BK_TEST_DB_HOST: 127.0.0.1
+          BK_TEST_DB_NAME: bk_test
+          BK_TEST_DB_USER: root
+          BK_TEST_DB_PASS: test
+        run: php apps/status/tests/run_api_tests.php
+
+  phpstatic:
+    name: PHP statická analýza (PHPStan, Psalm taint)
+    runs-on: ubuntu-latest
+    # Proc tenhle job existuje: CodeQL skenuje jen javascript-typescript
+    # (viz codeql.yml) a PHP neumi vubec - cely backend, kde zije autorizace,
+    # CSRF i prace s tokeny, tedy nemel zadnou statickou analyzu. Audit
+    # 2026-08-23 nasel v PHP dve zranitelnosti, ktere CodeQL videt nemohl,
+    # a jeho zelena o backendu nevypovidala nic.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          # Stejna verze jako produkce (cPanel ea-php84).
+          php-version: '8.4'
+          extensions: mbstring, curl, pdo, pdo_mysql
+          # Verze pinnute zamerne: nova verze nastroje umi najit nove veci a
+          # shodila by build na zmene, kterou nikdo neudelal.
+          tools: phpstan:2.2.9, psalm:6.16.1
+
+      # config.php se necommituje (drzi pristupy k DB), ale kod ho vyzaduje.
+      - name: Doplnit config ze vzoru
+        run: cp apps/status/config.sample.php apps/status/config.php
+
+      # Hleda chyby, ktere `php -l` nevidi: volani neexistujici funkce nebo
+      # metody, spatny pocet argumentu. Presne tohle kdysi shodilo badge.php,
+      # ktery mesice vracel 500, protoze volal funkci, co v kodu nebyla.
+      # Level 0 hlasi na teto kodove zakladne nula falesnych poplachu, takze
+      # nema baseline a kazdy budouci pad je skutecny.
+      # 1G na worker prestalo stacit, kdyz functions.php prerostl 15 tisic radku:
+      # PHPStan deli praci po souborech, takze jeden worker drzi cely ten soubor
+      # a spadl na limitu - hlasi to jako "Child process error", ne jako nalez.
+      - name: PHPStan (level 0, bez baseline)
+        run: phpstan analyse --no-progress --memory-limit=2G
+
+      # Taint analyza: sleduje cestu od $_GET/$_POST/$_COOKIE/$_SERVER az k
+      # nebezpecnemu mistu (echo do HTML, SQL, include). Pri prvnim behu nasla
+      # skutecny XSS v admin.php. Baseline drzi nalezy, ktere revize vyhodnotila
+      # jako falesne (echo json_encode u JSON endpointu a guardy, ktere Psalm
+      # neumi precist) - viz psalm-taint-baseline.xml. Novy tok v baseline neni
+      # a build shodi.
+      - name: Psalm taint analýza
+        run: psalm --taint-analysis --no-cache --no-progress
+
+  perf:
+    name: Výkon produkčních endpointů
+    runs-on: ubuntu-latest
+    # Měří živou instalaci, takže jen po nasazení na main - ne u PR.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          # Musi odpovidat produkci (cPanel ea-php84) - testovat na jine
+          # verzi znamena netestovat to, co uzivatelum opravdu bezi.
+          php-version: '8.4'
+          extensions: curl
+      - name: Perf check
+        run: php apps/status/tests/run_perf_check.php
+        continue-on-error: true # regresi hlásí, ale nezastavuje pipeline
+
+      # widget.php a badge.php mesice vracely 500, protoze je nikdo neotevrel
+      # a php -l chybu za behu nevidi. Tenhle test kazdou stranku pozada.
+      - name: Smoke test PHP stránek (žádná nesmí spadnout)
+        run: php apps/status/tests/run_page_smoke.php
+
+      # Přesně tahle kontrola chyběla, když F5 na /app/<route> vracel 404:
+      # API se měřilo, ale nasazené SPA routy nikdo netestoval. Deploy
+      # workflow to ověřuje po nasazení; tady se to hlídá při každém pushi,
+      # protože .htaccess může ze serveru zmizet i bez deploye.
+      # Tahle kontrola drive chybela: API se merilo, ale nasazene SPA routy
+      # nikdo netestoval - a F5 na /app/<route> pritom vracel 404.
+      - name: SPA deep-link check (F5 na route musí vrátit aplikaci)
+        run: |
+          code=$(curl -s -o /tmp/deeplink.html -w "%{http_code}" "https://bloodkings.eu/app/infrastructure/1")
+          if [ "$code" != "200" ] || ! grep -q "id=.root." /tmp/deeplink.html; then
+            echo "Deep link vraci $code misto aplikace - SPA fallback na serveru nefunguje."
+            echo "Zkontroluj cPanel -> Application Manager: aplikace registrovana na"
+            echo "URL '/app' prebira to URI a .htaccess se v jejim kontextu ignoruje."
+            exit 1
+          fi
+          echo "SPA fallback OK (HTTP $code)."

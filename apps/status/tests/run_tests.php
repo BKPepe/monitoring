@@ -1,0 +1,5531 @@
+<?php
+/**
+ * Tests of the pure functions from functions.php (no DB, no network).
+ *
+ * Running:  php apps/status/tests/run_tests.php
+ * In CI: .github/workflows/deploy-status.yml runs them before the deploy.
+ *
+ * Why this way: the app runs on shared hosting without Composer, so PHPUnit
+ * is unavailable. This runner needs nothing but PHP and catches exactly the
+ * class of regressions this project kept producing -
+ * invented values and wrong input evaluation.
+ */
+
+require_once __DIR__ . '/assert_helpers.php';
+// The whole library, as the app loads it: a renamed or removed function is an
+// error at its call below, not a block of checks that quietly stops running.
+require_once __DIR__ . '/../functions.php';
+
+// --- The loader itself: a name it cannot find stops the run -----------------
+// It used to skip such a name without a sound, so a renamed function took its
+// tests with it and the suite stayed green. It still takes the few functions
+// of files that cannot be loaded without effects, such as db.php.
+$loader_error = null;
+try {
+    bk_test_load_functions(__DIR__ . '/../db.php', ['bk_test_jmeno_ktere_neexistuje']);
+} catch (RuntimeException $e) {
+    $loader_error = $e->getMessage();
+}
+check_true('neznámé jméno v načítání funkcí shodí běh', $loader_error !== null
+    && str_contains($loader_error, 'bk_test_jmeno_ktere_neexistuje()'));
+
+// --- functions.php is a library, bootstrap.php starts the app ----------------
+// functions.php set a session ini value, required db.php (config.php, the
+// session, the connection) and corrected the session's role at its end, so the
+// suites could only copy its functions out with eval. Loading it now defines
+// functions and constants and nothing else; the role check runs in
+// bootstrap.php, which every entry point that uses the library loads.
+$lib_tokens = array_values(array_filter(token_get_all((string)file_get_contents(__DIR__ . '/../functions.php')),
+    fn ($t) => !is_array($t) || !in_array($t[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT, T_OPEN_TAG], true)));
+$lib_top = [];
+for ($i = 0, $depth = 0, $n = count($lib_tokens); $i < $n; $i++) {
+    $tok = $lib_tokens[$i];
+    $text = is_array($tok) ? $tok[1] : $tok;
+    if ($text === '{' || (is_array($tok) && in_array($tok[0], [T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true))) {
+        $depth++;
+    } elseif ($text === '}') {
+        $depth--;
+    } elseif ($depth === 0 && is_array($tok) && $tok[0] === T_FUNCTION) {
+        continue;
+    } elseif ($depth === 0 && ($i === 0 || in_array(is_array($lib_tokens[$i - 1]) ? $lib_tokens[$i - 1][1] : $lib_tokens[$i - 1], [';', '}'], true))) {
+        // The first token of a top-level statement: `function`, `const` or define().
+        if (!in_array(strtolower($text), ['function', 'const', 'define'], true)) {
+            $lib_top[] = $text . ' (řádek ' . (is_array($tok) ? $tok[2] : '?') . ')';
+        }
+    }
+}
+check('functions.php mimo funkce jen deklaruje (function, const, define)', $lib_top, []);
+$boot_users = [];
+$lib_users = [];
+foreach (glob(__DIR__ . '/../*.php') ?: [] as $entry) {
+    $entry_src = (string)file_get_contents($entry);
+    if (preg_match("~require(_once)?\\s+__DIR__\\s*\\.\\s*'/functions\\.php'~", $entry_src)) {
+        $lib_users[] = basename($entry);
+    }
+    if (preg_match("~require(_once)?\\s+__DIR__\\s*\\.\\s*'/bootstrap\\.php'~", $entry_src)) {
+        $boot_users[] = basename($entry);
+    }
+}
+check('functions.php načítá jen bootstrap.php, žádná stránka napřímo', $lib_users, ['bootstrap.php']);
+check('každá stránka a endpoint s funkcemi startuje přes bootstrap.php', $boot_users,
+    ['admin.php', 'agent_api.php', 'api.php', 'cron.php', 'index.php', 'monitor.php', 'node_api.php', 'rss.php']);
+// heartbeat.php, metrics.php and health.php need the database alone: none may
+// name a function or a constant of the library. health.php did: its HTML view
+// printed BK_CDN_FONTAWESOME, and PHP 8 ended the page there with a fatal error.
+$lib_names = array_flip(array_map('strtolower', array_filter(get_defined_functions()['user'],
+    fn ($f) => (new ReflectionFunction($f))->getFileName() === realpath(__DIR__ . '/../functions.php'))));
+preg_match_all("/^(?:define\\('|const )([A-Z][A-Z0-9_]*)/m", (string)file_get_contents(__DIR__ . '/../functions.php'), $lib_consts);
+$lib_consts = array_flip($lib_consts[1]);
+$hb_calls = [];
+foreach (['heartbeat.php', 'metrics.php', 'health.php'] as $hb_file) {
+    foreach (token_get_all((string)file_get_contents(__DIR__ . '/../' . $hb_file)) as $tok) {
+        if (is_array($tok) && $tok[0] === T_STRING && (isset($lib_names[strtolower($tok[1])]) || isset($lib_consts[$tok[1]]))) {
+            $hb_calls[] = $hb_file . ': ' . $tok[1];
+        }
+    }
+}
+check('heartbeat.php, metrics.php a health.php nesahají na nic z functions.php, stačí jim db.php', $hb_calls, []);
+
+// --- bk_api_json / bk_api_error: the answers of api.php ---------------------
+// They replace about 160 pairs of http_response_code() and echo json_encode()
+// in api.php, so the body has to stay byte for byte what the pair sent. Each
+// call ends the request, so each runs in a child PHP: what it printed, the
+// status it set and what went to the error log (stderr on the command line).
+$api_answer = function (string $call, string $action = 'zkouska'): array {
+    $php = 'require ' . var_export(__DIR__ . '/assert_helpers.php', true) . ';'
+        . 'bk_test_load_functions(' . var_export(__DIR__ . '/../api.php', true) . ', ["bk_api_json", "bk_api_error", "bk_api_printable"]);'
+        . '$action = ' . var_export($action, true) . ';'
+        . 'register_shutdown_function(function () { fwrite(STDERR, "\nHTTP=" . http_response_code()); });'
+        . $call . ';';
+    $proc = proc_open([PHP_BINARY, '-d', 'log_errors=1', '-d', 'error_log=', '-r', $php], [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    $out = (string)stream_get_contents($pipes[1]);
+    $err = (string)stream_get_contents($pipes[2]);
+    proc_close($proc);
+    $status = preg_match('/HTTP=(\d+)\s*$/', $err, $m) ? (int)$m[1] : null;
+    return [$status, $out, trim(preg_replace('/\s*HTTP=\d+\s*$/', '', $err))];
+};
+$api_pair = fn (array $payload): string => json_encode($payload, JSON_UNESCAPED_UNICODE);
+check('chyba 404: stejné tělo jako dřívější pár, nic v logu',
+    $api_answer('bk_api_error(404, "Monitor nenalezen.")'), [404, $api_pair(['error' => 'Monitor nenalezen.']), '']);
+check('chyba s dalšími klíči: error první, unicode i lomítka jako dřív',
+    $api_answer('bk_api_error(400, "Přepínač musí být 0 nebo 1: a/b", ["invalidKeys" => ["a/b"], "id" => 7])'),
+    [400, $api_pair(['error' => 'Přepínač musí být 0 nebo 1: a/b', 'invalidKeys' => ['a/b'], 'id' => 7]), '']);
+check('bk_api_json drží pořadí klíčů, jak ho handler napsal',
+    $api_answer('bk_api_json(["entries" => [], "error" => "Historii se nepodařilo načíst."], 500)')[1],
+    $api_pair(['entries' => [], 'error' => 'Historii se nepodařilo načíst.']));
+[$api_code, $api_body, $api_log] = $api_answer('bk_api_error(500, "Účet se nepodařilo založit.")');
+check('každá 500 jde i do logu, s akcí a větou',
+    [$api_code, $api_body, $api_log], [500, $api_pair(['error' => 'Účet se nepodařilo založit.']), '[api.php action=zkouska] HTTP 500: Účet se nepodařilo založit.']);
+[$api_code, $api_body, $api_log] = $api_answer('bk_api_json(["name" => "\xB1"], 200)');
+check('nezakódovatelná odpověď je 500 s chybou, ne prázdná 200',
+    [$api_code, $api_body], [500, $api_pair(['error' => 'Odpověď serveru se nepodařilo sestavit.'])]);
+check_true('a log řekne proč (' . $api_log . ')', str_contains($api_log, 'HTTP 200 answer not encoded: Malformed UTF-8')
+    && str_contains($api_log, 'HTTP 500: Odpověď serveru se nepodařilo sestavit.'));
+// $action comes from the query string unchecked, and the unknown-action
+// sentence carries it: invalid UTF-8 in it makes that answer unencodable,
+// which logs the action twice. A newline in it wrote lines of the caller's
+// choosing, and its length was the caller's too.
+$api_forged = "x\xB1\n[api.php action=save_user] HTTP 500: podvrh\r\x1B" . str_repeat('y', 300);
+$api_shown = 'x\xB1\x0A[api.php action=save_user] HTTP 500: podvrh\x0D\x1B' . str_repeat('y', 52) . '…';
+check('akce z požadavku jde do logu opsaná v \xNN a zkrácená, žádný řádek navíc',
+    $api_answer('bk_api_error(400, sprintf(\'Neznámá akce „%s".\', $action))', $api_forged),
+    [500, $api_pair(['error' => 'Odpověď serveru se nepodařilo sestavit.']),
+        "[api.php action={$api_shown}] HTTP 400 answer not encoded: Malformed UTF-8 characters, possibly incorrectly encoded\n"
+        . "[api.php action={$api_shown}] HTTP 500: Odpověď serveru se nepodařilo sestavit."]);
+bk_test_load_functions(__DIR__ . '/../api.php', ['bk_api_printable']);
+check('akce z požadavku: obyčejný název zůstane, jiný typ se jen pojmenuje, 100 bajtů se nezkrátí',
+    [bk_api_printable('save_user'), bk_api_printable(['x']), bk_api_printable(str_repeat('a', 100))],
+    ['save_user', 'array', str_repeat('a', 100)]);
+
+// --- find_dead_code.php: what counts as a use -------------------------------
+// The finder runs over a small tree of its own. A PHP function named only in a
+// comment or called only from a test is no use by the app, and an inline JS
+// function nothing calls is as dead as a PHP one. The helpers it requires are
+// copied along and left out of the lists.
+$dc_dir = sys_get_temp_dir() . '/bk_dead_code_' . bin2hex(random_bytes(4));
+$dc_files = [
+    'tests/find_dead_code.php' => (string)file_get_contents(__DIR__ . '/find_dead_code.php'),
+    'tests/assert_helpers.php' => (string)file_get_contents(__DIR__ . '/assert_helpers.php'),
+    'tests/fx_test.php' => "<?php\necho bk_fx_test_only();\n",
+    'lang/cs.php' => "<?php\nreturn [];\n",
+    'db.php' => "<?php\nfunction bk_settings_keys(): array {\n    return [];\n}\n",
+    'page.php' => "<?php\n// bk_fx_commented() is named here only.\n"
+        . "function bk_fx_used(): int { return 1; }\nfunction bk_fx_commented(): int { return 2; }\n"
+        . "function bk_fx_test_only(): int { return 3; }\necho bk_fx_used() + count(bk_settings_keys());\n?>\n"
+        . "<button onclick=\"fxUsed()\">x</button>\n<script>\nfunction fxUsed() {}\nfunction fxUnused() {}\n</script>\n",
+];
+foreach ($dc_files as $dc_path => $dc_src) {
+    @mkdir(dirname($dc_dir . '/' . $dc_path), 0700, true);
+    file_put_contents($dc_dir . '/' . $dc_path, $dc_src);
+}
+exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($dc_dir . '/tests/find_dead_code.php') . ' 2>&1', $dc_out, $dc_rc);
+$dc_text = implode("\n", $dc_out) . "\n";
+$dc_list = function (string $title) use ($dc_text): array {
+    if (!preg_match('/^' . preg_quote($title, '/') . ' \(\d+\):\n((?:  .+\n)+)/m', $dc_text, $m)) {
+        return [];
+    }
+    $lines = array_map('trim', explode("\n", rtrim($m[1])));
+    return array_values(array_filter($lines, fn($l) => !str_ends_with($l, '(assert_helpers.php)')));
+};
+check('mrtvý kód: bez volání je funkce jen z komentáře i nevolaná JS funkce',
+    [$dc_rc, $dc_list('Funkce bez jediného volání')], [0, ['bk_fx_commented  (page.php)', 'fxUnused  (page.php, JS)']]);
+check('mrtvý kód: funkce volaná jen z testu je zvlášť', $dc_list('Funkce volané jen z testů'), ['bk_fx_test_only  (page.php)']);
+foreach (array_keys($dc_files) as $dc_path) {
+    @unlink($dc_dir . '/' . $dc_path);
+}
+@rmdir($dc_dir . '/tests');
+@rmdir($dc_dir . '/lang');
+@rmdir($dc_dir);
+
+// --- run_api_action_lint.php: a comment is no caller --------------------------
+// The lint runs over a small tree of its own. Only lines that began with a
+// comment marker used to be dropped, so a JSDoc one-liner over a type kept an
+// action alive after its last caller was gone. A comment of any shape is no
+// call now; an address in quotes or in JSX text still is, and a problem line
+// keeps its number after a block comment over several lines.
+$al_dir = sys_get_temp_dir() . '/bk_action_lint_' . bin2hex(random_bytes(4));
+$al_files = [
+    'apps/status/tests/run_api_action_lint.php' => (string)file_get_contents(__DIR__ . '/run_api_action_lint.php'),
+    'apps/status/api.php' => "<?php\nif (\$action === 'shown' || \$action === 'listed' || \$action === 'doc_only') {}\n"
+        . "if (\$action === 'audit_logs') {}\n",
+    'apps/monitor/src/row.ts' => "/** One row of `api.php?action=doc_only`. */\n"
+        . "export type Row = { id: number }; // from api.php?action=doc_only\n"
+        . "/* api.php?action=doc_only\n   over two lines */\n"
+        . "export const load = () => fetch('https://example.com/status/api.php?action=shown'); // in quotes\n",
+    'apps/monitor/src/about.tsx' => "export const About = () => <p>GET https://example.com/status/api.php?action=listed</p>;\n",
+];
+$al_run = function () use ($al_dir): array {
+    exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($al_dir . '/apps/status/tests/run_api_action_lint.php') . ' 2>&1', $out, $rc);
+    return [$rc, implode("\n", $out)];
+};
+foreach ($al_files as $al_path => $al_src) {
+    @mkdir(dirname($al_dir . '/' . $al_path), 0700, true);
+    file_put_contents($al_dir . '/' . $al_path, $al_src);
+}
+[$al_rc, $al_out] = $al_run();
+check('lint akcí: komentář žádné volání není, adresa v uvozovkách a v textu JSX ano',
+    [$al_rc, preg_match('/nic nevolá:\n\n((?:  .+\n)+)/', $al_out . "\n", $al_m) ? trim($al_m[1]) : $al_out], [1, 'doc_only']);
+$al_files['apps/monitor/src/late.ts'] = "/*\n * three lines\n */\nrequest('nope');\n";
+file_put_contents($al_dir . '/apps/monitor/src/late.ts', $al_files['apps/monitor/src/late.ts']);
+[$al_rc, $al_out] = $al_run();
+check('lint akcí: za blokovým komentářem sedí číslo řádku', [$al_rc, str_contains($al_out, 'late.ts:4 volá action=nope')], [1, true]);
+foreach (array_keys($al_files) as $al_path) {
+    @unlink($al_dir . '/' . $al_path);
+}
+foreach (['apps/status/tests', 'apps/status', 'apps/monitor/src', 'apps/monitor', 'apps', ''] as $al_sub) {
+    @rmdir(rtrim($al_dir . '/' . $al_sub, '/'));
+}
+
+
+// --- bk_validate_import_target: imported targets ----------------------------
+// Everything a hosting-side check can never reach is blocked. Exactly this
+// gap produced three monitors reporting a permanent false outage.
+check('veřejná doména projde', bk_validate_import_target('dns.example.com'), null);
+check('veřejná IPv4 projde', bk_validate_import_target('8.8.8.8'), null);
+check('veřejná IPv6 projde', bk_validate_import_target('2a06:98c1:3120::3'), null);
+check('doména s portem projde', bk_validate_import_target('bloodkings.eu:53'), null);
+
+check_true('privátní IPv4 odmítnuta', bk_validate_import_target('192.168.1.10') !== null);
+check_true('privátní IPv4 s portem odmítnuta', bk_validate_import_target('10.0.0.5:53') !== null);
+check_true('loopback IPv6 v závorkách odmítnut', bk_validate_import_target('[::1]:53') !== null);
+check_true('link-local IPv6 odmítnuta', bk_validate_import_target('fe80::1') !== null);
+check_true('localhost odmítnut', bk_validate_import_target('localhost') !== null);
+check_true('.lan jméno odmítnuto', bk_validate_import_target('router.lan') !== null);
+check_true('.internal jméno odmítnuto', bk_validate_import_target('kresd.internal') !== null);
+check_true('prázdný cíl odmítnut', bk_validate_import_target('') !== null);
+check_true('URL na privátní IP odmítnuta', bk_validate_import_target('https://192.168.0.1/admin') !== null);
+// Exactly the input that produced the broken kresd monitor:
+check_true('jméno monitoru není adresa', bk_validate_import_target('Router - Praha') !== null);
+
+// --- bk_version_is_older: the agent update offer ----------------------------
+// String comparison reported "outdated" for current agents here.
+check_true('1.5.2 je starší než 1.5.6', bk_version_is_older('1.5.2', '1.5.6'));
+check_false('1.5.6 není starší než 1.5.6', bk_version_is_older('1.5.6', '1.5.6'));
+check_false('1.7.3 není starší než 1.5.6', bk_version_is_older('1.7.3', '1.5.6'));
+// The classic string-comparison trap: "1.10.0" < "1.9.0" as text.
+check_false('1.10.0 není starší než 1.9.0', bk_version_is_older('1.10.0', '1.9.0'));
+check_true('1.9.0 je starší než 1.10.0', bk_version_is_older('1.9.0', '1.10.0'));
+check_false('neznámá verze nehlásí zastaralost', bk_version_is_older(null, '1.5.6'));
+check_false('bez referenční verze se nehlásí nic', bk_version_is_older('1.0.0', null));
+
+// --- scripts/assemble-agents.sh: what goes up is what every agent takes -----
+// The deploy and the release copy the agents through this one script. It reads
+// AGENT_VERSION with a copy of the server's regex, so the copy has to stay the
+// server's: a file the script passes would otherwise be offered under another
+// version than its last line names, and the whole fleet would refuse it.
+$aa_regex = static function (string $src): ?string {
+    $re = <<<'RE'
+        ~preg_match\('(/\\\$\?AGENT_VERSION[^\n]*?/)', ~
+        RE;
+    return preg_match($re, $src, $m) ? $m[1] : null;
+};
+$aa_script = realpath(__DIR__ . '/../../..') . '/scripts/assemble-agents.sh';
+$aa_server = $aa_regex((string)file_get_contents(__DIR__ . '/../functions.php'));
+$aa_copy = $aa_regex((string)@file_get_contents($aa_script));
+check('assemble-agents.sh čte AGENT_VERSION přesně regexem serveru', [$aa_copy !== null, $aa_copy], [true, $aa_server]);
+
+// The script itself, on a tree of its own: the real path, not a test hook.
+$aa_tmp = sys_get_temp_dir() . '/bk_assemble_' . bin2hex(random_bytes(4));
+@mkdir($aa_tmp . '/scripts', 0777, true);
+@mkdir($aa_tmp . '/agents/vps-agent', 0777, true);
+@mkdir($aa_tmp . '/dest');
+copy($aa_script, $aa_tmp . '/scripts/assemble-agents.sh');
+$aa_good = [
+    'agent.sh' => "#!/bin/bash\nAGENT_VERSION=\"1.2.3\"\n# bk-agent-end 1.2.3\n",
+    'agent.py' => "AGENT_VERSION = \"1.2.3\"\n# bk-agent-end 1.2.3\n",
+    'agent.ps1' => "\$AGENT_VERSION = \"1.2.3\"\n# bk-agent-end 1.2.3\n",
+    'agent_openwrt.sh' => "#!/bin/sh\nAGENT_VERSION=\"1.2.3\"\n# bk-agent-end 1.2.3\n",
+    'docker-compose.agent.yml' => "services: {}\n",
+];
+$aa_run = static function (array $files) use ($aa_tmp): array {
+    foreach ($files as $name => $body) {
+        file_put_contents($aa_tmp . '/agents/vps-agent/' . $name, $body);
+        @unlink($aa_tmp . '/dest/' . $name);
+    }
+    $path = 'PATH=' . escapeshellarg(dirname(PHP_BINARY) . PATH_SEPARATOR . (string)getenv('PATH'));
+    exec($path . ' bash ' . escapeshellarg($aa_tmp . '/scripts/assemble-agents.sh') . ' ' . escapeshellarg($aa_tmp . '/dest') . ' 2>&1', $out, $rc);
+    $copied = [];
+    foreach (array_keys($files) as $name) {
+        $copied[$name] = @file_get_contents($aa_tmp . '/dest/' . $name);
+    }
+    return ['code' => $rc, 'out' => implode("\n", $out), 'copied' => $copied];
+};
+$aa_ok = $aa_run($aa_good);
+check('assemble-agents.sh zkopíruje všech pět souborů beze změny', [$aa_ok['code'], $aa_ok['copied']], [0, $aa_good]);
+$aa_cr = $aa_run(['agent.py' => "AGENT_VERSION = \"1.2.3\"\n# bk-agent-end 1.2.3\r\n"] + $aa_good);
+check_true('assemble-agents.sh odmítne CR na posledním řádku', $aa_cr['code'] === 1 && str_contains($aa_cr['out'], 'agent.py') && str_contains($aa_cr['out'], '1.2.3\\r'));
+$aa_ver = $aa_run(['agent.ps1' => "\$AGENT_VERSION = \"1.2.4\"\n# bk-agent-end 1.2.3\n"] + $aa_good);
+check_true('assemble-agents.sh odmítne konec s jinou verzí, než nabídne server', $aa_ver['code'] === 1 && str_contains($aa_ver['out'], "'# bk-agent-end 1.2.4'"));
+$aa_empty = $aa_run(['docker-compose.agent.yml' => ''] + $aa_good);
+check_true('assemble-agents.sh odmítne prázdný soubor', $aa_empty['code'] === 1 && str_contains($aa_empty['out'], 'missing or empty'));
+foreach (array_keys($aa_good) as $aa_name) {
+    @unlink($aa_tmp . '/agents/vps-agent/' . $aa_name);
+    @unlink($aa_tmp . '/dest/' . $aa_name);
+}
+@unlink($aa_tmp . '/scripts/assemble-agents.sh');
+foreach (['/agents/vps-agent', '/agents', '/scripts', '/dest', ''] as $aa_dir) {
+    @rmdir($aa_tmp . $aa_dir);
+}
+// deploy-hosting.yml starts the status deploy only when one of its paths
+// changed, so every script that deploy runs has to be one of them: otherwise
+// a change to what goes up waits for some unrelated apps/status push.
+$aa_wf = __DIR__ . '/../../../.github/workflows/';
+$aa_hosting = (string)@file_get_contents($aa_wf . 'deploy-hosting.yml');
+preg_match_all('~(?<![\w./-])scripts/[\w./-]+~', (string)@file_get_contents($aa_wf . 'deploy-status.yml'), $aa_used);
+$aa_used = array_values(array_unique(array_map(fn($s) => rtrim($s, '.'), $aa_used[0])));
+$aa_paths = preg_match('~^  push:\n(?:.*\n)*?    paths:\n((?:      [-#].*\n)+)~m', $aa_hosting, $aa_pm)
+    && preg_match_all("~^      - '([^']+)'$~m", $aa_pm[1], $aa_pp) ? $aa_pp[1] : [];
+$aa_decide = preg_match("~^\s*decide status '([^']+)'$~m", $aa_hosting, $aa_dm) ? $aa_dm[1] : null;
+$aa_unwatched = array_values(array_filter($aa_used, fn($s) => !array_filter($aa_paths, fn($g) => fnmatch($g, $s))
+    || $aa_decide === null || !preg_match('~' . $aa_decide . '~', $s)));
+check('změna skriptu, který deploy statusu spouští, deploy statusu spustí',
+    [$aa_used !== [], $aa_paths !== [], $aa_decide !== null, $aa_unwatched], [true, true, true, []]);
+// R185: a commit that changes only the root workspace's package files
+// (a dependency bump) rebuilds and deploys /app.
+$aa_app = preg_match("~^\s*decide app '([^']+)'$~m", $aa_hosting, $aa_am) ? $aa_am[1] : null;
+check('bump závislostí v package(-lock).json nasadí /app',
+    array_map(fn ($f) => in_array($f, $aa_paths, true) && $aa_app !== null && preg_match('~' . $aa_app . '~', $f) === 1, ['package.json', 'package-lock.json']),
+    [true, true]);
+
+// R242: the Cloudflare deploy runs one at a time, so an older build that
+// finishes later cannot overwrite a newer one.
+$cf_wf = (string)@file_get_contents($aa_wf . 'deploy.yml');
+check('deploy na Cloudflare má vlastní frontu a běžící nezruší',
+    [preg_match('~^concurrency:\n  group: [\w-]+\n  cancel-in-progress: false$~m', $cf_wf)], [1]);
+
+// --- bk_format_duration --------------------------------------------------
+check_true('trvání je neprázdný text', is_string(bk_format_duration(1800)) && bk_format_duration(1800) !== '');
+
+// --- bk_effective_threshold (presety) ------------------------------------
+// Preset ma prednost pred hodnotou monitoru, ale jen kdyz prah opravdu resi.
+$preset_full = ['metrics' => null, 'cpu' => 70, 'ram' => 80, 'hdd' => null];
+
+check('preset prebiji hodnotu monitoru', bk_effective_threshold($preset_full, 90, 'cpu'), 70);
+check('preset bez prahu nechava hodnotu monitoru', bk_effective_threshold($preset_full, 90, 'hdd'), 90);
+check('bez presetu plati hodnota monitoru', bk_effective_threshold(null, 85, 'cpu'), 85);
+check('nic nenastaveno = zadny prah', bk_effective_threshold(null, null, 'cpu'), null);
+check('prazdny retezec u monitoru = zadny prah', bk_effective_threshold(null, '', 'ram'), null);
+// Nula je platny prah (napr. "hlas cokoli"), ne "nenastaveno".
+check('nulovy prah v presetu se respektuje', bk_effective_threshold(['metrics' => null, 'cpu' => 0, 'ram' => null, 'hdd' => null], 90, 'cpu'), 0);
+check('nulovy prah u monitoru se respektuje', bk_effective_threshold(null, 0, 'cpu'), 0);
+
+// --- preset vs. vlastni sada metrik --------------------------------------
+// Volajici musi predat $pdo, jinak je vetev s presetem mrtva a prepinac
+// v UI nic nedela (presne to se stalo pri prvnim nasazeni presetu).
+// Funkce se sem nenacita (potrebuje DB), takze se cte primo ze zdroje.
+$fn_src = file_get_contents(__DIR__ . '/../functions.php');
+check_true(
+    'bk_get_enabled_metrics prijima $pdo',
+    (bool)preg_match('/function bk_get_enabled_metrics\([^)]*\$pdo/', $fn_src)
+);
+
+$callers = [
+    __DIR__ . '/../index.php',
+    __DIR__ . '/../api.php',
+    __DIR__ . '/../admin.php',
+];
+$missing_pdo = [];
+foreach ($callers as $caller_file) {
+    foreach (file($caller_file, FILE_IGNORE_NEW_LINES) as $line) {
+        $trimmed = ltrim($line);
+        // Zminka v komentari neni volani - bez tehle podminky test padal
+        // na radku "(viz bk_get_enabled_metrics())".
+        if (str_starts_with($trimmed, '//') || str_starts_with($trimmed, '*')) {
+            continue;
+        }
+        if (!str_contains($line, 'bk_get_enabled_metrics(')) {
+            continue;
+        }
+        // Definice funkce se take nepocita.
+        if (str_contains($line, 'function bk_get_enabled_metrics')) {
+            continue;
+        }
+        if (!str_contains($line, '$pdo')) {
+            $missing_pdo[] = basename($caller_file);
+        }
+    }
+}
+check('vsichni volajici predavaji $pdo', $missing_pdo, []);
+
+// --- The public view carries no host internals ------------------------------
+//
+// agent_api passes through keys the server has never heard of, so the public
+// monitor list uses an allowlist (bk_public_monitor_details) instead of the
+// name-based denylist it replaced: a denylist let every new key through, from
+// process lists to interface names. This guards both halves - the network
+// identity and new agent keys stay out, what the public card renders stays in.
+$sample = array_fill_keys(['lte_ipv4', 'wan_ipv6', 'public_ip', 'lan_subnet', 'wifi_ssid', 'peer_endpoint',
+    'device_mac', 'board_serial', 'hostname', 'agent_key', 'api_token', 'top_ram_processes', 'wan_l3_device',
+    'mwan3_active_gw', 'net', 'filesystems', 'some_future_agent_key',
+    // Router release 0.1.7: new explicit keys of last_details. The disk
+    // list names models and partitions, the radios name the SSID, and
+    // wan_path describes the household's line - none of it is public.
+    // lan_ports draws the household's own wiring: which socket carries a
+    // cable and how many devices sit behind it. Never in the public view.
+    'storage_disks', 'agent_tools', 'fs_alerts', 'wifi_radios', 'wan_path', 'wan_counters_prev', 'lan_ports',
+    'version', 'motd', 'players_online', 'players_max', 'clients_online', 'clients_max',
+    'presence_count', 'members', 'voice_channels', 'model', 'os', 'cpanel_stats'], 1);
+$public_keys = array_keys(bk_public_monitor_details($sample));
+foreach (['lte_ipv4', 'wan_ipv6', 'public_ip', 'lan_subnet', 'wifi_ssid', 'peer_endpoint', 'device_mac',
+          'board_serial', 'hostname', 'agent_key', 'api_token', 'top_ram_processes', 'wan_l3_device',
+          'mwan3_active_gw', 'net', 'filesystems', 'some_future_agent_key',
+          'storage_disks', 'agent_tools', 'fs_alerts', 'wifi_radios', 'wan_path', 'wan_counters_prev',
+          'lan_ports'] as $private_key) {
+    check_false("anonym neuvidí {$private_key}", in_array($private_key, $public_keys, true));
+}
+foreach (['version', 'motd', 'players_online', 'players_max', 'clients_online', 'clients_max',
+          'presence_count', 'members', 'voice_channels', 'model', 'os', 'cpanel_stats'] as $card_key) {
+    check_true("veřejná karta dostane {$card_key}", in_array($card_key, $public_keys, true));
+}
+check_true('veřejný pohled seznamu monitorů jde přes allowlist',
+    str_contains(file_get_contents(__DIR__ . '/../api.php'), '$details_out = bk_public_monitor_details($details);'));
+
+// --- Heartbeat monitory --------------------------------------------------
+//
+// Hlida se hlavne to, ze "jeste se neozvala" neni totez co "je dole".
+// Monitor, ktery nikdy nedostal signal, o sobe nevi nic - a alert na vypadek,
+// ktery se nestal, je stejna lez jako vymyslena nula v grafu.
+$hb_base = [
+    'heartbeat_interval' => 3600,
+    'heartbeat_grace' => 300,
+    'last_heartbeat' => null,
+    'heartbeat_last_result' => null,
+    'heartbeat_last_message' => null,
+];
+$now = strtotime('2026-08-10 12:00:00');
+$hb_at = function (string $when) use ($now) { return date('Y-m-d H:i:s', strtotime($when, $now)); };
+
+$r = bk_heartbeat_evaluate($hb_base, $now);
+check('bez signalu neni down, ale unknown', $r['status'], 'unknown');
+check('bez signalu se nehlasi stari', $r['age_secs'], null);
+
+$r = bk_heartbeat_evaluate(array_merge($hb_base, ['heartbeat_interval' => null]), $now);
+check('bez intervalu nejde nic vyhodnotit', $r['status'], 'unknown');
+
+$r = bk_heartbeat_evaluate(array_merge($hb_base, ['last_heartbeat' => $hb_at('-10 minutes')]), $now);
+check('cerstvy signal je up', $r['status'], 'up');
+check('u up se nehlasi zpozdeni', $r['overdue_secs'], null);
+
+// Presne na hranici intervalu + tolerance jeste ne - az za ni.
+$r = bk_heartbeat_evaluate(array_merge($hb_base, ['last_heartbeat' => $hb_at('-3900 seconds')]), $now);
+check('presne na limitu je jeste up', $r['status'], 'up');
+
+$r = bk_heartbeat_evaluate(array_merge($hb_base, ['last_heartbeat' => $hb_at('-3901 seconds')]), $now);
+check('sekundu za limitem uz je down', $r['status'], 'down');
+check('zpozdeni se spocita od limitu', $r['overdue_secs'], 1);
+
+// Tolerance musi opravdu odsouvat hranici, ne jen zdobit vypis.
+$r = bk_heartbeat_evaluate(array_merge($hb_base, ['heartbeat_grace' => null, 'last_heartbeat' => $hb_at('-3700 seconds')]), $now);
+check('bez tolerance plati holy interval', $r['status'], 'down');
+
+// Uloha dobehla vcas, ale skoncila chybou. Mlcet o tom jen proto, ze signal
+// prisel, by z hlidace udelalo kontrolu, ze cron startuje - ne ze zaloha vznikla.
+$r = bk_heartbeat_evaluate(array_merge($hb_base, [
+    'last_heartbeat' => $hb_at('-5 minutes'),
+    'heartbeat_last_result' => 'fail',
+    'heartbeat_last_message' => 'tar skoncil kodem 2',
+]), $now);
+check('ohlasene selhani je down i pri cerstvem signalu', $r['status'], 'down');
+check_true('duvod nese text od ulohy', str_contains((string)$r['error'], 'tar skoncil kodem 2'));
+
+// Stare 'fail' uz neni to hlavni - tam je problem, ze se uloha vubec neozvala.
+$r = bk_heartbeat_evaluate(array_merge($hb_base, [
+    'last_heartbeat' => $hb_at('-2 days'),
+    'heartbeat_last_result' => 'fail',
+]), $now);
+check('po limitu prevazi mlceni nad starym selhanim', $r['status'], 'down');
+check_true('hlaska mluvi o tom, ze se neozvala', str_contains((string)$r['error'], 'neozvala'));
+
+// Rozejite hodiny na stroji s ulohou nesmi zpusobit falesny vypadek.
+$r = bk_heartbeat_evaluate(array_merge($hb_base, ['last_heartbeat' => $hb_at('+10 minutes')]), $now);
+check('signal z budoucnosti je porad cerstvy', $r['status'], 'up');
+
+check('doba v sekundach', bk_format_duration_secs(45), '45 s');
+check('doba v minutach', bk_format_duration_secs(300), '5 min');
+check('doba v hodinach', bk_format_duration_secs(7320), '2 h 2 min');
+check('doba ve dnech', bk_format_duration_secs(180000), '2 d 2 h');
+
+// Token musi byt dost dlouhy a nahodny - je to jedina autorizace endpointu.
+$t1 = bk_heartbeat_generate_token();
+$t2 = bk_heartbeat_generate_token();
+check('token ma 48 hex znaku', strlen($t1), 48);
+check_true('token je hex', (bool)preg_match('/^[0-9a-f]+$/', $t1));
+check_true('dva tokeny se nerovnaji', $t1 !== $t2);
+
+// --- Cteni metrik z hlaseni agenta ---------------------------------------
+//
+// Jadro pravidla projektu: chybejici hodnota je NULL, nikdy nula. U zahozenych
+// paketu nebo teploty je "nula" uplne jina informace nez "agent to neposlal".
+check('cislo se precte', bk_agent_num(['cpu' => 42.5], 'cpu'), 42.5);
+check('cislo v retezci se precte', bk_agent_num(['cpu' => '42.5'], 'cpu'), 42.5);
+check('nula je platne mereni', bk_agent_num(['fw_dropped' => 0], 'fw_dropped'), 0.0);
+check('chybejici klic je NULL, ne nula', bk_agent_num([], 'cpu'), null);
+check('JSON null je NULL', bk_agent_num(['cpu' => null], 'cpu'), null);
+check('retezec "null" od starsiho agenta je NULL', bk_agent_num(['cpu' => 'null'], 'cpu'), null);
+check('prazdny retezec je NULL', bk_agent_num(['cpu' => ''], 'cpu'), null);
+check('text neni cislo', bk_agent_num(['cpu' => 'neznamo'], 'cpu'), null);
+check('pole neni cislo', bk_agent_num(['cpu' => [1, 2]], 'cpu'), null);
+// true by se pretypovalo na 1.0 a tvarilo se jako mereni.
+check('true neni cislo', bk_agent_num(['wan_up' => true], 'wan_up'), null);
+check('zaporna hodnota projde', bk_agent_num(['lte_rsrp' => -95.5], 'lte_rsrp'), -95.5);
+
+check('celociselna varianta zaokrouhli', bk_agent_int(['x' => 41.6], 'x'), 42);
+check('celociselna varianta drzi NULL', bk_agent_int([], 'x'), null);
+
+// --- Skutecna IP navstevnika za proxy ------------------------------------
+//
+// Bezpecnostni funkce, takze se testuje hlavne to, co se ma ODMITNOUT.
+// Kdyby se hlavicce verilo vzdy, muze si kdokoli zapsat do audit logu
+// libovolnou adresu a obchazet zamykani uctu tim, ze ji bude menit.
+check_true('IPv4 v rozsahu Cloudflare', bk_ip_in_cidr('104.16.5.9', '104.16.0.0/13'));
+check_false('IPv4 mimo rozsah', bk_ip_in_cidr('8.8.8.8', '104.16.0.0/13'));
+check_true('hranice rozsahu patri dovnitr', bk_ip_in_cidr('104.16.0.0', '104.16.0.0/13'));
+check_false('adresa tesne pod rozsahem uz ne', bk_ip_in_cidr('104.15.255.255', '104.16.0.0/13'));
+
+// Prefix, ktery nekonci na cely bajt - tady selze naivni porovnani retezcu.
+check_true('prefix /22 uvnitr', bk_ip_in_cidr('103.21.247.1', '103.21.244.0/22'));
+check_false('prefix /22 vne', bk_ip_in_cidr('103.21.248.1', '103.21.244.0/22'));
+
+// IPv6 ve zkracenem zapisu - bez binarniho porovnani by neprosla.
+check_true('IPv6 v rozsahu Cloudflare', bk_ip_in_cidr('2606:4700::1111', '2606:4700::/32'));
+check_false('IPv6 mimo rozsah', bk_ip_in_cidr('2001:4860::8888', '2606:4700::/32'));
+
+// Michani rodin adres je vzdy ne - jinak by IPv4 "prosla" IPv6 rozsahem.
+check_false('IPv4 neprojde IPv6 rozsahem', bk_ip_in_cidr('104.16.5.9', '2606:4700::/32'));
+check_false('IPv6 neprojde IPv4 rozsahem', bk_ip_in_cidr('2606:4700::1', '104.16.0.0/13'));
+
+check_false('nesmysl misto adresy', bk_ip_in_cidr('neni-adresa', '104.16.0.0/13'));
+check_false('CIDR bez lomitka', bk_ip_in_cidr('104.16.5.9', '104.16.0.0'));
+check_false('zaporny prefix', bk_ip_in_cidr('104.16.5.9', '104.16.0.0/-1'));
+check_false('prilis velky prefix', bk_ip_in_cidr('104.16.5.9', '104.16.0.0/33'));
+
+// --- Escalation of unacknowledged incidents --------------------------------
+//
+// Escalation wakes a human, so every condition must hold literally. The stamp
+// matters most: without it the same incident would be reported on every cron
+// run and we would learn to ignore it like the first alert.
+$inc_base = [
+    'status' => 'investigating',
+    'created_at' => null,
+    'resolved_at' => null,
+    'acknowledged_at' => null,
+    'escalated_at' => null,
+];
+$esc_at = function (string $when) use ($now) { return date('Y-m-d H:i:s', strtotime($when, $now)); };
+
+$r = bk_escalation_due(array_merge($inc_base, ['created_at' => $esc_at('-30 minutes')]), 15, $now);
+check_true('nepřevzatý incident po lhůtě eskaluje', $r['escalate']);
+check('doba čekání se počítá od vzniku', $r['waiting_secs'], 1800);
+
+$r = bk_escalation_due(array_merge($inc_base, ['created_at' => $esc_at('-10 minutes')]), 15, $now);
+check_false('před uplynutím lhůty se neeskaluje', $r['escalate']);
+
+// Exactly at the boundary yes - the period has elapsed.
+$r = bk_escalation_due(array_merge($inc_base, ['created_at' => $esc_at('-900 seconds')]), 15, $now);
+check_true('přesně po lhůtě se eskaluje', $r['escalate']);
+
+$r = bk_escalation_due(array_merge($inc_base, [
+    'created_at' => $esc_at('-2 hours'),
+    'acknowledged_at' => $esc_at('-100 minutes'),
+]), 15, $now);
+check_false('převzatý incident neeskaluje', $r['escalate']);
+check('a je řečeno proč', $r['reason'], 'incident někdo převzal');
+
+$r = bk_escalation_due(array_merge($inc_base, [
+    'created_at' => $esc_at('-2 hours'),
+    'escalated_at' => $esc_at('-1 hour'),
+]), 15, $now);
+check_false('už eskalovaný incident se neopakuje', $r['escalate']);
+
+$r = bk_escalation_due(array_merge($inc_base, [
+    'created_at' => $esc_at('-2 hours'),
+    'status' => 'resolved',
+]), 15, $now);
+check_false('vyřešený incident neeskaluje', $r['escalate']);
+
+$r = bk_escalation_due(array_merge($inc_base, [
+    'created_at' => $esc_at('-2 hours'),
+    'resolved_at' => $esc_at('-30 minutes'),
+]), 15, $now);
+check_false('incident s časem vyřešení neeskaluje', $r['escalate']);
+
+// A corrupted or missing creation time: waking a human over a broken record
+// is worse than doing nothing.
+$r = bk_escalation_due(array_merge($inc_base, ['created_at' => null]), 15, $now);
+check_false('bez času vzniku se neeskaluje', $r['escalate']);
+check('a je řečeno proč', $r['reason'], 'incident nemá použitelný čas vzniku');
+
+$r = bk_escalation_due(array_merge($inc_base, ['created_at' => $esc_at('-2 hours')]), 0, $now);
+check_false('nulová lhůta eskalaci vypíná', $r['escalate']);
+
+// What a webhook's answer proves decides the stamp: `failed` is retried next
+// run, `unknown` is not, because the endpoint may already have posted it and
+// a retry would post it again every minute.
+check('webhook: 2xx je převzetí', bk_webhook_delivery(true, 204, true), 'sent');
+check('webhook: odmítnutí i přesměrování jsou selhání',
+    [bk_webhook_delivery(true, 429, true), bk_webhook_delivery(true, 301, true)], ['failed', 'failed']);
+check('webhook: nedosažitelný je selhání', bk_webhook_delivery(false, 0, false), 'failed');
+check('webhook: bez odpovědi po odeslání celé zprávy se neví', bk_webhook_delivery(false, 0, true), 'unknown');
+
+// --- bk_period_minutes: the period window --------------------------------
+// Two periods returned a different window than their label claimed: `15m`
+// returned an hour and `6h` returned 24 hours (verified in production too).
+// You switched the range, the chart changed, and it showed something else.
+check('15m je opravdu 15 minut', bk_period_minutes('15m'), 15);
+check('1h je hodina', bk_period_minutes('1h'), 60);
+check('6h je šest hodin, ne 24', bk_period_minutes('6h'), 360);
+check('24h je den', bk_period_minutes('24h'), 1440);
+check('7d je týden', bk_period_minutes('7d'), 10080);
+check('30d je třicet dní', bk_period_minutes('30d'), 43200);
+// Longer periods come from the daily rollup, not raw data - hence null.
+check_true('90d jde přes denní agregaci', bk_period_minutes('90d') === null);
+check_true('1y jde přes denní agregaci', bk_period_minutes('1y') === null);
+check('neznámé období spadne na den', bk_period_minutes('nesmysl'), 1440);
+
+// --- Correlations between metrics (metric_correlations) -------------------
+//
+// The statistics here are easy to get subtly wrong in ways that still produce
+// a plausible-looking number, which is worse than producing none.
+$rising = range(1, 20);
+$falling = array_reverse($rising);
+
+$r_same = bk_pearson($rising, $rising);
+check('dokonalá shoda je r = 1', $r_same['r'], 1.0);
+check_true('a nepřeteče přes 1 zaokrouhlením', $r_same['r'] <= 1.0);
+check('opačný průběh je r = -1', bk_pearson($rising, $falling)['r'], -1.0);
+check('a počítá se ze všech párů', $r_same['pairs'], 20);
+
+// The core honesty rule of this endpoint: a series that never moves has no
+// correlation to report. Zero would claim "these two are unrelated",
+// which is a different - and unearned - statement.
+$flat = array_fill(0, 20, 5.0);
+$const = bk_pearson($rising, $flat);
+check_true('konstantní řada nemá korelaci (null, ne nula)', $const['r'] === null);
+check('a přizná proč', $const['reason'], 'constant');
+
+// Too little data must not yield a coefficient either - with three points
+// almost anything correlates.
+$few = bk_pearson([1.0, 2.0, 3.0], [2.0, 4.0, 6.0]);
+check_true('málo vzorků nedá koeficient', $few['r'] === null);
+check('a řekne to', $few['reason'], 'few_samples');
+
+// Pairs are formed only where both metrics measured something; the agent
+// may report CPU and skip temperature in the same row.
+$with_gaps = $rising;
+$with_gaps[3] = null;
+$with_gaps[7] = null;
+$gapped = bk_pearson($with_gaps, $rising);
+check('dvojice s chybějícím měřením se nepočítá', $gapped['pairs'], 18);
+check('zbytek dá pořád dokonalou shodu', $gapped['r'], 1.0);
+
+// A real-world shape: related but not identical.
+$noisy = array_map(fn($v) => $v * 2 + (($v % 3) - 1), $rising);
+$partial = bk_pearson($rising, $noisy);
+check_true('zašuměná závislost vyjde vysoká, ale ne dokonalá', $partial['r'] > 0.9 && $partial['r'] < 1.0);
+
+// Counters only grow, so their raw values correlate with everything that
+// grows. The panel compares increments instead.
+check('počítadlo se převádí na přírůstky', bk_counter_deltas([10.0, 12.0, 15.0]), [null, 2.0, 3.0]);
+// A drop means the counter reset (reboot) - that increment is unknowable.
+$reset = bk_counter_deltas([10.0, 12.0, 3.0, 5.0]);
+check_true('po restartu počítadla je přírůstek neznámý, ne záporný', $reset[2] === null);
+check('a další přírůstek se počítá od nové hodnoty', $reset[3], 2.0);
+// A missing measurement breaks the chain: the next increment would span
+// an unknown stretch of time.
+$gap = bk_counter_deltas([10.0, null, 20.0, 22.0]);
+check_true('po výpadku měření se přírůstek nedopočítává', $gap[2] === null);
+check('a navazuje se až dalším měřením', $gap[3], 2.0);
+
+// --- Trusted host for links in public mail (bk_trusted_link_host) ---------
+//
+// A confirmation mail goes to an address the requester names, so an arbitrary
+// Host header must never end up in its link - that would be a signed phishing
+// mail pointing at the attacker.
+$allow = ['localhost', '127.0.0.1'];
+check('vlastní SERVER_NAME se přijme', bk_trusted_link_host('bloodkings.eu', 'bloodkings.eu', $allow), 'bloodkings.eu');
+check_true(
+    'cizí Host se zahodí ve prospěch SERVER_NAME',
+    bk_trusted_link_host('evil.example', 'bloodkings.eu', $allow) === 'bloodkings.eu'
+);
+check('povolený vývojový host projde', bk_trusted_link_host('localhost:5273', 'localhost', $allow), 'localhost:5273');
+check_true(
+    'host mimo allowlist i mimo SERVER_NAME se zahodí',
+    bk_trusted_link_host('attacker.test', 'app.internal', $allow) === 'app.internal'
+);
+check_true('prázdný Host spadne na SERVER_NAME', bk_trusted_link_host('', 'bloodkings.eu', $allow) === 'bloodkings.eu');
+// Case-folding: a Host differing only in case must still match SERVER_NAME,
+// or the check could be dodged with BloodKings.EU.
+check('velikost písmen nerozhoduje', bk_trusted_link_host('BloodKings.EU', 'bloodkings.eu', $allow), 'bloodkings.eu');
+// The name before the colon matched, and in a link `bloodkings.eu:@` is a
+// user name: the browser would open evil.example. Only host[:port] passes.
+check('vlastní jméno s podvrženým zbytkem se zahodí', bk_trusted_link_host('bloodkings.eu:@evil.example', 'bloodkings.eu', $allow), 'bloodkings.eu');
+check('port z číslic projde', bk_trusted_link_host('bloodkings.eu:8443', 'bloodkings.eu', $allow), 'bloodkings.eu:8443');
+
+// --- Origin of the site_url setting (bk_site_origin) ------------------------
+//
+// The digest read site_url as the /status URL, public mails as the bare
+// origin; whichever the admin typed, one set of mail links was a 404.
+check('URL se /status dá origin', bk_site_origin('https://bloodkings.eu/status'), 'https://bloodkings.eu');
+check('holý origin i s lomítkem zůstane', bk_site_origin('https://bloodkings.eu/'), 'https://bloodkings.eu');
+check('port a velikost písmen', bk_site_origin(' HTTPS://Status.Example.cz:8443/status/ '), 'https://status.example.cz:8443');
+check('bez schématu to URL není', bk_site_origin('bloodkings.eu'), '');
+check('jiné schéma než http(s) ne', bk_site_origin('javascript://bloodkings.eu/%0aalert(1)'), '');
+check('prázdné nastavení', bk_site_origin(''), '');
+
+// --- LTE backup verdict (bk_lte_backup_state) -------------------------------
+//
+// The bug this guards: a HiLink modem's interface is "up" with no SIM in it,
+// so the interface flag alone must never count as a working backup.
+$v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => true, 'lte_sim_state' => 'ready']);
+check_true('přihlášený modem s připravenou SIM = záloha funkční', $v['ok'] === true);
+
+// THE regression: interface up, modem silent - that is not "working".
+$v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => null, 'lte_sim_state' => null]);
+check_true('rozhraní up bez slova od modemu není funkční záloha (null, ne true)', $v['ok'] === null);
+
+check_true('žádné LTE = žádný verdikt', bk_lte_backup_state([])['ok'] === null);
+check_true('rozhraní up, connected z monitoringu, SIM neznámá = funkční (901 registraci dokazuje)',
+    bk_lte_backup_state(['lte_up' => true, 'lte_connected' => true, 'lte_sim_state' => null])['ok'] === true);
+
+foreach (['no_sim', 'pin_required', 'puk_required', 'invalid'] as $bad) {
+    $v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => true, 'lte_sim_state' => $bad]);
+    check_true("SIM ve stavu {$bad} = nefunkční i když modem tvrdí 901", $v['ok'] === false && $v['reason'] === $bad);
+    check_true("a nese text pro operátora ({$bad})", is_string($v['text']) && $v['text'] !== '');
+}
+// The real case from the user's Turris: PIN fine (257), yet SimStatus 4 -
+// the network rejects the SIM - and the code must be in the text.
+$v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => false, 'lte_sim_state' => 'invalid', 'lte_sim_status_code' => 4]);
+check_true('SIM odmítnutá sítí nese SimStatus v textu', $v['reason'] === 'invalid' && str_contains($v['text'], 'SimStatus 4'));
+
+$v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => true, 'lte_sim_state' => 'pin_required', 'lte_sim_pin_left' => 2]);
+check_true('u PINu se hlásí zbývající pokusy', str_contains($v['text'], '2'));
+
+$v = bk_lte_backup_state(['lte_up' => true, 'lte_connected' => false, 'lte_sim_state' => 'ready', 'lte_conn_code' => 902]);
+check_true('SIM ok, ale modem odpojen = nefunkční', $v['ok'] === false && $v['reason'] === 'not_connected');
+check_true('a stavový kód je v textu', str_contains($v['text'], '902'));
+
+$v = bk_lte_backup_state(['lte_up' => false, 'lte_connected' => null, 'lte_sim_state' => null]);
+check_true('vypnuté rozhraní = nefunkční', $v['ok'] === false && $v['reason'] === 'interface_down');
+
+// --- WAN link verdict (bk_wan_link_state) -------------------------------------
+//
+// Mirrors wanLinkState() in apps/monitor/src/lib/wan-link.ts (vitest there).
+check_true('bez signálu = bez verdiktu', bk_wan_link_state([])['ok'] === null);
+check_true('řetězec "true" není důkaz', bk_wan_link_state(['wan_up' => 'true'])['ok'] === null);
+$v = bk_wan_link_state(['wan_up' => false, 'wan_internet' => true]);
+check_true('vypnuté rozhraní vyhrává nad pingem', $v['ok'] === false && $v['reason'] === 'interface_down' && str_contains((string)$v['text'], 'WAN'));
+$v = bk_wan_link_state(['wan_up' => true, 'wan_internet' => false]);
+check_true('nahoře bez pingu = bez internetu', $v['ok'] === false && $v['reason'] === 'no_internet' && str_contains((string)$v['text'], 'ping'));
+check_true('starý agent bez wan_internet: rozhraní up = funkční', bk_wan_link_state(['wan_up' => true])['ok'] === true);
+// Agents before 0.1.1 sent false for "no interface called wan at all".
+check_true('starý agent na AP: wan_up=false bez protokolu i pingu = bez verdiktu', bk_wan_link_state(['wan_up' => false])['ok'] === null);
+check_true('ale s protokolem je vypnuté rozhraní opravdu výpadek', bk_wan_link_state(['wan_up' => false, 'wan_proto' => 'dhcp'])['ok'] === false);
+check_true('a s pingem false taky (bez protokolu)', bk_wan_link_state(['wan_up' => false, 'wan_internet' => false])['ok'] === false);
+check_true('oba signály dobré = funkční', bk_wan_link_state(['wan_up' => true, 'wan_internet' => true])['ok'] === true);
+
+// --- PagerDuty event per status (bk_pagerduty_action) ---------------------------
+//
+// Everything but "down" used to be sent as "resolve": a silent agent, a lost
+// WAN or a lost LTE backup CLOSED the open incident instead of paging.
+foreach (['down', 'agent_offline', 'wan_lost', 'lte_backup_lost'] as $s) {
+    check("{$s} pageuje", bk_pagerduty_action($s), 'trigger');
+}
+foreach (['up', 'wan_restored', 'lte_backup_restored'] as $s) {
+    check("{$s} uzavírá incident", bk_pagerduty_action($s), 'resolve');
+}
+foreach (['vps_warning', 'latency_degraded', 'latency_recovered', 'ssl_expiring', 'maintenance', 'config_change'] as $s) {
+    check("{$s} do PagerDuty nejde", bk_pagerduty_action($s), null);
+}
+
+// --- Outage confirmation (bk_down_is_confirmed) --------------------------------
+//
+// One failed check is one failed check. With the confirmation at N the verdict
+// waits for N in a row - the log records every failure either way.
+check_true('při jedné požadované se hlásí hned', bk_down_is_confirmed(1, 1));
+check_false('při třech nestačí jedna', bk_down_is_confirmed(1, 3));
+check_false('ani dvě', bk_down_is_confirmed(2, 3));
+check_true('třetí v řadě potvrzuje', bk_down_is_confirmed(3, 3));
+check_true('a víc než dost taky', bk_down_is_confirmed(9, 3));
+// Nesmyslné nastavení nesmí výpadky umlčet úplně.
+check_true('nula požadovaných se chová jako jedna', bk_down_is_confirmed(1, 0));
+check_true('záporná taky', bk_down_is_confirmed(1, -5));
+
+// --- Alert colour class (bk_alert_color_class) ---------------------------------
+//
+// The Discord embed used to be green for "up" and red for everything else, so
+// a recovered WAN link and an expiring certificate looked like outages.
+foreach (['up', 'wan_restored', 'lte_backup_restored', 'latency_recovered'] as $s) {
+    check("{$s} je zelené", bk_alert_color_class($s), 'good');
+}
+foreach (['maintenance', 'vps_warning', 'latency_degraded', 'ssl_expiring'] as $s) {
+    check("{$s} je oranžové", bk_alert_color_class($s), 'warn');
+}
+foreach (['down', 'agent_offline', 'wan_lost', 'lte_backup_lost'] as $s) {
+    check("{$s} je červené", bk_alert_color_class($s), 'bad');
+}
+
+// --- Notify on a status change? (bk_should_notify_status_change) ----------------
+//
+// The end of a planned window is not a recovery - but only when nothing was
+// open. An outage that started BEFORE the window still has to be closed and
+// announced, otherwise the incident stays open and escalates while the
+// service runs.
+check_false('konec ohlášené údržby mlčí', bk_should_notify_status_change('maintenance', 'up', false));
+check_true('ale s otevřeným incidentem je to skutečné obnovení', bk_should_notify_status_change('maintenance', 'up', true));
+check_true('výpadek během údržby se hlásí', bk_should_notify_status_change('maintenance', 'down', false));
+check_true('běžný výpadek se hlásí', bk_should_notify_status_change('up', 'down', false));
+check_true('běžné obnovení se hlásí', bk_should_notify_status_change('down', 'up', false));
+check_true('začátek údržby se hlásí', bk_should_notify_status_change('up', 'maintenance', false));
+// One table for every writer (owner, 30 Oct). The first check of a new
+// monitor, or an agent that comes back, is no recovery - unless an incident
+// is open: then the notice is what closes it (R160, R162).
+check_false('první kontrola nového monitoru (unknown -> up) mlčí', bk_should_notify_status_change('unknown', 'up', false));
+check_true('unknown -> up s otevřeným incidentem je obnovení', bk_should_notify_status_change('unknown', 'up', true));
+check_true('unknown -> down se hlásí', bk_should_notify_status_change('unknown', 'down', false));
+check_false('neznámý stav nikoho nebudí', bk_should_notify_status_change('up', 'unknown', true));
+check_false('beze změny stavu se nic nehlásí', bk_should_notify_status_change('down', 'down', true));
+check_true('obnovení z varování se hlásí', bk_should_notify_status_change('warning', 'up', false));
+
+// --- SSL expiry warning latch (bk_ssl_alert_due) -------------------------------
+$now = 1_800_000_000;
+check_true('uvnitř okna a nikdy nevarováno = varovat', bk_ssl_alert_due(10, 14, 0, $now));
+check_false('mimo okno = nevarovat', bk_ssl_alert_due(20, 14, 0, $now));
+check_true('práh z nastavení, ne pevných 14 dní', bk_ssl_alert_due(20, 30, 0, $now));
+check_false('varováno před hodinou = mlčet', bk_ssl_alert_due(10, 14, $now - 3600, $now));
+check_true('varováno před 25 hodinami = znovu', bk_ssl_alert_due(10, 14, $now - 90000, $now));
+check_false('prošlý certifikát řeší výpadek, ne varování', bk_ssl_alert_due(-1, 14, 0, $now));
+check_true('poslední den je ještě varování', bk_ssl_alert_due(0, 14, 0, $now));
+
+// --- SMTP encryption (bk_smtp_encryption) ---------------------------------------
+// The values PHPMailer's ENCRYPTION_SMTPS and ENCRYPTION_STARTTLS stand for. Its
+// auto-upgrade is what would turn "none" into STARTTLS anyway, so it goes off too.
+check('SMTP: SSL', bk_smtp_encryption('ssl'), ['ssl', true]);
+check('SMTP: STARTTLS', bk_smtp_encryption('tls'), ['tls', true]);
+check('SMTP: bez zabezpečení nic nezkouší', bk_smtp_encryption('none'), ['', false]);
+check('SMTP: neznámá hodnota šifruje', bk_smtp_encryption(''), ['tls', true]);
+
+// --- Notices of an agent's report in a maintenance window (bk_maintenance_hold) --
+$mh_lost = ['wan_lost', 'WAN pryč'];
+$mh_back = ['wan_restored', 'WAN zpět'];
+check('v okně nejde nic ven a problém se drží', bk_maintenance_hold([$mh_lost], [], true), ['send' => [], 'held' => ['wan_lost' => $mh_lost]]);
+check('problém a jeho obnovení v okně se vyruší', bk_maintenance_hold([$mh_back], ['wan_lost' => $mh_lost], true), ['send' => [], 'held' => []]);
+check('obnovení alertu z doby před oknem se drží', bk_maintenance_hold([$mh_back], [], true), ['send' => [], 'held' => ['wan_restored' => $mh_back]]);
+check('a vyruší se, když se problém vrátí', bk_maintenance_hold([$mh_lost], ['wan_restored' => $mh_back], true), ['send' => [], 'held' => []]);
+check('prahy se nedrží', bk_maintenance_hold([['vps_warning', 'CPU'], ['conntrack_full', 'plno']], [], true), ['send' => [], 'held' => []]);
+$mh_disk_a = ['storage_failing', 'Disk A'];
+$mh_disk_b = ['storage_failing', 'Disk B'];
+$mh_warm = ['storage_warning', 'Disk C horký'];
+$mh_disks = bk_maintenance_hold([$mh_disk_a, $mh_disk_b, $mh_warm], [], true)['held'];
+check('každý disk má svou položku', array_values($mh_disks), [$mh_disk_a, $mh_disk_b, $mh_warm]);
+check('obnovení úložiště zruší varování, ne selhávající disk', array_values(bk_maintenance_hold([['storage_recovered', 'ok']], $mh_disks, true)['held']), [$mh_disk_a, $mh_disk_b]);
+check('po okně jde ven, co zbylo, před tím, co přineslo hlášení', bk_maintenance_hold([$mh_back], ['wan_lost' => $mh_lost], false), ['send' => [$mh_lost, $mh_back], 'held' => null]);
+check('mimo okno se nic nemění', bk_maintenance_hold([$mh_lost], [], false), ['send' => [$mh_lost], 'held' => null]);
+
+// --- Is the window running now (is_in_maintenance) ------------------------------
+$im_at = fn (int $offset): string => date('Y-m-d H:i:s', time() + $offset);
+check_false('vypnutá údržba neplatí ani s oknem', is_in_maintenance(['maintenance' => 0, 'maintenance_start' => $im_at(-60), 'maintenance_end' => $im_at(60)]));
+check_true('bez okna platí, dokud ji někdo nevypne', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => null, 'maintenance_end' => null]));
+check_true('okno, ve kterém jsme', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => $im_at(-60), 'maintenance_end' => $im_at(60)]));
+check_false('okno, které teprve začne', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => $im_at(3600), 'maintenance_end' => $im_at(7200)]));
+check_false('okno, které skončilo', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => $im_at(-7200), 'maintenance_end' => $im_at(-3600)]));
+check_false('jen začátek v budoucnu ještě neplatí', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => $im_at(3600), 'maintenance_end' => null]));
+check_true('jen začátek v minulosti platí', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => $im_at(-60), 'maintenance_end' => '']));
+check_true('jen konec v budoucnu platí', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => null, 'maintenance_end' => $im_at(60)]));
+check_false('jen konec v minulosti už neplatí', is_in_maintenance(['maintenance' => 1, 'maintenance_start' => null, 'maintenance_end' => $im_at(-60)]));
+
+// --- Expired maintenance window (bk_maintenance_window_expired) -----------------
+$now = strtotime('2026-09-07 12:00:00');
+check_true('okno s koncem v minulosti vypršelo', bk_maintenance_window_expired(['maintenance' => 1, 'maintenance_end' => '2026-09-07 11:00:00'], $now));
+check_false('okno s koncem v budoucnu běží', bk_maintenance_window_expired(['maintenance' => 1, 'maintenance_end' => '2026-09-07 13:00:00'], $now));
+check_false('bez konce = ruční údržba, nikdy nevyprší', bk_maintenance_window_expired(['maintenance' => 1, 'maintenance_end' => null], $now));
+check_false('vypnutá údržba nemá co vypršet', bk_maintenance_window_expired(['maintenance' => 0, 'maintenance_end' => '2026-09-07 11:00:00'], $now));
+check_false('řetězcová "1" bez konce', bk_maintenance_window_expired(['maintenance' => '1', 'maintenance_end' => ''], $now));
+check_true('řetězcová "1" s prošlým koncem', bk_maintenance_window_expired(['maintenance' => '1', 'maintenance_end' => '2026-09-06 11:00:00'], $now));
+check_false('nečitelný konec nevypršel', bk_maintenance_window_expired(['maintenance' => 1, 'maintenance_end' => 'nesmysl'], $now));
+
+// --- Periods on the backup link (bk_pair_link_periods) -------------------------
+$w = 1000; $now = 5000;
+$r = bk_pair_link_periods([], $w, $now);
+check('bez událostí = žádná období', count($r['periods']), 0);
+check('a nula sekund', $r['seconds'], 0);
+$r = bk_pair_link_periods([['wan_lost', 2000], ['wan_restored', 2600]], $w, $now);
+check('výpadek a obnovení = jedno období', count($r['periods']), 1);
+check('délka je rozdíl časů', $r['seconds'], 600);
+check_true('uzavřené období není otevřené', $r['open'] === false);
+$r = bk_pair_link_periods([['wan_lost', 4000]], $w, $now);
+check_true('výpadek bez obnovení běží do teď', $r['open'] === true && $r['periods'][0]['to'] === null);
+check('a počítá se do teď', $r['seconds'], 1000);
+$r = bk_pair_link_periods([['wan_restored', 1500]], $w, $now);
+check('obnovení bez výpadku = výpadek před oknem, počítá se od začátku okna', $r['seconds'], 500);
+check_true('a začátek je neznámý (null), ne vymyšlený', $r['periods'][0]['from'] === null);
+$r = bk_pair_link_periods([['wan_lost', 500], ['wan_restored', 1200]], $w, $now);
+check('období přesahující začátek okna se ořízne na okno', $r['seconds'], 200);
+$r = bk_pair_link_periods([['wan_lost', 2000], ['wan_lost', 2100], ['wan_restored', 2500]], $w, $now);
+check('dvojí výpadek za sebou se nepočítá dvakrát', count($r['periods']), 1);
+check('a měří se od prvního', $r['seconds'], 500);
+
+// An outage that started before the window and never ended: its events are
+// outside the query, so without the seed the answer was "nikdy".
+$r = bk_pair_link_periods([], $w, $now, 200);
+check_true('výpadek z doby před oknem stále běží', $r['open'] === true);
+check('a počítá se od začátku okna do teď', $r['seconds'], $now - $w);
+check('začátek zůstává skutečný, ne oříznutý', $r['periods'][0]['from'], 200);
+$r = bk_pair_link_periods([['wan_restored', 1400]], $w, $now, 200);
+check('obnovení uvnitř okna ho ukončí', $r['seconds'], 400);
+check_true('a už není otevřený', $r['open'] === false);
+$r = bk_pair_link_periods([['wan_restored', 1400], ['wan_lost', 4000]], $w, $now, 200);
+check('po obnovení může začít další výpadek', count($r['periods']), 2);
+check('a sečtou se obě období', $r['seconds'], 400 + ($now - 4000));
+
+// --- Typed agent input (bk_agent_str / bk_agent_bool) --------------------------
+foreach (['', 'N/A', 'N/A (smartctl chybí)', 'N/A (SMART nedostupné pro /dev/sda)', 'N/A (Storage modul neni k dispozici)', 'n/a'] as $missing) {
+    check_true("SMART '{$missing}' = neměřeno, ne zdravý disk", bk_smart_is_missing($missing) === true);
+}
+check_true('SMART OK je verdikt', bk_smart_is_missing('OK') === false);
+check_true('SMART WARNING je verdikt', bk_smart_is_missing('WARNING (Disk /dev/sdb selhal v SMART)') === false);
+check('řetězec se ořízne a zkrátí', bk_agent_str(['h' => '  abc  '], 'h', 2), 'ab');
+check_true('pole místo řetězce = null (ne TypeError v trim)', bk_agent_str(['h' => ['x']], 'h') === null);
+check_true('"null" od starého agenta = null', bk_agent_str(['h' => 'null'], 'h') === null);
+check_true('bool = null', bk_agent_str(['h' => true], 'h') === null);
+check('číslo se vrátí jako řetězec', bk_agent_str(['h' => 12], 'h'), '12');
+check('porty: jen celá čísla 1-65535, každé jednou a seřazená',
+    bk_agent_ports(['ports' => [443, '<img src=x onerror=alert(1)>', '22', 0, 70000, 443, 3.5, '8a', -1, ['x'], null, true]]), [22, 443]);
+check('porty: chybějící klíč nebo řetězec místo seznamu = prázdný seznam',
+    [bk_agent_ports([]), bk_agent_ports(['ports' => '22, 80'])], [[], []]);
+check_true('true/false projdou', bk_agent_bool(['a' => true], 'a') === true && bk_agent_bool(['a' => false], 'a') === false);
+check_true('1/0 a "1"/"0"', bk_agent_bool(['a' => 1], 'a') === true && bk_agent_bool(['a' => '0'], 'a') === false);
+check_true('"false" je false, ne true jako u (bool)', bk_agent_bool(['a' => 'false'], 'a') === false);
+check_true('pole, null a "maybe" = null', bk_agent_bool(['a' => []], 'a') === null && bk_agent_bool(['a' => null], 'a') === null && bk_agent_bool(['a' => 'maybe'], 'a') === null);
+
+// --- Web check verdict (bk_http_verdict) -----------------------------------
+// The body keyword used to be measured and ignored: a suspended-hosting page
+// served with 200 stayed green, although the form promises an outage.
+check('200 bez klíčového slova je up', bk_http_verdict(200, 'cokoli', null)['status'], 'up');
+check('200 s nalezeným textem je up', bk_http_verdict(200, '<h1>Blood Kings</h1>', 'Blood Kings')['status'], 'up');
+$v = bk_http_verdict(200, '<h1>Account suspended</h1>', 'Blood Kings');
+check('200 bez očekávaného textu je výpadek', $v['status'], 'down');
+check_true('chyba jmenuje hledaný text', str_contains((string)$v['error'], 'Blood Kings'));
+check('prázdné tělo s klíčovým slovem je výpadek', bk_http_verdict(200, '', 'Blood Kings')['status'], 'down');
+check('nepřečtené tělo s klíčovým slovem je výpadek', bk_http_verdict(200, false, 'Blood Kings')['status'], 'down');
+check('text se porovnává přesně, jak ho admin zadal', bk_http_verdict(200, 'blood kings', 'Blood Kings')['status'], 'down');
+check('prázdné nebo mezerové slovo se nekontroluje', bk_http_verdict(200, 'x', '  ')['status'], 'up');
+check('3xx s nalezeným textem je up', bk_http_verdict(301, 'Blood Kings', 'Blood Kings')['status'], 'up');
+$v = bk_http_verdict(503, 'Blood Kings', 'Blood Kings');
+check('503 je výpadek i s nalezeným textem', $v['status'], 'down');
+check('503 hlásí HTTP kód, ne chybějící text', $v['error'], 'HTTP status kód: 503');
+check('žádná odpověď je výpadek', bk_http_verdict(0, '', null)['status'], 'down');
+
+// --- A failed check measured no response time (check_socket) ---------------
+// Every failed check returned response_time 0 and cron logged it: each outage
+// was a 0 ms point in the latency charts, the fastest answer on screen. The
+// port is bound and released first, so nothing listens on it.
+// The other way round, a measured answer is never 0 either: the column is
+// whole ms, and a port on the same machine answers in a fraction of one,
+// which round() made 0 - the value every reader skips as unmeasured.
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_response_ms']);
+$rt_srv = stream_socket_server('tcp://127.0.0.1:0', $rt_errno, $rt_errstr);
+$rt_port = $rt_srv ? (int)substr(strrchr((string)stream_socket_get_name($rt_srv, false), ':'), 1) : 0;
+check_true('volný port pro test se našel', $rt_port > 0);
+$rt_up = check_socket('127.0.0.1', $rt_port, 1);
+check('otevřený port na tomtéž stroji má naměřenou odezvu aspoň 1 ms, ne 0',
+    [$rt_up['status'], is_int($rt_up['response_time']) && $rt_up['response_time'] >= 1], ['up', true]);
+if ($rt_srv) {
+    fclose($rt_srv);
+}
+$rt_down = check_socket('127.0.0.1', $rt_port, 1);
+check('zavřený port je výpadek bez naměřené odezvy, ne 0 ms',
+    [$rt_down['status'], array_key_exists('response_time', $rt_down) ? $rt_down['response_time'] : 'chybí'], ['down', null]);
+check('odezva do monitor_logs: kladná pod 1 ms je 1 ms, jinak celé ms',
+    [bk_response_ms(0.3), bk_response_ms('0.3'), bk_response_ms(0.5), bk_response_ms(1.4), bk_response_ms('18.6'), bk_response_ms(212)],
+    [1, 1, 1, 1, 19, 212]);
+check('nic, nula, záporná nebo nečíselná hodnota je NULL, ne 0 ms',
+    [bk_response_ms(null), bk_response_ms(0), bk_response_ms('0.0'), bk_response_ms(-2), bk_response_ms('null'),
+     bk_response_ms(''), bk_response_ms(true), bk_response_ms([5]), bk_response_ms(INF), bk_response_ms(NAN)],
+    array_fill(0, 10, null));
+// A probe times an 'up' result after the answer arrived, so its 0 is an
+// answer under 1 ms that the probe truncated, not a failed check's 0.
+check('nula u odpovědi, která přišla, je 1 ms; záporná ani nečíselná pořád NULL',
+    [bk_response_ms(0, true), bk_response_ms('0', true), bk_response_ms(0.4, true), bk_response_ms(150, true),
+     bk_response_ms(null, true), bk_response_ms(-2, true), bk_response_ms('null', true)],
+    [1, 1, 1, 150, null, null, null]);
+
+// --- monitors.last_details as an array (bk_monitor_details) ----------------
+// 44 readers decoded the column inline in idioms that disagreed on a missing
+// column, NULL, '' and broken JSON ($md_idioms below). The helper answers []
+// for all four, and each reader (??, isset, empty, truthiness or an is_array
+// guard) reads that [] as it read what the old idiom gave.
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_monitor_details']);
+$md_cases = [
+    'chybí sloupec' => [],
+    'NULL' => ['last_details' => null],
+    'prázdný řetězec' => ['last_details' => ''],
+    'rozbitý JSON' => ['last_details' => '{"cpu": 12'],
+];
+$md_object = ['last_details' => '{"cpu":12.5,"agent_last_seen":1767225600,"wan_up":true}'];
+check('bez sloupce, NULL, prázdný i rozbitý JSON je prázdné pole',
+    array_map('bk_monitor_details', array_values($md_cases)), [[], [], [], []]);
+check('objekt i seznam se dekódují celé, prázdný objekt je prázdné pole',
+    [bk_monitor_details($md_object), bk_monitor_details(['last_details' => '[1,2]']), bk_monitor_details(['last_details' => '{}'])],
+    [['cpu' => 12.5, 'agent_last_seen' => 1767225600, 'wan_up' => true], [1, 2], []]);
+// JSON that is no object or list was never written (every writer encodes an
+// array); a reader that indexed it would have read nothing anyway.
+check('JSON skalár nebo nula není detail',
+    [bk_monitor_details(['last_details' => '"text"']), bk_monitor_details(['last_details' => '0']),
+     bk_monitor_details(['last_details' => 'null']), bk_monitor_details(['id' => 1, 'last_details' => 42])],
+    [[], [], [], []]);
+$md_idioms = [
+    "?? '{}'" => fn (array $r) => json_decode($r['last_details'] ?? '{}', true),
+    "?? ''" => fn (array $r) => json_decode($r['last_details'] ?? '', true),
+    '(string)' => fn (array $r) => json_decode((string)($r['last_details'] ?? ''), true),
+    'ternár' => fn (array $r) => ($r['last_details'] ?? null) ? json_decode($r['last_details'], true) : null,
+    '!empty' => fn (array $r) => !empty($r['last_details']) ? json_decode($r['last_details'], true) : [],
+    '?: []' => fn (array $r) => json_decode($r['last_details'] ?? '', true) ?: [],
+];
+$md_read = fn ($d) => [$d['cpu'] ?? null, isset($d['agent_last_seen']), empty($d['wan_up']), (bool)$d, is_array($d) ? $d : []];
+$md_differs = [];
+foreach ($md_idioms as $md_name => $md_decode) {
+    foreach ($md_cases + ['prázdný objekt' => ['last_details' => '{}'], 'objekt' => $md_object] as $md_case => $md_row) {
+        if ($md_read($md_decode($md_row)) !== $md_read(bk_monitor_details($md_row))) {
+            $md_differs[] = $md_name . ' / ' . $md_case;
+        }
+    }
+}
+check('čtenáři (??, isset, empty, pravdivost, is_array) vidí totéž co dřív', $md_differs, []);
+// index.php keeps its own decode: bk_get_network_insights() skips a NULL and
+// reads an [] as a monitor whose outages count as WAN reconnects. This guards
+// decodes of a monitor row; a reader that fetches the bare column with
+// fetchColumn() decodes that string where it reads it.
+$md_inline = [];
+foreach (glob(__DIR__ . '/../*.php') ?: [] as $md_file) {
+    foreach (file($md_file) ?: [] as $md_line) {
+        if (preg_match('/json_decode\([^;]*last_details/', $md_line)) {
+            $md_inline[] = basename($md_file);
+        }
+    }
+}
+check('řádek monitoru dekóduje last_details jen přes bk_monitor_details(), mimo něj jen index.php kvůli NULL', $md_inline, ['index.php']);
+
+// --- Agent backup verdict (bk_agent_backup_says_up) ------------------------
+// The fallback turned real outages green: a web with the agent listing 443,
+// agent data 50 minutes old, and any monitored process vouching for TeamSpeak.
+$now = 1800000000;
+$all_ports = ['agent_last_seen' => $now - 60, 'ports' => [80, 443, 9987, 10011, 25565], 'missing_processes' => []];
+check_false('web agent nikdy nezachrání (nginx na 443 s mrtvým PHP je výpadek)',
+    bk_agent_backup_says_up('web', $all_ports, ['target' => 'https://x.cz'], $now));
+check_false('port monitor agent nezachrání', bk_agent_backup_says_up('port', $all_ports, ['port' => 80], $now));
+check_true('TeamSpeak s voice portem v čerstvém hlášení je up',
+    bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [9987]], ['target' => 'ts.x.cz', 'port' => 10011], $now));
+check_false('naslouchající ServerQuery port za TeamSpeak neručí, jen hlasový (R345)',
+    bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [10011]], ['target' => 'ts.x.cz', 'port' => 10011], $now));
+check_true('voice port se bere z cíle host:port',
+    bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [9988]], ['target' => 'ts.x.cz:9988'], $now));
+check_true('Docker agent hlásí po 300 s, hlášení staré 6 minut ještě platí',
+    bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 360, 'ports' => [9987]], ['target' => 'ts.x.cz'], $now));
+check_false('hlášení staré 20 minut nic nedokazuje',
+    bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 1200, 'ports' => [9987]], ['target' => 'ts.x.cz'], $now));
+check_false('agent, který nikdy nehlásil, nic nedokazuje',
+    bk_agent_backup_says_up('minecraft', ['ports' => [25565]], ['port' => 25565], $now));
+check_true('Minecraft s portem v čerstvém hlášení je up',
+    bk_agent_backup_says_up('minecraft', ['agent_last_seen' => $now - 30, 'ports' => ['25565']], ['port' => 25565], $now));
+check_false('cizí port Minecraft nezachrání',
+    bk_agent_backup_says_up('minecraft', ['agent_last_seen' => $now - 30, 'ports' => [80]], ['port' => 25565], $now));
+check_true('běžící ts3server v čerstvém hlášení je up',
+    bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [], 'missing_processes' => []], ['target' => 'ts.x.cz', 'monitored_processes' => 'ts3server, nginx'], $now));
+check_false('chybějící ts3server není up',
+    bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [], 'missing_processes' => ['ts3server']], ['target' => 'ts.x.cz', 'monitored_processes' => 'ts3server'], $now));
+check_false('běžící nginx neručí za TeamSpeak',
+    bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => [], 'missing_processes' => []], ['target' => 'ts.x.cz', 'monitored_processes' => 'nginx'], $now));
+check_false('rozbitá data agenta nic nedokazují',
+    bk_agent_backup_says_up('teamspeak', ['agent_last_seen' => $now - 60, 'ports' => 'x'], ['target' => 'ts.x.cz'], $now));
+
+// --- Per-monitor access (bk_viewer, bk_monitor_scope_sql) --------------------
+// Monitors belong to users; an admin sees all, a user the assigned ones, an
+// anonymous visitor none through the app. The scope helper must never widen.
+$saved_session = $_SESSION ?? null;
+$_SESSION = [];
+check('anonym není přihlášený ani admin', bk_viewer(), ['logged_in' => false, 'is_admin' => false, 'user_id' => 0]);
+$_SESSION = ['admin_logged_in' => true, 'admin_role' => 'user', 'admin_id' => 7];
+check('uživatel je přihlášený, ne admin', bk_viewer(), ['logged_in' => true, 'is_admin' => false, 'user_id' => 7]);
+$_SESSION = ['admin_logged_in' => true, 'admin_role' => 'admin', 'admin_id' => 1];
+check_true('admin je admin', bk_viewer()['is_admin']);
+$_SESSION = ['admin_role' => 'admin', 'admin_id' => 1];
+check_false('role bez přihlášení nic neznamená', bk_viewer()['is_admin']);
+$_SESSION = $saved_session ?? [];
+check('admin nemá omezení', bk_monitor_scope_sql(null, 'm.id'), ['1=1', []]);
+check('nic přiřazeného = nic, ne všechno', bk_monitor_scope_sql([], 'm.id'), ['1=0', []]);
+check('přiřazené monitory jako vázané parametry', bk_monitor_scope_sql([3, '5', 3], 'm.id'), ['m.id IN (?,?)', [3, 5]]);
+$threw = false;
+try {
+    bk_monitor_scope_sql([1], 'm.id) OR (1=1');
+} catch (InvalidArgumentException $e) {
+    $threw = true;
+}
+check_true('podvržený název sloupce se odmítne', $threw);
+
+// The subscription form shows what the alert's COALESCE really uses: a monitor
+// without a row was shown as 0 to an administrator who got its e-mails.
+$se_mon = ['email_notifications' => 1, 'sms_notifications' => null];
+$se_user = ['sms_notifications' => 1, 'whatsapp_notifications' => 1];
+check('admin bez řádku dostává podle monitoru a profilu', bk_subscription_effective(true, null, $se_mon, $se_user), ['email' => 1, 'sms' => 1, 'whatsapp' => 1]);
+check('uživatel bez řádku nedostává nic', bk_subscription_effective(false, null, $se_mon, $se_user), ['email' => 0, 'sms' => 0, 'whatsapp' => 0]);
+check('řádek má přednost, jeho NULL padá na výchozí', bk_subscription_effective(false, ['email_notifications' => 0, 'sms_notifications' => null, 'whatsapp_notifications' => '0'], $se_mon, $se_user), ['email' => 0, 'sms' => 1, 'whatsapp' => 0]);
+
+// A save stores only the boxes the account changed against what the form
+// showed. Comparing with the no-row values at save time pinned every monitor
+// once the profile's WhatsApp switch changed under the open form.
+$sr_mon = ['email_notifications' => 1, 'sms_notifications' => 0];
+$sr_off = ['sms_notifications' => 0, 'whatsapp_notifications' => 0];
+$sr_on = ['sms_notifications' => 0, 'whatsapp_notifications' => 1];
+$sr_shown = ['email' => 1, 'sms' => 0, 'whatsapp' => 1];
+check('admin s nedotčeným řádkem nic neuloží, i když mezitím vypnul WhatsApp v profilu',
+    bk_subscription_row_to_store(true, null, $sr_shown, $sr_shown, $sr_mon, $sr_off), null);
+check('zaškrtnutá SMS se uloží sama, nedotčené kanály zůstanou NULL',
+    bk_subscription_row_to_store(true, null, ['sms' => 1] + $sr_shown, $sr_shown, $sr_mon, $sr_off),
+    ['email_notifications' => null, 'sms_notifications' => 1, 'whatsapp_notifications' => null]);
+check('a WhatsApp zapnutý v profilu po načtení formuláře opravdu chodí',
+    bk_subscription_effective(true, bk_subscription_row_to_store(true, null, ['sms' => 1, 'whatsapp' => 0] + $sr_shown, ['whatsapp' => 0] + $sr_shown, $sr_mon, $sr_on), $sr_mon, $sr_on),
+    ['email' => 1, 'sms' => 1, 'whatsapp' => 1]);
+$sr_pinned = ['email_notifications' => 0, 'sms_notifications' => null, 'whatsapp_notifications' => 1];
+check('nedotčený kanál si drží, co bylo uloženo',
+    bk_subscription_row_to_store(true, $sr_pinned, ['email' => 0, 'sms' => 1] + $sr_shown, ['email' => 0] + $sr_shown, $sr_mon, $sr_off),
+    ['email_notifications' => 0, 'sms_notifications' => 1, 'whatsapp_notifications' => 1]);
+check('návrat na výchozí hodnotu kanál uvolní a prázdný řádek zmizí',
+    bk_subscription_row_to_store(true, ['email_notifications' => null, 'sms_notifications' => 1, 'whatsapp_notifications' => null], $sr_shown, ['sms' => 1] + $sr_shown, $sr_mon, $sr_on), null);
+$sr_user_none = ['email' => 0, 'sms' => 0, 'whatsapp' => 0];
+check('uživateli se nedotčený kanál zapíše jako 0, NULL by e-mail zapnul přes monitor',
+    bk_subscription_row_to_store(false, null, ['sms' => 1] + $sr_user_none, $sr_user_none, $sr_mon, $sr_on),
+    ['email_notifications' => 0, 'sms_notifications' => 1, 'whatsapp_notifications' => 0]);
+check('uživatel, který vše odškrtne, řádek nemá',
+    bk_subscription_row_to_store(false, ['email_notifications' => 1, 'sms_notifications' => 0, 'whatsapp_notifications' => 0], $sr_user_none, ['email' => 1] + $sr_user_none, $sr_mon, $sr_on), null);
+
+$pub = bk_public_monitor_details([
+    'version' => '3.13.7', 'players_online' => 4, 'cpanel_stats' => ['disk' => ['percent' => 40]],
+    'top_cpu_processes' => [['name' => 'mysqld', 'cpu' => 80]], 'processes' => ['sshd', 'nginx'],
+    'ts3_process' => ['pid' => 42], 'missing_processes' => ['kresd'], 'discovered_services' => [['name' => 'x']],
+    'wan_l3_device' => 'pppoe-wan', 'lte_device' => 'wwan0', 'interfaces' => [['iface' => 'eth0']],
+    'net_lte' => 120, 'wan_ipv4' => '203.0.113.9', 'ports' => [22, 443], 'agent_key' => 'x',
+    'containers_future_key' => ['db'],
+]);
+check('veřejné detaily nesou jen hodnoty karty', array_keys($pub), ['version', 'players_online', 'cpanel_stats']);
+check('prázdné detaily zůstanou prázdné', bk_public_monitor_details([]), []);
+
+check('HTTP chyba webu zůstane veřejná', bk_public_reason('HTTP status kód: 503', 'web'), 'HTTP status kód: 503');
+check('chybějící proces agenta se veřejně nejmenuje', bk_public_reason('Chybí běžící proces: nginx', 'vps'), null);
+check('agent-side kontrola nejmenuje proces', bk_public_reason("Agent nehlásí proces 'kresd' ani otevřený port 53.", 'agent_service'), null);
+check('zmínka o procesu u jiného typu se také skryje', bk_public_reason('ts3server restartován (PID 1 -> 2)', 'teamspeak'), null);
+check('prázdný důvod zůstane prázdný', bk_public_reason(null, 'vps'), null);
+check('DNS chyba neprozradí jméno hostitele', bk_public_reason('cURL chyba: Could not resolve host: interni.example', 'web'), 'Adresu se nepodařilo přeložit (DNS)');
+check('neúspěšné spojení neprozradí hostitele ani port', bk_public_reason("cURL chyba: Failed to connect to 10.0.0.5 port 8443 after 3 ms: Couldn't connect to server", 'web'), 'Spojení selhalo');
+check('vypršený čas se pozná', bk_public_reason('cURL chyba: Operation timed out after 10001 milliseconds with 0 bytes received', 'web'), 'Vypršel časový limit spojení');
+check('hledaný text stránky se neprozradí', bk_public_reason('Stránka odpověděla HTTP 200, ale neobsahuje očekávaný text „tajne-slovo“', 'web'), 'Stránka odpověděla HTTP 200, ale neobsahuje očekávaný obsah');
+check('zavřený port nenese číslo portu', bk_public_reason('Port 2222 je zavřený nebo nedostupný: Connection refused (111)', 'port'), 'Port je zavřený nebo nedostupný');
+check('chyba TS3 neprozradí IP hostingu', bk_public_reason('TS3 Query port (10011) nedostupný: Connection timed out (110). Tip: Ujistěte se, že váš VPS neblokuje IP adresu webhostingu (203.0.113.7) ve svém firewallu.', 'teamspeak'), 'TeamSpeak ServerQuery neodpovídá');
+check('pevná hláška Minecraftu zůstane', bk_public_reason('Minecraft server je podle API vypnutý.', 'minecraft'), 'Minecraft server je podle API vypnutý.');
+check('neznámý text se veřejně neřekne', bk_public_reason('Cíl 10.0.0.1 vrátil něco nečekaného', 'web'), null);
+
+check('automatický důvod výpadku zůstane interní', bk_public_incident_update('Automaticky detekován výpadek. Důvod: Chybí běžící proces: nginx'), 'Automaticky detekován výpadek.');
+check('převzetí nejmenuje operátora', bk_public_incident_update('Incident převzal: pepe'), 'Incident převzat.');
+check('poznámka ztratí jméno autora', bk_public_incident_update('[pepe] Vyměňujeme disk'), 'Vyměňujeme disk');
+check('ruční zpráva bez jména zůstane celá', bk_public_incident_update('Pracujeme na opravě'), 'Pracujeme na opravě');
+check('zpráva jen se jménem je prázdná', bk_public_incident_update('[pepe] '), null);
+
+$wb = bk_wifi_band_totals([
+    ['band' => '2.4GHz', 'clients' => 3, 'clients_6ghz_capable' => 1, 'clients_caps_known' => 3],
+    ['band' => '2.4GHz', 'clients' => '2', 'clients_6ghz_capable' => '0', 'clients_caps_known' => '1'],
+    ['band' => '5GHz', 'clients' => 4],
+    ['band' => '6GHz', 'clients' => 1, 'clients_6ghz_capable' => 1, 'clients_caps_known' => 1],
+    ['band' => '60GHz', 'clients' => 9],
+    'not a radio',
+]);
+check('pásma se sčítají po rádiích', [$wb['wifi_clients_24g'], $wb['wifi_clients_5g'], $wb['wifi_clients_6g']], [5, 4, 1]);
+check('podpora 6E na 2.4 GHz se sečte i z čísel v textu', [$wb['wifi_6e_capable_24g'], $wb['wifi_6e_known_24g']], [1, 4]);
+check('rádio bez údaje o podpoře nechá pásmo neznámé, ne nulové', [$wb['wifi_6e_capable_5g'], $wb['wifi_6e_known_5g']], [null, null]);
+$wb_bad = bk_wifi_band_totals([['band' => '2.4GHz', 'clients' => -1, 'clients_6ghz_capable' => 5, 'clients_caps_known' => 2]]);
+check('záporný počet ani víc schopných než známých se neuloží', [$wb_bad['wifi_clients_24g'], $wb_bad['wifi_6e_capable_24g'], $wb_bad['wifi_6e_known_24g']], [null, null, null]);
+check('bez rádií je všechno neznámé', array_values(array_unique(array_values(bk_wifi_band_totals(null)), SORT_REGULAR)), [null]);
+check('pravdivostní hodnota ani desetinné číslo nejsou počet', [bk_wifi_count(true), bk_wifi_count(2.5), bk_wifi_count('7')], [null, null, 7]);
+check('počet nad 4096 je chyba parseru, ne dav', [bk_wifi_count(4096), bk_wifi_count(4097), bk_wifi_count('99999')], [4096, null, null]);
+
+// Agent 0.1.7: the air per band, over access-point radios only.
+$ap = fn (array $r) => $r + ['mode' => 'ap', 'band' => '5GHz'];
+$air = bk_wifi_band_totals([
+    $ap(['radio' => 'a', 'noise' => -95, 'busy_pct' => 12.5, 'busy_other_pct' => 2.0]),
+    $ap(['radio' => 'b', 'noise' => -80, 'busy_pct' => 60.0, 'busy_other_pct' => null]),
+    $ap(['radio' => 'c', 'band' => '2.4GHz', 'noise' => null, 'busy_pct' => null]),
+]);
+check('šum je nejhorší rádio pásma, ne průměr', [$air['wifi_noise_5g'], $air['wifi_noise_24g'], $air['wifi_noise_6g']], [-80.0, null, null]);
+check('cizí provoz se bere z nejvytíženějšího rádia', [$air['wifi_busy_5g'], $air['wifi_busy_other_5g'], $air['wifi_busy_24g']], [60.0, null, null]);
+$vaps = bk_wifi_band_totals([
+    $ap(['radio' => 'phy0-ap0', 'phy' => 'phy0', 'frequency_mhz' => 5180, 'noise' => -92, 'busy_pct' => 30.0, 'busy_other_pct' => null, 'clients_weak' => 1]),
+    $ap(['radio' => 'phy0-ap1', 'phy' => 'phy0', 'frequency_mhz' => 5180, 'noise' => -92, 'busy_pct' => 30.0, 'busy_other_pct' => 11.0, 'clients_weak' => 2]),
+]);
+check('dvě VAP jednoho rádia jsou jedno měření', [$vaps['wifi_noise_5g'], $vaps['wifi_busy_5g'], $vaps['wifi_busy_other_5g'], $vaps['wifi_weak_clients']], [-92.0, 30.0, 11.0, 3]);
+
+$unserved = fn (array $radios) => bk_wifi_band_totals($radios)['wifi_6e_unserved'];
+$sta = fn (int $clients, ?int $known, ?int $capable, string $band = '5GHz') => ['mode' => 'ap', 'band' => $band, 'clients' => $clients, 'clients_caps_known' => $known, 'clients_6ghz_capable' => $capable];
+check('wifi_6e_unserved: 2 schopní klienti bez 6GHz rádia → 1, s 6GHz rádiem → 0, bez hostapd → null',
+    [$unserved([$sta(4, 4, 2)]), $unserved([$sta(4, 4, 2), $sta(1, null, null, '6GHz')]), $unserved([$sta(4, null, null)])], [1, 0, null]);
+check('wifi_6e_unserved: 1 schopný + 2 neznámí → null, ne 0', $unserved([$sta(5, 3, 1)]), null);
+check('1 schopný + 0 neznámých → 0', $unserved([$sta(3, 3, 1)]), 0);
+check('2 schopní + 3 neznámí → 1', $unserved([$sta(3, 2, 1, '2.4GHz'), $sta(4, 2, 1)]), 1);
+check('rádio bez počtu klientů → null, pokud nejsou 2 schopní', [
+    $unserved([$sta(3, 3, 1), ['mode' => 'ap', 'band' => '2.4GHz', 'clients' => null, 'clients_caps_known' => 2, 'clients_6ghz_capable' => 0]]),
+    $unserved([$sta(3, 3, 1), ['mode' => 'ap', 'band' => '2.4GHz', 'clients' => null, 'clients_caps_known' => 2, 'clients_6ghz_capable' => 1]]),
+], [null, 1]);
+$uplink = bk_wifi_band_totals([
+    ['mode' => 'client', 'band' => '5GHz', 'clients' => 1, 'noise' => -60, 'busy_pct' => 90.0, 'clients_weak' => 1, 'clients_caps_known' => 1, 'clients_6ghz_capable' => 1, 'clients_akm_known' => 1, 'clients_wpa2' => 1],
+    ['mode' => 'mesh', 'band' => '6GHz', 'clients' => 2, 'noise' => -70],
+    $ap(['noise' => -90, 'clients' => 2, 'clients_weak' => 0, 'clients_caps_known' => 2, 'clients_6ghz_capable' => 2, 'clients_akm_known' => 2, 'clients_wpa2' => 0]),
+]);
+// The mesh link on 6 GHz is not a 6 GHz network for the clients: still unserved.
+check('client/mesh rozhraní se nepočítá', [$uplink['wifi_noise_5g'], $uplink['wifi_noise_6g'], $uplink['wifi_busy_5g'], $uplink['wifi_weak_clients'], $uplink['wifi_wpa2_clients'], $uplink['wifi_6e_unserved']], [-90.0, null, null, 0, 0, 1]);
+$silent = bk_wifi_band_totals([$ap(['noise' => null, 'busy_pct' => null, 'clients_weak' => null, 'clients_wpa2' => null, 'clients_akm_known' => null]), ['radio' => 'phy3-ap0', 'band' => null, 'mode' => null]]);
+check('samé null zůstane null', array_values(array_unique(array_values($silent), SORT_REGULAR)), [null]);
+$wpa = bk_wifi_band_totals([
+    $ap(['clients_akm_known' => 3, 'clients_wpa2' => 2]), $ap(['clients_akm_known' => null, 'clients_wpa2' => 5]),
+    $ap(['band' => '2.4GHz', 'clients_opclass_known' => 4, 'clients_5ghz_capable' => 3]), $ap(['clients_opclass_known' => 2, 'clients_5ghz_capable' => 2]),
+    $ap(['band' => '2.4GHz', 'clients_opclass_known' => null, 'clients_5ghz_capable' => 7]),
+]);
+check('WPA2 klienti jen z rádií, která zabezpečení znají; podpora 5 GHz jen z 2.4GHz rádií', [$wpa['wifi_wpa2_clients'], $wpa['wifi_5g_capable_24g']], [2, 3]);
+check('starší agent bez klíče mode je přístupový bod', bk_wifi_band_totals([['band' => '5GHz', 'channel' => 36, 'noise' => -91, 'busy_pct' => 8]])['wifi_noise_5g'], -91.0);
+
+check('bez archivovaných monitorů se nic nefiltruje', bk_exclude_ids_sql([], 'id'), ['1=1', []]);
+check('archivované id se vynechá, jednou a jen kladné', bk_exclude_ids_sql([5, '7', 5, 0, -2], 'm.id'), ['m.id NOT IN (?,?)', [5, 7]]);
+$bk_bad_column = false;
+try {
+    bk_exclude_ids_sql([1], 'id; DROP TABLE monitors');
+} catch (InvalidArgumentException $e) {
+    $bk_bad_column = true;
+}
+check_true('neplatný název sloupce se odmítne', $bk_bad_column);
+check('router má agenta routeru', bk_agent_label('openwrt'), 'Agent routeru');
+check('server má agenta serveru', bk_agent_label('vps'), 'Agent serveru');
+check_false('rada u routeru nemluví o VPS', str_contains(bk_agent_silence_hint('OpenWrt'), 'VPS'));
+
+// --- bk_sanitize_wifi_radios / bk_wifi_radio_profile -------------------------
+// The radio list used to be stored exactly as sent. Rules read it now, so a
+// value out of range must become "not measured" - never the edge of the range.
+$band_of = fn ($freq) => bk_sanitize_wifi_radios([['radio' => 'w0', 'frequency_mhz' => $freq, 'band' => '5GHz']])[0]['band'];
+check('pásmo se odvodí z frekvence (2412, 5180, 5925, 5955, 7125, 0)',
+    array_map($band_of, [2412, 5180, 5925, 5955, 7125, 0]), ['2.4GHz', '5GHz', '6GHz', '6GHz', '6GHz', null]);
+$old_agent = bk_sanitize_wifi_radios([
+    ['radio' => 'wlan0', 'band' => '2.4GHz', 'channel' => null, 'clients' => null],
+    ['radio' => 'wlan1', 'band' => '5GHz', 'channel' => 36, 'clients' => 3],
+]);
+check('vypnuté rádio agenta 0.1.6 nemá pásmo 2.4GHz', [$old_agent[0]['band'], $old_agent[1]['band']], [null, '5GHz']);
+$edge = bk_sanitize_wifi_radios([['radio' => 'w0', 'frequency_mhz' => 5180, 'busy_pct' => 101, 'noise' => 0, 'tx_power' => 41,
+    'signal_min' => 0, 'channel' => 0, 'bitrate_tx_avg_mbps' => 0, 'clients' => 5000]])[0];
+check('hodnota mimo rozsah je null, ne okraj rozsahu (busy 101, noise 0)',
+    [$edge['busy_pct'], $edge['noise'], $edge['tx_power'], $edge['signal_min'], $edge['channel'], $edge['bitrate_tx_avg_mbps'], $edge['clients']],
+    [null, null, null, null, null, null, null]);
+$inside = bk_sanitize_wifi_radios([['radio' => 'w0', 'frequency_mhz' => 5180, 'busy_pct' => 100, 'noise' => -20, 'tx_power' => 0, 'signal_min' => -1]])[0];
+check('okraj rozsahu sám je platné měření', [$inside['busy_pct'], $inside['noise'], $inside['tx_power'], $inside['signal_min']], [100.0, -20, 0, -1]);
+$leaky = bk_sanitize_wifi_radios([['radio' => 'w0', 'bssid' => 'x', 'mac' => 'y', 'hwmodes' => ['ax'], 'ssid' => "Do\x07ma"]])[0];
+check('neznámý klíč (bssid, hwmodes) se zahodí', array_values(array_intersect(array_keys($leaky), ['bssid', 'mac', 'hwmodes'])), []);
+check('řídicí znaky z SSID zmizí', $leaky['ssid'], 'Doma');
+$over = bk_sanitize_wifi_radios([['radio' => 'w0', 'clients_6ghz_capable' => 3, 'clients_caps_known' => 2,
+    'clients_5ghz_capable' => 1, 'clients_opclass_known' => 4]])[0];
+check('capable > known vynuluje obojí', [$over['clients_6ghz_capable'], $over['clients_caps_known'], $over['clients_5ghz_capable'], $over['clients_opclass_known']], [null, null, 1, 4]);
+$akm = bk_sanitize_wifi_radios([['radio' => 'w0', 'clients_akm_known' => 3, 'clients_wpa2' => 2, 'clients_wpa3' => 2, 'clients_8021x' => 0]])[0];
+check('víc klíčů než stanic se známým zabezpečením vynuluje všechny čtyři', [$akm['clients_akm_known'], $akm['clients_wpa2'], $akm['clients_wpa3'], $akm['clients_8021x']], [null, null, null, null]);
+$gen = ['legacy' => 0, 'wifi4' => 1, 'wifi5' => 1, 'wifi6' => 2, 'wifi7' => 1];
+$ubus = bk_sanitize_wifi_radios([['radio' => 'w0', 'clients_gen' => ['source' => 'ubus'] + $gen], ['radio' => 'w1', 'clients_gen' => ['source' => 'hostapd_cli'] + $gen],
+    ['radio' => 'w2', 'clients_gen' => ['source' => 'guess'] + $gen]]);
+check('zdroj ubus vynutí wifi7 = null', [$ubus[0]['clients_gen']['wifi7'], $ubus[0]['clients_gen']['wifi6'], $ubus[1]['clients_gen']['wifi7'], $ubus[2]['clients_gen']], [null, 2, 1, null]);
+$many = [];
+for ($i = 0; $i < 17; $i++) {
+    $many[] = ['radio' => "wlan{$i}"];
+}
+check('17. rádio se zahodí', count(bk_sanitize_wifi_radios($many)), 16);
+check('rádio se jménem mimo vzor se zahodí', array_column(bk_sanitize_wifi_radios([['radio' => 'wlan0; rm'], ['radio' => 'phy0-ap0'], 'x', ['ssid' => 'bez jména']]), 'radio'), ['phy0-ap0']);
+check('co není seznam, není hlášení rádií', [bk_sanitize_wifi_radios(null), bk_sanitize_wifi_radios('x'), bk_sanitize_wifi_radios([])], [null, null, []]);
+// The app tells an older agent (no key) from "the router could not tell"
+// (key = null): the sanitizer must not invent the key.
+$sent = bk_sanitize_wifi_radios([['radio' => 'wlan0', 'band' => '5GHz', 'channel' => 36, 'clients' => 2, 'clients_gen' => null]])[0];
+check('klíč, který agent neposlal, nevznikne; poslaný null zůstane', [array_key_exists('clients_akm_known', $sent), array_key_exists('clients_gen', $sent), $sent['clients_gen']], [false, true, null]);
+$enc = bk_sanitize_wifi_radios([['radio' => 'w0', 'encryption' => 'wpa_wpa2', 'mode' => 'ap', 'busy_state' => 'measured', 'weakest_gen' => 4, 'phy_has_6ghz' => false],
+    ['radio' => 'w1', 'encryption' => 'wpa9', 'mode' => 'Master', 'busy_state' => 'ok', 'weakest_gen' => 3, 'phy_has_6ghz' => 0]]);
+check('sanitizer hodnotu wpa_wpa2 propustí, neznámou hodnotu šifrování dá null',
+    [$enc[0]['encryption'], $enc[1]['encryption'], $enc[1]['mode'], $enc[1]['busy_state'], $enc[1]['weakest_gen'], $enc[0]['phy_has_6ghz'], $enc[1]['phy_has_6ghz']],
+    ['wpa_wpa2', null, null, null, null, false, null]);
+$foreign = bk_sanitize_wifi_radios([['radio' => 'w0', 'busy_pct' => 10, 'busy_other_pct' => 12], ['radio' => 'w1', 'busy_pct' => null, 'busy_other_pct' => 5],
+    ['radio' => 'w2', 'busy_pct' => 10.5, 'busy_other_pct' => 10.5]]);
+check('cizí provoz větší než celé vytížení, nebo bez něj, není měření', [$foreign[0]['busy_other_pct'], $foreign[1]['busy_other_pct'], $foreign[2]['busy_other_pct']], [null, null, 10.5]);
+$modes = bk_sanitize_wifi_radios([['radio' => 'w0', 'htmode' => 'HE80', 'htmodes_supported' => ['HT20', 'HT20', 'HT40+', 'bogus', 7, 'HE80'], 'phy' => 'phy0'],
+    ['radio' => 'w1', 'htmode' => 'AX80', 'htmodes_supported' => 'HE80', 'phy' => 'radio0']]);
+check('režimy mimo vzor se ze seznamu vyřadí a opakované sloučí', [$modes[0]['htmodes_supported'], $modes[1]['htmode'], $modes[1]['htmodes_supported'], $modes[1]['phy']], [['HT20', 'HE80'], null, null, null]);
+
+$profile = fn (array $r) => array_values(bk_wifi_radio_profile($r));
+check('HE80 → 6/80', array_slice($profile(['htmode' => 'HE80']), 0, 2), [6, 80]);
+check('VHT80+80 → 5/160', array_slice($profile(['htmode' => 'VHT80+80']), 0, 2), [5, 160]);
+check('NOHT → 0/20', array_slice($profile(['htmode' => 'NOHT']), 0, 2), [0, 20]);
+check('neznámý režim nemá generaci ani šířku', array_slice($profile(['htmode' => null]), 0, 2), [null, null]);
+$phy_modes = ['HT20', 'HT40', 'VHT20', 'VHT40', 'VHT80', 'VHT160', 'HE20', 'HE40', 'HE80', 'HE160'];
+check('podporovaná generace se omezí pásmem (2,4 GHz bez VHT, 6 GHz bez HT/VHT)', [
+    array_slice($profile(['band' => '2.4GHz', 'htmodes_supported' => ['HT20', 'HT40', 'VHT20', 'VHT80']]), 2),
+    array_slice($profile(['band' => '2.4GHz', 'htmodes_supported' => $phy_modes]), 2),
+    array_slice($profile(['band' => '5GHz', 'htmodes_supported' => $phy_modes]), 2),
+    array_slice($profile(['band' => '6GHz', 'htmodes_supported' => ['HT20', 'VHT80']]), 2),
+    array_slice($profile(['band' => '6GHz', 'htmodes_supported' => ['HT40', 'HE160', 'EHT320']]), 2),
+], [[4, 40], [6, 40], [6, 160], [null, null], [7, 320]]);
+check('bez pásma není podporovaná generace', array_slice($profile(['htmode' => 'HE80', 'htmodes_supported' => $phy_modes]), 2), [null, null]);
+
+// --- bk_sanitize_storage_disks / bk_disk_key / bk_sanitize_agent_tools --------
+$sd_now = 1789553300;
+$sd_smart = ['state' => 'ok', 'checked_at' => $sd_now - 97, 'temperature_c' => 67, 'power_on_hours' => 24750, 'passed' => true,
+    'serial_number' => 'S3CR3T', 'wwn' => '5 0026b7 000000000', 'model' => 'KINGSTON SUV500MS120G'];
+$sd_disk = ['name' => 'sda', 'transport' => 'sata', 'port' => 'ata1', 'model' => 'KINGSTON SUV500M', 'size_bytes' => 120034123776,
+    'rotational' => false, 'removable' => false, 'serial_number' => 'S3CR3T', 'wwn' => 'x', 'eui64' => 'y', 'cid' => 'z',
+    'partitions' => [['name' => 'sda1', 'size_bytes' => 120033075200, 'mount' => '/', 'fstype' => 'btrfs', 'used_pct' => 19, 'uuid' => 'u']],
+    'emmc' => null, 'smart' => $sd_smart];
+$sd = bk_sanitize_storage_disks([$sd_disk], $sd_now);
+check('klíče serial_number, wwn, eui64, cid se zahodí na disku i ve smart',
+    [preg_match('/S3CR3T|0026b7|serial|wwn|eui|"cid"|uuid/i', (string)json_encode($sd)), $sd[0]['smart']['model'], $sd[0]['partitions'][0]['mount']],
+    [0, 'KINGSTON SUV500MS120G', '/']);
+$sd_temp = fn ($t) => bk_sanitize_storage_disks([['smart' => ['temperature_c' => $t] + $sd_smart] + $sd_disk], $sd_now)[0]['smart']['temperature_c'];
+check('teplota 0 a 300 → null', [$sd_temp(0), $sd_temp(300), $sd_temp(-5), $sd_temp(67), $sd_temp(125)], [null, null, null, 67, 125]);
+$sd_emmc = bk_sanitize_storage_disks([['name' => 'mmcblk0', 'transport' => 'emmc', 'emmc' => ['life_a' => 12, 'life_b' => 2, 'pre_eol' => 0, 'cid' => 'abc']]], $sd_now)[0];
+check('eMMC life 12 → null', $sd_emmc['emmc'], ['life_a' => null, 'life_b' => 2, 'pre_eol' => null]);
+$sd_state = fn ($smart) => bk_sanitize_storage_disks([['smart' => $smart] + $sd_disk], $sd_now)[0]['smart']['state'];
+check('stav mimo výčet → error', [$sd_state(['state' => 'fine']), $sd_state(null), $sd_state(['state' => 'standby'])], ['error', 'error', 'standby']);
+$sd_many = [];
+for ($i = 0; $i < 9; $i++) {
+    $sd_many[] = ['name' => 'sd' . chr(97 + $i), 'partitions' => array_map(fn ($n) => ['name' => 'sd' . chr(97 + $i) . $n], range(1, 17))];
+}
+$sd_capped = bk_sanitize_storage_disks($sd_many, $sd_now);
+check('9. disk a 17. oddíl se zahodí', [count($sd_capped), count($sd_capped[0]['partitions'])], [8, 16]);
+check('loop, mtdblock a zram nejsou disky', array_column(bk_sanitize_storage_disks([['name' => 'loop0'], ['name' => 'mtdblock0'], ['name' => 'zram0'], ['name' => 'mmcblk0boot0'], ['name' => 'nvme0n1'], ['name' => 'sda']], $sd_now), 'name'), ['nvme0n1', 'sda']);
+$sd_old = bk_sanitize_storage_disks([['smart' => ['checked_at' => $sd_now - 401 * 86400] + $sd_smart] + $sd_disk, ['name' => 'sdb', 'smart' => ['checked_at' => $sd_now + 2 * 86400] + $sd_smart]], $sd_now);
+check('čas čtení SMART starší 400 dní nebo z budoucnosti není čas čtení', [$sd_old[0]['smart']['checked_at'], $sd_old[1]['smart']['checked_at'], $sd[0]['smart']['checked_at']], [null, null, $sd_now - 97]);
+check('neznámý transport je other, neplatný port a přípojný bod null', (function () use ($sd_disk, $sd_now) {
+    $d = bk_sanitize_storage_disks([['transport' => 'scsi', 'port' => 'ata 1;', 'partitions' => [['name' => 'sda1', 'mount' => 'srv', 'fstype' => 'BTRFS!', 'used_pct' => 101]]] + $sd_disk], $sd_now)[0];
+    return [$d['transport'], $d['port'], $d['partitions'][0]['mount'], $d['partitions'][0]['fstype'], $d['partitions'][0]['used_pct']];
+})(), ['other', null, null, null, null]);
+check('bajty zapsané za život disku se nezaokrouhlí ani nad 2^53', bk_sanitize_storage_disks([['smart' => ['written_bytes' => 9007199254740993] + $sd_smart] + $sd_disk], $sd_now)[0]['smart']['written_bytes'], 9007199254740993);
+check('co není seznam, není hlášení disků; prázdný seznam = žádný disk', [bk_sanitize_storage_disks(null, $sd_now), bk_sanitize_storage_disks([], $sd_now)], [null, []]);
+
+$sd_pending = bk_sanitize_storage_disks([['smart' => ['state' => 'pending']] + $sd_disk], $sd_now)[0];
+check('stejný před i po prvním čtení SMART', [$sd_pending['key'], strlen($sd[0]['key'])], [$sd[0]['key'], 16]);
+$sd_key = fn (array $change) => bk_sanitize_storage_disks([$change + $sd_disk], $sd_now)[0]['key'];
+check_true('jiný port nebo velikost → jiný klíč', count(array_unique([$sd[0]['key'], $sd_key(['port' => 'ata2']), $sd_key(['size_bytes' => 240057409536]), $sd_key(['transport' => 'usb'])])) === 4);
+
+$tools = bk_sanitize_agent_tools(['smartctl' => true, 'smart_drivedb' => 1, 'hostapd_cli' => 'yes', 'iw' => false, 'ethtool' => false,
+    'pkg_manager' => 'dpkg', 'smart_probe_age_s' => 97, 'smart_probe_running_s' => -1, 'shell' => '/bin/ash']);
+check('nástroje routeru: jen přísné true/false, neznámý správce balíčků a záporný čas jsou null',
+    $tools, ['smartctl' => true, 'smart_drivedb' => null, 'hostapd_cli' => null, 'iw' => false, 'librespeed_cli' => null, 'ethtool' => false, 'tc' => null,
+        'pkg_manager' => null, 'smart_probe_age_s' => 97, 'smart_probe_running_s' => null]);
+check('starší agent nástroje neposílá: null, ne samá false', bk_sanitize_agent_tools(null), null);
+
+// --- bk_counter_step / bk_wan_counter_steps: WAN error and drop counters -------
+// Stored as STEPS (new events per report). A reset is unknowable, not "the
+// value since boot": that number is link bring-up noise and would feed a rule.
+check('přírůstek je rozdíl proti minulému hlášení', [bk_counter_step(7, 12, true), bk_counter_step(7, 7, true)], [5, 0]);
+check('null na kterékoli straně zůstává null', [bk_counter_step(null, 5, true), bk_counter_step(5, null, true), bk_counter_step(null, null, true)], [null, null, null]);
+check('restart routeru: přírůstek je neznámý, ne hodnota od startu', bk_counter_step(120, 4, true), null);
+
+$cnt = fn (int $errors, int $drops = 0, ?int $flaps = 0, ?int $ct = 0) => ['wan_rx_errors' => $errors, 'wan_tx_errors' => 0,
+    'wan_rx_dropped' => $drops, 'wan_tx_dropped' => 0, 'conntrack_drop' => $ct, 'wan_carrier_down_count' => $flaps, 'wan_rx_ring_drops' => null];
+$first = bk_wan_counter_steps(null, $cnt(7, 120, 3, 1), 'eth2', 5000, null);
+check('první hlášení = žádný přírůstek', array_values(array_unique(array_values($first['steps']), SORT_REGULAR)), [null]);
+$second = bk_wan_counter_steps($first['state'], $cnt(9, 125, 4, 1), 'eth2', 5060, null);
+check('druhé hlášení: chyby, zahození, výpadky linky a odmítnutá spojení jsou přírůstky', $second['steps'],
+    ['wan_errors' => 2, 'wan_drops' => 5, 'wan_ring_drops' => null, 'wan_link_flaps' => 1, 'conntrack_drops' => 0,
+        'wan_rx_overrun' => null, 'wan_rx_discard' => null, 'wan_crc_errors' => null, 'wan_mac_rx_errors' => null,
+        'wan_refill_errors' => null, 'wan_oversize' => null]);
+$rebooted = bk_wan_counter_steps($second['state'], $cnt(40, 300, 9, 5), 'eth2', 90, null);
+check('restart, po kterém čítač stihl přerůst starou hodnotu, se pozná podle uptime', array_values(array_unique(array_values($rebooted['steps']), SORT_REGULAR)), [null]);
+check('po restartu se počítá od nové hodnoty', bk_wan_counter_steps($rebooted['state'], $cnt(41, 300, 9, 5), 'eth2', 150, null)['steps']['wan_errors'], 1);
+$moved = bk_wan_counter_steps($second['state'], $cnt(10, 126, 4, 2), 'eth0', 5120, null);
+check('jiné WAN zařízení = žádný přírůstek', array_values(array_unique(array_values($moved['steps']), SORT_REGULAR)), [null]);
+check('bez známého uptime nejde restart vyloučit: žádný přírůstek', bk_wan_counter_steps($second['state'], $cnt(10), 'eth2', null, null)['steps']['wan_errors'], null);
+$one_side = bk_wan_counter_steps($second['state'], ['wan_tx_errors' => null] + $cnt(10, 126, 4, 1), 'eth2', 5120, null);
+check('součet směrů je známý, jen když jsou známé oba', [$one_side['steps']['wan_errors'], $one_side['steps']['wan_drops']], [null, 1]);
+$gap = bk_wan_counter_steps($second['state'], array_fill_keys(array_keys($cnt(0)), null), 'eth2', 5120, null);
+$after_gap = bk_wan_counter_steps($gap['state'], $cnt(12, 125, 4, 1), 'eth2', 5180, null);
+check('minuta bez čtení čítačů nic neztratí: další přírůstek ji překlene', [$gap['steps']['wan_errors'], $after_gap['steps']['wan_errors']], [null, 3]);
+check('agent, který čítače nečte, žádný stav neukládá', bk_wan_counter_steps(null, [], null, 300, null)['state'], null);
+
+// Ring drops are read once an hour (ethtool -S): a step only with a new reading.
+$ring = fn ($prev, ?int $drops, int $uptime, int $checked) => bk_wan_counter_steps($prev, ['wan_rx_ring_drops' => $drops] + $cnt(0), 'eth2', $uptime, $checked);
+$r1 = $ring(null, 100, 1000, 1789550000);
+$r2 = $ring($r1['state'], 100, 1060, 1789550000);
+$r3 = $ring($r2['state'], 140, 4600, 1789553600);
+$r4 = $ring($r3['state'], null, 8200, 1789557200);
+$r5 = $ring($r4['state'], 150, 11800, 1789560800);
+check('zahozené rámce portu: přírůstek jen v hlášení s novým čtením, jinak null', [$r1['steps']['wan_ring_drops'], $r2['steps']['wan_ring_drops'], $r3['steps']['wan_ring_drops']], [null, null, 40]);
+check('čtení bez ethtool řetěz přeruší, nula z něj nevznikne', [$r4['steps']['wan_ring_drops'], $r5['steps']['wan_ring_drops']], [null, null]);
+// A reboot empties the router's hourly cache, so the first report after it
+// carries a fresh reading: no step against the value from before the reboot.
+$r_boot = $ring($r3['state'], 5, 60, 1789553700);
+check('restart mezi dvěma čteními: první čtení po něm nemá přírůstek, další ano',
+    [$r_boot['steps']['wan_ring_drops'], $ring($r_boot['state'], 900, 3660, 1789557300)['steps']['wan_ring_drops']], [null, 895]);
+
+// --- The WAN port's own counters (agent 0.1.13): hourly steps like the ring ----
+// They come from the same `ethtool -S` read, so the same gate applies: a step
+// only on the report with a NEW wan_path.checked_at. A name the driver does not
+// print is null and stays null; a measured 0 is a step of 0.
+$pc_cnt = ['wan_rx_errors' => 0, 'wan_tx_errors' => 0, 'wan_rx_dropped' => 0, 'wan_tx_dropped' => 0,
+    'conntrack_drop' => 0, 'wan_carrier_down_count' => 0];
+$pc_keys = ['wan_rx_overrun', 'wan_rx_discard', 'wan_crc_errors', 'wan_mac_rx_errors', 'wan_refill_errors', 'wan_oversize'];
+$pc = fn ($prev, array $port, int $uptime, int $checked) => bk_wan_counter_steps($prev, $port + $pc_cnt, 'eth2', $uptime, $checked);
+$pc_steps = fn (array $res): array => array_intersect_key($res['steps'], array_flip($pc_keys));
+$pc_a = ['wan_rx_ring_drops' => 7, 'rx_overrun' => 2, 'rx_discard' => 5, 'bad_crc_event' => 3, 'mac_receive_error' => 1,
+    'refill_errors' => 4, 'oversize_received' => 0];
+$pc1 = $pc(null, $pc_a, 1000, 1789550000);
+$pc2 = $pc($pc1['state'], $pc_a, 1060, 1789550000);
+$pc3 = $pc($pc2['state'], ['rx_overrun' => 12, 'rx_discard' => 5, 'bad_crc_event' => 3, 'mac_receive_error' => 1,
+    'refill_errors' => 9, 'oversize_received' => 0, 'wan_rx_ring_drops' => 17], 4600, 1789553600);
+check('čítače portu: první čtení nemá přírůstek, minuta beze změny času také ne',
+    [array_unique(array_values($pc_steps($pc1)), SORT_REGULAR), array_unique(array_values($pc_steps($pc2)), SORT_REGULAR)], [[null], [null]]);
+check('čítače portu: nové hodinové čtení dá přírůstek každého, změřená nula zůstane nulou',
+    $pc_steps($pc3), ['wan_rx_overrun' => 10, 'wan_rx_discard' => 0, 'wan_crc_errors' => 0, 'wan_mac_rx_errors' => 0,
+        'wan_refill_errors' => 5, 'wan_oversize' => 0]);
+check('čítače portu: prstenec počítá dál stejně jako dřív', $pc3['steps']['wan_ring_drops'], 10);
+// A driver that prints only the two ring counters: the other four are unknown.
+$pc4 = $pc($pc3['state'], ['rx_overrun' => 13, 'rx_discard' => 6, 'wan_rx_ring_drops' => 19], 8200, 1789557200);
+check('čítače portu: název, který ovladač nevypíše, je null, ne nula',
+    $pc_steps($pc4), ['wan_rx_overrun' => 1, 'wan_rx_discard' => 1, 'wan_crc_errors' => null, 'wan_mac_rx_errors' => null,
+        'wan_refill_errors' => null, 'wan_oversize' => null]);
+check('čítače portu: po chybějícím čtení se řetěz obnoví až dalším čtením',
+    $pc_steps($pc($pc4['state'], $pc_a + ['bad_crc_event' => 3], 11800, 1789560800))['wan_crc_errors'], null);
+check('čítače portu: pokles (restart ovladače) není přírůstek',
+    $pc_steps($pc($pc3['state'], ['refill_errors' => 2] + $pc_a, 8200, 1789557200))['wan_refill_errors'], null);
+// A state saved by the server before this release knows only the ring: its
+// first reading with the new counters starts them, it books no total.
+$pc_old = $pc1['state'];
+foreach (['rx_overrun', 'rx_discard', 'bad_crc_event', 'mac_receive_error', 'refill_errors', 'oversize_received'] as $pc_k) {
+    unset($pc_old[$pc_k]);
+}
+$pc5 = $pc($pc_old, ['wan_rx_ring_drops' => 9] + $pc_a, 4600, 1789553600);
+check('čítače portu: stav z doby před nimi dá první přírůstek null, prstenec pokračuje',
+    [array_unique(array_values($pc_steps($pc5)), SORT_REGULAR), $pc5['steps']['wan_ring_drops']], [[null], 2]);
+
+// --- bk_sanitize_wan_path ------------------------------------------------------
+$wp = bk_sanitize_wan_path(['checked_at' => 1789553100, 'flow_offloading' => true, 'flow_offloading_hw' => 'false', 'flowtable_active' => 1,
+    'packet_steering' => 'unset', 'packet_steering_active' => true, 'wan_rps_mask' => '3', 'wan_threaded_napi' => false, 'wan_rx_ring_drops' => -1,
+    'sqm' => [['iface' => 'eth2', 'download_kbps' => 0, 'upload_kbps' => 900000, 'egress_dropped' => null, 'ingress_dropped' => 12, 'script' => 'x'], ['iface' => 'eth2; reboot'], 'x'],
+    'lan_port_max_mbit' => 1000, 'lan_port_cap_mbit' => 0, 'lan_conduits' => [['dev' => 'eth1', 'mbit' => 1000, 'mac' => 'x'], ['dev' => null]], 'gateway' => 'x']);
+check('cesta WAN: přísné true/false, hodnota mimo rozsah null, neznámé klíče pryč',
+    [$wp['flow_offloading'], $wp['flow_offloading_hw'], $wp['flowtable_active'], $wp['wan_rx_ring_drops'], $wp['lan_port_cap_mbit'], array_key_exists('gateway', $wp)],
+    [true, null, null, null, null, false]);
+check('nulová rychlost fronty SQM znamená neomezený směr, ne 0 kbit/s', $wp['sqm'],
+    [['iface' => 'eth2', 'download_kbps' => null, 'upload_kbps' => 900000, 'egress_dropped' => null, 'ingress_dropped' => 12]]);
+check('vedení LAN portů nese jen zařízení a rychlost', $wp['lan_conduits'], [['dev' => 'eth1', 'mbit' => 1000]]);
+$wp_null = bk_sanitize_wan_path(['sqm' => null, 'lan_conduits' => 'x']);
+check('sqm null (nešlo ověřit) se nezmění na prázdný seznam (ověřeno, žádná fronta)', [$wp_null['sqm'], bk_sanitize_wan_path(['sqm' => []])['sqm'], $wp_null['lan_conduits']], [null, [], null]);
+check('starší agent cestu WAN neposílá', bk_sanitize_wan_path(null), null);
+
+// Agent 0.1.13: the port's own counters and the SFP module's readings.
+$wp13 = bk_sanitize_wan_path(['rx_overrun' => 2, 'rx_discard' => '5', 'bad_crc_event' => 0, 'mac_receive_error' => -1,
+    'refill_errors' => 4.5, 'oversize_received' => null, 'sfp_temp_mc' => 49000, 'sfp_temp_max_mc' => 70000,
+    'sfp_temp_crit_mc' => 200001, 'sfp_rx_power_uw' => 350, 'sfp_rx_power_min_uw' => 100001, 'sfp_rx_power_lcrit_uw' => 'x',
+    'sfp_phy_hwmon' => 'true', 'sfp_serial' => 'ABC123']);
+check('čítače portu: celé číslo i jako text, záporné a desetinné null, změřená nula zůstane',
+    [$wp13['rx_overrun'], $wp13['rx_discard'], $wp13['bad_crc_event'], $wp13['mac_receive_error'], $wp13['refill_errors'], $wp13['oversize_received']],
+    [2, 5, 0, null, null, null]);
+check('modul SFP: m°C a µW v rozsahu, mimo něj null; příznak PHY jen přísný bool; sériové číslo pryč',
+    [$wp13['sfp_temp_mc'], $wp13['sfp_temp_max_mc'], $wp13['sfp_temp_crit_mc'], $wp13['sfp_rx_power_uw'],
+        $wp13['sfp_rx_power_min_uw'], $wp13['sfp_rx_power_lcrit_uw'], $wp13['sfp_phy_hwmon'], array_key_exists('sfp_serial', $wp13)],
+    [49000, 70000, null, 350, null, null, null, false]);
+check('modul SFP: záporná teplota je měření a false u PHY zůstane false',
+    [bk_sanitize_wan_path(['sfp_temp_mc' => -5000, 'sfp_phy_hwmon' => false])['sfp_temp_mc'], bk_sanitize_wan_path(['sfp_phy_hwmon' => false])['sfp_phy_hwmon']],
+    [-5000, false]);
+
+// --- bk_sanitize_lan_ports -----------------------------------------------------
+$lp = bk_sanitize_lan_ports(['bridge' => 'br-lan', 'clients_total' => 6, 'mac' => 'x',
+    'ports' => [
+        ['name' => 'lan0', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full', 'max_mbit' => 1000, 'partner_max_mbit' => 1000, 'clients' => 3, 'mac' => 'x'],
+        ['name' => 'lan1', 'link' => true, 'speed_mbit' => 100, 'duplex' => 'full', 'max_mbit' => 1000, 'partner_max_mbit' => 100, 'clients' => 0],
+        // A port with no carrier that still carries a rate: the agent does
+        // not send this, a broken one might - and a rate on a dead port
+        // reads like a measurement of a live one.
+        ['name' => 'lan2', 'link' => false, 'speed_mbit' => 1000, 'duplex' => 'full', 'max_mbit' => 1000, 'partner_max_mbit' => 1000, 'clients' => 0],
+        ['name' => 'lan3', 'link' => null, 'speed_mbit' => 'fast', 'duplex' => 'plný', 'max_mbit' => 0, 'partner_max_mbit' => 2000000, 'clients' => 9999],
+        ['name' => 'lan4; reboot', 'link' => true],
+        ['link' => true],
+        'lan5',
+    ],
+    'conduits' => [['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full'], ['dev' => null], 'x']]);
+check('LAN porty: jen známé klíče, jméno musí vypadat jako síťové zařízení',
+    [array_column($lp['ports'], 'name'), array_key_exists('mac', $lp), array_key_exists('mac', $lp['ports'][0])],
+    [['lan0', 'lan1', 'lan2', 'lan3'], false, false]);
+check('LAN port bez linku nemá vyjednanou rychlost, duplex ani protistranu',
+    [$lp['ports'][2]['speed_mbit'], $lp['ports'][2]['duplex'], $lp['ports'][2]['partner_max_mbit']], [null, null, null]);
+check('LAN port: nečitelná hodnota je null, ne dohad; nula klientů je měření',
+    [$lp['ports'][3]['speed_mbit'], $lp['ports'][3]['duplex'], $lp['ports'][3]['max_mbit'],
+        $lp['ports'][3]['partner_max_mbit'], $lp['ports'][3]['clients'], $lp['ports'][1]['clients']],
+    [null, null, null, null, null, 0]);
+check('LAN porty: vedení ke CPU nese jen zařízení, link, rychlost a duplex',
+    [$lp['conduits'], $lp['bridge'], $lp['clients_total']],
+    [[['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full']], 'br-lan', 6]);
+check('starší agent přepínač neposílá a router, který se nemohl podívat, hlásí null',
+    [bk_sanitize_lan_ports(null), bk_sanitize_lan_ports(['bridge' => 'br-lan', 'ports' => []]),
+        bk_sanitize_lan_ports(['bridge' => 'br-lan', 'conduits' => [], 'clients_total' => 0])],
+    [null, null, null]);
+// 16 ports is past any board the agent runs on; a longer list is malformed.
+$lp_many = bk_sanitize_lan_ports(['ports' => array_map(fn ($i) => ['name' => "lan{$i}", 'link' => false, 'clients' => 0], range(0, 39))]);
+check('LAN porty: seznam má strop a přepočítaný součet se nepodsouvá',
+    [count($lp_many['ports']), $lp_many['clients_total'], $lp_many['bridge'], $lp_many['conduits']], [16, null, null, []]);
+
+// --- bk_details_fit / bk_ingest_issue_add: nothing is dropped silently ----------
+$fit_small = bk_details_fit(['cpu' => 12.5, 'wifi_radios' => [['radio' => 'phy0-ap0']], 'details_dropped' => ['storage_disks']], 60000, ['fs_alerts']);
+check('hlášení, které se vejde, seznam zahozených klíčů vynuluje', [$fit_small['dropped'], json_decode($fit_small['json'], true)['details_dropped']], [[], []]);
+$fit_big = ['cpu' => 12.5, 'storage_disks' => array_fill(0, 300, str_repeat('d', 100)), 'wifi_radios' => array_fill(0, 200, str_repeat('r', 100)),
+    'interfaces' => array_fill(0, 50, 'eth0'), 'fs_alerts' => array_fill(0, 400, str_repeat('f', 100)), 'ingest_issues' => [['type' => 'x']], 'note' => str_repeat('n', 500)];
+$fit = bk_details_fit($fit_big, 60000, ['fs_alerts', 'ingest_issues']);
+$fit_kept = json_decode($fit['json'], true);
+// fs_alerts is the BIGGEST list here and survives anyway: shedding it would
+// hide exactly the alert the blob exists for. Unprotected lists go by size.
+check('při přetečení jdou největší nechráněné seznamy první a jejich jména se zapíšou', [$fit['dropped'], $fit_kept['details_dropped']], [['storage_disks', 'wifi_radios'], ['storage_disks', 'wifi_radios']]);
+check_true('při přetečení zůstane fs_alerts i ingest_issues', isset($fit_kept['fs_alerts'], $fit_kept['ingest_issues'], $fit_kept['cpu']) && strlen($fit['json']) <= 60000);
+$fit_str = bk_details_fit(['cpu' => 1, 'blob' => str_repeat('x', 900), 'list' => array_fill(0, 5, 'abcdefgh')], 300, []);
+check('když seznamy nestačí, jdou i dlouhé řetězce a skaláry zůstanou', [$fit_str['dropped'], json_decode($fit_str['json'], true)['cpu']], [['list', 'blob'], 1]);
+
+$issues = [];
+foreach (range(1, 7) as $n) {
+    $issues = bk_ingest_issue_add($issues, 'passthrough_key_limit', "key_{$n}");
+}
+check('problémů příjmu je nejvýš pět a nesou typ, klíč a velikost', [count($issues), $issues[0], bk_ingest_issue_add([], 'passthrough_too_large', 'big_list', 9000)[0]],
+    [5, ['type' => 'passthrough_key_limit', 'key' => 'key_1', 'bytes' => null], ['type' => 'passthrough_too_large', 'key' => 'big_list', 'bytes' => 9000]]);
+
+// --- bk_metric_column_map: the router metrics of releases 0.1.7 and 0.1.9 -----
+// A metric missing from the map is stored every minute and read by nobody;
+// a metric whose key is longer than metrics_daily.metric_key is rolled up into
+// a TRUNCATED key and its chart stays empty for 30 days before anyone notices.
+$reg = bk_metric_column_map();
+$reg_new = [
+    'wifi_noise_24g', 'wifi_noise_5g', 'wifi_noise_6g',
+    'wifi_busy_24g', 'wifi_busy_5g', 'wifi_busy_6g',
+    'wifi_busy_other_24g', 'wifi_busy_other_5g', 'wifi_busy_other_6g',
+    'wifi_weak_clients', 'wifi_wpa2_clients', 'wifi_6e_unserved', 'wifi_5g_capable_24g',
+    'cpu_core_max', 'cpu_core_max_softirq', 'wan_rx_mbps', 'wan_tx_mbps',
+    'wan_errors', 'wan_drops', 'wan_ring_drops', 'wan_link_flaps', 'conntrack_drops',
+    'agent_run_ms', 'clock_skew_s',
+    // Agent 0.1.9: the CPU time of the previous run.
+    'agent_prev_cpu_ms',
+    // Agent 0.1.13: the WAN port's own counters, hourly steps.
+    'wan_rx_overrun', 'wan_rx_discard', 'wan_crc_errors', 'wan_mac_rx_errors', 'wan_refill_errors', 'wan_oversize',
+];
+check('registr metrik: všech 31 metrik routeru v něm je', [count($reg_new), array_values(array_diff($reg_new, array_keys($reg)))], [31, []]);
+// schema.sql read as health.php and cron read it (db.php, bk_schema_parse).
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_schema_parse']);
+check('schéma: tabulky a sloupce v pořadí souboru, klíče, indexy ani omezení sloupci nejsou', bk_schema_parse(
+    "-- komentář\nCREATE TABLE IF NOT EXISTS `a` (\n  `id` INT AUTO_INCREMENT PRIMARY KEY,\n  `jmeno` VARCHAR(5) DEFAULT NULL, -- `x` uvnitř\n"
+    . "  KEY `idx_jmeno` (`jmeno`),\n  UNIQUE KEY `u` (`id`),\n  CONSTRAINT `fk` FOREIGN KEY (`id`) REFERENCES `b` (`id`)\n) ENGINE=InnoDB;\n\n"
+    . "CREATE TABLE IF NOT EXISTS `b` (\n  `id` INT\n) ENGINE=InnoDB;\nINSERT INTO `a` (`id`) VALUES (1);\n"),
+    ['a' => ['id', 'jmeno'], 'b' => ['id']]);
+check('schéma: text bez CREATE TABLE nedá žádnou tabulku', bk_schema_parse("SELECT 1;\n"), []);
+$schema_tables = bk_schema_parse((string)file_get_contents(__DIR__ . '/../schema.sql'));
+check('schéma: schema.sql dá každou svou tabulku, žádnou bez sloupců', [
+    count($schema_tables), array_keys(array_filter($schema_tables, fn ($cols) => $cols === [])),
+    in_array('metric_annotations', array_keys($schema_tables), true),
+], [preg_match_all('/CREATE TABLE IF NOT EXISTS/', (string)file_get_contents(__DIR__ . '/../schema.sql')), [], true]);
+// bk_schema_missing() from a copy of db.php in a folder of its own, against
+// what a database answers from information_schema. Without a schema.sql to
+// compare with it says so (null), and asks the database nothing.
+$sm_dir = sys_get_temp_dir() . '/bk_schema_missing_' . bin2hex(random_bytes(4));
+@mkdir($sm_dir);
+copy(__DIR__ . '/../db.php', $sm_dir . '/db.php');
+bk_test_load_functions($sm_dir . '/db.php', ['bk_schema_missing']);
+$sm_pdo = new class ('sqlite::memory:') extends PDO {
+    public int $queries = 0;
+    public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): PDOStatement|false {
+        $this->queries++;
+        // Columns come back in MySQL's own case, which may differ from the file's.
+        return parent::query("SELECT 'a' AS TABLE_NAME, 'ID' AS COLUMN_NAME UNION ALL SELECT 'c', 'id'");
+    }
+};
+$sm_none = bk_schema_missing($sm_pdo);
+file_put_contents($sm_dir . '/schema.sql', "CREATE TABLE IF NOT EXISTS `a` (\n  `id` INT,\n  `nova` INT\n) ENGINE=InnoDB;\n"
+    . "CREATE TABLE IF NOT EXISTS `b` (\n  `id` INT\n) ENGINE=InnoDB;\n");
+check('schéma: bez schema.sql není s čím srovnat (null, žádný dotaz), jinak chybějící tabulka a sloupec jménem',
+    [$sm_none, $sm_pdo->queries, bk_schema_missing($sm_pdo)], [null, 0, ['tables' => ['b'], 'columns' => ['a.nova']]]);
+@unlink($sm_dir . '/schema.sql');
+@unlink($sm_dir . '/db.php');
+@rmdir($sm_dir);
+$reg_bad_col = [];
+$reg_bad_only = [];
+$reg_long = [];
+foreach ($reg_new as $reg_key) {
+    $reg_def = $reg[$reg_key] ?? [];
+    if (($reg_def['col'] ?? null) !== $reg_key || !in_array($reg_key, $schema_tables['vps_metrics'] ?? [], true)) {
+        $reg_bad_col[] = $reg_key;
+    }
+    if (($reg_def['only'] ?? null) !== ['openwrt']) {
+        $reg_bad_only[] = $reg_key;
+    }
+    // metrics_daily.metric_key is VARCHAR(30).
+    if (strlen($reg_key) > 30) {
+        $reg_long[] = $reg_key;
+    }
+}
+check('registr metrik: klíč = sloupec vps_metrics a sloupec existuje ve schématu', $reg_bad_col, []);
+check('registr metrik: nové metriky posílá jen OpenWrt', $reg_bad_only, []);
+check('registr metrik: klíč se vejde do metrics_daily.metric_key', $reg_long, []);
+$reg_steps = [];
+foreach ($reg as $reg_key => $reg_def) {
+    if (($reg_def['step'] ?? false) === true) {
+        $reg_steps[] = $reg_key;
+        // A step is already a difference; reading it as a cumulative
+        // counter as well would subtract the same minute twice.
+        check_true("registr metrik: krokovou metriku {$reg_key} nikdo nečte jako čítač", ($reg_def['counter'] ?? false) === false);
+    }
+}
+check('registr metrik: krokových metrik je přesně jedenáct', $reg_steps,
+    ['wan_errors', 'wan_drops', 'wan_ring_drops', 'wan_link_flaps', 'conntrack_drops',
+        'wan_rx_overrun', 'wan_rx_discard', 'wan_crc_errors', 'wan_mac_rx_errors', 'wan_refill_errors', 'wan_oversize']);
+
+// --- Fixture: the user's Turris Omnia (tests/fixtures/omnia_router.php) -------
+// Every "must fire / must not fire on this router" test of the router release
+// stands on this file, so the file itself is held to the rules of the release:
+// masked, honest about what was not measured, and in step with the schema.
+{
+    $omnia = require __DIR__ . '/fixtures/omnia_router.php';
+    $omnia_src = (string)file_get_contents(__DIR__ . '/fixtures/omnia_router.php');
+    $omnia_p = $omnia['payload'];
+    $table_columns = fn (string $table): array => $schema_tables[$table] ?? [];
+    $all_keys = function (array $a) use (&$all_keys): array {
+        $keys = [];
+        foreach ($a as $k => $v) {
+            if (is_string($k)) {
+                $keys[] = $k;
+            }
+            if (is_array($v)) {
+                $keys = array_merge($keys, $all_keys($v));
+            }
+        }
+        return $keys;
+    };
+
+    check('Omnia: A8 fixture nenese MAC, BSSID ani IP adresu', preg_match('/(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}|\b\d{1,3}(?:\.\d{1,3}){3}\b/i', $omnia_src . json_encode($omnia)), 0);
+    check('Omnia: A8 žádný klíč nepojmenovává sériové číslo, WWN ani MAC', array_values(preg_grep('/serial|wwn|eui|guid|cid|bssid|^mac/i', $all_keys($omnia))), []);
+    check('Omnia: A1 jediný disk je sda a o eMMC není nic nulou', [array_column($omnia_p['storage_disks'], 'name'), $omnia_p['storage_disks'][0]['emmc']], [['sda'], null]);
+    check('Omnia: A5 teplota je 67 °C, chybějící atribut 198 zůstává neznámý', [$omnia_p['storage_disks'][0]['smart']['temperature_c'], $omnia_p['storage_disks'][0]['smart']['offline_uncorrectable']], [67, null]);
+    check('Omnia: bez ethtool a tc jsou zahozené rámce neznámé, ne nula', [$omnia_p['wan_path']['wan_rx_ring_drops'], $omnia_p['agent_tools']['ethtool'], $omnia_p['agent_tools']['tc']], [null, false, false]);
+    check('Omnia: stav portu je z fyzického eth2, 174 zahozených rámců VLAN mu nepatří', [$omnia_p['wan_link_dev'], $omnia_p['wan_link_mbit'], $omnia_p['wan_rx_dropped']], ['eth2', 2500, 0]);
+    check('Omnia: LAN porty sdílejí jedno gigabitové vedení eth1', [$omnia_p['wan_path']['lan_port_cap_mbit'], $omnia_p['wan_path']['lan_conduits']], [1000, [['dev' => 'eth1', 'mbit' => 1000]]]);
+    $omnia_lan = bk_sanitize_lan_ports($omnia_p['lan_ports']);
+    check('Omnia: přepínač má pět portů, dva bez kabelu, a ty nehlásí rychlost ani duplex',
+        [array_column($omnia_lan['ports'], 'name'), array_column($omnia_lan['ports'], 'link'),
+            array_column($omnia_lan['ports'], 'speed_mbit')],
+        [['lan0', 'lan1', 'lan2', 'lan3', 'lan4'], [true, true, false, false, true], [1000, 100, null, null, 1000]]);
+    check('Omnia: lan1 jede 100 kvůli protistraně, ne kvůli závadě - port sám umí 1000',
+        [$omnia_lan['ports'][1]['partner_max_mbit'], $omnia_lan['ports'][1]['max_mbit'], $omnia_lan['ports'][0]['partner_max_mbit']],
+        [100, 1000, 1000]);
+    check('Omnia: všech pět portů visí na jednom gigabitovém vedení eth1',
+        [$omnia_lan['conduits'], $omnia_lan['bridge']],
+        [[['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full']], 'br-lan']);
+    check('Omnia: nesečtené počty zařízení zůstávají neznámé, ne nula',
+        [$omnia_lan['ports'][0]['clients'], $omnia_lan['clients_total'], $omnia_lan['ports'][2]['clients']], [null, null, 0]);
+    check('Omnia: vypnutá sekce SQM není fronta a měření rychlosti žádné není', [$omnia_p['wan_path']['sqm'], $omnia_p['speedtests']], [[], []]);
+    check('Omnia: co router nezměřil, je neznámé (špička jádra, zaplnění conntrack, délka běhu)', [$omnia_p['cpu_core_max_pct'], $omnia_p['conntrack_pct'], $omnia_p['agent_run_ms']], [null, null, null]);
+    check('Omnia: klíče agenta 0.1.9 starší záznam nezměřil, takže jsou null, ne nula',
+        [array_key_exists('agent_prev_cpu_ms', $omnia_p), $omnia_p['agent_prev_cpu_ms'], array_key_exists('runs_skipped_killed', $omnia_p), $omnia_p['runs_skipped_killed']],
+        [true, null, true, null]);
+    check_false('Omnia: tarif není součástí hlášení, zadává ho až majitel', array_key_exists('wan_plan_down_mbit', $omnia_p));
+
+    // The week and the disk day must fit the tables they are seeded into.
+    $metric_map = bk_metric_column_map();
+    $vps_columns = $table_columns('vps_metrics');
+    $week_without_column = [];
+    foreach (array_keys($omnia['week']['metrics']) as $metric_key) {
+        $column = $metric_map[$metric_key]['col'] ?? $metric_key;
+        if (!in_array($column, $vps_columns, true)) {
+            $week_without_column[] = $metric_key;
+        }
+    }
+    check('Omnia: každá týdenní metrika má sloupec ve vps_metrics', $week_without_column, []);
+    check('Omnia: klíče metrik se vejdou do metrics_daily.metric_key', array_values(array_filter(array_keys($omnia['week']['metrics']), fn($k) => strlen($k) > 30)), []);
+    check('Omnia: denní řádek disku zná jen sloupce storage_disk_daily', array_values(array_diff(array_keys($omnia['disk_day']), $table_columns('storage_disk_daily'))), []);
+    check('Omnia: průměrná teplota disku za den je 67 °C', $omnia['disk_day']['temp_sum'] / $omnia['disk_day']['temp_n'], 67);
+    check('Omnia: klíč disku je 16 hex znaků z transportu, portu, modelu a velikosti', preg_match('/^[0-9a-f]{16}$/', $omnia['disk_key']), 1);
+
+    // The second radio (REAL_FACTS „Second radio phy3-ap0"): USB adapter,
+    // 2,4 GHz, ovladač bez šumu a s prázdným survey. Fixture musí nést přesně
+    // to, co agent z reálných záznamů posílá - jinak se serverová pravidla učí
+    // na rádiu, které neexistuje.
+    check('Omnia: druhé rádio má stejná pole jako první', array_diff(array_keys($omnia_p['wifi_radios'][0]), array_keys($omnia['second_radio'])), []);
+    $omnia_r2 = $omnia['second_radio'];
+    check('Omnia: druhé rádio je 2,4GHz AP na kanálu 5 s šesti klienty',
+        [$omnia_r2['band'], $omnia_r2['channel'], $omnia_r2['frequency_mhz'], $omnia_r2['htmode'], $omnia_r2['clients']],
+        ['2.4GHz', 5, 2432, 'HT20', 6]);
+    check('Omnia: ovladač druhého rádia nehlásí šum ani obsazenost - null, ne nula',
+        [$omnia_r2['noise'], $omnia_r2['snr_min'], $omnia_r2['busy_pct'], $omnia_r2['busy_other_pct'], $omnia_r2['busy_state']],
+        [null, null, null, null, 'unsupported']);
+    // CORE D11 („[refines REAL_FACTS]"): AP bez HE nikdy [HE] nenastaví, takže
+    // stanice bez něj nic nedokazuje - známých je 0, ne 6.
+    check('Omnia: na AP bez HE je schopnost 6 GHz neznámá (0 z 0), ne změřená nula ze šesti',
+        [$omnia_r2['clients_caps_known'], $omnia_r2['clients_6ghz_capable'], $omnia_r2['clients_opclass_known']],
+        [0, 0, 0]);
+    check('Omnia: bez AKM řádku je stanice bez [MFP] WPA2 - 3 ze 6, zbytek neznámý',
+        [$omnia_r2['clients_akm_known'], $omnia_r2['clients_wpa2'], $omnia_r2['clients_wpa3'], $omnia_r2['clients_8021x']],
+        [3, 3, 0, 0]);
+    check_true('Omnia: síla signálu druhého rádia se nezachytila, takže zůstává neznámá',
+        $omnia_r2['signal_median'] === null && $omnia_r2['signal_min'] === null
+        && $omnia_r2['clients_weak'] === null && $omnia_r2['bitrate_tx_avg_mbps'] === null);
+    // Obě rádia dohromady: pásma se nesmějí slít a nezměřená hodnota nesmí
+    // druhé pásmo vynulovat.
+    $omnia_tot = bk_wifi_band_totals(bk_sanitize_wifi_radios(
+        array_merge($omnia_p['wifi_radios'], [$omnia['second_radio']])));
+    check('Omnia: dvě rádia, dvě pásma - klienti se nesčítají přes pásma',
+        [$omnia_tot['wifi_clients_5g'], $omnia_tot['wifi_clients_24g'], $omnia_tot['wifi_clients_6g']],
+        [4, 6, null]);
+    check('Omnia: pásmo bez měřitelného šumu a obsazenosti zůstává neznámé',
+        [$omnia_tot['wifi_noise_24g'], $omnia_tot['wifi_busy_24g'], $omnia_tot['wifi_busy_other_24g']],
+        [null, null, null]);
+    check('Omnia: 5GHz pásmo si své hodnoty podrží i vedle nezměřeného rádia',
+        [$omnia_tot['wifi_noise_5g'], $omnia_tot['wifi_busy_5g'], $omnia_tot['wifi_busy_other_5g']],
+        [-92.0, 3.5, 1.2]);
+    check('Omnia: druhé rádio přidá tři WPA2 stanice, 6 GHz ale nikdo neobslouží',
+        [$omnia_tot['wifi_wpa2_clients'], $omnia_tot['wifi_6e_unserved']], [3, 1]);
+
+    // X9: a top-level key of the report is either stored as a metric or a
+    // deliberate exemption of run_agent_metric_lint.php - otherwise the lint
+    // turns red the day the agent really sends it.
+    $nm_list = require __DIR__ . '/fixtures/agent_not_metrics.php';
+    $stored_by_contract = ['wifi_clients_count', 'wan_link_mbit', 'conntrack_count', 'conntrack_pct', 'cpu_core_max_pct', 'cpu_core_max_softirq_pct', 'wan_rx_mbps', 'wan_tx_mbps', 'agent_run_ms', 'agent_prev_cpu_ms',
+        // Stored per minute since schema 20260927r022 (vps_metrics.speedtest_active).
+        'speedtest_active'];
+    check('Omnia: každý klíč hlášení je ukládaná metrika, nebo vědomá výjimka lintu', array_values(array_diff(array_keys($omnia_p), $nm_list, $stored_by_contract)), []);
+    check('Omnia: ukládané klíče mezi výjimkami lintu nejsou', array_values(array_intersect($stored_by_contract, $nm_list)), []);
+}
+
+
+// --- bk_pagerduty_dedup_key: a disk incident is not an outage -----------------
+//
+// Everything used to page under one key `bk-monitor-<id>`, so a WAN flap that
+// resolved closed the open incident of a failing disk - and the on-call saw
+// nothing until the disk died. The WAN and the LTE backup each have a key too:
+// their recoveries closed the page of a server that was still down (R148).
+check('storage_failing pageuje pod vlastním klíčem bk-monitor-6-storage',
+    bk_pagerduty_dedup_key(6, 'storage_failing'), 'bk-monitor-6-storage');
+foreach (['wan_lost' => 'bk-monitor-6-wan', 'wan_restored' => 'bk-monitor-6-wan',
+    'lte_backup_lost' => 'bk-monitor-6-lte', 'lte_backup_restored' => 'bk-monitor-6-lte',
+    'agent_offline' => 'bk-monitor-6', 'up' => 'bk-monitor-6'] as $s => $pd_key) {
+    check("klíč pro {$s}", bk_pagerduty_dedup_key(6, $s), $pd_key);
+}
+check('storage_recovered a storage_warning do PagerDuty nejdou (recovered)', bk_pagerduty_action('storage_recovered'), null);
+check('storage_recovered a storage_warning do PagerDuty nejdou (warning)', bk_pagerduty_action('storage_warning'), null);
+check('storage_failing pageuje', bk_pagerduty_action('storage_failing'), 'trigger');
+check('down má dál klíč bk-monitor-6', bk_pagerduty_dedup_key(6, 'down'), 'bk-monitor-6');
+
+// --- bk_storage_alert_eval: disk rules (CORE 3.5) -------------------------------
+//
+// The whole point is hysteresis: a disk sits at its limit for months, so an
+// alert that fires on every hourly reading is an alert nobody reads.
+$sd_now = 1758000000;
+$sd_disk = function (array $smart = [], array $over = []): array {
+    return array_merge([
+        'key' => 'aaaabbbbccccdddd',
+        'name' => 'sda',
+        'transport' => 'sata',
+        'rotational' => false,
+        'emmc' => null,
+        'smart' => array_merge([
+            'state' => 'ok', 'passed' => true, 'checked_at' => 1,
+            'model' => 'KINGSTON SUV500MS120G', 'protocol' => 'ATA',
+        ], $smart),
+    ], $over);
+};
+/** Event types of one evaluation, in order. */
+$sd_types = fn (array $res): array => array_map(fn ($e) => $e['type'], $res['events']);
+$sd_key = 'aaaabbbbccccdddd';
+
+// Temperature: the user's SSD idles at 67 °C with a lifetime max of 68.
+$sd_a = bk_storage_alert_eval([$sd_disk(['temperature_c' => 67])], [], $sd_now);
+$sd_b = bk_storage_alert_eval([$sd_disk(['temperature_c' => 67])], $sd_a['states'], $sd_now + 3600);
+check('Omnia: 67 °C dvakrát po sobě neupozorní', array_merge($sd_types($sd_a), $sd_types($sd_b)), []);
+
+$sd_1 = bk_storage_alert_eval([$sd_disk(['temperature_c' => 70])], [], $sd_now);
+$sd_2 = bk_storage_alert_eval([$sd_disk(['temperature_c' => 70])], $sd_1['states'], $sd_now + 3600);
+$sd_3 = bk_storage_alert_eval([$sd_disk(['temperature_c' => 66])], $sd_2['states'], $sd_now + 7200);
+$sd_4 = bk_storage_alert_eval([$sd_disk(['temperature_c' => 65])], $sd_3['states'], $sd_now + 10800);
+check('70 °C jednou nic, podruhé varování, 66 °C drží, 65 °C obnoví',
+    [$sd_types($sd_1), $sd_types($sd_2), $sd_types($sd_3), $sd_types($sd_4)],
+    [[], ['disk_temp_critical'], [], ['disk_temp_normal']]);
+check('varování o teplotě má status storage_warning', $sd_2['events'][0]['status'], 'storage_warning');
+
+check('rotační limit 60, NVMe 80',
+    [
+        bk_disk_temp_limit(['smart' => ['rotation_rpm' => 5400]]),
+        bk_disk_temp_limit(['transport' => 'nvme', 'smart' => []]),
+        bk_disk_temp_limit(['rotational' => false, 'smart' => []]),
+    ], [60, 80, 70]);
+
+// SMART counters. A drive bought with three bad blocks must stay quiet.
+$sd_c1 = bk_storage_alert_eval([$sd_disk(['runtime_bad_blocks' => 3])], [], $sd_now);
+check('první pohled na 3 vadné bloky je tichý', $sd_types($sd_c1), []);
+check('první pohled si uloží základnu', $sd_c1['states'][$sd_key]['base']['badblk'], 3);
+
+$sd_c2 = bk_storage_alert_eval([$sd_disk(['runtime_bad_blocks' => 4])], $sd_c1['states'], $sd_now + 3600);
+$sd_c3 = bk_storage_alert_eval([$sd_disk(['runtime_bad_blocks' => 4])], $sd_c2['states'], $sd_now + 7200);
+check('3 → 4 vadné bloky = varování, stejné čtení znovu nic',
+    [$sd_types($sd_c2), $sd_c2['events'][0]['status'], $sd_types($sd_c3)],
+    [['disk_errors_growing'], 'storage_warning', []]);
+
+// The baseline rises only with the alert, so growth during the cooldown is
+// reported in full afterwards - never swallowed.
+$sd_c4 = bk_storage_alert_eval([$sd_disk(['runtime_bad_blocks' => 6])], $sd_c2['states'], $sd_now + 10800);
+$sd_c5 = bk_storage_alert_eval([$sd_disk(['runtime_bad_blocks' => 6])], $sd_c4['states'], $sd_now + 3600 + 90000);
+check('růst během 24h odkladu se ohlásí po něm',
+    [$sd_types($sd_c4), $sd_types($sd_c5)], [[], ['disk_errors_growing']]);
+check_true('a ohlásí celý růst 4 → 6', str_contains($sd_c5['events'][0]['message'], '4 → 6'));
+
+$sd_p = bk_storage_alert_eval([$sd_disk(['pending_sectors' => 2])], [], $sd_now);
+check('čekající sektory při prvním pohledu = selhání',
+    [$sd_types($sd_p), $sd_p['events'][0]['status']], [['disk_errors_growing'], 'storage_failing']);
+
+$sd_d1 = bk_storage_alert_eval([$sd_disk(['reallocated_sectors' => 10])], [], $sd_now);
+$sd_d2 = bk_storage_alert_eval([$sd_disk(['reallocated_sectors' => 4])], $sd_d1['states'], $sd_now + 3600);
+check('pokles čítače sníží základnu potichu',
+    [$sd_types($sd_d2), $sd_d2['states'][$sd_key]['base']['realloc']], [[], 4]);
+
+// --- bk_storage_alert_eval: SMART failure, wear and disk replacement ------------
+// exit bit 4 = "the disk is failing now"; bit 3 = "it failed in the past".
+$sd_fail = fn (): array => $sd_disk(['passed' => false, 'exit_bits' => 0x10, 'state' => 'failing']);
+$sd_ok = fn (): array => $sd_disk(['passed' => true, 'exit_bits' => 0]);
+
+$sd_f1 = bk_storage_alert_eval([$sd_fail()], [], $sd_now);
+$sd_f2 = bk_storage_alert_eval([$sd_ok()], $sd_f1['states'], $sd_now + 3600);
+$sd_f3 = bk_storage_alert_eval([$sd_ok()], $sd_f2['states'], $sd_now + 7200);
+$sd_f4 = bk_storage_alert_eval([$sd_ok()], $sd_f3['states'], $sd_now + 10800);
+check('SMART failed jednou, tři čtení passed po sobě → obnoveno, dvě nestačí',
+    [$sd_types($sd_f1), $sd_types($sd_f2), $sd_types($sd_f3), $sd_types($sd_f4)],
+    [['disk_smart_failed'], [], [], ['disk_smart_ok']]);
+check('obnovení jde jako storage_recovered', $sd_f4['events'][0]['status'], 'storage_recovered');
+
+// A prefail attribute crossing its threshold back and forth on a warm disk
+// used to send an hourly failing/recovered pair.
+$sd_g1 = bk_storage_alert_eval([$sd_fail()], [], $sd_now);
+$sd_g2 = bk_storage_alert_eval([$sd_ok()], $sd_g1['states'], $sd_now + 3600);
+$sd_g3 = bk_storage_alert_eval([$sd_fail()], $sd_g2['states'], $sd_now + 7200);
+check('failing, ok, failing během 3 hodin = jedno upozornění a žádné obnovení',
+    array_merge($sd_types($sd_g1), $sd_types($sd_g2), $sd_types($sd_g3)), ['disk_smart_failed']);
+
+$sd_h = bk_storage_alert_eval([$sd_fail()], $sd_g3['states'], $sd_now + 12 * 3600);
+check('nové selhání do 24 h od posledního upozornění se neposílá znovu', $sd_types($sd_h), []);
+$sd_h2 = bk_storage_alert_eval([$sd_fail()], $sd_h['states'], $sd_now + 30 * 3600);
+check('po 24 h se selhání připomene', $sd_types($sd_h2), ['disk_smart_failed']);
+
+$sd_w1 = bk_storage_alert_eval([$sd_disk(['wear_pct' => 89])], [], $sd_now);
+$sd_w2 = bk_storage_alert_eval([$sd_disk(['wear_pct' => 90])], $sd_w1['states'], $sd_now + 3600);
+$sd_w3 = bk_storage_alert_eval([$sd_disk(['wear_pct' => 95])], $sd_w2['states'], $sd_now + 7200);
+check('opotřebení 89 nic, 90 varování, 95 už ne',
+    [$sd_types($sd_w1), $sd_types($sd_w2), $sd_types($sd_w3)], [[], ['disk_wear_high'], []]);
+
+$sd_emmc = fn (int $pre_eol): array => $sd_disk(
+    ['state' => 'not_applicable', 'passed' => null, 'checked_at' => null],
+    ['name' => 'mmcblk0', 'transport' => 'emmc', 'emmc' => ['life_a' => 2, 'life_b' => 1, 'pre_eol' => $pre_eol]]
+);
+$sd_e2 = bk_storage_alert_eval([$sd_emmc(2)], [], $sd_now);
+$sd_e3 = bk_storage_alert_eval([$sd_emmc(3)], $sd_e2['states'], $sd_now + 3600);
+check('pre-EOL 2 varování, 3 selhání',
+    [$sd_types($sd_e2), $sd_e2['events'][0]['status'], $sd_types($sd_e3), $sd_e3['events'][0]['status']],
+    [['disk_wear_high'], 'storage_warning', ['disk_emmc_eol'], 'storage_failing']);
+check('eMMC na konci životnosti se nepřipomíná každou hodinu',
+    $sd_types(bk_storage_alert_eval([$sd_emmc(3)], $sd_e3['states'], $sd_now + 7200)), []);
+
+// Wear from life_a/b with no pre-EOL reading said "rezervní bloky: v normě" (R52).
+$ew_text = fn (?int $pre_eol): string => (string)bk_with_email_lang('cs', fn (): array => bk_router_rec_render(
+    bk_rec_item('disk_wear_high', 'disk_wear_high:d:mmc', 'storage', 'warning', ['kind' => 'disk', 'disk_key' => 'mmc', 'name' => 'mmcblk0'],
+        ['disk' => 'mmcblk0', 'name' => 'mmcblk0', 'variant' => 'emmc', 'life' => 9, 'pre_eol' => $pre_eol])))['measured'];
+check_true('eMMC bez hlášení rezervních bloků netvrdí, že jsou v normě',
+    str_contains($ew_text(null), 'rezervní bloky: nehlášeno') && !str_contains($ew_text(null), 'v normě'));
+check_true('s hlášením 1 jsou v normě', str_contains($ew_text(1), 'rezervní bloky: v normě'));
+
+// The disk identity is a hash of transport, port, model and size, so an
+// identical replacement lands on the same row. Its power-on hours give it
+// away, and the old drive's baselines must not judge the new one.
+$sd_r1 = bk_storage_alert_eval([$sd_disk(['runtime_bad_blocks' => 100, 'power_on_hours' => 24750])], [], $sd_now);
+$sd_r2 = bk_storage_alert_eval([$sd_disk(['runtime_bad_blocks' => 3, 'power_on_hours' => 10])], $sd_r1['states'], $sd_now + 3600);
+check('výměna disku (hodiny −48) vynuluje základny',
+    [$sd_types($sd_r2), $sd_r2['states'][$sd_key]['base']['badblk']], [[], 3]);
+$sd_r3 = bk_storage_alert_eval([$sd_disk(['runtime_bad_blocks' => 100, 'power_on_hours' => 24720])], $sd_r1['states'], $sd_now + 3600);
+check('hodiny o 30 nižší jsou zaokrouhlení firmwaru, ne nový disk',
+    $sd_r3['states'][$sd_key]['base']['badblk'], 100);
+
+// --- bk_storage_gate_open: the hourly pre-filter of CORE 3.4 step 1 -------------
+$g_now = 1758000000;
+$g_disks = [['key' => 'aaaabbbbccccdddd', 'smart' => ['checked_at' => 500]]];
+$g_old = [['key' => 'aaaabbbbccccdddd', 'smart' => ['checked_at' => 500]]];
+check_false('stejné checked_at nic nevyhodnotí', bk_storage_gate_open($g_now - 60, $g_disks, $g_old, $g_now));
+check_true('novější čtení SMART otevře bránu hned',
+    bk_storage_gate_open($g_now - 60, [['key' => 'aaaabbbbccccdddd', 'smart' => ['checked_at' => 900]]], $g_old, $g_now));
+check_true('nový disk otevře bránu hned',
+    bk_storage_gate_open($g_now - 60, [['key' => 'ffffeeeeddddcccc', 'smart' => ['checked_at' => 500]]], $g_old, $g_now));
+check_true('bez předchozího vzorku se jede vždy', bk_storage_gate_open(null, $g_disks, $g_old, $g_now));
+check_true('po 55 minutách se jede kvůli zápisům hostitele',
+    bk_storage_gate_open($g_now - 3400, $g_disks, $g_old, $g_now));
+// The dropped list is exactly the storage_list_dropped case: without this
+// it would mean one upsert per disk per minute.
+check_false('chybějící starý seznam neznamená, že je každý disk nový',
+    bk_storage_gate_open($g_now - 60, $g_disks, null, $g_now));
+
+// --- bk_disk_host_write_delta: host writes between two samples ------------------
+$hw_now = 1758000000;
+$hw_row = ['last_write_sectors' => 1000, 'last_uptime' => 100000, 'last_sample_ts' => $hw_now - 3600];
+check('první vzorek disku nepřičte nic', bk_disk_host_write_delta(null, 1000, 103600, $hw_now), [null, 0]);
+check('běžný přírůstek 2048 sektorů = 1 MiB',
+    bk_disk_host_write_delta($hw_row, 3048, 103600, $hw_now), [1048576, 0]);
+check('restart routeru: počítá se od nuly a den je neúplný',
+    bk_disk_host_write_delta($hw_row, 3048, 200, $hw_now), [1560576, 1]);
+check('přetečení čítače bez restartu nepřičte nic a den je neúplný',
+    bk_disk_host_write_delta($hw_row, 500, 103600, $hw_now), [null, 1]);
+check('2 GiB/s není zápis routeru',
+    bk_disk_host_write_delta($hw_row, 1000 + 20000000000, 103600, $hw_now), [null, 1]);
+
+// --- bk_fs_alert_eval: a partition that is filling up (CORE 3.5) ----------------
+//
+// The root is left to the legacy hdd alert, a squashfs is 100 % full by
+// construction, and a partition one point under the limit must not flap daily.
+$fs_now = 1758000000;
+$fs_one = fn (float $pct, string $mount = '/srv', array $over = []): array => [array_merge(
+    ['mount' => $mount, 'device' => '/dev/sda1', 'fstype' => 'btrfs', 'total_kb' => 117217792, 'used_pct' => $pct],
+    $over
+)];
+$fs_types = fn (array $res): array => array_map(fn ($e) => $e['type'], $res['events']);
+
+$fs_1 = bk_fs_alert_eval($fs_one(95.0), [], 90.0, $fs_now);
+$fs_2 = bk_fs_alert_eval($fs_one(95.0), $fs_1['state'], 90.0, $fs_now + 60);
+$fs_3 = bk_fs_alert_eval($fs_one(95.0), $fs_2['state'], 90.0, $fs_now + 120);
+check('dvě hlášení nad limitem',
+    [$fs_types($fs_1), $fs_types($fs_2), $fs_types($fs_3)], [[], ['fs_full'], []]);
+check('zaplněný oddíl jde jako storage_warning', $fs_2['events'][0]['status'], 'storage_warning');
+
+$fs_hold = bk_fs_alert_eval($fs_one(86.0), $fs_2['state'], 90.0, $fs_now + 180);
+$fs_free = bk_fs_alert_eval($fs_one(84.0), $fs_hold['state'], 90.0, $fs_now + 240);
+check('uvolnění o 5 bodů',
+    [$fs_types($fs_hold), $fs_types($fs_free), $fs_free['events'][0]['status']],
+    [[], ['fs_freed'], 'storage_recovered']);
+
+// The same reset the hdd alert does in bk_agent_report() - an admin who
+// lowers the limit must be able to be warned again.
+$fs_thr = bk_fs_alert_eval($fs_one(95.0), $fs_2['state'], 80.0, $fs_now + 300);
+check('změna limitu resetuje', [$fs_types($fs_thr), $fs_thr['state']['/srv']['streak']], [[], 1]);
+
+$fs_skip = [
+    ['mount' => '/', 'fstype' => 'ext4', 'total_kb' => 117217792, 'used_pct' => 99.0],
+    ['mount' => '/overlay', 'fstype' => 'ext4', 'total_kb' => 117217792, 'used_pct' => 99.0],
+    ['mount' => '/rom', 'fstype' => 'squashfs', 'total_kb' => 117217792, 'used_pct' => 100.0],
+    ['mount' => '/mnt/img', 'fstype' => 'squashfs', 'total_kb' => 117217792, 'used_pct' => 100.0],
+];
+$fs_s1 = bk_fs_alert_eval($fs_skip, [], 90.0, $fs_now);
+$fs_s2 = bk_fs_alert_eval($fs_skip, $fs_s1['state'], 90.0, $fs_now + 60);
+check('/, /overlay, /rom a squashfs se přeskočí',
+    [$fs_types($fs_s2), array_keys($fs_s2['state'])], [[], []]);
+
+$fs_tiny = fn (): array => $fs_one(99.0, '/boot', ['fstype' => 'ext4', 'total_kb' => 32768]);
+$fs_t1 = bk_fs_alert_eval($fs_tiny(), [], 90.0, $fs_now);
+$fs_t2 = bk_fs_alert_eval($fs_tiny(), $fs_t1['state'], 90.0, $fs_now + 60);
+check('oddíl pod 64 MB se přeskočí', [$fs_types($fs_t2), array_keys($fs_t2['state'])], [[], []]);
+
+// An unplugged USB disk keeps its latch for a week, then goes, or every
+// mount the router ever had would sit in last_details forever.
+$fs_gone = bk_fs_alert_eval([], $fs_2['state'], 90.0, $fs_now + 3 * 86400);
+check('odpojený oddíl si týden drží záznam', array_keys($fs_gone['state']), ['/srv']);
+check('po sedmi dnech záznam zmizí',
+    array_keys(bk_fs_alert_eval([], $fs_2['state'], 90.0, $fs_now + 8 * 86400)['state']), []);
+check('a po návratu se upozornění neposílá znovu',
+    $fs_types(bk_fs_alert_eval($fs_one(95.0), $fs_gone['state'], 90.0, $fs_now + 3 * 86400 + 60)), []);
+// --- Která linka nesla měření rychlosti (agent 0.1.11) ------------------------
+// Turris spouští noční test bez vazby na rozhraní: při výpadku WAN změřil LTE
+// zálohu (47/44 Mbit/s) a stránka to ukázala jako rychlost optiky (393/436).
+check('agent: změřená linka, důkaz a protokol projdou',
+    bk_speedtest_uplink_fields(['uplink' => 'backup', 'uplink_evidence' => 'counters', 'proto' => 'http']),
+    ['uplink' => 'backup', 'uplink_source' => 'counters', 'proto' => 'http']);
+check('agent: cokoli mimo smlouvu je neměřeno, ne odhad',
+    bk_speedtest_uplink_fields(['uplink' => 'lte', 'uplink_evidence' => 'counters', 'proto' => 'ftp']),
+    ['uplink' => null, 'uplink_source' => null, 'proto' => null]);
+check('agent: důkaz bez linky se neuloží',
+    bk_speedtest_uplink_fields(['uplink_evidence' => 'counters']),
+    ['uplink' => null, 'uplink_source' => null, 'proto' => null]);
+check('starší agent bez klíčů: tři null',
+    bk_speedtest_uplink_fields([]), ['uplink' => null, 'uplink_source' => null, 'proto' => null]);
+
+$ul_down = [[strtotime('2026-09-25 03:15:00'), strtotime('2026-09-25 03:25:00')], [strtotime('2026-09-26 03:10:00'), null]];
+check('změřená linka vyhraje nad výpadkem',
+    bk_speedtest_attribute(['uplink' => 'wan', 'uplink_source' => 'counters', 'measured_at' => '2026-09-25 03:20:49'], $ul_down),
+    ['uplink' => 'wan', 'source' => 'counters']);
+check('bez údaje od agenta: test během výpadku WAN je odhadnutá záloha',
+    bk_speedtest_attribute(['uplink' => null, 'measured_at' => '2026-09-25 03:20:49'], $ul_down),
+    ['uplink' => 'backup', 'source' => 'outage']);
+check('výpadek, který ještě trvá, platí také',
+    bk_speedtest_attribute(['measured_at' => '2026-09-26 04:00:00'], $ul_down), ['uplink' => 'backup', 'source' => 'outage']);
+check('mimo výpadek zůstane linka neznámá, ne WAN',
+    bk_speedtest_attribute(['measured_at' => '2026-09-25 12:00:00'], $ul_down), ['uplink' => null, 'source' => null]);
+check('konec výpadku do něj už nepatří',
+    bk_speedtest_attribute(['measured_at' => '2026-09-25 03:25:00'], $ul_down), ['uplink' => null, 'source' => null]);
+check_true('záloha i smíšené měření jsou mimo WAN',
+    bk_speedtest_off_wan(['uplink' => 'backup']) && bk_speedtest_off_wan(['uplink' => 'mixed'])
+    && !bk_speedtest_off_wan(['uplink' => 'wan']) && !bk_speedtest_off_wan(['uplink' => null]));
+
+$ul_now = strtotime('2026-09-26 12:00:00');
+$ul_rows = [
+    ['measured_at' => '2026-09-26 11:51:29', 'download_mbps' => 393.09, 'upload_mbps' => 435.67, 'ping_ms' => 3.49, 'uplink' => 'wan'],
+    ['measured_at' => '2026-09-25 03:20:49', 'download_mbps' => 47.18, 'upload_mbps' => 44.08, 'ping_ms' => 37.75, 'uplink' => 'backup'],
+    ['measured_at' => '2026-09-24 03:20:00', 'download_mbps' => 400.01, 'upload_mbps' => 420.0, 'ping_ms' => 4.0, 'uplink' => null],
+    ['measured_at' => '2026-09-23 03:20:00', 'download_mbps' => 200.0, 'upload_mbps' => 200.0, 'ping_ms' => 9.0, 'uplink' => 'mixed'],
+];
+$ul_avg = bk_speedtest_averages($ul_rows, ['week' => 7], $ul_now);
+check('průměr WAN: LTE ani smíšené měření ho nestáhnou dolů',
+    [$ul_avg['wan']['week']['samples'], $ul_avg['wan']['week']['downloadMbps'], $ul_avg['wan']['week']['unknownSamples']],
+    [2, 396.55, 1]);
+check('LTE má vlastní průměr',
+    [$ul_avg['backup']['week']['samples'], $ul_avg['backup']['week']['downloadMbps']], [1, 47.18]);
+$ul_none = bk_speedtest_averages([], ['week' => 7], $ul_now);
+check('bez měření je průměr null, ne nula', [$ul_none['wan']['week']['downloadMbps'], $ul_none['backup']['week']['samples']], [null, 0]);
+
+// --- bk_speedtest_item / _ack / _in_report: příjem měření rychlosti ----------
+// W01: agent před 0.1.7 dělil skutečné Mbit/s číslem 125000, takže v tabulce
+// leží hodnoty jako 0.0148. Neměřeno je NULL, nikdy vymyšlená nula.
+$st_ts = '2026-09-20T05:23:41+02:00';
+$st_at = date('Y-m-d H:i:s', (int)strtotime($st_ts));
+$st_full = [
+    'timestamp' => $st_ts, 'download_mbps' => 1350.12, 'upload_mbps' => 902.4, 'ping_ms' => 2.1, 'jitter_ms' => 0.3,
+    'server' => 'Prague, Czech Republic (CESNET)', 'bytes_received' => 2531000000, 'bytes_sent' => 1692000000,
+    'started_by' => 'agent', 'iface' => 'eth2', 'tool' => 'go-1.0.12', 'link_mbit' => 2500,
+];
+$st_one = bk_speedtest_item($st_full);
+check('měření se rozpadne na sloupce tabulky', [$st_one['row']['measured_at'], $st_one['row']['download_mbps'],
+    $st_one['row']['server_name'], $st_one['row']['iface'], $st_one['row']['tool'], $st_one['row']['link_mbit']],
+    [$st_at, 1350.12, 'Prague, Czech Republic (CESNET)', 'eth2', 'go-1.0.12', 2500]);
+check('started_by se ukládá do sloupce source', [$st_one['row']['source'],
+    bk_speedtest_item(['timestamp' => $st_ts, 'started_by' => 'turris'])['row']['source'],
+    bk_speedtest_item(['timestamp' => $st_ts])['row']['source']], ['agent', 'turris', 'turris']);
+check('bez času měření se položka odmítne', bk_speedtest_item(['download_mbps' => 5.0]), null);
+
+// The mark of a pre-0.1.7 agent is the missing byte counter.
+$st_dmg = bk_speedtest_item(['timestamp' => $st_ts, 'download_mbps' => 0.0148, 'upload_mbps' => 0.05]);
+check('poškozená hodnota bez počtu bajtů se uloží jako NULL',
+    [$st_dmg['row']['download_mbps'], $st_dmg['row']['upload_mbps']], [null, null]);
+$st_slow = bk_speedtest_item(['timestamp' => $st_ts, 'download_mbps' => 0.05, 'bytes_received' => 93750]);
+check('stejně malá hodnota S počtem bajtů je měření a zůstane', $st_slow['row']['download_mbps'], 0.05);
+
+check('jednotková totožnost nástroje projde', bk_speedtest_unit_ok(1350.12, 2531000000), true);
+check('bajty/s místo Mbit/s totožnost neprojdou', bk_speedtest_unit_ok(0.0148, 2531000000), false);
+check('bez jedné ze dvou hodnot se nerozhoduje',
+    [bk_speedtest_unit_ok(1350.12, null), bk_speedtest_unit_ok(null, 2531000000), bk_speedtest_unit_ok(0.0, 2531000000)], [null, null, null]);
+$st_bad_unit = bk_speedtest_item(['timestamp' => $st_ts, 'download_mbps' => 0.0148, 'bytes_received' => 2531000000]);
+check('neshoda jednotek se uloží k výsledku a ohlásí',
+    [json_decode($st_bad_unit['row']['diagnostics'], true)['unit_mismatch'], $st_bad_unit['issues'][0][0]], [true, 'unit_mismatch']);
+
+// Diagnostics: only the named keys, re-encoded by the server.
+$st_diag = bk_speedtest_item($st_full + ['diagnostics' => ['v' => 1, 'cpu_measured' => true, 'path_verified' => true,
+    'client' => ['ip' => '10.0.0.1'], 'samples' => 45, 'gaps' => 0,
+    'dl' => ['secs' => 15.0, 'wan_mbps' => 1400.0, 'core' => 0, 'core_busy_pct' => 100.0, 'hostname' => 'omnia'],
+    'run' => ['wan_rx_errors' => 0], 'path' => ['flow_offloading' => true]]]);
+$st_dec = json_decode($st_diag['row']['diagnostics'], true);
+check('diagnostika projde jen seznamem povolených klíčů',
+    [isset($st_dec['client']), isset($st_dec['dl']['hostname']), (float)$st_dec['dl']['wan_mbps'], $st_dec['samples'], $st_dec['path']['flow_offloading']],
+    [false, false, 1400.0, 45, true]);
+check('měření z Turrisu diagnostiku mít nemusí', bk_speedtest_item(['timestamp' => $st_ts])['row']['diagnostics'], null);
+$st_huge = bk_speedtest_item(['timestamp' => $st_ts, 'diagnostics' => ['v' => 1, 'dl' => ['wan_mbps' => 1.0], 'run' => array_fill_keys(
+    array_map(fn ($n) => "pad_{$n}", range(1, 400)), 1)]]);
+check_true('příliš velká diagnostika se zahodí a řekne se to',
+    $st_huge['row']['diagnostics'] === null || strlen($st_huge['row']['diagnostics']) <= 2048);
+$st_drop = bk_speedtest_diagnostics(['neznamy' => 1, 'jiny' => 'x']);
+check('diagnostika bez jediného známého klíče je zahozená položka', [$st_drop['diagnostics'], $st_drop['dropped']], [null, true]);
+
+// The ack is what the agent deletes its files by (WAN 3.1.6).
+$st_h = fn (int $n): array => ['ts' => $n, 'raw_ts' => "t{$n}"];
+check('potvrzuje se nejnovější zpracovaná položka',
+    bk_speedtest_ack([$st_h(10), $st_h(30), $st_h(20)], []), 't30');
+check('po chybě zápisu se potvrdí jen to, co je před ní',
+    bk_speedtest_ack([$st_h(10), $st_h(20)], [$st_h(20), $st_h(30)]), 't10');
+check('když neprošlo nic, nepotvrzuje se nic',
+    [bk_speedtest_ack([], [$st_h(10)]), bk_speedtest_ack([], [])], [null, null]);
+
+// X17: the report itself says a test overlapped this minute.
+$st_now = 1789891234;
+check('výsledek z poslední minuty hlášení označí',
+    bk_speedtest_in_report([['timestamp' => date('c', $st_now - 60)]], $st_now), true);
+check('starší výsledek ve stejném hlášení nic neoznačuje',
+    [bk_speedtest_in_report([['timestamp' => date('c', $st_now - 600)]], $st_now), bk_speedtest_in_report(null, $st_now)], [false, false]);
+
+// --- bk_router_alert_eval: západky a události routeru (X14, list 2.2) --------
+// Stejný vzorec jako u WAN a LTE: streak, západka, zotavení. Co hlášení
+// neneslo, nechává západku na pokoji - „nevíme" není „je to v pořádku".
+$ra_now = 1789891234;
+$ra_types = fn (array $res): array => array_map(fn ($e) => $e['type'], $res['events']);
+$ra_run = function (array $cur, array $state, int $at) { return bk_router_alert_eval($cur, $state, $at); };
+
+// Link speed of the WAN port: baseline = the highest rate ever seen.
+$ra_link = fn (float $mbit): array => ['wan_link_mbit' => $mbit, 'wan_link_dev' => 'eth2'];
+$ra_l1 = $ra_run($ra_link(2500.0), [], $ra_now);
+check('první rychlost portu WAN je jen základ, žádná událost',
+    [$ra_types($ra_l1), $ra_l1['state']['wan_link_baseline']['mbit']], [[], 2500.0]);
+$ra_l2 = $ra_run($ra_link(1000.0), $ra_l1['state'], $ra_now + 60);
+$ra_l3 = $ra_run($ra_link(1000.0), $ra_l2['state'], $ra_now + 120);
+check('dvě pomalejší hlášení ještě poplach nespustí', [$ra_types($ra_l2), $ra_types($ra_l3)], [[], []]);
+$ra_l4 = $ra_run($ra_link(1000.0), $ra_l3['state'], $ra_now + 180);
+check('třetí pomalejší hlášení ohlásí degradaci s oběma rychlostmi',
+    [$ra_types($ra_l4), $ra_l4['events'][0]['status'], $ra_l4['events'][0]['message']],
+    [['wan_link_degraded'], 'wan_link_degraded', 'Port WAN (eth2) je spojený rychlostí 1000 Mbit/s, dosud 2500 Mbit/s.']);
+check('další pomalé hlášení už mlčí', $ra_types($ra_run($ra_link(1000.0), $ra_l4['state'], $ra_now + 240)), []);
+$ra_l5 = $ra_run($ra_link(2500.0), $ra_l4['state'], $ra_now + 300);
+check('návrat na plnou rychlost se ohlásí jednou',
+    [$ra_types($ra_l5), $ra_l5['state']['wan_link_alert_sent'],
+        $ra_types($ra_run($ra_link(2500.0), $ra_l5['state'], $ra_now + 360))],
+    [['wan_link_restored'], false, []]);
+// Seven days at the lower rate: the ISP really moved the customer, the
+// weekly rule takes over and the latch goes out WITHOUT a "restored" lie.
+$ra_l6 = $ra_run($ra_link(1000.0), $ra_l4['state'], $ra_now + 8 * 86400);
+check('po týdnu na nižší rychlosti se základ přeučí a západka zhasne beze slova',
+    [$ra_types($ra_l6), $ra_l6['state']['wan_link_baseline']['mbit'], $ra_l6['state']['wan_link_alert_sent']],
+    [[], 1000.0, false]);
+check('bez měření rychlosti se západka nemění',
+    $ra_run(['wan_link_mbit' => null], $ra_l4['state'], $ra_now + 400)['state']['wan_link_alert_sent'], true);
+
+// Connection table (W09): a refused connection counts only while the
+// table really is full - below 90 % a clash is an ordinary clash.
+$ra_c1 = $ra_run(['conntrack_pct' => 92.0], [], $ra_now);
+$ra_c2 = $ra_run(['conntrack_pct' => 92.0], $ra_c1['state'], $ra_now + 60);
+check('plná tabulka spojení se ohlásí až po druhém hlášení',
+    [$ra_types($ra_c1), $ra_types($ra_c2), $ra_c2['events'][0]['message']],
+    [[], ['conntrack_full'], 'Tabulka spojení routeru je zaplněná z 92 %.']);
+$ra_refused = $ra_run(['conntrack_pct' => 95.0, 'conntrack_drops' => 3], [], $ra_now);
+check('odmítnuté spojení při plné tabulce ohlásí hned první hlášení a řekne to',
+    [$ra_types($ra_refused), $ra_refused['events'][0]['message'] ?? null],
+    [['conntrack_full'], 'Tabulka spojení routeru je zaplněná z 95 % a nová spojení odmítá.']);
+check('kolize při poloprázdné tabulce nejsou odmítnutá spojení',
+    $ra_types($ra_run(['conntrack_pct' => 40.0, 'conntrack_drops' => 3], [], $ra_now)), []);
+$ra_c3 = $ra_run(['conntrack_pct' => 88.0], $ra_c2['state'], $ra_now + 120);
+$ra_c4 = $ra_run(['conntrack_pct' => 80.0], $ra_c3['state'], $ra_now + 180);
+check('mezi 85 a 90 % se nic nemění, pod 85 % se zapíše návrat do normálu',
+    [$ra_types($ra_c3), $ra_types($ra_c4), $ra_c4['events'][0]['status']], [[], ['conntrack_normal'], null]);
+
+// Firewall (G20): only a device with a WAN role. On a dumb AP a disabled
+// firewall is the recommended setup.
+$ra_fw = ['firewall_enabled' => false, 'wan_up' => true];
+$ra_f1 = $ra_run($ra_fw, [], $ra_now);
+$ra_f2 = $ra_run($ra_fw, $ra_f1['state'], $ra_now + 60);
+$ra_f3 = $ra_run($ra_fw, $ra_f2['state'], $ra_now + 120);
+check('firewall se ohlásí až po třech hlášeních a pamatuje si čas prvního',
+    [$ra_types($ra_f1), $ra_types($ra_f2), $ra_types($ra_f3), $ra_f3['state']['firewall_off_since']],
+    [[], [], ['firewall_disabled'], $ra_now]);
+$ra_f4 = $ra_run(['firewall_enabled' => true, 'wan_up' => true], $ra_f3['state'], $ra_now + 180);
+check('načtená pravidla ohlásí zotavení a zapomenou čas',
+    [$ra_types($ra_f4), $ra_f4['state']['firewall_off_since']], [['firewall_restored'], null]);
+$ra_ap = ['firewall_enabled' => false, 'wan_up' => null];
+$ra_ap3 = $ra_run($ra_ap, $ra_run($ra_ap, $ra_run($ra_ap, [], $ra_now)['state'], $ra_now + 60)['state'], $ra_now + 120);
+check('AP bez WAN role poplach o firewallu nedostane', $ra_types($ra_ap3), []);
+
+// Local DNS resolver (G41): judged only while the line itself works.
+$ra_dns = ['dns_resolver_ok' => false, 'wan_internet' => true];
+$ra_d1 = $ra_run($ra_dns, [], $ra_now);
+$ra_d2 = $ra_run($ra_dns, $ra_d1['state'], $ra_now + 60);
+check('DNS resolver se ohlásí po druhém neúspěchu',
+    [$ra_types($ra_d1), $ra_types($ra_d2), $ra_d2['events'][0]['message']],
+    [[], ['dns_resolver_failed'], 'DNS resolver routeru neodpovídá (připojení k internetu funguje).']);
+check('při výpadku linky se resolver nesoudí a západka se nemění',
+    [$ra_types($ra_run(['dns_resolver_ok' => false, 'wan_internet' => false], $ra_d1['state'], $ra_now + 60)),
+        $ra_run(['dns_resolver_ok' => false, 'wan_internet' => null], $ra_d1['state'], $ra_now + 60)['state']['dns_resolver_bad_streak']],
+    [[], 1]);
+check('odpovídající resolver ohlásí návrat',
+    $ra_types($ra_run(['dns_resolver_ok' => true, 'wan_internet' => true], $ra_d2['state'], $ra_now + 120)), ['dns_resolver_restored']);
+
+// Restart and OOM: timeline only, and the cause is never claimed.
+$ra_r = $ra_run(['uptime' => 120], ['uptime' => 400000], $ra_now);
+check('klesající uptime je restart, jen do časové osy a bez příčiny',
+    [$ra_types($ra_r), $ra_r['events'][0]['status'], strpos($ra_r['events'][0]['message'], 'Příčinu router nezaznamenává') !== false],
+    [['router_rebooted'], null, true]);
+check('rostoucí uptime restart není', $ra_types($ra_run(['uptime' => 400060], ['uptime' => 400000], $ra_now)), []);
+$ra_o = $ra_run(['oom_kills' => 3, 'uptime' => 400060], ['oom_kills' => 1, 'uptime' => 400000], $ra_now);
+check('růst OOM čítače je událost a zapíše si čas',
+    [$ra_types($ra_o), $ra_o['events'][0]['message'], $ra_o['state']['oom_kill_at']],
+    [['oom_kill'], 'Jádro ukončilo 2 proces(y) pro nedostatek paměti.', $ra_now]);
+check('po restartu se nulovaný OOM čítač za událost nepovažuje',
+    $ra_types($ra_run(['oom_kills' => 0, 'uptime' => 120], ['oom_kills' => 5, 'uptime' => 400000], $ra_now)), ['router_rebooted']);
+
+// Public addresses (IPv6 first, phase 1): judged only on a working line,
+// and a loss needs the good state seen first.
+check('rozsahy IPv4: veřejná, CGNAT, privátní, speciální, žádná',
+    array_map('bk_ipv4_scope', ['203.0.113.10', '100.64.0.1', '100.127.255.254', '100.128.0.1', '10.1.2.3',
+        '172.31.0.1', '172.32.0.1', '192.168.8.100', '192.0.0.2', '169.254.1.1', '127.0.0.1', '0.0.0.0',
+        '224.0.0.1', '255.255.255.255', '', null, 'abc', '2001:db8::1']),
+    ['public', 'cgnat', 'cgnat', 'public', 'private',
+        'private', 'public', 'private', 'special', 'special', 'special', 'special',
+        'special', 'special', null, null, null, null]);
+check('IPv6: globální je jen 2000::/3',
+    array_map('bk_ipv6_is_global', ['2001:db8::1', '2a00:1028::1', 'fd00::1', 'fe80::1', '::1', '', null, '203.0.113.10']),
+    [true, true, false, false, false, null, null, null]);
+$ra_addr = fn (?string $v4, ?string $v6, bool $up = true, ?bool $inet = true): array =>
+    ['wan_up' => $up, 'wan_internet' => $inet, 'wan_ipv4' => $v4, 'wan_ipv6' => $v6];
+$ra_seq = function (array $reports, array $state) use ($ra_run, $ra_types, $ra_now): array {
+    $types = [];
+    foreach ($reports as $i => $cur) {
+        $res = $ra_run($cur, $state, $ra_now + 60 * $i);
+        $state = $res['state'];
+        $types[] = $ra_types($res);
+    }
+    return [$types, $state];
+};
+
+[$ra_t, $ra_s] = $ra_seq([$ra_addr('100.64.3.4', null), $ra_addr('100.64.3.4', null)], []);
+check('router, který k serveru přišel už za CGNAT, nic neztratil', [$ra_t, $ra_s['public_ipv4_seen']], [[[], []], false]);
+[$ra_t, $ra_s] = $ra_seq([$ra_addr('203.0.113.10', '2001:db8::1'), $ra_addr('100.64.3.4', '2001:db8::1'),
+    $ra_addr('100.64.3.4', '2001:db8::1'), $ra_addr('100.64.3.4', '2001:db8::1')], []);
+check('veřejná IPv4 viděná: ztráta až po druhém hlášení za CGNAT a jen jednou', $ra_t, [[], [], ['public_ipv4_lost'], []]);
+$ra_ev4 = $ra_run($ra_addr('100.64.3.4', '2001:db8::1'), ['public_ipv4_seen' => true, 'public_ipv4_bad_streak' => 1], $ra_now)['events'][0];
+check('ztráta veřejné IPv4 jde do notifikace a adresu neprozradí',
+    [$ra_ev4['status'], str_contains($ra_ev4['message'], 'CGNAT'), str_contains($ra_ev4['message'], '100.64')],
+    ['public_ipv4_lost', true, false]);
+check('bez funkční linky se nerozhoduje ani o návratu (wan_lost mluví sám)',
+    [$ra_types($ra_run($ra_addr('203.0.113.10', null, false), $ra_s, $ra_now)),
+        $ra_types($ra_run($ra_addr('203.0.113.10', null, true, false), $ra_s, $ra_now))],
+    [[], []]);
+[$ra_t, $ra_s2] = $ra_seq([$ra_addr('203.0.113.10', '2001:db8::1'), $ra_addr('203.0.113.10', '2001:db8::1')], $ra_s);
+check('veřejná IPv4 zpět se ohlásí jednou', [$ra_t, $ra_s2['public_ipv4_alert_sent']], [[['public_ipv4_restored'], []], false]);
+
+[$ra_t, $ra_s] = $ra_seq([$ra_addr('203.0.113.10', '2001:db8::1'), $ra_addr('203.0.113.10', null),
+    $ra_addr('203.0.113.10', null), $ra_addr('203.0.113.10', '2001:db8::1')], []);
+check('dvě hlášení bez IPv6 po reconnectu ještě mlčí a návrat sérii vynuluje',
+    [$ra_t, $ra_s['wan_ipv6_bad_streak']], [[[], [], [], []], 0]);
+[$ra_t, $ra_s] = $ra_seq([$ra_addr('203.0.113.10', '2001:db8::1'), $ra_addr('203.0.113.10', null),
+    $ra_addr('203.0.113.10', null), $ra_addr('203.0.113.10', 'fd00::1'), $ra_addr('203.0.113.10', null)], []);
+check('třetí hlášení bez globální IPv6 (jen ULA) ohlásí ztrátu jednou', $ra_t, [[], [], [], ['wan_ipv6_lost'], []]);
+[$ra_t, $ra_s] = $ra_seq([$ra_addr('203.0.113.10', '2001:db8::2'), $ra_addr('203.0.113.10', '2001:db8::2')], $ra_s);
+check('globální IPv6 zpět se ohlásí jednou', [$ra_t, $ra_s['wan_ipv6_alert_sent']], [[['wan_ipv6_restored'], []], false]);
+[$ra_t, $ra_s] = $ra_seq(array_fill(0, 4, $ra_addr('203.0.113.10', null)), []);
+check('WAN bez vlastní IPv6 (poskytovatel deleguje jen prefix) nikdy nehlásí ztrátu', [$ra_t, $ra_s['wan_ipv6_seen']],
+    [[[], [], [], []], false]);
+
+check('upozornění na veřejné adresy: ztráta varuje, návrat je dobrá zpráva, nic nestránkuje',
+    [bk_alert_color_class('public_ipv4_lost'), bk_alert_color_class('wan_ipv6_lost'),
+        bk_alert_color_class('public_ipv4_restored'), bk_alert_color_class('wan_ipv6_restored'),
+        bk_pagerduty_action('public_ipv4_lost'), bk_pagerduty_action('wan_ipv6_restored')],
+    ['warn', 'warn', 'good', 'good', null, null]);
+
+// --- bk_reports_24h_expected / bk_wireguard_peer_count ----------------------
+$rq_now = 1789891234;
+check('za celý den se čeká 1440 minutových hlášení',
+    bk_reports_24h_expected(['status' => 'up'], null, $rq_now)['expected'], 1440);
+check('router nahozený před dvěma hodinami dluží jen dvě hodiny',
+    bk_reports_24h_expected(['status' => 'up'], $rq_now - 7200, $rq_now)['expected'], 120);
+check('vypnutý (pozastavený) monitor nedluží nic',
+    bk_reports_24h_expected(['status' => 'paused'], null, $rq_now)['expected'], 0);
+check('nový agent nedluží hlášení z doby před prvním (R152)',
+    bk_reports_24h_expected(['status' => 'up'], null, $rq_now, $rq_now - 1800)['expected'], 30);
+check('první hlášení před oknem nic nemění',
+    bk_reports_24h_expected(['status' => 'up'], null, $rq_now, $rq_now - 5 * 86400)['expected'], 1440);
+check('naplánovaná údržba se z očekávání odečte',
+    bk_reports_24h_expected(['status' => 'up', 'maintenance' => 1,
+        'maintenance_start' => date('Y-m-d H:i:s', $rq_now - 7200),
+        'maintenance_end' => date('Y-m-d H:i:s', $rq_now - 3600)], null, $rq_now)['expected'], 1380);
+
+check('seznam protějšků WireGuardu se do sloupce ukládá jako počet',
+    [bk_wireguard_peer_count([['public_key' => 'a'], ['public_key' => 'b']]), bk_wireguard_peer_count([]),
+        bk_wireguard_peer_count(3), bk_wireguard_peer_count(null), bk_wireguard_peer_count('x')], [2, 0, 3, null, null]);
+
+// --- Pořadí doporučení routeru (CORE 3.7) --------------------------------
+// The order is what the reader of the weekly e-mail sees first, and it is
+// NOT alphabetical: a disk that is losing power must come before an optional
+// self-test, whatever their keys are.
+
+$mk = fn (string $id, string $area, string $sev, string $key = ''): array =>
+    bk_rec_item($id, $key === '' ? $id : $key, $area, $sev, ['kind' => 'disk']);
+$ids = fn (array $items): array => array_map(fn ($i) => $i['key'], $items);
+
+check('závažnost rozhoduje první',
+    $ids(bk_rec_sort_items([$mk('disk_selftest_never', 'storage', 'info'), $mk('disk_smart_failing', 'storage', 'critical')])),
+    ['disk_smart_failing', 'disk_selftest_never']);
+
+check('při stejné závažnosti jde úložiště před wifi a wifi před balíčky',
+    $ids(bk_rec_sort_items([$mk('pkg_iw', 'packages', 'info'), $mk('wifi_noise_high', 'wifi', 'info'), $mk('disk_selftest_never', 'storage', 'info')])),
+    ['disk_selftest_never', 'wifi_noise_high', 'pkg_iw']);
+
+// The reason the rank list exists: alphabetically `disk_selftest_never`
+// would come first, and „router loses power" would be under it.
+check('pořadí pravidel není abecední',
+    $ids(bk_rec_sort_items([$mk('disk_selftest_never', 'storage', 'info'), $mk('disk_unclean_shutdowns', 'storage', 'info')])),
+    ['disk_unclean_shutdowns', 'disk_selftest_never']);
+
+check('dvě instance téhož pravidla řadí klíč',
+    $ids(bk_rec_sort_items([$mk('disk_temp_warm', 'storage', 'warning', 'disk_temp_warm:d:b'), $mk('disk_temp_warm', 'storage', 'warning', 'disk_temp_warm:d:a')])),
+    ['disk_temp_warm:d:a', 'disk_temp_warm:d:b']);
+
+check('každé id ze seznamu pravidel má svůj rank',
+    count(bk_router_rec_thresholds()['rank']), count(array_unique(bk_router_rec_thresholds()['rank'])));
+
+check_true('položka jen pro stránku to o sobě řekne',
+    !empty(bk_rec_item('wan_cpu_packet_path', 'wan_cpu_packet_path', 'wan', 'info', [], [], true)['page_only'])
+    && !array_key_exists('page_only', bk_rec_item('disk_temp_warm', 'k', 'storage', 'info', [])));
+
+
+// --- Pravidla Wi-Fi (CORE 3.7) ---------------------------------------------
+// Každé z dvanácti pravidel má trojici „spustí se" / „těsně pod hranicí se
+// nespustí" / „drží, dokud je aktivní": bez držení by hodnota na hranici
+// blikala v pondělním e-mailu týden co týden.
+
+$wf_win = bk_router_rec_window(date('Y-m-d'));
+// One constant value on every day of a window slice. `samples` decides
+// whether the day counts at all (CORE: >= 360).
+$wf_series = function (array $days, $value, int $samples = 1440): array {
+    $out = [];
+    foreach ($days as $day) {
+        $out[$day] = ['min' => $value, 'avg' => $value, 'max' => $value, 'samples' => $samples];
+    }
+    return $out;
+};
+$wf_radio = function (array $over = []): array {
+    return array_merge([
+        'radio' => 'phy0-ap0', 'ssid' => 'Test 5', 'mode' => 'ap', 'band' => '5GHz',
+        'channel' => 36, 'htmode' => 'HE80', 'htmodes_supported' => ['HT20', 'VHT80', 'HE80'],
+        'encryption' => 'wpa2_wpa3', 'encryption_enterprise' => false, 'phy_has_6ghz' => false,
+        'clients' => 2, 'clients_weak' => 0, 'signal_min' => -50, 'snr_min' => 40,
+        'weakest_gen' => 6, 'bitrate_tx_avg_mbps' => 500.0,
+        'clients_caps_known' => 2, 'clients_6ghz_capable' => 0,
+    ], $over);
+};
+// One evaluation of the Wi-Fi group: radios, weekly metrics, saved state.
+$wf_run = function (array $radios, array $metrics, array $state = [], array $details = []) use ($wf_win): array {
+    $win = $wf_win;
+    $win['metrics'] = $metrics;
+    return bk_rec_rules_wifi([
+        'window' => $win,
+        'details' => array_merge(['wifi_radios' => $radios], $details),
+        'monitor' => ['id' => 1, 'type' => 'openwrt'],
+        'now' => time(),
+    ], $state);
+};
+// rule id => severity, so a test reads like the e-mail.
+$wf_fired = function (array $res): array {
+    $out = [];
+    foreach ($res['items'] as $item) {
+        $out[(string)$item['id']] = (string)$item['severity'];
+    }
+    ksort($out);
+    return $out;
+};
+$wf_active = fn (string $key, string $sev = 'info'): array => [$key => ['active' => 1, 'severity' => $sev]];
+// Which of the LISTED rules answered "not measured" instead of silently
+// passing - the difference between "nothing found" and "nothing measured".
+$wf_skipped = fn (array $res, array $ids): array =>
+    array_values(array_intersect($ids, array_values($res['not_evaluated'])));
+
+// --- wifi_channel_busy: cizí provoz má vlastní (nižší) práh, protože
+//     vlastní stahování změnou kanálu nezmizí.
+$wf_busy = fn (float $other, ?float $total = 20.0): array => array_merge(
+    ['wifi_busy_other_5g' => $wf_series($wf_win['days'], $other)],
+    $total === null ? [] : ['wifi_busy_5g' => $wf_series($wf_win['days'], $total)]);
+check('Wi-Fi: cizí provoz 35 % na kanálu se ozve', $wf_fired($wf_run([$wf_radio()], $wf_busy(35.0))),
+    ['wifi_channel_busy' => 'info']);
+check('Wi-Fi: cizí provoz 34,9 % je ticho', $wf_fired($wf_run([$wf_radio()], $wf_busy(34.9))), []);
+check('Wi-Fi: rozdělaný kanál drží na 30 %, pod 30 % končí',
+    [$wf_fired($wf_run([$wf_radio()], $wf_busy(30.0), $wf_active('wifi_channel_busy:5g'))),
+        $wf_fired($wf_run([$wf_radio()], $wf_busy(29.9), $wf_active('wifi_channel_busy:5g')))],
+    [['wifi_channel_busy' => 'info'], []]);
+check('Wi-Fi: cizí provoz 55 % je varování, 50 % s uloženým varováním drží',
+    [$wf_fired($wf_run([$wf_radio()], $wf_busy(55.0))),
+        $wf_fired($wf_run([$wf_radio()], $wf_busy(50.0), $wf_active('wifi_channel_busy:5g', 'warning')))],
+    [['wifi_channel_busy' => 'warning'], ['wifi_channel_busy' => 'warning']]);
+check('Wi-Fi: bez cizího provozu platí práh celkové obsazenosti 50 %',
+    [$wf_fired($wf_run([$wf_radio()], ['wifi_busy_5g' => $wf_series($wf_win['days'], 50.0)])),
+        $wf_fired($wf_run([$wf_radio()], ['wifi_busy_5g' => $wf_series($wf_win['days'], 49.9)]))],
+    [['wifi_channel_busy' => 'info'], []]);
+check('Wi-Fi: pásmo bez survey se nevyhodnocuje, nemlčí jako v pořádku',
+    $wf_skipped($wf_run([$wf_radio()], []),
+        ['wifi_channel_busy', 'wifi_noise_high', 'wifi_week_degraded']),
+    ['wifi_channel_busy', 'wifi_noise_high', 'wifi_week_degraded']);
+
+// --- wifi_noise_high: hranice jsou „fair" / „poor" z aplikace.
+$wf_noise = fn (float $dbm): array => ['wifi_noise_5g' => $wf_series($wf_win['days'], $dbm)];
+check('Wi-Fi: šum −84 dBm se ozve, −85 dBm ne',
+    [$wf_fired($wf_run([$wf_radio()], $wf_noise(-84.0))), $wf_fired($wf_run([$wf_radio()], $wf_noise(-85.0)))],
+    [['wifi_noise_high' => 'info'], []]);
+check('Wi-Fi: šum drží do −87 dBm, pod ním končí',
+    [$wf_fired($wf_run([$wf_radio()], $wf_noise(-86.0), $wf_active('wifi_noise_high:5g'))),
+        $wf_fired($wf_run([$wf_radio()], $wf_noise(-87.0), $wf_active('wifi_noise_high:5g')))],
+    [['wifi_noise_high' => 'info'], []]);
+check('Wi-Fi: šum −79 dBm je varování, −82 s uloženým varováním drží',
+    [$wf_fired($wf_run([$wf_radio()], $wf_noise(-79.0))),
+        $wf_fired($wf_run([$wf_radio()], $wf_noise(-81.0), $wf_active('wifi_noise_high:5g', 'warning')))],
+    [['wifi_noise_high' => 'warning'], ['wifi_noise_high' => 'warning']]);
+
+// --- wifi_week_degraded: jen prostředí, ne klienti - jinak by týden
+//     prázdného bytu vypadal jako závada.
+$wf_two_weeks = function (array $w_vals, array $p_vals) use ($wf_win, $wf_series): array {
+    $out = [];
+    foreach ($w_vals as $key => $v) {
+        $out[$key] = $wf_series($wf_win['days'], $v);
+    }
+    foreach ($p_vals as $key => $v) {
+        $out[$key] = ($out[$key] ?? []) + $wf_series($wf_win['prev_days'], $v);
+    }
+    return $out;
+};
+check('Wi-Fi: šum o 8 dB výš a nad −88 dBm je zhoršené prostředí',
+    $wf_fired($wf_run([$wf_radio()], $wf_two_weeks(['wifi_noise_5g' => -87.0], ['wifi_noise_5g' => -95.0]))),
+    ['wifi_week_degraded' => 'info']);
+check('Wi-Fi: stejný růst, ale pořád pod −88 dBm, je ticho',
+    $wf_fired($wf_run([$wf_radio()], $wf_two_weeks(['wifi_noise_5g' => -89.0], ['wifi_noise_5g' => -97.0]))), []);
+check('Wi-Fi: zhoršený šum i cizí provoz najednou je varování',
+    $wf_fired($wf_run([$wf_radio()], $wf_two_weeks(
+        ['wifi_noise_5g' => -87.0, 'wifi_busy_other_5g' => 31.0],
+        ['wifi_noise_5g' => -95.0, 'wifi_busy_other_5g' => 10.0]))),
+    ['wifi_week_degraded' => 'warning']);
+check('Wi-Fi: cizí provoz o 15 bodů výš, ale pod 30 %, prostředí nezhorší',
+    $wf_fired($wf_run([$wf_radio()], $wf_two_weeks(
+        ['wifi_busy_other_5g' => 29.0], ['wifi_busy_other_5g' => 10.0]))), []);
+check('Wi-Fi: bez předchozího týdne se zhoršení nevyhodnocuje, šum ano',
+    $wf_skipped($wf_run([$wf_radio()], $wf_noise(-92.0)),
+        ['wifi_noise_high', 'wifi_week_degraded']), ['wifi_week_degraded']);
+
+// --- wifi_weak_encryption / wifi_wpa2_only: konfigurace jedné sítě.
+$wf_enc = fn (string $enc, array $over = []): array =>
+    $wf_fired($wf_run([$wf_radio(array_merge(['encryption' => $enc], $over))], $wf_noise(-92.0)));
+check('Wi-Fi: WEP a WPA1 jsou kritické, otevřená síť varování',
+    [$wf_enc('wep'), $wf_enc('wpa'), $wf_enc('open')],
+    [['wifi_weak_encryption' => 'critical'], ['wifi_weak_encryption' => 'critical'],
+        ['wifi_weak_encryption' => 'warning']]);
+check('Wi-Fi: WPA/WPA2 je varování a nikdy „jen WPA2"', $wf_enc('wpa_wpa2'),
+    ['wifi_weak_encryption' => 'warning']);
+check('Wi-Fi: OWE ani WPA2/WPA3 se za slabé nepovažuje',
+    [$wf_enc('owe'), $wf_enc('wpa2_wpa3')], [[], []]);
+check('Wi-Fi: samotné WPA2 je informace, podnikové WPA2 ne',
+    [$wf_enc('wpa2'), $wf_enc('wpa2', ['encryption_enterprise' => true])],
+    [['wifi_wpa2_only' => 'info'], []]);
+
+// --- wifi_wpa3_ready: nejpřísnější pravidlo, zve majitele vypnout WPA2.
+$wf_wpa3 = function (array $days_over = [], int $clients = 4) use ($wf_win, $wf_series, $wf_radio, $wf_run): array {
+    $days = $wf_series($wf_win['days'], 0);
+    foreach ($days_over as $idx => $row) {
+        $days[$wf_win['days'][$idx]] = $row;
+    }
+    return $wf_run([$wf_radio()], ['wifi_wpa2_clients' => $days,
+        'wifi_clients' => $wf_series($wf_win['days'], $clients)]);
+};
+check('Wi-Fi: celý týden bez jediného WPA2 klienta nabídne čisté WPA3',
+    $wf_fired($wf_wpa3()), ['wifi_wpa3_ready' => 'info']);
+check('Wi-Fi: jedna stanice přes WPA2 v jediném dni nabídku zruší',
+    $wf_fired($wf_wpa3([3 => ['min' => 0, 'avg' => 0.1, 'max' => 1, 'samples' => 1440]])), []);
+check('Wi-Fi: den s mezerou v datech se nevyhodnotí, místo aby prošel',
+    [$wf_fired($wf_wpa3([3 => ['min' => 0, 'avg' => 0, 'max' => 0, 'samples' => 1295]])),
+        $wf_skipped($wf_wpa3([3 => ['min' => 0, 'avg' => 0, 'max' => 0, 'samples' => 1295]]),
+            ['wifi_wpa3_ready'])],
+    [[], ['wifi_wpa3_ready']]);
+check('Wi-Fi: týden bez jediného klienta se na WPA3 nepřepíná', $wf_fired($wf_wpa3([], 0)), []);
+
+// --- wifi_mode_below_card / wifi_channel_narrow / wifi_24_wide_channel:
+//     co karta na TOMTO pásmu opravdu umí (REAL_FACTS: na 2,4 GHz je HT
+//     maximum, i když ovladač hlásí „ac").
+check('Wi-Fi: HT80 na kartě s HE je varování a navrhne HE80',
+    $wf_fired($wf_run([$wf_radio(['htmode' => 'HT80'])], $wf_noise(-92.0))),
+    ['wifi_mode_below_card' => 'warning']);
+check('Wi-Fi: na 2,4 GHz je stejný nález jen informace',
+    $wf_fired($wf_run([$wf_radio(['band' => '2.4GHz', 'channel' => 6, 'htmode' => 'NOHT',
+        'htmodes_supported' => ['HT20', 'HT40']])], $wf_noise(-92.0))),
+    ['wifi_mode_below_card' => 'info']);
+check('Wi-Fi: HT20 na 2,4 GHz kartě hlásící „ac" je maximum pásma, ne nález',
+    $wf_fired($wf_run([$wf_radio(['band' => '2.4GHz', 'channel' => 6, 'htmode' => 'HT20',
+        'htmodes_supported' => ['HT20', 'HT40', 'VHT80']])], $wf_noise(-92.0))), []);
+// The suggestion keeps the width the radio runs NOW: widening the channel
+// is a different rule with a different guard.
+$wf_suggested = function (array $res, string $id): ?string {
+    foreach ($res['items'] as $item) {
+        if ((string)$item['id'] === $id) {
+            return (string)($item['params']['suggested'] ?? '');
+        }
+    }
+    return null;
+};
+check('Wi-Fi: navržený režim si nechá současnou šířku kanálu',
+    $wf_suggested($wf_run([$wf_radio(['htmode' => 'HT40'])], $wf_noise(-92.0)), 'wifi_mode_below_card'),
+    'HE40');
+check('Wi-Fi: 40 MHz na 5 GHz s kartou na 80 MHz je úzký kanál',
+    $wf_fired($wf_run([$wf_radio(['htmode' => 'HE40'])], $wf_noise(-92.0))),
+    ['wifi_channel_narrow' => 'info']);
+check('Wi-Fi: na obsazeném kanálu se rozšíření nedoporučuje',
+    $wf_fired($wf_run([$wf_radio(['htmode' => 'HE40'])],
+        ['wifi_busy_5g' => $wf_series($wf_win['days'], 40.0)])), []);
+check('Wi-Fi: 20 MHz na 2,4 GHz je správně, 40 MHz je nález',
+    [$wf_fired($wf_run([$wf_radio(['band' => '2.4GHz', 'channel' => 5, 'htmode' => 'HT20',
+        'htmodes_supported' => ['HT20', 'HT40']])], $wf_noise(-92.0))),
+        $wf_fired($wf_run([$wf_radio(['band' => '2.4GHz', 'channel' => 5, 'htmode' => 'HT40',
+            'htmodes_supported' => ['HT20', 'HT40']])], $wf_noise(-92.0)))],
+    [[], ['wifi_24_wide_channel' => 'info']]);
+
+// --- wifi_6ghz_unserved: počítá jen klienty připojené k TOMUTO routeru.
+$wf_6e = fn (float $share): array => ['wifi_6e_unserved' => $wf_series($wf_win['days'], $share)]
+    + ['wifi_busy_5g' => $wf_series($wf_win['days'], 3.5)];
+$wf_r6 = fn (array $over = []): array => $wf_radio(array_merge(
+    ['clients_caps_known' => 4, 'clients_6ghz_capable' => 2, 'bitrate_tx_avg_mbps' => 736.8], $over));
+check('Wi-Fi: dva klienti s 6 GHz půlku týdne se ozvou, 0,49 ne',
+    [$wf_fired($wf_run([$wf_r6()], $wf_6e(0.50))), $wf_fired($wf_run([$wf_r6()], $wf_6e(0.49)))],
+    [['wifi_6ghz_unserved' => 'info'], []]);
+check('Wi-Fi: jeden večer bez nich (0,30) běžící nález neukončí, 0,20 ano',
+    [$wf_fired($wf_run([$wf_r6()], $wf_6e(0.30), $wf_active('wifi_6ghz_unserved'))),
+        $wf_fired($wf_run([$wf_r6()], $wf_6e(0.20), $wf_active('wifi_6ghz_unserved')))],
+    [['wifi_6ghz_unserved' => 'info'], []]);
+check('Wi-Fi: 0,30 bez uloženého nálezu nález nezačne',
+    $wf_fired($wf_run([$wf_r6()], $wf_6e(0.30))), []);
+check('Wi-Fi: vlastní rádio na 6 GHz nález ukončí, i když podíl zůstal vysoký',
+    $wf_fired($wf_run([$wf_r6(), $wf_radio(['band' => '6GHz', 'channel' => 37, 'ssid' => 'Domov 6'])],
+        $wf_6e(0.90), $wf_active('wifi_6ghz_unserved'))), []);
+check('Wi-Fi: WAN 2500 Mbit/s dostane větu o smyslu Wi-Fi nad 1 Gbit/s, 1000 Mbit/s vedle 736,8 nic',
+    [$wf_run([$wf_r6()], $wf_6e(0.90), [], ['wan_link_mbit' => 2500])['items'][0]['params']['wan_variant'],
+        $wf_run([$wf_r6()], $wf_6e(0.90), [], ['wan_link_mbit' => 1000])['items'][0]['params']['wan_variant'],
+        $wf_run([$wf_r6()], $wf_6e(0.90), [], ['wan_link_mbit' => 300])['items'][0]['params']['wan_variant']],
+    ['fast', null, 'slow']);
+
+// --- wifi_weak_client: informace, a jen když je pásmo tiché.
+$wf_weak = fn (float $mean, float $noise = -92.0): array =>
+    ['wifi_weak_clients' => $wf_series($wf_win['days'], $mean)] + $wf_noise($noise);
+$wf_rw = fn (array $over = []): array => $wf_radio(array_merge(
+    ['clients_weak' => 1, 'signal_min' => -75, 'snr_min' => 17, 'weakest_gen' => 4], $over));
+check('Wi-Fi: slabý klient většinu týdne se ozve, 0,49 ne',
+    [$wf_fired($wf_run([$wf_rw()], $wf_weak(0.5))), $wf_fired($wf_run([$wf_rw()], $wf_weak(0.49)))],
+    [['wifi_weak_client' => 'info'], []]);
+check('Wi-Fi: klient přesně na hranici −75 dBm nebliká - drží do 0,25',
+    [$wf_fired($wf_run([$wf_rw()], $wf_weak(0.45), $wf_active('wifi_weak_client'))),
+        $wf_fired($wf_run([$wf_rw()], $wf_weak(0.20), $wf_active('wifi_weak_client')))],
+    [['wifi_weak_client' => 'info'], []]);
+check('Wi-Fi: v zarušeném pásmu mluví o rušení, ne o vzdálenosti',
+    $wf_fired($wf_run([$wf_rw()], $wf_weak(1.0, -82.0))), ['wifi_noise_high' => 'info']);
+check('Wi-Fi: bez změřeného šumu pásma se o vzdálenosti nic netvrdí',
+    $wf_fired($wf_run([$wf_rw()], ['wifi_weak_clients' => $wf_series($wf_win['days'], 1.0)])), []);
+
+// --- wifi_5ghz_clients_on_24: jen když opravdu běží obě pásma.
+$wf_24 = fn (array $over = []): array => $wf_radio(array_merge(
+    ['band' => '2.4GHz', 'channel' => 5, 'htmode' => 'HT20', 'ssid' => 'Domov 2G',
+        'htmodes_supported' => ['HT20', 'HT40']], $over));
+$wf_cap = fn (float $n): array => ['wifi_5g_capable_24g' => $wf_series($wf_win['days'], $n)] + $wf_noise(-92.0);
+check('Wi-Fi: jedno zařízení s 5 GHz na 2,4 GHz se ozve, 0,99 ne',
+    [$wf_fired($wf_run([$wf_radio(), $wf_24()], $wf_cap(1.0))),
+        $wf_fired($wf_run([$wf_radio(), $wf_24()], $wf_cap(0.99)))],
+    [['wifi_5ghz_clients_on_24' => 'info'], []]);
+check('Wi-Fi: drží do 0,75, pod ní končí',
+    [$wf_fired($wf_run([$wf_radio(), $wf_24()], $wf_cap(0.75), $wf_active('wifi_5ghz_clients_on_24'))),
+        $wf_fired($wf_run([$wf_radio(), $wf_24()], $wf_cap(0.74), $wf_active('wifi_5ghz_clients_on_24')))],
+    [['wifi_5ghz_clients_on_24' => 'info'], []]);
+check('Wi-Fi: bez druhého pásma se přechod na 5 GHz nedoporučuje',
+    $wf_fired($wf_run([$wf_24()], $wf_cap(2.0))), []);
+
+// --- Klíč rádia. REAL_FACTS: totéž USB rádio bylo phy3-ap0 i phy1-ap0,
+//     takže ztlumení klíčované jménem rozhraní by se po restartu ztratilo.
+$wf_key = fn (array $over): string => (string)$wf_run([$wf_radio(array_merge(['encryption' => 'wpa2'], $over))],
+    $wf_noise(-92.0))['items'][0]['key'];
+check('Wi-Fi: přejmenované rozhraní klíč nezmění, jiná síť ano',
+    [$wf_key(['radio' => 'phy3-ap0']) === $wf_key(['radio' => 'phy1-ap0']),
+        $wf_key(['radio' => 'phy0-ap0']) === $wf_key(['ssid' => 'Jiná'])],
+    [true, false]);
+check('Wi-Fi: jméno rozhraní zůstává popiskem v subjektu, ne klíčem',
+    $wf_run([$wf_radio(['encryption' => 'wpa2', 'radio' => 'phy3-ap0'])], $wf_noise(-92.0))['items'][0]['subject'],
+    ['kind' => 'radio', 'radio' => 'phy3-ap0', 'band' => '5GHz']);
+check('Wi-Fi: položka nese pásmo jako hodnotu, ne jako přeložený popisek',
+    array_intersect_key($wf_run([$wf_radio(['encryption' => 'wpa2'])], $wf_noise(-92.0))['items'][0]['params'],
+        ['band_id' => 1, 'ch' => 1]),
+    ['band_id' => '5GHz', 'ch' => 36]);
+
+// --- Rádia mimo režim AP nemají majitelova klienta ani jeho síť.
+check('Wi-Fi: klientské ani vypnuté rádio žádné doporučení nevydá',
+    [$wf_fired($wf_run([$wf_radio(['mode' => 'sta', 'encryption' => 'open'])], $wf_noise(-70.0))),
+        $wf_fired($wf_run([$wf_radio(['mode' => null, 'encryption' => 'open'])], $wf_noise(-70.0)))],
+    [[], []]);
+
+// --- Pravidla WAN, systému a balíčků (rule sheet 2.1, WAN 3.5) --------------
+// Každé pravidlo má dvojici „spustí se" / „těsně pod hranicí se nespustí"
+// a tam, kde má pár enter/hold, i test držení: bez něj by metrika na hranici
+// blikala v pondělním e-mailu každý týden.
+
+$rw_days = bk_router_rec_window(date('Y-m-d'))['days'];
+// A full week of reports: every rule that reads the week needs four days
+// with data, so the base fixture has seven.
+$rw_series = function (string $key, array $values, int $samples = 1440) use ($rw_days): array {
+    $out = [];
+    foreach ($rw_days as $i => $day) {
+        $v = $values[$i] ?? null;
+        if ($v === null) {
+            continue;
+        }
+        $out[$day] = ['min' => $v, 'avg' => $v / max(1, $samples), 'max' => $v, 'samples' => $samples];
+    }
+    return [$key => $out];
+};
+// A step metric's DAILY value is avg * samples, so a day carrying `n` is
+// written as avg = n / samples.
+$rw_step = function (string $key, array $totals) use ($rw_days): array {
+    $out = [];
+    foreach ($rw_days as $i => $day) {
+        $t = $totals[$i] ?? null;
+        if ($t === null) {
+            continue;
+        }
+        $out[$day] = ['min' => 0.0, 'avg' => $t / 1440.0, 'max' => $t, 'samples' => 1440];
+    }
+    return [$key => $out];
+};
+$rw_base = $rw_series('cpu', array_fill(0, 7, 10.0));
+$rw_in = fn (array $metrics, array $over = []): array => $over + [
+    'window' => ['days' => $rw_days, 'metrics' => $metrics + $rw_base, 'prev_days' => [], 'days30' => []],
+    'details' => ['wan_link_dev' => 'eth2'],
+    'monitor' => ['wan_plan_down_mbit' => 2000, 'wan_plan_up_mbit' => 1000],
+    'rx_packets' => [], 'events' => [], 'speedtests' => [], 'server_max' => [],
+    'forwarding_minutes' => null, 'conntrack_days' => null, 'now' => time(),
+];
+$rw_ids = function (array $res): array {
+    return array_map(fn (array $i): string => (string)$i['id'], $res['items']);
+};
+$rw_active = fn (string $key): array => [$key => ['active' => 1, 'severity' => 'warning', 'rule_id' => $key]];
+
+// R-W6: a day counts when even its best minute was below the plan.
+$rw_link = fn (int $below): array =>
+    $rw_series('wan_link_mbit', array_merge(array_fill(0, $below, 1000.0), array_fill(0, 7 - $below, 2500.0)));
+check_true('port pod tarifem 6 dní ze 7 = doporučení, 5 dní ne',
+    in_array('wan_link_below_plan', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_link(6)), [])), true)
+    && !in_array('wan_link_below_plan', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_link(5)), [])), true));
+check_true('port pod tarifem 5 dní: trvající doporučení zůstává, nové nevznikne',
+    in_array('wan_link_below_plan', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_link(5)), $rw_active('wan_link_below_plan'))), true)
+    && !in_array('wan_link_below_plan', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_link(4)), $rw_active('wan_link_below_plan'))), true));
+check('bez tarifu se port pod tarifem nevyhodnocuje',
+    bk_rec_rules_wan_week($rw_in($rw_link(7), ['monitor' => []]), [])['not_evaluated']['wan_link_below_plan'] ?? null,
+    'wan_link_below_plan');
+
+// R-W9, the error branch: a week sum AND enough distinct days.
+$rw_err = fn (array $per_day): array => $rw_step('wan_errors', $per_day);
+check_true('100 chyb ve 3 dnech = doporučení, 99 nebo 2 dny ne',
+    in_array('wan_port_errors', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_err([40.0, 40.0, 20.0])), [])), true)
+    && !in_array('wan_port_errors', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_err([40.0, 40.0, 19.0])), [])), true)
+    && !in_array('wan_port_errors', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_err([60.0, 60.0])), [])), true));
+check_true('50 chyb ve 2 dnech drží jen aktivní doporučení',
+    in_array('wan_port_errors', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_err([25.0, 25.0])), $rw_active('wan_port_errors'))), true)
+    && !in_array('wan_port_errors', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_err([25.0, 25.0])), [])), true));
+
+// R-W9, the ring branch: a share of the week's received packets, never a
+// bare count - and sysfs drops alone never raise the rule.
+$rw_ring = fn (array $per_day, float $rx): array =>
+    $rw_in($rw_step('wan_ring_drops', $per_day), ['rx_packets' => array_fill_keys($rw_days, $rx / 7.0)]);
+check_true('kruhový buffer: 0,1 % paketů ve 2 dnech = doporučení, v 1 dni ne',
+    in_array('wan_port_errors', $rw_ids(bk_rec_rules_wan_week($rw_ring([600.0, 600.0], 1000000.0), [])), true)
+    && !in_array('wan_port_errors', $rw_ids(bk_rec_rules_wan_week($rw_ring([1200.0], 1000000.0), [])), true));
+// The sysfs counter is evidence only: on mvneta it counts junk frames of
+// protocols nobody asked for, and a week of them must not raise the rule
+// even when the days would be there.
+check_true('R-W9 nevzniká ze samotných sysfs dropů',
+    !in_array('wan_port_errors', $rw_ids(bk_rec_rules_wan_week($rw_in(
+        $rw_step('wan_drops', [5000.0, 5000.0, 5000.0]) + $rw_step('wan_errors', [1.0, 1.0, 1.0])), [])), true));
+
+// R-W10: the step is null across a reboot, so those outages cannot count.
+check_true('3 výpadky linky za týden = doporučení, 2 ne',
+    in_array('wan_link_flaps', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_step('wan_link_flaps', [1.0, 1.0, 1.0])), [])), true)
+    && !in_array('wan_link_flaps', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_step('wan_link_flaps', [1.0, 1.0])), [])), true));
+check_true('2 výpadky drží jen aktivní doporučení',
+    in_array('wan_link_flaps', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_step('wan_link_flaps', [1.0, 1.0])), $rw_active('wan_link_flaps'))), true)
+    && !in_array('wan_link_flaps', $rw_ids(bk_rec_rules_wan_week($rw_in($rw_step('wan_link_flaps', [1.0])), $rw_active('wan_link_flaps'))), true));
+check('výpadky přes restart routeru se nepočítají (krok je null)',
+    bk_rec_rules_wan_week($rw_in($rw_step('wan_link_flaps', [])), [])['not_evaluated']['wan_link_flaps'] ?? null,
+    'wan_link_flaps');
+// wan_link_below_plan, wan_link_flaps and the three keys of wan_port_errors.
+check('méně než 4 dny dat týdenní pravidla nevyhodnotí',
+    count(bk_rec_rules_wan_week($rw_in($rw_series('cpu', [10.0, 10.0, 10.0])), [])['not_evaluated']), 5);
+
+// --- The weekly WAN and clock rules read only W --------------------------------
+// The inputs batch loads thirty days (the disk wear trend reads that far) and
+// bk_rec_week_stat sums whatever it is handed. Each case puts the same numbers
+// once inside W (fires) and once on days30 outside W with W itself quiet
+// (must not fire): "on N of the last 7 days" has to be true.
+$w1_win = bk_router_rec_window(date('Y-m-d'));
+$w1_out = array_values(array_diff($w1_win['days30'], $w1_win['days']));
+// A step metric's day: avg * samples = the day's total.
+$w1_step = function (string $key, array $totals): array {
+    $out = [];
+    foreach ($totals as $day => $total) {
+        $out[$day] = ['min' => 0.0, 'avg' => $total / 1440.0, 'max' => $total, 'samples' => 1440];
+    }
+    return [$key => $out];
+};
+$w1_quiet = array_fill_keys($w1_win['days'], 0.0);
+$w1_in = function (array $metrics, array $over = []) use ($rw_in, $w1_win): array {
+    $in = $rw_in($metrics, $over);
+    $in['window']['days30'] = $w1_win['days30'];
+    return $in;
+};
+$w1_fires = fn (string $id, array $res): bool => in_array($id, $rw_ids($res), true);
+$w1_three_in = array_fill_keys(array_slice($w1_win['days'], 0, 3), 40.0) + $w1_quiet;
+$w1_three_out = array_fill_keys(array_slice($w1_out, 0, 3), 40.0) + $w1_quiet;
+check('chyby portu WAN: 3 × 40 v týdnu = doporučení, tytéž dny mimo týden ne',
+    [$w1_fires('wan_port_errors', bk_rec_rules_wan_week($w1_in($w1_step('wan_errors', $w1_three_in)), [])),
+        $w1_fires('wan_port_errors', bk_rec_rules_wan_week($w1_in($w1_step('wan_errors', $w1_three_out)), []))],
+    [true, false]);
+// The ring share divides by the week's packets; 1,200 drops on two days
+// outside W used to be divided by the packets of W alone.
+$w1_ring = fn (array $totals): array => $w1_in($w1_step('wan_ring_drops', $totals),
+    ['rx_packets' => array_fill_keys($w1_win['days'], 1000000.0 / 7.0)]);
+check('zahozené rámce portu: 2 × 1200 v týdnu = doporučení, mimo týden ne',
+    [$w1_fires('wan_port_errors', bk_rec_rules_wan_week($w1_ring(array_fill_keys(array_slice($w1_win['days'], 0, 2), 1200.0) + $w1_quiet), [])),
+        $w1_fires('wan_port_errors', bk_rec_rules_wan_week($w1_ring(array_fill_keys(array_slice($w1_out, 0, 2), 1200.0) + $w1_quiet), []))],
+    [true, false]);
+check('výpadky linky: 3 v týdnu = doporučení, mimo týden ne',
+    [$w1_fires('wan_link_flaps', bk_rec_rules_wan_week($w1_in($w1_step('wan_link_flaps',
+        array_fill_keys(array_slice($w1_win['days'], 0, 3), 1.0) + $w1_quiet)), [])),
+        $w1_fires('wan_link_flaps', bk_rec_rules_wan_week($w1_in($w1_step('wan_link_flaps',
+            array_fill_keys(array_slice($w1_out, 0, 3), 1.0) + $w1_quiet)), []))],
+    [true, false]);
+// Clock: 30 s on the 23 days before W and 5 s in W. A month's mean would
+// be 24 s and fire; the week's is 5 s.
+$w1_skew = [];
+foreach ($w1_win['days30'] as $day) {
+    $secs = in_array($day, $w1_win['days'], true) ? 5.0 : 30.0;
+    $w1_skew[$day] = ['min' => $secs, 'avg' => $secs, 'max' => $secs, 'samples' => 1440];
+}
+$w1_gap = fn (array $skew): array => bk_rec_rules_gap(['window' => $w1_in(['clock_skew_s' => $skew])['window'],
+    'details' => ['wan_up' => true], 'monitor' => [], 'events' => [], 'now' => time()], []);
+check('hodiny: 30 s před týdnem a 5 s v něm doporučení nevydá, 30 s v týdnu ano',
+    [$w1_fires('clock_skew', $w1_gap($w1_skew)),
+        $w1_fires('clock_skew', $w1_gap(array_map(fn (array $r): array => ['min' => 30.0, 'avg' => 30.0, 'max' => 30.0, 'samples' => 1440], $w1_skew)))],
+    [false, true]);
+$w1_month = array_values(array_filter(bk_rec_rules_wan_week($w1_in($w1_step('wan_errors',
+    array_fill_keys($w1_win['days30'], 40.0))), [])['items'], fn (array $i): bool => $i['id'] === 'wan_port_errors'));
+check('chyby portu WAN: měsíc chyb dá v textu 7 dní a součet týdne',
+    [$w1_month[0]['params']['days'] ?? null, $w1_month[0]['params']['errors'] ?? null], [7, 280.0]);
+
+// --- The WAN port finding names the measured cause ------------------------------
+// On mvneta rx_errors mixes damaged frames from the line with frames the router
+// could not take in, so the finding used to blame "the SFP module, the fibre or
+// its connector" whatever happened. With the port's own counters (agent
+// 0.1.13) it names what was measured; without them it says it cannot tell and
+// gives the command that can. A line fault and an MTU mismatch are items of
+// their own, so a mute of today's unexplained finding never hides them.
+$pe_win = bk_router_rec_window(date('Y-m-d'));
+$pe_days = $pe_win['days'];
+// The day before W: the split covers a day only when it also has a
+// reading from the day before (the upgrade day holds older errors).
+$pe_before = $pe_win['days30'][22];
+$pe_step = function (string $key, array $totals): array {
+    $out = [];
+    foreach ($totals as $day => $total) {
+        $out[$day] = ['min' => 0.0, 'avg' => $total / 24.0, 'max' => $total, 'samples' => 24];
+    }
+    return [$key => $out];
+};
+$pe_split_keys = ['crc' => 'wan_crc_errors', 'mac_rx' => 'wan_mac_rx_errors', 'overrun' => 'wan_rx_overrun',
+    'discard' => 'wan_rx_discard', 'refill' => 'wan_refill_errors', 'oversize' => 'wan_oversize'];
+// $errors: the W days' error totals; $split: counter => total on the FIRST
+// W day, every other covered day reads 0. $cover: the days the split has rows.
+$pe_in = function (array $errors, ?array $split, array $over = [], ?array $cover = null)
+    use ($rw_in, $pe_win, $pe_days, $pe_before, $pe_step, $pe_split_keys): array {
+    $metrics = $pe_step('wan_errors', array_combine(array_slice($pe_days, 0, count($errors)), $errors));
+    if ($split !== null) {
+        $cover ??= array_merge([$pe_before], $pe_days);
+        foreach ($pe_split_keys as $name => $metric) {
+            $totals = array_fill_keys($cover, 0.0);
+            if (in_array($pe_days[0], $cover, true)) {
+                $totals[$pe_days[0]] = (float)($split[$name] ?? 0);
+            }
+            $metrics += $pe_step($metric, $totals);
+        }
+    }
+    $in = $rw_in($metrics, $over);
+    $in['window']['days30'] = $pe_win['days30'];
+    // rw_in adds its cpu days for W only; the day before needs no cpu row.
+    return $in;
+};
+$pe_item = function (array $in, array $state = []): ?array {
+    foreach (bk_rec_rules_wan_week($in, $state)['items'] as $item) {
+        if ($item['id'] === 'wan_port_errors') {
+            return $item;
+        }
+    }
+    return null;
+};
+$pe_shape = fn (?array $i): array => $i === null ? [] : [$i['key'], $i['severity'], $i['params']['cause'], $i['params']['branch']];
+// `??` cannot tell a missing param from an honest null.
+$pe_param = fn (?array $i, string $k) => is_array($i) && array_key_exists($k, $i['params']) ? $i['params'][$k] : 'chybí';
+$pe_text = fn (string $lang, ?array $i, string $part): string => $i === null ? '' : (string)bk_with_email_lang($lang,
+    fn (): array => bk_router_rec_render($i))[$part];
+$pe_120 = [40.0, 40.0, 40.0];
+
+check('příčina: CRC nad prahem = závada linky pod vlastním klíčem, varování',
+    $pe_shape($pe_item($pe_in($pe_120, ['crc' => 8, 'mac_rx' => 4]))),
+    ['wan_port_errors:line', 'warning', 'physical', 'errors']);
+// The floor is max(10, 10 % of the week's errors): 100 errors -> 10, 200 -> 20.
+$pe_cause = fn (array $errors, array $split): ?string => $pe_item($pe_in($errors, $split))['params']['cause'] ?? null;
+check('příčina: práh linky je max(10, 10 % chyb) - 9 a 10 ze 100, 19 a 24 ze 200',
+    [$pe_cause([40.0, 40.0, 20.0], ['crc' => 9]), $pe_cause([40.0, 40.0, 20.0], ['crc' => 10]),
+        $pe_cause([80.0, 80.0, 40.0], ['crc' => 19]), $pe_cause([80.0, 80.0, 40.0], ['crc' => 24])],
+    ['unknown', 'physical', 'unknown', 'physical']);
+// Router load needs the same bar as a line fault: some rx_errors sources
+// have no counter at all, so a single overrun explains nothing.
+check('příčina: přetečení FIFO a nedoplněné buffery nad prahem = zátěž routeru, jen informace; pod prahem neznámá',
+    [$pe_shape($pe_item($pe_in($pe_120, ['overrun' => 50]))), $pe_cause($pe_120, ['refill' => 3, 'crc' => 11]),
+        $pe_cause($pe_120, ['overrun' => 11]), $pe_cause($pe_120, ['overrun' => 12]), $pe_cause($pe_120, ['overrun' => 6, 'refill' => 6]),
+        $pe_cause([400.0, 400.0, 200.0], ['crc' => 90, 'overrun' => 1])],
+    [['wan_port_errors', 'info', 'capacity', 'errors'], 'unknown', 'unknown', 'capacity', 'capacity', 'unknown']);
+// A step sum read back from a FLOAT column: 10 CRC over 22 hourly rows is
+// 22 x 0.454545 = 9.99999, and it still meets the floor of 10.
+$pe_float = $pe_in([40.0, 40.0, 20.0], ['crc' => 10]);
+$pe_float['window']['metrics']['wan_crc_errors'][$pe_days[0]] = ['min' => 0.0, 'avg' => 0.454545, 'max' => 1.0, 'samples' => 22];
+check('příčina: součet kroků z FLOAT se zaokrouhlí na celé číslo, 9,99999 CRC splní práh 10',
+    [$pe_item($pe_float)['params']['cause'] ?? null, $pe_item($pe_float)['params']['crc'] ?? null], ['physical', 10.0]);
+check('příčina: příliš dlouhé rámce = nesoulad MTU pod vlastním klíčem',
+    $pe_shape($pe_item($pe_in($pe_120, ['oversize' => 30, 'overrun' => 5]))),
+    ['wan_port_errors:mtu', 'warning', 'config', 'errors']);
+check('příčina: počítadla, která nic nevysvětlí, = neznámá, varování jako dřív',
+    $pe_shape($pe_item($pe_in($pe_120, ['discard' => 400]))), ['wan_port_errors', 'warning', 'unknown', 'errors']);
+// Coverage: an error day without a reading, or the day of the upgrade.
+$pe_gap = $pe_in($pe_120, ['crc' => 30], [], array_merge([$pe_before], [$pe_days[0], $pe_days[1]]));
+$pe_upgrade = $pe_in($pe_120, ['crc' => 30], [], $pe_days);
+check('příčina: den s chybami bez čtení počítadel nebo den nasazení = neznámá, bez rozpadu',
+    [$pe_shape($pe_item($pe_gap)), $pe_param($pe_item($pe_gap), 'crc'), $pe_param($pe_item($pe_upgrade), 'cause')],
+    [['wan_port_errors', 'warning', 'unknown', 'errors'], null, 'unknown']);
+check('starší agent bez počítadel: neznámá příčina, varování, rozpad null',
+    [$pe_shape($pe_item($pe_in($pe_120, null))), $pe_param($pe_item($pe_in($pe_120, null)), 'overrun')],
+    [['wan_port_errors', 'warning', 'unknown', 'errors'], null]);
+
+// Hysteresis spans the three keys: a finding that moves from "unknown" to
+// a line fault holds at the hold threshold instead of starting over.
+check('trvající :line drží 60 chyb ve 2 dnech, neaktivní ne',
+    [$pe_item($pe_in([30.0, 30.0], ['crc' => 20]), ['wan_port_errors:line' => ['active' => 1]])['key'] ?? null,
+        $pe_item($pe_in([30.0, 30.0], ['crc' => 20]), ['wan_port_errors' => ['active' => 1]])['key'] ?? null,
+        $pe_item($pe_in([30.0, 30.0], ['crc' => 20]))],
+    ['wan_port_errors:line', 'wan_port_errors:line', null]);
+check('nevyhodnocený týden nechá na pokoji všechny tři klíče',
+    array_keys(array_filter(bk_rec_rules_wan_week($rw_in($rw_series('cpu', [10.0, 10.0, 10.0])), [])['not_evaluated'],
+        fn ($rule) => $rule === 'wan_port_errors')),
+    ['wan_port_errors', 'wan_port_errors:line', 'wan_port_errors:mtu']);
+
+// A mute of today's unexplained finding covers its own key only.
+$pe_muted = ['wan_port_errors' => ['active' => 1, 'muted_at' => '2026-09-20 10:00:00', 'muted_severity' => 'warning']];
+$pe_split_of = fn (?array $i): array => array_map(fn (array $x): string => $x['key'],
+    bk_router_rec_split([$i], $pe_muted)['items']);
+check('ztlumení neznámé příčiny neschová pozdější závadu linky',
+    [$pe_split_of($pe_item($pe_in($pe_120, ['crc' => 30]))), $pe_split_of($pe_item($pe_in($pe_120, null)))],
+    [['wan_port_errors:line'], []]);
+
+// The ring branch alone: a share of the week's packets, and only a
+// MEASURED overrun may say "could not keep up".
+$pe_ring = function (?array $split) use ($pe_in, $pe_days, $pe_step, $rw_in, $pe_win, $pe_before, $pe_split_keys): array {
+    $in = $pe_in([1.0], $split, ['rx_packets' => array_fill_keys($pe_days, 1000000.0 / 7.0)]);
+    $in['window']['metrics'] += $pe_step('wan_ring_drops', [$pe_days[0] => 700.0, $pe_days[1] => 700.0]);
+    return $in;
+};
+$pe_r_old = $pe_item($pe_ring(null));
+$pe_r_ovr = $pe_item($pe_ring(['overrun' => 200, 'discard' => 1200]));
+$pe_r_one = $pe_item($pe_ring(['overrun' => 1, 'discard' => 1399]));
+check('jen fronta: bez rozpadu neznámá, s přetečením nad prahem zátěž, vždy jen informace',
+    [$pe_shape($pe_r_old), $pe_shape($pe_r_ovr), $pe_r_old['params']['days'] ?? null],
+    [['wan_port_errors', 'info', 'unknown', 'ring'], ['wan_port_errors', 'info', 'capacity', 'ring'], 2]);
+// The ring's floor is max(10, 10 % of the week's ring drops): 140 of 1400.
+check('jen fronta: práh přetečení je 10 % zahozených - 139 ne, 140 ano, 1 z 1400 neznámá s příkazem',
+    [$pe_item($pe_ring(['overrun' => 139, 'discard' => 1261]))['params']['cause'] ?? null,
+        $pe_item($pe_ring(['overrun' => 140, 'discard' => 1260]))['params']['cause'] ?? null,
+        $pe_shape($pe_r_one), str_contains($pe_text('en', $pe_r_one, 'action'), 'ethtool -S eth2')],
+    ['unknown', 'capacity', ['wan_port_errors', 'info', 'unknown', 'ring'], true]);
+check_true('jen fronta ze starých řádků: "zahozeno (filtr adres…)", nikdy "nestíhal"',
+    str_contains($pe_text('en', $pe_r_old, 'measured'), 'discarded 1400 received frames')
+    && !preg_match('/keep up|could not take frames/', $pe_text('en', $pe_r_old, 'measured'))
+    && !str_contains($pe_text('cs', $pe_r_old, 'measured'), 'nestíhal')
+    && str_contains($pe_text('en', $pe_r_old, 'action'), 'harmless filtering'));
+check_true('jen fronta s rozpadem: zahozené a ztracené rámce zvlášť, nestíhání jen u naměřeného přetečení',
+    str_contains($pe_text('en', $pe_r_ovr, 'measured'), 'The port discarded 1200 frames (address filter or lack of room). Frames lost to a full receive FIFO: 200; the router could not keep up')
+    && str_contains($pe_text('cs', $pe_r_ovr, 'measured'), 'plné přijímací frontě FIFO: 200; router nestíhal'));
+check_true('chyby se starou frontou: zahozené rámce bez tvrzení o přetečení',
+    str_contains($pe_text('en', $pe_item($pe_in($pe_120, null, [])), 'measured'), 'logged 120 receive errors on 3 of the last 7 days')
+    && !str_contains($pe_text('en', $pe_item($pe_in($pe_120, null)), 'measured'), 'dropped packets'));
+
+// Texts by cause. Fibre is never claimed; copper only on proof.
+$pe_phys = $pe_item($pe_in($pe_120, ['crc' => 30, 'overrun' => 4]));
+$pe_copper = $pe_item($pe_in($pe_120, ['crc' => 30], ['details' => ['wan_link_dev' => 'eth2',
+    'wan_path' => ['sfp_phy_hwmon' => true, 'sfp_temp_mc' => 49000, 'sfp_temp_max_mc' => 70000,
+        'sfp_rx_power_uw' => 350, 'sfp_rx_power_min_uw' => 50]]]));
+$pe_optic = $pe_item($pe_in($pe_120, ['crc' => 30], ['details' => ['wan_link_dev' => 'eth2',
+    'wan_path' => ['sfp_phy_hwmon' => false, 'sfp_rx_power_uw' => 350, 'sfp_rx_power_min_uw' => 50]]]));
+check_true('závada linky: rozpad počítadel ve větě, akce jmenuje optiku i metaliku',
+    str_contains($pe_text('en', $pe_phys, 'measured'), "The port's own counters: 30 CRC errors, 0 MAC receive errors, 4 receive FIFO overruns")
+    && str_contains($pe_text('en', $pe_phys, 'action'), 'fibre or cable'));
+check_true('metalický modul: akce bez optiky, s teplotou modulu proti jeho vlastní mezi, bez dBm',
+    !preg_match('/fibre|optick/i', $pe_text('en', $pe_copper, 'action') . $pe_text('cs', $pe_copper, 'action'))
+    && str_contains($pe_text('en', $pe_copper, 'action'), 'copper (RJ45)')
+    // The port sees its link to the module, so the module comes first.
+    && str_contains($pe_text('en', $pe_copper, 'action'), 'reseat the module and watch its temperature first, then replace the patch cable')
+    && str_contains($pe_text('cs', $pe_copper, 'action'), 'nejdřív znovu zasuňte modul')
+    && str_contains($pe_text('en', $pe_copper, 'measured'), 'The SFP module reads 49 °C; its own warning limit is 70 °C.')
+    && !str_contains($pe_text('en', $pe_copper, 'measured'), 'dBm'));
+check('modul bez PHY: výkon v dBm proti vlastní spodní mezi, optika se netvrdí',
+    [$pe_optic['params']['module'], $pe_optic['params']['sfp_rx_dbm'], $pe_optic['params']['sfp_rx_min_dbm'],
+        str_contains($pe_text('en', $pe_optic, 'measured'), 'The module receives -4.6 dBm; its own low warning is -13.0 dBm.')],
+    [null, -4.6, -13.0, true]);
+check_true('nesoulad MTU a zátěž: vlastní akce, žádná výměna hardwaru',
+    str_contains($pe_text('en', $pe_item($pe_in($pe_120, ['oversize' => 30])), 'action'), 'MTU')
+    && str_contains($pe_text('en', $pe_item($pe_in($pe_120, ['overrun' => 30])), 'action'), 'Nothing needs replacing'));
+$pe_unknown = $pe_item($pe_in($pe_120, null));
+check('neznámá příčina: příkaz v akci i v bloku stránky, známá příčina příkaz nemá',
+    [bk_rec_command($pe_unknown), str_contains($pe_text('en', $pe_unknown, 'action'), (string)bk_rec_command($pe_unknown)),
+        bk_rec_command($pe_phys)],
+    ["ethtool -S eth2 | grep -E 'bad_crc_event|mac_receive_error|oversize_received|rx_overrun|rx_discard|refill_errors'", true, null]);
+
+// Speed-test minutes: the scan's own numbers; NULL flags are "not recorded".
+$pe_st = fn (?array $minutes): string => $pe_text('en', $pe_item($pe_in($pe_120, null, ['wan_error_minutes' => $minutes])), 'measured');
+check('test rychlosti: věty z vlastních čísel minutového průchodu',
+    [str_contains($pe_st(['errors' => 130, 'during' => 90, 'unknown' => 10]), 'Of the 130 errors counted minute by minute, 90 fell in minutes with a speed test running or just finished. For 10 of them it is not recorded'),
+        str_contains($pe_st(['errors' => 120, 'during' => 0, 'unknown' => 120]), 'For the 120 errors counted minute by minute it is not recorded whether a speed test was running.'),
+        str_contains($pe_st(['errors' => 120, 'during' => 0, 'unknown' => 120]), 'Of the'),
+        str_contains($pe_st(null), 'speed test')],
+    [true, true, false, false]);
+
+// Speed tests are advised against only where the minute scan put errors
+// in them; the ring text shows no scan numbers and never advises it.
+$pe_cap = fn (?array $minutes): ?array => $pe_item($pe_in($pe_120, ['overrun' => 30], ['wan_error_minutes' => $minutes]));
+$pe_cap_st = $pe_cap(['errors' => 120, 'during' => 90, 'unknown' => 0]);
+$pe_cap_none = $pe_cap(['errors' => 120, 'during' => 0, 'unknown' => 0]);
+check('zátěž: rada o testech rychlosti jen s chybami v minutách testu, jinak a u fronty bez ní',
+    [str_contains($pe_text('en', $pe_cap_st, 'action'), 'fewer or shorter speed tests lower the part counted in speed-test minutes'),
+        str_contains($pe_text('cs', $pe_cap_st, 'action'), 'méně nebo kratší testy'),
+        (bool)preg_match('/speed.test/i', $pe_text('en', $pe_cap_none, 'action')), str_contains($pe_text('cs', $pe_cap_none, 'action'), 'test'),
+        (bool)preg_match('/speed.test/i', $pe_text('en', $pe_cap(null), 'action')),
+        (bool)preg_match('/speed.test/i', $pe_text('en', $pe_r_ovr, 'action')), str_contains($pe_text('cs', $pe_r_ovr, 'action'), 'test'),
+        str_contains($pe_text('en', $pe_cap_none, 'action'), 'Nothing needs replacing.')],
+    [true, true, false, false, false, false, false, true]);
+
+// What a mute of an unexplained finding does: with the counters a later
+// line fault gets its own key once they cover the week; without them it
+// stays under the muted key, and the text must not promise otherwise.
+$pe_unknown_split = $pe_item($pe_in($pe_120, ['discard' => 400]));
+$pe_no_flag = fn (string $lang): string => (string)bk_with_email_lang($lang, fn (): array => bk_rec_wan_port_texts(
+    ['name' => 'eth2', 'branch' => 'errors', 'cause' => 'unknown', 'errors' => 120.0, 'days' => 3], 'eth2'))[1];
+check('neznámá příčina: slib o ztlumení jen s počítadly, bez nich varování, bez příznaku nic',
+    [$pe_unknown_split['params']['line_counters'] ?? null, $pe_unknown['params']['line_counters'] ?? null,
+        str_contains($pe_text('en', $pe_unknown_split, 'action'), "Once the port's counters cover the whole week, a line fault they show clearly is reported as its own item even if you mute this one; a weaker one stays under this item."),
+        str_contains($pe_text('en', $pe_unknown_split, 'action'), 'has not sent'),
+        str_contains($pe_text('en', $pe_unknown, 'action'), 'has not sent the counters that tell a line fault apart'),
+        str_contains($pe_text('en', $pe_unknown, 'action'), 'its own item'),
+        str_contains($pe_text('cs', $pe_unknown, 'action'), 'by schovalo i pozdější závadu linky'),
+        (bool)preg_match('/its own item|has not sent/', $pe_no_flag('en')), (bool)preg_match('/samostatná|neposlal/', $pe_no_flag('cs'))],
+    [true, false, true, false, true, false, true, false, false]);
+
+// Every variant in both languages: no placeholder left, no double space,
+// and the two languages differ.
+$pe_variants = ['physical' => $pe_phys, 'copper' => $pe_copper, 'optic' => $pe_optic, 'unknown' => $pe_unknown,
+    'unknown_split' => $pe_unknown_split,
+    'config' => $pe_item($pe_in($pe_120, ['oversize' => 30])), 'capacity' => $pe_item($pe_in($pe_120, ['overrun' => 30])),
+    'capacity_st' => $pe_cap_st, 'capacity_none' => $pe_cap_none,
+    'ring_old' => $pe_r_old, 'ring_overrun' => $pe_r_ovr, 'ring_one' => $pe_r_one,
+    'speedtest' => $pe_item($pe_in($pe_120, null, ['wan_error_minutes' => ['errors' => 130, 'during' => 90, 'unknown' => 10]])),
+    'no_dev' => $pe_item($pe_in($pe_120, null, ['details' => []]))];
+$pe_bad = [];
+foreach ($pe_variants as $pe_name => $pe_v) {
+    foreach (['measured', 'action'] as $pe_part) {
+        foreach (['cs', 'en'] as $pe_lang) {
+            $pe_t = $pe_text($pe_lang, $pe_v, $pe_part);
+            if ($pe_t === '' || preg_match('/%\d*\$?[sd]/', $pe_t) || str_contains($pe_t, '  ') || str_starts_with($pe_t, 'rr_')) {
+                $pe_bad[] = "{$pe_lang}:{$pe_name}:{$pe_part}";
+            }
+        }
+        if ($pe_text('cs', $pe_v, $pe_part) === $pe_text('en', $pe_v, $pe_part)) {
+            $pe_bad[] = "same:{$pe_name}:{$pe_part}";
+        }
+    }
+}
+check('každá varianta nálezu na portu WAN je v obou jazycích celá', $pe_bad, []);
+
+// --- The WAN port finding gives errors per million packets of the port ---------
+// Evidence only: the rate never decides whether the finding fires. It counts
+// only the days whose errors were measured (a day without an errors row is
+// unknown, not zero), and each of them needs the WAN port's own packet count.
+if (isset($pe_in, $pe_item, $pe_text)) {
+    $pm_rx = fn (array $days): array => ['rx_packets_iface' => ['eth2' => array_fill_keys($days, 20000000.0),
+        'br-lan' => array_fill_keys($pe_days, 90000000.0)]];
+    // Errors measured on 3 days, the port's packets on all 7: 120 / 60 M.
+    $pm_full = $pe_item($pe_in($pe_120, null, $pm_rx($pe_days)));
+    $pm_gap = $pe_item($pe_in($pe_120, null, $pm_rx(array_slice($pe_days, 1))));
+    $pm_quiet_gap = $pe_item($pe_in($pe_120, null, $pm_rx(array_diff($pe_days, [$pe_days[6]]))));
+    // Four more days MEASURED at zero errors do enter it: 120 / 140 M; one of
+    // them without the port's packets leaves no rate at all.
+    $pm_zeros = [40.0, 40.0, 40.0, 0.0, 0.0, 0.0, 0.0];
+    $pm_zero = $pe_item($pe_in($pm_zeros, null, $pm_rx($pe_days)));
+    $pm_zero_gap = $pe_item($pe_in($pm_zeros, null, $pm_rx(array_diff($pe_days, [$pe_days[6]]))));
+    check('chyby na milion paketů portu: jen dny se změřenými chybami, jen pakety portu WAN',
+        [round((float)($pm_full['params']['per_million'] ?? 0.0), 4), $pe_param($pm_gap, 'per_million'),
+            round((float)($pm_quiet_gap['params']['per_million'] ?? 0.0), 4),
+            round((float)($pm_zero['params']['per_million'] ?? 0.0), 4), $pe_param($pm_zero_gap, 'per_million')],
+        [2.0, null, 2.0, round(120 / 140, 4), null]);
+    check_true('chyby na milion paketů: věta v obou jazycích, bez věty, když den s chybami chybí',
+        str_contains($pe_text('en', $pm_full, 'measured'), 'That is 2.0 errors per million packets the port received.')
+        && str_contains($pe_text('cs', $pm_full, 'measured'), 'Chyby na milion paketů, které port přijal: 2,0.')
+        && str_contains($pe_text('en', $pm_zero, 'measured'), 'That is 0.86 errors per million packets the port received.')
+        && !str_contains($pe_text('en', $pm_gap, 'measured'), 'per million'));
+    check('chyby na milion paketů: počet řádů podle velikosti, nikdy 0,00',
+        [bk_with_email_lang('en', fn () => bk_rec_wan_port_texts(['name' => 'eth2', 'errors' => 60.0, 'days' => 2, 'per_million' => 0.004], 'eth2')[0]),
+            bk_with_email_lang('en', fn () => bk_rec_wan_port_texts(['name' => 'eth2', 'errors' => 60.0, 'days' => 2, 'per_million' => 12.34], 'eth2')[0])],
+        ['The WAN port (eth2) logged 60 receive errors on 2 of the last 7 days. That is 0.004 errors per million packets the port received.',
+            'The WAN port (eth2) logged 60 receive errors on 2 of the last 7 days. That is 12 errors per million packets the port received.']);
+}
+
+
+// A router with a full week of data and three agreeing probes below the
+// plan, outside both goodput plateaus, from two proven servers.
+$rt_row = function (int $id, int $days_ago, float $dl, string $server, array $phase = [], array $diag = []): array {
+    return ['id' => $id, 'measured_at' => date('Y-m-d H:i:s', time() - $days_ago * 86400),
+        'download_mbps' => $dl, 'upload_mbps' => null, 'link_mbit' => 2500, 'source' => 'agent',
+        'server_name' => $server, 'diagnostics' => json_encode($diag + [
+            'cpu_measured' => true, 'path_verified' => true,
+            'background_dl_mbps' => 0.0, 'background_ul_mbps' => 0.0,
+            'dl' => $phase + ['secs' => 15.0, 'wan_mbps' => 0.0, 'core' => 0, 'core_busy_pct' => 20.0,
+                'core_user_pct' => 5.0, 'core_system_pct' => 5.0, 'core_irq_softirq_pct' => 10.0,
+                'hot_share' => 0.1, 'all_cores_avg_pct' => 12.0, 'softnet_time_squeeze' => 0.0,
+                'softnet_dropped' => 0.0, 'rx_packets' => 1000000.0, 'retrans_pct' => 0.1],
+            'ul' => null, 'run' => ['wan_rx_ring_drops' => 0]])];
+};
+$rt_in = fn (array $over = []): array => $over + [
+    'window' => ['days' => $rw_days, 'metrics' => $rw_base, 'prev_days' => [], 'days30' => []],
+    'details' => ['wan_link_dev' => 'eth2', 'wan_link_mbit' => 2500, 'wan_path' => []],
+    'monitor' => ['wan_plan_down_mbit' => 2000, 'wan_plan_up_mbit' => 1000],
+    'speedtests' => [], 'server_max' => ['Praha A' => ['dl' => 1900.0, 'ul' => null],
+        'Praha B' => ['dl' => 1900.0, 'ul' => null]],
+    'rx_packets' => [], 'events' => [], 'forwarding_minutes' => null, 'conntrack_days' => null,
+    'now' => time(),
+];
+$rt_ids = fn (array $res): array => array_map(fn (array $i): string => (string)$i['id'], $res['items']);
+$rt_three = [$rt_row(1, 1, 700.0, 'Praha A'), $rt_row(2, 3, 710.0, 'Praha B'), $rt_row(3, 5, 705.0, 'Praha A')];
+
+check_true('shoda tří sond pod tarifem = doporučení o pomalé lince',
+    in_array('wan_line_below_plan', $rt_ids(bk_rec_rules_wan_tests($rt_in(['speedtests' => $rt_three]), [])), true));
+check_true('jediná sonda na doporučení o lince nestačí',
+    !in_array('wan_line_below_plan', $rt_ids(bk_rec_rules_wan_tests($rt_in(['speedtests' => [$rt_three[0]]]), [])), true));
+check_true('dva servery na 940 při tarifu 2000 linku neobviní',
+    !in_array('wan_line_below_plan', $rt_ids(bk_rec_rules_wan_tests($rt_in([
+        'speedtests' => [$rt_row(1, 1, 905.0, 'Praha A'), $rt_row(2, 3, 910.0, 'Praha B'),
+            $rt_row(3, 5, 900.0, 'Praha A')]]), [])), true));
+
+// R-W3: the port ceiling, and the negative CORE 7 asks for.
+// The port ceiling can only be the answer where the plan is HIGHER than it:
+// with a 2000 Mbit plan on a 2500 Mbit port, 2200 Mbit/s is the plan being
+// delivered, and rule 1 has to win.
+check_true('rychlost u stropu portu = doporučení o portu, ne o lince',
+    in_array('wan_port_limited', $rt_ids(bk_rec_rules_wan_tests($rt_in([
+        'monitor' => ['wan_plan_down_mbit' => 5000, 'wan_plan_up_mbit' => 1000],
+        'speedtests' => [$rt_row(1, 1, 2200.0, 'Praha A'), $rt_row(2, 3, 2210.0, 'Praha B'),
+            $rt_row(3, 5, 2205.0, 'Praha A')]]), [])), true));
+check_true('port 2500 a tarif 2000: port není limit',
+    $rt_ids(bk_rec_rules_wan_tests($rt_in(['speedtests' => $rt_three]), [])) === ['wan_line_below_plan']);
+
+// R-W4: only a shaper set WELL below the plan is worth a sentence.
+$rt_sqm = fn (int $kbps): array => $rt_in([
+    'details' => ['wan_link_dev' => 'eth2', 'wan_link_mbit' => 2500,
+        'wan_path' => ['sqm' => [['iface' => 'eth2', 'download_kbps' => $kbps, 'upload_kbps' => $kbps]]]],
+    'speedtests' => [$rt_row(1, 1, 85.0, 'Praha A', [], ['path' => ['sqm_dl_kbps' => $kbps]]),
+        $rt_row(2, 3, 84.0, 'Praha B', [], ['path' => ['sqm_dl_kbps' => $kbps]]),
+        $rt_row(3, 5, 85.5, 'Praha A', [], ['path' => ['sqm_dl_kbps' => $kbps]])]]);
+check_true('zapnuté SQM na 85 Mbit při tarifu 2000 se doporučí',
+    in_array('wan_sqm_limited', $rt_ids(bk_rec_rules_wan_tests($rt_sqm(85000), [])), true));
+check_true('Omnia: vypnuté SQM nic nedoporučí; zapnuté 85 Mbit při tarifu 2000 ano',
+    !in_array('wan_sqm_limited', $rt_ids(bk_rec_rules_wan_tests($rt_in([
+        'speedtests' => [$rt_row(1, 1, 85.0, 'Praha A'), $rt_row(2, 3, 84.0, 'Praha B'),
+            $rt_row(3, 5, 85.5, 'Praha A')]]), [])), true)
+    && in_array('wan_sqm_limited', $rt_ids(bk_rec_rules_wan_tests($rt_sqm(85000), [])), true));
+
+// R-W7 and the X12 flag it controls.
+$rt_fwd = fn (int $minutes, array $over = []): array =>
+    $rt_in($over + ['forwarding_minutes' => $minutes]);
+check_true('10 minut vytíženého jádra = doporučení, 9 ne',
+    in_array('wan_forwarding_core_saturated', $rt_ids(bk_rec_rules_wan_tests($rt_fwd(10), [])), true)
+    && !in_array('wan_forwarding_core_saturated', $rt_ids(bk_rec_rules_wan_tests($rt_fwd(9), [])), true));
+check_true('5 minut drží jen aktivní doporučení',
+    in_array('wan_forwarding_core_saturated', $rt_ids(bk_rec_rules_wan_tests($rt_fwd(5),
+        ['wan_forwarding_core_saturated' => ['active' => 1]])), true)
+    && !in_array('wan_forwarding_core_saturated', $rt_ids(bk_rec_rules_wan_tests($rt_fwd(5), [])), true));
+
+// R-W11: only drops from a table that was really full.
+$rt_ct = fn (array $days): array => $rt_in(['conntrack_days' => $days]);
+check_true('odmítnutá spojení ve 2 dnech = doporučení, v 1 dni ne',
+    in_array('conntrack_drops', $rt_ids(bk_rec_rules_wan_tests($rt_ct(
+        ['2026-09-14' => ['drops' => 5.0, 'pct' => 99.0], '2026-09-15' => ['drops' => 3.0, 'pct' => 97.0]]), [])), true)
+    && !in_array('conntrack_drops', $rt_ids(bk_rec_rules_wan_tests($rt_ct(
+        ['2026-09-14' => ['drops' => 50.0, 'pct' => 99.0]]), [])), true));
+check_true('1 den drží jen aktivní doporučení',
+    in_array('conntrack_drops', $rt_ids(bk_rec_rules_wan_tests($rt_ct(
+        ['2026-09-14' => ['drops' => 5.0, 'pct' => 99.0]]), ['conntrack_drops' => ['active' => 1]])), true));
+check_true('kolize při poloprázdné tabulce nejsou odmítnutá spojení',
+    !in_array('conntrack_drops', $rt_ids(bk_rec_rules_wan_tests($rt_ct([]), [])), true));
+
+// WAN 3.4: the evidence row. `early_drop` reaches the SENTENCE, never the
+// count - an evicted connection was not refused. It arrives in details as
+// a counter since boot (the ingest types it), and stays out of the text
+// when the router did not report it.
+$rt_ct_days = ['2026-09-14' => ['drops' => 5.0, 'pct' => 99.0], '2026-09-15' => ['drops' => 3.0, 'pct' => 97.0]];
+$rt_ct_item = function (array $details) use ($rt_in, $rt_ct_days): array {
+    foreach (bk_rec_rules_wan_tests($rt_in(['conntrack_days' => $rt_ct_days, 'details' => $details]), [])['items'] as $i) {
+        if ((string)$i['id'] === 'conntrack_drops') {
+            return $i;
+        }
+    }
+    return [];
+};
+$rt_ct_det = ['wan_link_dev' => 'eth2', 'wan_link_mbit' => 2500, 'wan_path' => []];
+check('vytlačená spojení se berou z hlášení routeru',
+    $rt_ct_item($rt_ct_det + ['conntrack_early_drop' => 18])['params']['evicted'] ?? 'chybí', 18.0);
+check('a nepřičítají se k odmítnutým',
+    $rt_ct_item($rt_ct_det + ['conntrack_early_drop' => 18])['params']['drops'] ?? null, 8.0);
+$rt_ct_none = $rt_ct_item($rt_ct_det)['params'] ?? [];
+check('nezměřený čítač zůstane null, ne nula',
+    [array_key_exists('evicted', $rt_ct_none), $rt_ct_none['evicted']], [true, null]);
+$rt_ct_text = fn (string $lang, array $details): string => bk_with_email_lang($lang, fn (): string =>
+    (string)bk_router_rec_render($rt_ct_item($details))['measured']);
+check_true('věta o vytlačených spojeních je v obou jazycích a říká od kdy',
+    str_contains($rt_ct_text('cs', $rt_ct_det + ['conntrack_early_drop' => 18]), 'Vytlačeno kvůli místu: 18 spojení od startu routeru.')
+    && str_contains($rt_ct_text('en', $rt_ct_det + ['conntrack_early_drop' => 18]), 'Evicted to make room: 18 connections since boot.'));
+check_true('bez změřeného čítače se věta nevykreslí (ani s nulou v textu)',
+    !str_contains($rt_ct_text('cs', $rt_ct_det), 'Vytlačeno')
+    && !str_contains($rt_ct_text('en', $rt_ct_det), 'Evicted'));
+// A measured zero is a measurement, not a missing value - it stays visible.
+check_true('změřená nula je výsledek, ne prázdno',
+    str_contains($rt_ct_text('cs', $rt_ct_det + ['conntrack_early_drop' => 0]), 'Vytlačeno kvůli místu: 0 spojení'));
+
+// R-W8: the capability, never the rate the ports happen to link at.
+$rt_lan = fn (?int $cap, ?int $max): array => $rt_in([
+    'details' => ['wan_link_dev' => 'eth2', 'wan_link_mbit' => 2500,
+        'wan_path' => ['lan_port_cap_mbit' => $cap, 'lan_port_max_mbit' => $max]]]);
+check_true('gigabitové porty LAN při tarifu 2000 = informace',
+    in_array('lan_wired_ceiling', $rt_ids(bk_rec_rules_wan_tests($rt_lan(1000, 1000), [])), true));
+check_true('neznámá schopnost portů LAN mlčí, i když jsou spojené na gigabitu',
+    !in_array('lan_wired_ceiling', $rt_ids(bk_rec_rules_wan_tests($rt_lan(null, 1000), [])), true));
+
+// The evidence the switch adds (0.1.8): the conduit that is really shared
+// and how many devices share it. It is evidence, never a second rule.
+$rt_lanp = function (?array $lan) use ($rt_in): array {
+    $in = $rt_in([]);
+    $in['details'] = ['wan_link_dev' => 'eth2', 'wan_link_mbit' => 2500,
+        'wan_path' => ['lan_port_cap_mbit' => 1000, 'lan_port_max_mbit' => 1000]];
+    if ($lan !== null) {
+        $in['details']['lan_ports'] = $lan;
+    }
+    return $in;
+};
+$rt_lan_item = function (?array $lan) use ($rt_lanp): array {
+    foreach (bk_rec_rules_wan_tests($rt_lanp($lan), [])['items'] as $it) {
+        if (($it['id'] ?? '') === 'lan_wired_ceiling') {
+            return $it;
+        }
+    }
+    return [];
+};
+// Two linked conduits: the SLOWER one is what every wired client shares.
+$rt_lan_two = ['clients_total' => 6, 'ports' => [['name' => 'lan0']], 'conduits' => [
+    ['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000],
+    ['dev' => 'eth0', 'link' => true, 'speed_mbit' => 2500],
+    ['dev' => 'eth5', 'link' => false, 'speed_mbit' => 100]]];
+check('sdílené vedení je to nejpomalejší spojené, nespojené se nepočítá',
+    [$rt_lan_item($rt_lan_two)['params']['conduit'], $rt_lan_item($rt_lan_two)['params']['clients']], [1000.0, 6]);
+check('bez údajů z přepínače zůstanou čísla domácnosti neznámá',
+    [$rt_lan_item(null)['params']['conduit'], $rt_lan_item(null)['params']['clients']], [null, null]);
+check('jedno zařízení nic nesdílí, proto se nepočítá',
+    $rt_lan_item(['clients_total' => 1, 'conduits' => [['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000]]])['params']['clients'], null);
+$rt_lan_text = fn (string $lang, ?array $lan): string => bk_with_email_lang($lang, fn (): string =>
+    (string)bk_router_rec_render($rt_lan_item($lan))['measured']);
+check_true('věta o sdíleném vedení je v obou jazycích a nese obě čísla',
+    str_contains($rt_lan_text('cs', $rt_lan_two), 'Kabelem je připojeno 6 zařízení a všechna sdílejí jedno vedení do routeru o rychlosti 1000 Mbit/s.')
+    && str_contains($rt_lan_text('en', $rt_lan_two), '6 wired devices are connected and all of them share one 1000 Mbit/s line to the router.'));
+check_true('chybí-li jedno z čísel, věta se nevykreslí vůbec',
+    !str_contains($rt_lan_text('cs', null), 'sdílejí')
+    && !str_contains($rt_lan_text('en', ['clients_total' => 6, 'conduits' => []]), 'share one'));
+
+
+$rg_in = fn (array $over = []): array => $over + [
+    'window' => ['days' => $rw_days, 'metrics' => $rw_base, 'prev_days' => [], 'days30' => []],
+    'details' => ['wan_up' => true], 'monitor' => [], 'events' => [], 'now' => time(),
+];
+$rg_ids = fn (array $res): array => array_map(fn (array $i): string => (string)$i['id'], $res['items']);
+$rg_days = fn (int $n, int $per_day): array => array_slice(array_combine($rw_days,
+    array_map(fn (string $d): array => ['n' => $per_day, 'last_at' => $d . ' 03:00:00'], $rw_days)), 0, $n);
+
+// R-F1. Never for a device without a WAN role: a dumb AP has no firewall.
+check_true('nenačtená pravidla firewallu jsou kritické doporučení',
+    in_array('firewall_off', $rg_ids(bk_rec_rules_gap($rg_in([
+        'details' => ['wan_up' => true, 'firewall_off_since' => time() - 3600]]), [])), true));
+check_true('AP bez role WAN doporučení o firewallu nedostane',
+    !in_array('firewall_off', $rg_ids(bk_rec_rules_gap($rg_in([
+        'details' => ['firewall_off_since' => time() - 3600]]), [])), true));
+
+// R-S1 / R-D1: events, counted per day.
+check_true('3 restarty za týden = doporučení, 2 ne',
+    in_array('router_restarts', $rg_ids(bk_rec_rules_gap($rg_in(['events' => ['router_rebooted' => $rg_days(3, 1)]]), [])), true)
+    && !in_array('router_restarts', $rg_ids(bk_rec_rules_gap($rg_in(['events' => ['router_rebooted' => $rg_days(2, 1)]]), [])), true));
+check_true('2 restarty drží jen aktivní doporučení',
+    in_array('router_restarts', $rg_ids(bk_rec_rules_gap($rg_in(['events' => ['router_rebooted' => $rg_days(2, 1)]]),
+        ['router_restarts' => ['active' => 1]])), true));
+check_true('věta o nečistých vypnutích jen tam, kde to doporučení opravdu stojí',
+    !empty(bk_rec_rules_gap($rg_in(['events' => ['router_rebooted' => $rg_days(3, 1)]]),
+        ['disk_unclean_shutdowns:d:a' => ['active' => 1]])['items'][0]['params']['unclean'])
+    && empty(bk_rec_rules_gap($rg_in(['events' => ['router_rebooted' => $rg_days(3, 1)]]),
+        ['disk_unclean_shutdowns:d:a' => ['active' => 1, 'muted_at' => '2026-01-01']])['items'][0]['params']['unclean']));
+check_true('resolver selhal ve 3 dnech = doporučení, ve 2 ne',
+    in_array('dns_resolver_failing', $rg_ids(bk_rec_rules_gap($rg_in(['events' => ['dns_resolver_failed' => $rg_days(3, 2)]]), [])), true)
+    && !in_array('dns_resolver_failing', $rg_ids(bk_rec_rules_gap($rg_in(['events' => ['dns_resolver_failed' => $rg_days(2, 9)]]), [])), true));
+check('počet výpadků v textu je počet událostí, ne minuty',
+    bk_rec_rules_gap($rg_in(['events' => ['dns_resolver_failed' => $rg_days(3, 2)]]), [])['items'][0]['params']['count'], 6);
+check_true('2 dny drží jen aktivní doporučení',
+    in_array('dns_resolver_failing', $rg_ids(bk_rec_rules_gap($rg_in(['events' => ['dns_resolver_failed' => $rg_days(2, 1)]]),
+        ['dns_resolver_failing' => ['active' => 1]])), true));
+
+// R-S2: the column stores the ABSOLUTE skew, so the weekly mean is a real
+// distance and a week of +21 s and -21 s does not cancel itself out.
+$rg_skew = function (float $secs) use ($rw_days, $rw_base): array {
+    $days = [];
+    foreach ($rw_days as $day) {
+        $days[$day] = ['min' => $secs, 'avg' => $secs, 'max' => $secs, 'samples' => 1440];
+    }
+    return ['clock_skew_s' => $days] + $rw_base;
+};
+$rg_skew_in = fn (float $secs): array => $rg_in([
+    'window' => ['days' => $rw_days, 'metrics' => $rg_skew($secs), 'prev_days' => [], 'days30' => []]]);
+check_true('průměrný rozdíl hodin 21 s = doporučení, 20 s ne',
+    in_array('clock_skew', $rg_ids(bk_rec_rules_gap($rg_skew_in(21.0), [])), true)
+    && !in_array('clock_skew', $rg_ids(bk_rec_rules_gap($rg_skew_in(20.0), [])), true));
+check_true('16 s drží jen aktivní doporučení, 15 s ho ukončí',
+    in_array('clock_skew', $rg_ids(bk_rec_rules_gap($rg_skew_in(16.0), ['clock_skew' => ['active' => 1]])), true)
+    && !in_array('clock_skew', $rg_ids(bk_rec_rules_gap($rg_skew_in(15.0), ['clock_skew' => ['active' => 1]])), true));
+
+// Packages: a strict false only, never a missing key.
+check_true('chybějící balíček se doporučí, netestovaný ne',
+    $rg_ids(bk_rec_rules_gap($rg_in(['details' => ['wan_up' => true, 'agent_tools' => ['iw' => false]]]), [])) === ['pkg_iw']
+    && $rg_ids(bk_rec_rules_gap($rg_in(['details' => ['wan_up' => true, 'agent_tools' => ['smartctl' => true]]]), [])) === []);
+// R103: the install hint reads the package manager where the agent sends it.
+$rg_pkg = bk_rec_rules_gap($rg_in(['details' => ['wan_up' => true, 'agent_tools' => ['iw' => false, 'pkg_manager' => 'apk']]]), []);
+check('rada k instalaci zná správce balíčků z agent_tools', $rg_pkg['items'][0]['params']['pkg_manager'] ?? 'chybí', 'apk');
+check_true('pkg_librespeed_cli: jen se zapnutým měřením a chybějícím programem',
+    in_array('pkg_librespeed_cli', $rg_ids(bk_rec_rules_gap($rg_in([
+        'details' => ['wan_up' => true, 'agent_tools' => ['librespeed_cli' => false]],
+        'monitor' => ['wan_probe_enabled' => 1]]), [])), true)
+    && !in_array('pkg_librespeed_cli', $rg_ids(bk_rec_rules_gap($rg_in([
+        'details' => ['wan_up' => true, 'agent_tools' => ['librespeed_cli' => false]],
+        'monitor' => ['wan_probe_enabled' => 0]]), [])), true));
+
+// --- Texty 15 nových pravidel v obou jazycích (CORE 6.2 / WAN 3.7) ----------
+// Pravidlo bez textu vykreslí své id; tenhle blok je to jediné, co takovou
+// chybu najde dřív než čtenář pondělního e-mailu.
+$rr_params = [
+    // The twelve Wi-Fi ids of CORE 3.7. Each one is rendered in both
+    // languages below, so a missing text or an unreplaced placeholder is
+    // a failure here and not a blank line in the Monday e-mail.
+    'wifi_6ghz_unserved' => ['hw' => 'none', 'capable' => 2, 'known' => 4, 'share' => 90.0,
+        'band_id' => '5GHz', 'rate' => 736.8, 'busy' => 3.5, 'wan_variant' => 'fast', 'wan_mbit' => 2500.0],
+    'wifi_channel_busy' => ['band_id' => '2.4GHz', 'ch' => 5, 'variant' => 'other',
+        'other' => 41.0, 'busy' => 62.0],
+    'wifi_noise_high' => ['band_id' => '5GHz', 'noise' => -79.0],
+    'wifi_week_degraded' => ['band_id' => '5GHz', 'changes' => [
+        ['what' => 'noise', 'from' => -95.0, 'to' => -87.0],
+        ['what' => 'busy_other', 'from' => 10.0, 'to' => 31.0]]],
+    'wifi_weak_encryption' => ['band_id' => '2.4GHz', 'ch' => 5, 'what' => 'legacy', 'enc' => 'WEP'],
+    'wifi_wpa2_only' => ['band_id' => '5GHz', 'ch' => 36],
+    'wifi_wpa3_ready' => ['radios' => [['band' => '5GHz', 'ch' => 36]],
+        'from' => '2026-09-14', 'to' => '2026-09-20'],
+    'wifi_mode_below_card' => ['band_id' => '5GHz', 'ch' => 36, 'cur' => 4, 'best' => 6,
+        'htmode' => 'HT80', 'suggested' => 'HE80'],
+    'wifi_channel_narrow' => ['band_id' => '5GHz', 'ch' => 36, 'w' => 40, 'suggested' => 'HE80'],
+    'wifi_24_wide_channel' => ['band_id' => '2.4GHz', 'ch' => 5, 'w' => 40, 'suggested' => 'HT20'],
+    'wifi_weak_client' => ['band_id' => '5GHz', 'ch' => 36, 'signal' => -75.0, 'snr' => 17,
+        'gen' => 4, 'noise' => -92.0],
+    'wifi_5ghz_clients_on_24' => ['n' => 1.4],
+    'wan_link_below_plan' => ['name' => 'eth2', 'mbit' => 1000.0, 'plan' => 2000.0, 'days' => 6],
+    'wan_port_errors' => ['name' => 'eth2', 'errors' => 120.0, 'drops' => 5.0, 'days' => 3, 'ring' => 7.0],
+    'wan_link_flaps' => ['name' => 'eth2', 'flaps' => 3.0],
+    'wan_line_below_plan' => ['dir' => 'dl', 'mbps' => 700.0, 'plan' => 2000.0, 'core' => 20.0,
+        'link' => 2500.0, 'agree' => 3, 'span_days' => 3, 'servers' => 2, 'ok_pct' => 85],
+    'wan_port_limited' => ['dir' => 'ul', 'mbps' => 2200.0, 'name' => 'eth2', 'link' => 2500.0],
+    'wan_sqm_limited' => ['dir' => 'dl', 'mbps' => 85.0, 'sqm' => 85.0, 'plan' => 2000.0],
+    'wan_cpu_packet_path' => ['dir' => 'dl', 'mbps' => 900.0, 'core_busy' => 98.0, 'net_share' => 95.0,
+        'all_cores' => 52.0, 'agree' => 3, 'tests' => 3, 'link' => 2500.0, 'with_forwarding' => true,
+        'steering_off' => true],
+    'wan_forwarding_core_saturated' => ['minutes' => 12, 'softirq' => 85.0, 'mbps' => 300.0,
+        'steering_off' => true, 'offloading_off' => true],
+    'conntrack_drops' => ['drops' => 40.0, 'pct' => 99.0, 'days' => 2, 'evicted' => 18.0],
+    'lan_wired_ceiling' => ['plan' => 2000.0, 'cap' => 1000.0],
+    'firewall_off' => ['since' => 1758000000],
+    'router_restarts' => ['count' => 3, 'last_at' => '2026-09-20 03:00:00', 'unclean' => true],
+    'dns_resolver_failing' => ['days' => 3, 'count' => 6],
+    'clock_skew' => ['secs' => 21.4],
+    'pkg_smartmontools' => ['pkg' => 'smartmontools', 'pkg_manager' => 'opkg'],
+    'pkg_smart_drivedb' => ['pkg' => 'smartmontools-drivedb', 'pkg_manager' => 'opkg'],
+    'pkg_hostapd_utils' => ['pkg' => 'hostapd-utils', 'pkg_manager' => 'apk'],
+    'pkg_iw' => ['pkg' => 'iw', 'pkg_manager' => null],
+    'pkg_librespeed_cli' => ['pkg' => 'librespeed-cli', 'pkg_manager' => 'opkg'],
+];
+$rr_bad = [];
+$rr_same = [];
+foreach ($rr_params as $rr_id => $rr_p) {
+    $rr_out = [];
+    foreach (['cs', 'en'] as $rr_lang) {
+        $rr_out[$rr_lang] = bk_with_email_lang($rr_lang, fn (): array =>
+            bk_router_rec_render(bk_rec_item($rr_id, $rr_id, bk_rec_area_of($rr_id), 'info', [], $rr_p)));
+        foreach (['title', 'measured', 'action'] as $rr_part) {
+            $rr_text = (string)$rr_out[$rr_lang][$rr_part];
+            // A literal per-cent sign is fine (`%%` in the source); an
+            // UNREPLACED placeholder is the bug this looks for.
+            if ($rr_text === '' || $rr_text === $rr_id || preg_match('/%\d*\$?[sd]/', $rr_text)
+                || str_starts_with($rr_text, 'rr_') || str_contains($rr_text, '  ')) {
+                $rr_bad[] = $rr_lang . ':' . $rr_id . ':' . $rr_part;
+            }
+        }
+    }
+    if ($rr_out['cs']['measured'] === $rr_out['en']['measured']) {
+        $rr_same[] = $rr_id;
+    }
+}
+check('každé nové pravidlo má v obou jazycích titulek, měření i akci', $rr_bad, []);
+check('český a anglický text se liší', $rr_same, []);
+// N9 / CORE 7.3: nothing on this card may propose enabling a band the
+// MT7915E cannot serve. The regex runs over every rendered action.
+$rr_band = [];
+foreach ($rr_params as $rr_id => $rr_p) {
+    foreach (['cs', 'en'] as $rr_lang) {
+        $rr_act = (string)bk_with_email_lang($rr_lang, fn (): array =>
+            bk_router_rec_render(bk_rec_item($rr_id, $rr_id, bk_rec_area_of($rr_id), 'info', [], $rr_p)))['action'];
+        if (preg_match('/(zapn|enable)[^.]{0,40}(2[,.]4|5) ?GHz/i', $rr_act)) {
+            $rr_band[] = $rr_lang . ':' . $rr_id;
+        }
+    }
+}
+check('žádný text neobsahuje výzvu zapnout 2,4 GHz / 5 GHz', $rr_band, []);
+// CORE 3.7: every rule says WHAT WAS MEASURED, not a bare instruction. A
+// text that loses its number reads like a leaflet and cannot be acted on,
+// so each Wi-Fi sentence is checked against the value it was given.
+$rr_values = [
+    'wifi_6ghz_unserved' => ['2 z 4', '90 %'], 'wifi_channel_busy' => ['Kanál 5', '41,0 %', '62,0 %'],
+    'wifi_noise_high' => ['-79 dBm'], 'wifi_week_degraded' => ['-95', '-87', '10,0', '31,0'],
+    'wifi_weak_encryption' => ['WEP'], 'wifi_wpa2_only' => ['5 GHz, kanál 36'],
+    'wifi_wpa3_ready' => ['2026-09-14', '2026-09-20'], 'wifi_mode_below_card' => ['HT80', 'Wi-Fi 4', 'Wi-Fi 6'],
+    'wifi_channel_narrow' => ['40 MHz'], 'wifi_24_wide_channel' => ['40 MHz'],
+    'wifi_weak_client' => ['-75 dBm', '17 dB', '-92 dBm'], 'wifi_5ghz_clients_on_24' => ['1,4'],
+];
+$rr_missing = [];
+foreach ($rr_values as $rr_id => $rr_needles) {
+    $rr_text = bk_with_email_lang('cs', fn (): array =>
+        bk_router_rec_render(bk_rec_item($rr_id, $rr_id, 'wifi', 'info', [], $rr_params[$rr_id])))['measured'];
+    foreach ($rr_needles as $rr_needle) {
+        if (!str_contains($rr_text, $rr_needle)) {
+            $rr_missing[] = $rr_id . ': ' . $rr_needle;
+        }
+    }
+}
+check('každé pravidlo Wi-Fi říká, co bylo naměřeno', $rr_missing, []);
+// One sentence, one minus sign: bk_rec_num() writes an ASCII one, so a
+// typographic one in the literal text would sit next to it.
+$rr_minus = [];
+foreach (array_keys($rr_values) as $rr_id) {
+    foreach (['cs', 'en'] as $rr_lang) {
+        $rr_one = bk_with_email_lang($rr_lang, fn (): array =>
+            bk_router_rec_render(bk_rec_item($rr_id, $rr_id, 'wifi', 'info', [], $rr_params[$rr_id])));
+        if (str_contains(implode(' ', $rr_one), "\u{2212}")) {
+            $rr_minus[] = $rr_lang . ':' . $rr_id;
+        }
+    }
+}
+check('texty píšou mínus stejně jako čísla', $rr_minus, []);
+check('Omnia: zapnutý flow offloading větu o offloadingu nepřidá',
+    str_contains((string)bk_router_rec_render(bk_rec_item('wan_forwarding_core_saturated',
+        'wan_forwarding_core_saturated', 'wan', 'warning', [],
+        ['minutes' => 12, 'softirq' => 85.0, 'mbps' => 300.0, 'offloading_off' => false]))['action'],
+        'offloading'), false);
+
+// --- bk_wan_test_verdict: jeden test, jeden směr (WAN 3.4) ------------------
+// Klasifikátor je jen na serveru: aplikace vykresluje, co dostane. Proto se
+// tady zkouší každé pravidlo i každá branka - špatný verdikt by poslal
+// majitele reklamovat linku, která je v pořádku.
+
+// Čistá fáze: CPU změřené, cesta ověřená, žádné ztráty ani pozadí.
+$wphase = fn (array $over = []): array => $over + [
+    'secs' => 15.0, 'wan_mbps' => 0.0, 'core' => 0, 'core_busy_pct' => 20.0,
+    'core_user_pct' => 5.0, 'core_system_pct' => 5.0, 'core_irq_softirq_pct' => 10.0,
+    'hot_share' => 0.1, 'all_cores_avg_pct' => 12.0, 'softnet_time_squeeze' => 0.0,
+    'softnet_dropped' => 0.0, 'rx_packets' => 1000000.0, 'retrans_pct' => 0.1,
+];
+$wdiag = fn (array $dl = [], array $over = []): array => $over + [
+    'cpu_measured' => true, 'path_verified' => true,
+    'background_dl_mbps' => 0.0, 'background_ul_mbps' => 0.0,
+    'dl' => $dl, 'ul' => null, 'run' => ['wan_rx_ring_drops' => 0],
+];
+$wtest = fn (?float $dl, array $diag, array $over = []): array => $over + [
+    'id' => 1, 'measured_at' => date('Y-m-d H:i:s'), 'download_mbps' => $dl,
+    'upload_mbps' => null, 'link_mbit' => 2500, 'source' => 'agent',
+    'server_name' => 'Praha A', 'diagnostics' => $diag,
+];
+$wdl = fn (array $test, array $ctx = []): array => bk_wan_test_verdict($test, $ctx)['dl'];
+
+// S = vyšší z obou měření: nástroj počítá i rozjezd, fáze ne.
+$win = bk_wan_dir_inputs($wtest(800.0, $wdiag($wphase(['wan_mbps' => 1000.0]))), $wdiag($wphase(['wan_mbps' => 1000.0])), 'dl', []);
+check('S je vyšší z nástroje a 0,95× fázové rychlosti', round($win['s'], 1), 950.0);
+check('G je 0,93 × rychlost portu', round($win['g'], 1), 2325.0);
+check('bez tarifu není žádný strop', $win['cap'], null);
+check('výchozí podíl tarifu je 85 %', $win['k'], 0.85);
+
+$wctx = ['plan_down' => 2000, 'plan_up' => 1000];
+$win2 = bk_wan_dir_inputs($wtest(800.0, []), $wdiag($wphase(), ['path' => ['sqm_dl_kbps' => 500000]]), 'dl', $wctx);
+check('strop je menší z tarifu a tvarovače', $win2['cap'], 500.0);
+check('vlastní podíl tarifu se použije',
+    bk_wan_dir_inputs([], [], 'dl', ['plan_ok_pct' => 60])['k'], 0.6);
+check('podíl mimo rozsah spadne na 85 %',
+    bk_wan_dir_inputs([], [], 'dl', ['plan_ok_pct' => 5])['k'], 0.85);
+
+// Pravidlo 1: tarif dosažen - nic se nehledá dál.
+$v = $wdl($wtest(1800.0, $wdiag($wphase())), $wctx);
+check('dosažený tarif není úzké hrdlo', [$v['class'], $v['reason']], ['none', 'plan_reached']);
+check_true('u dosaženého tarifu se nehlásí nedostatek CPU', !isset($v['numbers']['no_cpu_headroom']));
+
+// Stejný výsledek, ale jádro je vytížené: dnes to stačí, rezerva žádná.
+$v = $wdl($wtest(1800.0, $wdiag($wphase(['core_busy_pct' => 96.0, 'core_irq_softirq_pct' => 80.0]))), $wctx);
+check('tarif dosažen s vytíženým jádrem hlásí chybějící rezervu',
+    [$v['reason'], $v['numbers']['no_cpu_headroom'] ?? null, $v['numbers']['also'][0] ?? null],
+    ['plan_reached', true, 'packet_path']);
+
+// Pravidlo 2: tvarovač SQM je záměrný strop.
+$v = $wdl($wtest(480.0, $wdiag($wphase(), ['path' => ['sqm_dl_kbps' => 500000]])), $wctx);
+check('rychlost na hraně SQM je záměrný strop', [$v['class'], $v['reason']], ['link_limited', 'sqm_shaper']);
+
+// Pravidlo 3: port WAN. 0,90 × G = 2092,5 při lince 2500.
+$v = $wdl($wtest(2200.0, $wdiag($wphase())), ['plan_down' => 4000]);
+check('rychlost u stropu portu je limit portu', [$v['class'], $v['reason']], ['link_limited', 'wan_port']);
+
+// Pravidlo 4: zahlcená síťová cesta v jádře.
+$v = $wdl($wtest(900.0, $wdiag($wphase(['core_busy_pct' => 98.0, 'core_irq_softirq_pct' => 85.0, 'core_user_pct' => 8.0]))), $wctx);
+check('vytížené jádro v softirq je síťová cesta', [$v['class'], $v['reason']], ['cpu_limited', 'packet_path']);
+check('verdikt nese číslo nejvytíženějšího jádra', $v['numbers']['core'], 0);
+
+// Pravidlo 5: totéž jádro, ale práci dělá klient testu.
+$v = $wdl($wtest(900.0, $wdiag($wphase(['core_busy_pct' => 98.0, 'core_irq_softirq_pct' => 20.0, 'core_user_pct' => 70.0]))), $wctx);
+check('vytížené jádro v uživatelském čase je klient testu', [$v['class'], $v['reason']], ['cpu_limited', 'test_client']);
+$v = $wdl($wtest(900.0, $wdiag($wphase(['hot_share' => 0.6, 'core_irq_softirq_pct' => 20.0, 'core_user_pct' => 20.0]))), $wctx);
+check('jedno jádro nad polovinou práce bez převahy je smíšené', [$v['class'], $v['reason']], ['cpu_limited', 'mixed']);
+
+// Pravidlo 6: pod tarifem s klidným jádrem a bez ztrát.
+$v = $wdl($wtest(900.0, $wdiag($wphase())), $wctx);
+check('pod tarifem s klidným routerem je limit linka', [$v['class'], $v['reason']], ['line_limited', 'below_plan']);
+check('jednotlivý test o lince má nízkou důvěru', $v['confidence'], 'low');
+$v = $wdl($wtest(900.0, $wdiag($wphase(['retrans_pct' => 2.0]))), $wctx);
+check('retransmise nad procento ukazují na ztráty výš', $v['reason'], 'upstream_loss');
+
+// ... ale zahozený paket v routeru to zastaví: to není vina linky.
+$v = $wdl($wtest(900.0, $wdiag($wphase(['softnet_dropped' => 3.0]))), $wctx);
+check('zahozené pakety brání verdiktu o lince', $v['class'], 'inconclusive');
+check('bez pojmenovatelné příčiny se důvod nevymýšlí', $v['reason'], null);
+$v = $wdl($wtest(900.0, $wdiag($wphase(), ['run' => ['wan_rx_ring_drops' => 5]])), $wctx);
+check('přetečený kruhový buffer brání verdiktu o lince', $v['class'], 'inconclusive');
+
+// Branky. Bez výsledku a bez ověřené cesty se neřekne nic; ostatní tři
+// nechají projít jen pravidla 1-3 (dolní mez, která dosáhne stropu, ho
+// dosáhla), nikdy ne „pomalá linka".
+$v = $wdl($wtest(null, $wdiag($wphase())), $wctx);
+check('bez naměřené rychlosti není verdikt', [$v['class'], $v['reason']], ['inconclusive', 'no_result']);
+$v = $wdl($wtest(900.0, $wdiag($wphase(), ['path_verified' => false])), $wctx);
+check('neověřená cesta zastaví i rychlý výsledek', [$v['class'], $v['reason']], ['inconclusive', 'path_unverified']);
+
+$v = $wdl($wtest(900.0, $wdiag($wphase(), ['background_dl_mbps' => 120.0])), $wctx);
+check('provoz na pozadí zakáže verdikt o lince', [$v['class'], $v['reason']], ['inconclusive', 'background_traffic']);
+$v = $wdl($wtest(1800.0, $wdiag($wphase(), ['background_dl_mbps' => 120.0])), $wctx);
+check('provoz na pozadí nebrání potvrdit dosažený tarif', [$v['class'], $v['reason']], ['none', 'plan_reached']);
+
+$v = $wdl($wtest(900.0, $wdiag($wphase()), ['source' => 'turris']), $wctx);
+check('test od Turrisu nemá data o CPU', [$v['class'], $v['reason']], ['inconclusive', 'cpu_not_measured']);
+$v = $wdl($wtest(1800.0, $wdiag($wphase()), ['source' => 'turris']), $wctx);
+check('test od Turrisu smí potvrdit dosažený tarif', $v['reason'], 'plan_reached');
+$v = $wdl($wtest(900.0, $wdiag($wphase(['secs' => 4.0]))), $wctx);
+check('fáze kratší než deset sekund se pro CPU nepočítá', $v['reason'], 'cpu_not_measured');
+$v = $wdl($wtest(900.0, $wdiag($wphase(), ['minute_overlap_secs' => 0])), $wctx);
+check('bez překryvu s minutovým během branka nepadne', $v['reason'], 'below_plan');
+$ov = $wphase();
+$ov['minute_overlap_secs'] = 3.0;
+$v = $wdl($wtest(900.0, $wdiag($ov)), $wctx);
+check('minutový běh přes fázi zakáže verdikt o lince', $v['reason'], 'minute_run_overlap');
+
+// Pravidlo 7.
+$v = $wdl($wtest(900.0, $wdiag($wphase(['core_busy_pct' => 85.0]))), $wctx);
+check('jádro mezi 80 a 90 % je hraniční', [$v['class'], $v['reason']], ['inconclusive', 'cpu_borderline']);
+$v = $wdl($wtest(900.0, $wdiag($wphase())), []);
+check('bez tarifu se o lince nerozhoduje', [$v['class'], $v['reason']], ['inconclusive', 'no_plan_known']);
+check('verdikt nese id testu, o který se opírá', $v['basis'], [1]);
+
+// --- bk_wan_bottleneck: shoda posledních sond (WAN 3.4, agregace) -----------
+$wnow = time();
+$wat = fn (int $days_ago): string => date('Y-m-d H:i:s', $wnow - $days_ago * 86400);
+// Test „pod tarifem, router v klidu" - základ agregace.
+$wrow = function (int $id, int $days_ago, float $dl, string $server, array $over = []) use ($wphase, $wdiag): array {
+    return $over + ['id' => $id, 'measured_at' => date('Y-m-d H:i:s', time() - $days_ago * 86400),
+        'download_mbps' => $dl, 'upload_mbps' => null, 'link_mbit' => 2500, 'source' => 'agent',
+        'server_name' => $server, 'diagnostics' => $wdiag($wphase())];
+};
+$wc = ['plan_down' => 2000, 'plan_up' => 1000, 'now' => $wnow,
+    'server_max' => ['Praha A' => ['dl' => 1900.0, 'ul' => null], 'Praha B' => ['dl' => 1900.0, 'ul' => null]]];
+
+$agg = bk_wan_bottleneck([$wrow(1, 1, 900.0, 'Praha A')], $wc)['dl'];
+check('jedna sonda na verdikt nestačí', [$agg['reason'], $agg['numbers']['needed']], ['not_enough_tests', 1]);
+
+// Hodnoty leží mimo obě náhorní plošiny (880-950 a 2200-2380 Mbit/s),
+// jinak by je čtvrtá pojistka poslala na `port_plateau` - což je vlastní
+// kontrola o kus níž.
+$three = [$wrow(1, 1, 700.0, 'Praha A'), $wrow(2, 3, 710.0, 'Praha B'), $wrow(3, 5, 705.0, 'Praha A')];
+$agg = bk_wan_bottleneck($three, $wc)['dl'];
+check('tři shodné sondy dají vysokou důvěru',
+    [$agg['class'], $agg['reason'], $agg['confidence']], ['line_limited', 'below_plan', 'high']);
+check('agregace jmenuje všechny testy, o které se opírá', $agg['basis'], [1, 2, 3]);
+
+// Dvě ze tří: střední důvěra.
+$mixed = [$wrow(1, 1, 700.0, 'Praha A'), $wrow(2, 3, 710.0, 'Praha B'),
+    $wrow(3, 5, 1900.0, 'Praha A')];
+$agg = bk_wan_bottleneck($mixed, $wc)['dl'];
+check('dvě ze tří shodných dají střední důvěru', [$agg['class'], $agg['confidence']], ['line_limited', 'medium']);
+
+// Tři různé verdikty: nerozhodnuto, ne „většina".
+// Tři RŮZNÉ verdikty: pod tarifem, tarif dosažen a hraniční jádro. Dvě
+// hodnoty nad tarifem by byly shoda dvou ze tří, ne neshoda.
+$dis = [$wrow(1, 1, 700.0, 'Praha A'), $wrow(2, 3, 1900.0, 'Praha B'),
+    $wrow(3, 5, 705.0, 'Praha A', ['diagnostics' => $wdiag($wphase(['core_busy_pct' => 85.0]))])];
+$agg = bk_wan_bottleneck($dis, $wc)['dl'];
+check('tři neshodné sondy nerozhodnou nic', [$agg['class'], $agg['reason']], ['inconclusive', 'tests_disagree']);
+
+// Turrisovy soubory do agregace nikdy nevstupují.
+$turris = [$wrow(1, 1, 900.0, 'Praha A', ['source' => 'turris']),
+    $wrow(2, 3, 910.0, 'Praha B', ['source' => 'turris']),
+    $wrow(3, 5, 905.0, 'Praha A', ['source' => 'turris'])];
+$agg = bk_wan_bottleneck($turris, $wc)['dl'];
+check('měření od Turrisu se do agregace nepočítají', $agg['reason'], 'not_enough_tests');
+
+// Neplatná jednotka: výsledek neznámého rozměru se neprůměruje.
+$bad = $three;
+$bad[0]['diagnostics'] = $wdiag($wphase(), ['unit_mismatch' => true]);
+$agg = bk_wan_bottleneck($bad, $wc)['dl'];
+check('test s neshodou jednotek do agregace nepatří', $agg['numbers']['tests'], 2);
+
+// Release contract section 4: this is the state of the user's router at
+// release - the probe is wave 2 and no result has ever been stored, so
+// both directions must say so instead of guessing.
+$empty = bk_wan_bottleneck([], $wc);
+check('Omnia: bez jediného měření je verdikt neprůkazný',
+    [$empty['dl']['class'], $empty['dl']['reason'], $empty['ul']['class'], $empty['ul']['reason']],
+    ['inconclusive', 'not_enough_tests', 'inconclusive', 'not_enough_tests']);
+check('bez měření karta ví, kolik jich ještě chybí', $empty['dl']['numbers']['needed'], 2);
+
+// X27: a probe measured while an ordinary minute run was collecting does
+// not count towards the three. Without this the aggregate would stand on
+// a rate the router's own telemetry was competing with.
+$overlap = $three;
+$ov3 = $wphase();
+$ov3['minute_overlap_secs'] = 4.0;
+$overlap[2]['diagnostics'] = $wdiag($ov3);
+check('test rušený minutovým během se do verdiktu nepočítá',
+    bk_wan_bottleneck($overlap, $wc)['dl']['numbers']['tests'], 2);
+
+// Starší než 21 dní.
+$old = [$wrow(1, 1, 900.0, 'Praha A'), $wrow(2, 25, 910.0, 'Praha B'), $wrow(3, 30, 905.0, 'Praha A')];
+$agg = bk_wan_bottleneck($old, $wc)['dl'];
+check('sonda starší tří týdnů se nepočítá', $agg['reason'], 'not_enough_tests');
+
+// --- Čtyři pojistky verdiktu „limit je linka" (WAN 3.4) ---------------------
+// Shoda sama o sobě nedokazuje, že limituje linka: dva servery můžou narazit
+// do stejného stropu, který linka není.
+$one = [$wrow(1, 1, 900.0, 'Praha A'), $wrow(2, 3, 910.0, 'Praha A'), $wrow(3, 5, 905.0, 'Praha A')];
+$agg = bk_wan_bottleneck($one, $wc)['dl'];
+check('jediný testovací server na verdikt o lince nestačí', $agg['reason'], 'single_server');
+
+$sameday = [$wrow(1, 1, 900.0, 'Praha A'), $wrow(2, 1, 910.0, 'Praha B')];
+$agg = bk_wan_bottleneck($sameday, $wc)['dl'];
+check('dvě měření z jednoho dne nejsou dvě pozorování', $agg['reason'], 'not_enough_tests');
+
+$far = [$wrow(1, 1, 500.0, 'Praha A'), $wrow(2, 3, 900.0, 'Praha B'), $wrow(3, 5, 505.0, 'Praha A')];
+$agg = bk_wan_bottleneck($far, $wc)['dl'];
+check('servery lišící se o víc než 15 % měřily něco jiného', $agg['reason'], 'server_limited');
+check('rychlejší server je pak dolní mez linky', $agg['numbers']['s_lower_bound_mbps'], 900.0);
+
+$unproven = $wc;
+$unproven['server_max'] = ['Praha A' => ['dl' => 940.0, 'ul' => null], 'Praha B' => ['dl' => 940.0, 'ul' => null]];
+$agg = bk_wan_bottleneck([$wrow(1, 1, 900.0, 'Praha A'), $wrow(2, 3, 910.0, 'Praha B'),
+    $wrow(3, 5, 905.0, 'Praha A')], $unproven)['dl'];
+check('server, který stropu nikdy nedosáhl, verdikt neunese', $agg['reason'], 'server_capacity_unproven');
+check('pojistka řekne, jaký strop se nepodařilo doložit', $agg['numbers']['cap_mbit'], 2000.0);
+
+// Plató gigabitového portu pod tarifem: v cestě je něco s pomalejším portem.
+$plateau = $wc;
+$plateau['server_max'] = ['Praha A' => ['dl' => 2000.0, 'ul' => null], 'Praha B' => ['dl' => 2000.0, 'ul' => null]];
+$agg = bk_wan_bottleneck([$wrow(1, 1, 930.0, 'Praha A'), $wrow(2, 3, 940.0, 'Praha B'),
+    $wrow(3, 5, 935.0, 'Praha A')], $plateau)['dl'];
+check('plató gigabitového portu pod tarifem nesvádí na linku', $agg['reason'], 'port_plateau');
+
+// A když projdou všechny čtyři, verdikt padne.
+$agg = bk_wan_bottleneck([$wrow(1, 1, 700.0, 'Praha A'), $wrow(2, 3, 710.0, 'Praha B'),
+    $wrow(3, 5, 705.0, 'Praha A')], $plateau)['dl'];
+check('po všech pojistkách verdikt o lince padne',
+    [$agg['class'], $agg['reason'], $agg['confidence']], ['line_limited', 'below_plan', 'high']);
+check('agregace uvádí rozptyl dní a počet serverů',
+    [$agg['numbers']['span_days'], $agg['numbers']['servers']], [3, 2]);
+
+// --- Doporučení na drát: příkaz, chybějící balíčky, oblast, tvar (CORE 3.9) --
+
+check('rostoucí chyby disku nabídnou dlouhý test',
+    bk_rec_command(['id' => 'disk_errors_growing', 'params' => ['name' => 'sda']]),
+    'smartctl -t long /dev/sda');
+check('nikdy nespuštěný test nabídne krátký',
+    bk_rec_command(['id' => 'disk_selftest_never', 'params' => ['name' => 'mmcblk0']]),
+    'smartctl -t short /dev/mmcblk0');
+check('chybějící balíček nabídne instalaci podle správce balíčků',
+    bk_rec_command(['id' => 'pkg_librespeed_cli', 'params' => ['pkg_manager' => 'opkg']]),
+    bk_rec_install_cmd('opkg', 'librespeed-cli'));
+check('pravidlo bez příkazu žádný nevymýšlí',
+    bk_rec_command(['id' => 'disk_temp_warm', 'params' => ['name' => 'sda']]), null);
+check('podezřelé jméno zařízení se do příkazu nedostane',
+    bk_rec_command(['id' => 'disk_selftest_never', 'params' => ['name' => 'sda; rm -rf /']]), null);
+
+check('chybí jen to, co agent opravdu hledal a nenašel',
+    bk_rec_missing_packages(['smartctl' => true, 'iw' => false, 'ethtool' => false, 'tc' => true]),
+    ['iw', 'ethtool']);
+check('bez objektu nástrojů se nic netvrdí', bk_rec_missing_packages(null), []);
+
+$areas = [];
+foreach (bk_router_rec_thresholds()['rank'] as $rid) {
+    $areas[bk_rec_area_of($rid)] = true;
+}
+check('každé id pravidla má svou oblast', count($areas), 6);
+check('oblast disku i souborového systému je úložiště',
+    [bk_rec_area_of('disk_temp_warm'), bk_rec_area_of('fs_nearly_full')], ['storage', 'storage']);
+check('conntrack a strop LAN patří k WAN',
+    [bk_rec_area_of('conntrack_drops'), bk_rec_area_of('lan_wired_ceiling')], ['wan', 'wan']);
+
+$json = bk_rec_item_json([
+    'id' => 'disk_temp_warm', 'key' => 'disk_temp_warm:d:abc', 'area' => 'storage',
+    'severity' => 'warning', 'subject' => ['kind' => 'disk', 'disk_key' => 'abc', 'name' => 'sda'],
+    'params' => [], 'openSince' => '2026-09-01',
+], ['muted_at' => '2026-09-02 10:00:00', 'muted_by' => 'pepe', 'mute_reason' => '', 'muted_severity' => 'info'], false);
+check('klíč disku jde na drát v camelCase', $json['subject']['diskKey'], 'abc');
+check('ztlumená položka, která už nehoří, nemá texty',
+    [$json['title'], $json['measured'], $json['action'], $json['active']], [null, null, null, false]);
+check('prázdný důvod ztlumení je null, ne prázdný řetězec', $json['mute']['reason'], null);
+check('ztlumení si pamatuje závažnost, při které vzniklo', $json['mute']['severity'], 'info');
+
+// --- Daily reminder: what counts as broken --------------------------------
+// The feature exists because of a four-day outage nobody was told about: the
+// alert goes out on a CHANGE of state and then never again. These tests guard
+// the one decision the whole reminder rests on - what gets into it, and what
+// must never, because a message that cries wolf daily is a message nobody reads.
+
+// Each recipient reads only their own part: the report used to be rendered
+// once and sent to everybody, so a user with one monitor read the names,
+// error texts and incidents of all the others.
+$ds_report = [
+    'outages' => [['id' => 1, 'name' => 'Web'], ['id' => 2, 'name' => 'Server']],
+    'silent' => [['id' => 2, 'name' => 'Server'], ['id' => 0, 'name' => 'bez id']],
+    'incidents' => [['id' => 7, 'monitor_id' => 1], ['id' => 8, 'monitor_id' => 2], ['id' => 9, 'monitor_id' => null]],
+    'cron' => ['last' => null, 'age_secs' => null, 'stale' => true],
+    'problem_count' => 7,
+];
+check('administrátor (null) čte všechno', bk_daily_reminder_scoped($ds_report, null), $ds_report);
+$ds_one = bk_daily_reminder_scoped($ds_report, [1]);
+check('uživatel s monitorem 1: jen jeho výpadek a incident, nic bez monitoru',
+    [array_column($ds_one['outages'], 'id'), $ds_one['silent'], array_column($ds_one['incidents'], 'id'), $ds_one['problem_count']],
+    [[1], [], [7], 2]);
+check('bez monitorů nic', bk_daily_reminder_scoped($ds_report, [])['problem_count'], 0);
+$ds_quiet = bk_daily_reminder_scoped($ds_report, [1, 2], false);
+check('bez tichého sběru zůstanou výpadky a incidenty',
+    [count($ds_quiet['outages']), $ds_quiet['silent'], count($ds_quiet['incidents']), $ds_quiet['problem_count']],
+    [2, [], 2, 4]);
+
+// Relative to the real clock, not a fixed date: the selection asks
+// bk_get_collection_issues(), which reads time() itself (it is shared with
+// the app and the public page). With a frozen "now" the fixtures would age
+// against the real clock and a suite that passed at nine would fail at noon.
+// It reads the agent offline timeout too, through db.php's get_setting().
+bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defaults']);
+$dr_now = time();
+$dr_at = fn (int $secs_ago): string => date('Y-m-d H:i:s', $dr_now - $secs_ago);
+$dr_monitor = fn (array $over): array => array_merge([
+    'id' => 1, 'name' => 'Web', 'type' => 'web', 'status' => 'up',
+    'last_checked' => $dr_at(60), 'last_status_change' => $dr_at(3600),
+    'maintenance' => 0, 'archived_at' => null, 'details' => [], 'last_error' => null,
+], $over);
+// The message texts come from lang/, so the selection runs inside the
+// e-mail language exactly as the cron does.
+$dr_select = fn (array $monitors, array $incidents = [], ?string $cron = null): array =>
+    bk_with_email_lang('cs', fn (): array => bk_daily_reminder_select($monitors, $incidents, $cron, 900, $dr_now));
+
+// Nothing wrong = nothing to send. Without this the reminder would arrive
+// every morning saying "all good" and be filtered within a week.
+$dr_ok = $dr_select([$dr_monitor([])]);
+check('zdravý systém nemá co hlásit', $dr_ok['problem_count'], 0);
+check('a ani jednu sekci', [count($dr_ok['outages']), count($dr_ok['silent']), count($dr_ok['incidents'])], [0, 0, 0]);
+
+$dr_down = $dr_select([$dr_monitor([
+    'status' => 'down', 'last_status_change' => $dr_at(4 * 86400), 'last_error' => 'HTTP 502',
+])]);
+check('výpadek se hlásí', count($dr_down['outages']), 1);
+check('i s uloženým důvodem', $dr_down['outages'][0]['reason'], 'HTTP 502');
+check('a s délkou trvání', $dr_down['outages'][0]['duration_secs'], 4 * 86400);
+check_false('výpadek není varování', $dr_down['outages'][0]['warning']);
+
+// A slow service and an expiring certificate are warnings, not outages -
+// the same classification the alert e-mail uses.
+$dr_warn = $dr_select([$dr_monitor(['status' => 'latency_degraded'])]);
+check_true('zhoršená odezva se hlásí jako varování', $dr_warn['outages'][0]['warning'] ?? false);
+
+// Longest first: the four-day outage must not end up under the ten-minute one.
+$dr_order = $dr_select([
+    $dr_monitor(['id' => 1, 'name' => 'Krátký', 'status' => 'down', 'last_status_change' => $dr_at(600)]),
+    $dr_monitor(['id' => 2, 'name' => 'Dlouhý', 'status' => 'down', 'last_status_change' => $dr_at(4 * 86400)]),
+    $dr_monitor(['id' => 3, 'name' => 'Neznámý', 'status' => 'down', 'last_status_change' => null]),
+]);
+check('nejdéle trvající výpadek je první',
+    array_column($dr_order['outages'], 'name'), ['Dlouhý', 'Krátký', 'Neznámý']);
+check('neznámá délka se nevymýšlí', $dr_order['outages'][2]['duration_secs'], null);
+
+// Maintenance is a planned outage: announcing it daily would teach the
+// reader that the message is usually about nothing.
+check('monitor v údržbě se nehlásí',
+    $dr_select([$dr_monitor(['status' => 'down', 'maintenance' => 1])])['problem_count'], 0);
+check('ani stav maintenance',
+    $dr_select([$dr_monitor(['status' => 'maintenance'])])['problem_count'], 0);
+// Archived = out of service for good; trigger_notifications() ignores it too.
+check('archivovaný monitor se nehlásí',
+    $dr_select([$dr_monitor(['status' => 'down', 'archived_at' => $dr_at(86400)])])['problem_count'], 0);
+check('nezměřený a pozastavený monitor není porucha', [
+    $dr_select([$dr_monitor(['status' => 'unknown', 'last_checked' => null])])['problem_count'],
+    $dr_select([$dr_monitor(['status' => 'paused', 'last_checked' => null])])['problem_count'],
+], [0, 0]);
+
+// The case that started the whole feature: nothing crashed, the data just
+// stopped arriving. It has its own section - merged into the outages it
+// would be buried among them again.
+$dr_silent = $dr_select([$dr_monitor([
+    'type' => 'vps', 'status' => 'up', 'details' => ['agent_last_seen' => $dr_now - 7200],
+])]);
+check('mlčící agent se hlásí', count($dr_silent['silent']), 1);
+check('a NE mezi výpadky', count($dr_silent['outages']), 0);
+check('sekce zná svůj druh problému', $dr_silent['silent'][0]['issue'], 'agent_silent');
+// Cron puts a silent agent's monitor down: it is one problem, in the silent
+// section, not also an outage (a probe found it twice and counted 2).
+$dr_silent_down = $dr_select([$dr_monitor([
+    'type' => 'vps', 'status' => 'down', 'last_error' => 'Agent neodpovídá', 'details' => ['agent_last_seen' => $dr_now - 7200],
+])]);
+check('mlčící agent s monitorem dole je jeden problém v tichém sběru',
+    [count($dr_silent_down['silent']), count($dr_silent_down['outages']), $dr_silent_down['problem_count']], [1, 0, 1]);
+// Timeout 0 switches the detection off: the reminder used to list every
+// agent that ever reported as silent, every morning.
+$GLOBALS['system_settings'] = ['agent_offline_timeout' => '0'];
+check('vypnutá detekce: připomínka mlčení agenta nehlásí', $dr_select([$dr_monitor([
+    'type' => 'vps', 'status' => 'up', 'details' => ['agent_last_seen' => $dr_now - 172800],
+])])['problem_count'], 0);
+unset($GLOBALS['system_settings']);
+
+// A heartbeat past interval + grace stopped reporting - the silent half.
+$dr_hb = $dr_select([$dr_monitor([
+    'type' => 'heartbeat', 'status' => 'down', 'last_checked' => null, 'last_status_change' => $dr_at(7200),
+    'heartbeat_interval' => 3600, 'heartbeat_grace' => 300, 'last_heartbeat' => $dr_at(7200),
+])]);
+check('heartbeat po lhůtě je tichý sběr', array_column($dr_hb['silent'], 'issue'), ['heartbeat_overdue']);
+check('a nepočítá se zároveň jako výpadek', count($dr_hb['outages']), 0);
+// A job that reported its own failure DID fail - that belongs to the outages.
+$dr_hb_fail = $dr_select([$dr_monitor([
+    'type' => 'heartbeat', 'status' => 'down', 'last_checked' => null,
+    'heartbeat_interval' => 3600, 'heartbeat_grace' => 300, 'last_heartbeat' => $dr_at(120),
+    'heartbeat_last_result' => 'fail', 'last_error' => 'Záloha skončila chybou',
+])]);
+check('ohlášené selhání úlohy je výpadek, ne ticho',
+    [count($dr_hb_fail['outages']), count($dr_hb_fail['silent'])], [1, 0]);
+
+// Two rules, one monitor: the heartbeat is past its grace period AND the
+// checks stopped running (this is how it looked in the e2e message -
+// "Zaloha NAS" twice, counted as two problems). One subject, one row, and
+// the second finding stays readable under the first.
+$dr_dup = $dr_select([$dr_monitor([
+    'id' => 7, 'name' => 'Záloha NAS', 'type' => 'heartbeat', 'status' => 'down',
+    'last_checked' => $dr_at(300 * 60), 'last_status_change' => $dr_at(7200),
+    'heartbeat_interval' => 3600, 'heartbeat_grace' => 300, 'last_heartbeat' => $dr_at(18000),
+])]);
+check('jeden monitor je v tichém sběru jednou, i když ho našla dvě pravidla',
+    [count($dr_dup['silent']), $dr_dup['problem_count']], [1, 1]);
+check('hlavní nález je ten od heartbeatu', $dr_dup['silent'][0]['issue'], 'heartbeat_overdue');
+check('a druhý nález se neztratil, jen nepočítá znovu',
+    array_column($dr_dup['silent'][0]['also'], 'issue'), ['checks_stalled']);
+check_true('text druhého nálezu zůstal celý',
+    str_contains($dr_dup['silent'][0]['also'][0]['message'] ?? '', '300'));
+// Řádek si nechává to delší ticho - kratší věk by poruchu zlehčil.
+check('řádek hlásí delší z obou dob ticha', $dr_dup['silent'][0]['age_secs'], 300 * 60);
+
+// The same rule for two collection issues on one monitor.
+$dr_dup2 = $dr_select([$dr_monitor([
+    'id' => 8, 'name' => 'VPS', 'type' => 'vps', 'status' => 'up', 'last_checked' => $dr_at(60),
+    'details' => [
+        'agent_last_seen' => $dr_now - 7200,
+        'cpanel_stats_error' => ['error' => 'HTTP 403', 'since' => $dr_at(9000)],
+    ],
+])]);
+check('dva výpadky sběru na jednom monitoru jsou jeden problém',
+    [count($dr_dup2['silent']), count($dr_dup2['silent'][0]['also']), $dr_dup2['problem_count']], [1, 1, 1]);
+
+// Two monitors stay two problems - the deduplication is per monitor, not per section.
+$dr_two = $dr_select([
+    $dr_monitor(['id' => 1, 'name' => 'A', 'type' => 'vps', 'details' => ['agent_last_seen' => $dr_now - 7200]]),
+    $dr_monitor(['id' => 2, 'name' => 'B', 'type' => 'vps', 'details' => ['agent_last_seen' => $dr_now - 7200]]),
+]);
+check('dva mlčící monitory jsou dva problémy',
+    [count($dr_two['silent']), $dr_two['problem_count']], [2, 2]);
+
+// R140: missing minute reports reach the reminder for a router only. A
+// server agent runs every 5 minutes as installed; a count cron stored for
+// it earlier would say "1152 of 1440 missing" every morning.
+$dr_rep = ['agent_last_seen' => $dr_now - 60, 'reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => $dr_now - 600]];
+$dr_reports = $dr_select([
+    $dr_monitor(['id' => 1, 'name' => 'Router', 'type' => 'openwrt', 'details' => $dr_rep + ['agent_type' => 'openwrt']]),
+    $dr_monitor(['id' => 2, 'name' => 'VPS', 'type' => 'vps', 'details' => $dr_rep + ['agent_type' => 'bash']]),
+]);
+check('chybějící minuty routeru jdou do připomínky, serverového agenta ne',
+    array_map(fn (array $s): array => [$s['name'], $s['issue']], $dr_reports['silent']), [['Router', 'reports_missing']]);
+
+// Unacknowledged incidents, oldest first.
+$dr_inc = $dr_select([$dr_monitor([])], [
+    ['id' => 5, 'title' => 'Nový', 'impact' => 'minor', 'status' => 'investigating', 'created_at' => $dr_at(600), 'monitor_name' => null],
+    ['id' => 4, 'title' => 'Starý', 'impact' => 'major', 'status' => 'identified', 'created_at' => $dr_at(86400), 'monitor_name' => 'Web'],
+]);
+check('nepřevzaté incidenty se hlásí od nejstaršího',
+    array_column($dr_inc['incidents'], 'title'), ['Starý', 'Nový']);
+check('a znají svůj věk', $dr_inc['incidents'][0]['age_secs'], 86400);
+// A healthy monitor plus two incidents: the reminder goes out for the
+// incidents alone, nothing else is needed.
+check('incidenty se počítají mezi problémy', $dr_inc['problem_count'], 2);
+
+// The collection stamp is context, never a reason to send: this code runs
+// FROM cron, so "the collector is late" alone would be a message from the
+// machine proving it runs.
+$dr_cron = $dr_select([$dr_monitor([])], [], $dr_at(4 * 3600));
+check('starý běh sběru sám o sobě zprávu nevyvolá', $dr_cron['problem_count'], 0);
+check_true('ale je označený jako zastaralý', $dr_cron['cron']['stale']);
+check('a ví, jak je starý', $dr_cron['cron']['age_secs'], 4 * 3600);
+check_true('žádný dokončený běh = taky zastaralý', $dr_select([$dr_monitor([])], [], null)['cron']['stale']);
+check('čerstvý běh zastaralý není',
+    $dr_select([$dr_monitor([])], [], $dr_at(120))['cron']['stale'], false);
+// The limit is the collection watchdog's own (collection_max_age_secs), not
+// a second number invented here: the e-mail and the app must not disagree
+// about whether collection is alive.
+check('hranice zastaralosti se řídí nastavením hlídače', bk_with_email_lang('cs', fn (): bool =>
+    bk_daily_reminder_select([$dr_monitor([])], [], $dr_at(1200), 1800, $dr_now)['cron']['stale']), false);
+
+// --- Daily reminder: the once-a-day guard ---------------------------------
+// The router's cron runs every minute. Without the stamp the reminder would
+// go out nine hundred times a day, and the next real one would be filtered.
+$dr_day = mktime(8, 0, 0, 9, 21, 2026);
+check_false('před nastavenou hodinou se nic neposílá', bk_daily_reminder_due('', 8, $dr_day - 60));
+check_true('od nastavené hodiny ano', bk_daily_reminder_due('', 8, $dr_day));
+check_false('podruhé týž den už ne', bk_daily_reminder_due('2026-09-21', 8, $dr_day + 3600));
+check_true('a další den zase ano', bk_daily_reminder_due('2026-09-21', 8, $dr_day + 86400));
+check_true('pozdě večer se dnešek ještě dožene', bk_daily_reminder_due('2026-09-20', 8, $dr_day + 14 * 3600));
+// A nonsensical hour must not silence the reminder forever - it falls back
+// to the documented default, the same one get_setting() hands out.
+check_true('nesmyslná hodina spadne na výchozích 8:00', bk_daily_reminder_due('', 99, $dr_day));
+check_false('a před osmou pak taky mlčí', bk_daily_reminder_due('', -5, $dr_day - 60));
+
+// A whole day of a per-minute cron sends exactly once.
+$dr_last = '';
+$dr_sends = 0;
+for ($dr_min = 0; $dr_min < 48 * 60; $dr_min++) {
+    $dr_ts = mktime(0, 0, 0, 9, 21, 2026) + $dr_min * 60;
+    if (bk_daily_reminder_due($dr_last, 8, $dr_ts)) {
+        $dr_sends++;
+        $dr_last = date('Y-m-d', $dr_ts);
+    }
+}
+check('cron každou minutu odešle za dva dny právě dvakrát', $dr_sends, 2);
+
+
+// --- Přejímka na routeru majitele (INDEX 4, CORE 7.2-7.4) -------------------
+// Celý engine nad fixture, ne jedna skupina pravidel: tohle je seznam, který
+// majitel dostane v pondělním e-mailu. „Nespustilo se" musí znamenat, že
+// pravidlo hodnotu VIDĚLO a řeklo ne - ne že chybí.
+
+if (is_readable(__DIR__ . '/fixtures/omnia_router.php')) {
+    $ac = require __DIR__ . '/fixtures/omnia_router.php';
+    $ac_win = bk_router_rec_window(date('Y-m-d'));
+    // The fixture's one day of metrics_daily, repeated over the whole week.
+    $ac_metrics = [];
+    foreach ($ac['week']['metrics'] as $ac_key => $ac_vals) {
+        foreach ($ac_win['days'] as $ac_day) {
+            $ac_metrics[$ac_key][$ac_day] = ['min' => $ac_vals[0], 'avg' => $ac_vals[1],
+                'max' => $ac_vals[2], 'samples' => $ac['week']['samples']];
+        }
+    }
+    $ac_win['metrics'] = $ac_metrics;
+    // The disk as the server stores it: the payload plus the derived key.
+    $ac_details = $ac['payload'];
+    $ac_details['storage_disks'][0]['key'] = $ac['disk_key'];
+    $ac_details['agent_version'] = '0.1.7';
+    $ac_daily = [];
+    foreach ($ac_win['days'] as $ac_i => $ac_day) {
+        // power_on_hours is the LAST day's value; a day back is 24 hours less.
+        $ac_daily[$ac_day] = ['day' => $ac_day] + $ac['disk_day'];
+        $ac_daily[$ac_day]['power_on_hours'] = $ac['disk_day']['power_on_hours']
+            - (count($ac_win['days']) - 1 - $ac_i) * 24;
+    }
+    $ac_run = fn (array $details, array $state = []): array => bk_router_rec_evaluate([
+        'monitor' => ['id' => 6, 'type' => 'openwrt'],
+        'details' => $details,
+        'window' => $ac_win,
+        'disks' => [$ac['disk_key'] => ['row' => ['disk_key' => $ac['disk_key']], 'daily' => $ac_daily]],
+        'state' => $state,
+        'now' => time(),
+    ]);
+    $ac_res = $ac_run($ac_details);
+    $ac_ids = array_values(array_map(fn (array $i): string => (string)$i['id'], $ac_res['items']));
+    $ac_sev = [];
+    foreach ($ac_res['items'] as $ac_item) {
+        $ac_sev[(string)$ac_item['id']] = (string)$ac_item['severity'];
+    }
+    $ac_of = function (string $id) use ($ac_res): ?array {
+        foreach ($ac_res['items'] as $item) {
+            if ((string)$item['id'] === $id) {
+                return $item;
+            }
+        }
+        return null;
+    };
+    $ac_text = fn (string $id, string $lang = 'cs'): array => bk_with_email_lang($lang,
+        fn (): array => bk_router_rec_render((array)$ac_of($id)));
+
+    check_true('Omnia: doporučení se vůbec vyhodnocují', $ac_res['applicable'] === true && $ac_res['reason'] === null);
+    // F1-F5 and their order (CORE 7.2): severity, then area, then rank -
+    // NOT the alphabetical order of the keys, which would give F2, F4, F3.
+    // `wifi_wpa3_ready` stands between F1 and F5 because the seeded week
+    // already IS the clean week of CORE 7.4 V1 (`wifi_wpa2_clients` max 0 on
+    // all seven days, 1,440 samples each, four clients) - the variant needs no
+    // change to the fixture. Its rank puts it after F1 and before F5.
+    check('Omnia: F1-F5 se spustí právě jednou a ve správném pořadí', $ac_ids,
+        ['disk_temp_warm', 'disk_unclean_shutdowns', 'disk_selftest_never',
+            'wifi_6ghz_unserved', 'wifi_wpa3_ready', 'wifi_weak_client']);
+    check('Omnia: F2 je varování, ostatní informace', $ac_sev,
+        ['disk_temp_warm' => 'warning', 'disk_unclean_shutdowns' => 'info',
+            'disk_selftest_never' => 'info', 'wifi_6ghz_unserved' => 'info',
+            'wifi_wpa3_ready' => 'info', 'wifi_weak_client' => 'info']);
+
+    // N1-N6, N8: silent because the rule LOOKED. A rule that is missing or
+    // that could not be evaluated would pass a bare "is not in the list", so
+    // both halves are asserted: not fired AND not in `not_evaluated`.
+    $ac_evaluated_no = function (array $ids) use ($ac_res, $ac_sev): array {
+        $bad = [];
+        foreach ($ids as $id) {
+            if (isset($ac_sev[$id])) {
+                $bad[] = $id . ': spustilo se';
+            } elseif (in_array($id, $ac_res['not_evaluated'], true)) {
+                $bad[] = $id . ': nevyhodnoceno';
+            }
+        }
+        return $bad;
+    };
+    check('Omnia: N1, N2 - kanál ani šum se neozvou, protože 3,5 % a −92 dBm změřeny byly',
+        $ac_evaluated_no(['wifi_channel_busy', 'wifi_noise_high']), []);
+    check('Omnia: N3-N5 - smíšené WPA2/WPA3, HE80 a karta na HE nedávají nález',
+        $ac_evaluated_no(['wifi_wpa2_only', 'wifi_channel_narrow', 'wifi_24_wide_channel',
+            'wifi_mode_below_card']), []);
+    check('Omnia: N6 - SMART prošel, 183 stojí na 3, opotřebení 0 %',
+        $ac_evaluated_no(['disk_smart_failing', 'disk_errors_growing', 'disk_wear_high',
+            'disk_wear_fast', 'disk_heavy_writes', 'disk_smart_unreadable']), []);
+    check('Omnia: N8 - jediné pásmo, 19 % zaplnění, WPA2/WPA3 a beze změny prostředí',
+        $ac_evaluated_no(['wifi_5ghz_clients_on_24', 'fs_nearly_full', 'wifi_weak_encryption',
+            'wifi_week_degraded']), []);
+    check('Omnia: N7 - všechny nástroje jsou nainstalované',
+        $ac_evaluated_no(['pkg_smartmontools', 'pkg_smart_drivedb', 'pkg_hostapd_utils', 'pkg_iw']), []);
+
+    // F1: the measured sentence names 2 of 4 clients and the 90 % share, the
+    // action quotes the 736.8 Mbit/s link rate and the 3.5 % airtime, carries
+    // the 2500 Mbit/s WAN sentence with its caveat and invites a mute.
+    $ac_f1 = $ac_text('wifi_6ghz_unserved');
+    check_true('Omnia: F1 měření jmenuje 2 ze 4 klientů a 90 % času',
+        str_contains($ac_f1['measured'], '2 z 4') && str_contains($ac_f1['measured'], '90 %'));
+    check_true('Omnia: F1 říká, že žádné rádio 6 GHz nenabízí',
+        str_contains($ac_f1['measured'], 'kanály 6 GHz nenabízí'));
+    check_true('Omnia: F1 cituje 736,8 Mbit/s a 3,5 % obsazenosti',
+        str_contains($ac_f1['action'], '736,8') && str_contains($ac_f1['action'], '3,5 %'));
+    check_true('Omnia: F1 nese větu o WAN 2500 Mbit/s i s výhradou o procesoru a lince',
+        str_contains($ac_f1['action'], '2500 Mbit/s')
+        && str_contains($ac_f1['action'], 'procesoru routeru nebo v samotné lince'));
+    check_true('Omnia: F1 zmíní WPA3 na 6 GHz, kratší dosah a nabídne ztlumení',
+        str_contains($ac_f1['action'], 'WPA3') && str_contains($ac_f1['action'], 'kratší dosah')
+        && str_contains($ac_f1['action'], 'ztlumte'));
+    check_false('Omnia: F1 neslibuje, co zapnout - karta 6 GHz nemá',
+        str_contains($ac_f1['action'], 'Přidejte síť na 6 GHz'));
+
+    // F5: information, not a fault. It names the signal, the SNR, the client's
+    // generation and the band's noise, and it never offers another band on a
+    // card that cannot serve one (N9).
+    $ac_f5 = $ac_text('wifi_weak_client');
+    check_true('Omnia: F5 jmenuje -75 dBm, odstup 17 dB a Wi-Fi 4',
+        str_contains($ac_f5['measured'], '-75 dBm') && str_contains($ac_f5['measured'], 'odstup od šumu 17 dB')
+        && str_contains($ac_f5['measured'], 'umí jen Wi-Fi 4'));
+    check_true('Omnia: F5 nazve šum -92 dBm v pořádku a mluví o vzdálenosti',
+        str_contains($ac_f5['measured'], '-92 dBm') && str_contains($ac_f5['measured'], 'v pořádku')
+        && str_contains($ac_f5['measured'], 'o vzdálenost'));
+    check_true('Omnia: F5 je podaná jako informace a 6 GHz podle ní nepomůže',
+        str_contains($ac_f5['action'], 'informace, ne závada')
+        && str_contains($ac_f5['action'], '6 GHz tomuto zařízení nepomůže'));
+    check('Omnia: N9 - žádný text F1 ani F5 nenavrhuje zapnout jiné pásmo karty',
+        array_values(array_filter([$ac_f1['action'], $ac_f5['action'], $ac_f1['measured'], $ac_f5['measured']],
+            fn (string $txt): bool => (bool)preg_match('/(zapn|enable)[^.]{0,40}(2[,.]4|5) ?GHz/i', $txt))), []);
+    check_true('Omnia: anglický text F5 je jiný a stejně konkrétní',
+        str_contains($ac_text('wifi_weak_client', 'en')['measured'], '17 dB above the noise')
+        && $ac_text('wifi_weak_client', 'en')['measured'] !== $ac_f5['measured']);
+
+    // V3 / V4 / V13 / V14: the two thresholds that keep the Monday e-mail from
+    // flapping. A share that fell to 0.30 keeps a RUNNING item; the same 0.30
+    // never starts one.
+    $ac_share = function (float $share) use ($ac_win, $ac_metrics): array {
+        $win = $ac_win;
+        $win['metrics'] = $ac_metrics;
+        foreach ($win['days'] as $day) {
+            $win['metrics']['wifi_6e_unserved'][$day] = ['min' => 0, 'avg' => $share, 'max' => 1, 'samples' => 1440];
+        }
+        return $win;
+    };
+    $ac_wifi = function (array $win, array $state) use ($ac_details): array {
+        $res = bk_rec_rules_wifi(['window' => $win, 'details' => $ac_details,
+            'monitor' => ['id' => 6, 'type' => 'openwrt'], 'now' => time()], $state);
+        return array_map(fn (array $i): string => (string)$i['id'], $res['items']);
+    };
+    $ac_active = fn (string $key): array => [$key => ['active' => 1, 'severity' => 'info']];
+    check('Omnia: V3 klienti na jiném AP (0,30) běžící F1 neukončí, 0,20 ano',
+        [in_array('wifi_6ghz_unserved', $ac_wifi($ac_share(0.30), $ac_active('wifi_6ghz_unserved')), true),
+            in_array('wifi_6ghz_unserved', $ac_wifi($ac_share(0.20), $ac_active('wifi_6ghz_unserved')), true)],
+        [true, false]);
+    check_false('Omnia: V4 jediný večer (0,30) F1 nezačne',
+        in_array('wifi_6ghz_unserved', $ac_wifi($ac_share(0.30), []), true));
+    // V13 / V14: the real weak-client week. The client sits exactly ON the
+    // -75 dBm boundary, so the weekly mean hovers around 0.5 (REAL_FACTS).
+    $ac_weak = function (float $mean) use ($ac_win, $ac_metrics): array {
+        $win = $ac_win;
+        $win['metrics'] = $ac_metrics;
+        foreach ($win['days'] as $day) {
+            $win['metrics']['wifi_weak_clients'][$day] = ['min' => 0, 'avg' => $mean, 'max' => 1, 'samples' => 1440];
+        }
+        return $win;
+    };
+    check('Omnia: V13 týden s průměrem 0,45 drží F5, V14 bez uloženého nálezu nezačne',
+        [in_array('wifi_weak_client', $ac_wifi($ac_weak(0.45), $ac_active('wifi_weak_client')), true),
+            in_array('wifi_weak_client', $ac_wifi($ac_weak(0.45), []), true),
+            in_array('wifi_weak_client', $ac_wifi($ac_weak(0.20), $ac_active('wifi_weak_client')), true)],
+        [true, false, false]);
+
+    // V5 / V6: the mute path of a Wi-Fi item. The key is what the API stores
+    // and what the engine produces the next week, so both are checked at once.
+    $ac_mute_state = ['wifi_6ghz_unserved' => ['muted_at' => '2026-06-01 09:00:00',
+        'muted_by' => 'pepe', 'muted_severity' => 'info',
+        'mute_reason' => '6 GHz obsluhuje jiný přístupový bod', 'first_seen' => '2026-05-25 09:00:00']];
+    $ac_split = bk_router_rec_split($ac_res['items'], $ac_mute_state);
+    check('Omnia: V5 ztlumené F1 zmizí ze seznamu a zůstane s důvodem v ztlumených',
+        [array_map(fn (array $i): string => (string)$i['id'], $ac_split['muted']),
+            in_array('wifi_6ghz_unserved', array_map(fn (array $i): string => (string)$i['id'], $ac_split['items']), true),
+            (string)$ac_split['muted'][0]['muteReason']],
+        [['wifi_6ghz_unserved'], false, '6 GHz obsluhuje jiný přístupový bod']);
+    check('Omnia: klíče Wi-Fi položek projdou kontrolou ztlumení v API',
+        array_values(array_filter(array_map(fn (array $i): string => (string)$i['key'], $ac_res['items']),
+            fn (string $k): bool => !preg_match('/^[a-z0-9_]{3,40}(:[A-Za-z0-9._:-]{1,39})?$/', $k)
+                || !in_array(explode(':', $k, 2)[0], bk_router_rec_thresholds()['rank'], true))), []);
+    // V6: a 6 GHz radio of the router's own ends F1 at once - the share is 0
+    // by construction, and the rule is EVALUATED, not skipped.
+    $ac_with6 = $ac_details;
+    $ac_with6['wifi_radios'][] = ['radio' => 'wlan6', 'ssid' => 'Domov 6 GHz', 'mode' => 'ap',
+        'band' => '6GHz', 'frequency_mhz' => 5955, 'channel' => 1, 'htmode' => 'HE80',
+        'htmodes_supported' => ['HE20', 'HE40', 'HE80'], 'phy_has_6ghz' => true,
+        'encryption' => 'wpa2_wpa3', 'encryption_enterprise' => false, 'clients' => 2,
+        'clients_caps_known' => 2, 'clients_6ghz_capable' => 2];
+    $ac_res6 = $ac_run($ac_with6, $ac_active('wifi_6ghz_unserved'));
+    check('Omnia: V6 vlastní rádio na 6 GHz F1 ukončí a nezůstane nevyhodnocené',
+        [in_array('wifi_6ghz_unserved', array_map(fn (array $i): string => (string)$i['id'], $ac_res6['items']), true),
+            in_array('wifi_6ghz_unserved', $ac_res6['not_evaluated'], true)],
+        [false, false]);
+    // V11: a week with too little data is "not measured", never "nothing found".
+    $ac_short = $ac_win;
+    $ac_short['metrics'] = $ac_metrics;
+    foreach (array_slice($ac_win['days'], 0, 5) as $ac_day) {
+        foreach (array_keys($ac_short['metrics']) as $ac_key) {
+            unset($ac_short['metrics'][$ac_key][$ac_day]);
+        }
+    }
+    $ac_res11 = bk_rec_rules_wifi(['window' => $ac_short, 'details' => $ac_details,
+        'monitor' => ['id' => 6, 'type' => 'openwrt'], 'now' => time()], []);
+    check('Omnia: V11 dva dny dat znamenají „nezměřeno", ne „nic jsme nenašli"',
+        [array_map(fn (array $i): string => (string)$i['id'], $ac_res11['items']),
+            array_values(array_intersect(['wifi_6ghz_unserved', 'wifi_weak_client'],
+                array_values($ac_res11['not_evaluated'])))],
+        [[], ['wifi_6ghz_unserved', 'wifi_weak_client']]);
+}
+
+// --- Dostupnost v čase, ne v řádcích (W1-B1) ----------------------------------
+// Dostupnost bývala „řádky up / všechny řádky". Mlčící agent zapíše jediný
+// řádek 'down' a pak nic, takže třídenní výpadek byl jeden řádek z tisíců
+// a měsíc pořád ukazoval ~99,99 %. Teď každý řádek platí do dalšího (nejvýš
+// 2,5 intervalu) a nepokrytý čas je u agenta výpadek, u aktivní kontroly
+// neměřeno.
+{
+    $ut_now = 1_790_000_000;
+    $ut_from = $ut_now - 30 * 86400;
+    $ut_rows = [];
+    for ($t = $ut_from; $t <= $ut_now - 3 * 86400; $t += 300) {
+        $ut_rows[] = [$t, 'up'];
+    }
+    $ut_iv = bk_uptime_interval(array_column($ut_rows, 0));
+    check('interval se čte z vlastních řádků (medián mezer)', $ut_iv, 300);
+
+    $ut_agent = bk_uptime_summary(bk_uptime_segments($ut_rows, $ut_from, $ut_now, $ut_iv, true), $ut_from, $ut_now);
+    check_true('27 dní hlášení a 3 dny ticha u agenta: pod 91 %', $ut_agent['pct'] !== null && $ut_agent['pct'] < 91 && $ut_agent['pct'] > 89);
+    check_true('ticho agenta je výpadek, ne neměřeno', $ut_agent['silent'] > 3 * 86400 - 1000 && $ut_agent['unmeasured'] === 0);
+    check('výpadek v sekundách = ticho + řádky down', $ut_agent['outage'], $ut_agent['silent'] + $ut_agent['down']);
+
+    // cron.php zapíše po padesáti minutách ticha jeden řádek 'down' - v řádcích
+    // to byla 1 z 7 777 kontrol (99,99 %), v čase to na výsledku nic nemění.
+    $ut_rows_cron = $ut_rows;
+    $ut_rows_cron[] = [$ut_now - 3 * 86400 + 3000, 'down'];
+    $ut_rows_count = count(array_filter($ut_rows_cron, fn ($r) => $r[1] === 'up')) / count($ut_rows_cron) * 100;
+    check_true('starý výpočet po řádcích by ukázal přes 99,9 %', $ut_rows_count > 99.9);
+    $ut_cron = bk_uptime_summary(bk_uptime_segments($ut_rows_cron, $ut_from, $ut_now, $ut_iv, true), $ut_from, $ut_now);
+    check_true('s řádkem down z cronu pořád pod 91 %', $ut_cron['pct'] < 91);
+
+    $ut_active = bk_uptime_summary(bk_uptime_segments($ut_rows, $ut_from, $ut_now, $ut_iv, false), $ut_from, $ut_now);
+    check('aktivní kontrola: když cron neběží, nic se neměřilo - 100 % z naměřeného', $ut_active['pct'], 100.0);
+    check_true('a ty tři dny jsou neměřené, ne výpadek', $ut_active['unmeasured'] > 3 * 86400 - 1000 && $ut_active['outage'] === 0);
+
+    check('bez řádků není dostupnost 100, ale null', bk_uptime_summary(bk_uptime_segments([], $ut_from, $ut_now, 300, true), $ut_from, $ut_now)['pct'], null);
+    check('agent, o kterém nevíme, že kdy hlásil: ticho je neměřeno', bk_uptime_summary(bk_uptime_segments([], $ut_from, $ut_now, 300, true), $ut_from, $ut_now)['silent'], 0);
+    check('agent, který hlásil před oknem a celé okno mlčí: 0 %', bk_uptime_summary(bk_uptime_segments([], $ut_from, $ut_now, 300, true, true), $ut_from, $ut_now)['pct'], 0.0);
+    // Poslední řádek před oknem (stav, ve kterém okno začíná) se počítá jen do okna.
+    $ut_carry = bk_uptime_summary(bk_uptime_segments([[$ut_from - 100, 'down'], [$ut_from + 200, 'up']], $ut_from, $ut_from + 260, 60, false), $ut_from, $ut_from + 260);
+    check('řádek před oknem kryje jen začátek okna', [$ut_carry['down'], $ut_carry['up']], [50, 60]);
+
+    // Výpadek v minutách jsou skutečné minuty, ne počet řádků.
+    $ut_min = [];
+    for ($i = 0; $i < 60; $i++) {
+        $ut_min[] = [$ut_now - 3600 + $i * 60, ($i >= 20 && $i < 30) ? 'down' : 'up'];
+    }
+    $ut_min_sum = bk_uptime_summary(bk_uptime_segments($ut_min, $ut_now - 3600, $ut_now, 60, false), $ut_now - 3600, $ut_now);
+    check('deset minutových řádků down je 600 s výpadku', $ut_min_sum['outage'], 600);
+    check('a dostupnost 50 z 60 minut', $ut_min_sum['pct'], 83.333);
+
+    // agent_service, jehož agent zmlkl: cron zapíše 'unknown'. Ten čas je
+    // neměřený, ale monitor ze SLA nevypadne - naměřený den v něm zůstane.
+    $ut_svc = [];
+    for ($t = $ut_now - 2 * 86400; $t < $ut_now - 86400; $t += 60) {
+        $ut_svc[] = [$t, 'up'];
+    }
+    $ut_svc[] = [$ut_now - 86400, 'unknown'];
+    $ut_svc_sum = bk_uptime_summary(bk_uptime_segments($ut_svc, $ut_now - 2 * 86400, $ut_now, 60, false), $ut_now - 2 * 86400, $ut_now);
+    check('služba s neznámým stavem zůstane v SLA s naměřeným časem', $ut_svc_sum['pct'], 100.0);
+    check_true('a neznámý den je neměřený', $ut_svc_sum['unmeasured'] >= 86400 - 150);
+
+    // Údržba stojí mimo zlomek: nesnižuje ani nezvyšuje.
+    $ut_maint = bk_uptime_summary(bk_uptime_segments([[$ut_now - 600, 'up'], [$ut_now - 300, 'maintenance']], $ut_now - 600, $ut_now, 300, false), $ut_now - 600, $ut_now);
+    check('údržba se do dostupnosti nepočítá', [$ut_maint['pct'], $ut_maint['maintenance']], [100.0, 300]);
+    // C-7 / CR-4: degraded time counts as available everywhere, as in the day strip; it stays visible as 'warning'.
+    $ut_warn = bk_uptime_summary([[0, 60, 'up'], [60, 120, 'warning']], 0, 120);
+    check('warning je dostupnost (C-7), zhoršený čas zůstane vidět zvlášť', [$ut_warn['pct'], $ut_warn['warning'], $ut_warn['outage']], [100.0, 60, 0]);
+    check('výpadek dostupnost snižuje, warning ne', bk_uptime_summary([[0, 60, 'down'], [60, 120, 'warning']], 0, 120)['pct'], 50.0);
+
+    check('jedna dlouhá mezera medián nepohne', bk_uptime_interval([0, 60, 120, 180, 180 + 3 * 86400, 180 + 3 * 86400 + 60]), 60);
+    check('málo řádků: výchozích 300 s', bk_uptime_interval([0, 60]), 300);
+    check('sondy z více míst nezkrátí interval pod minutu', bk_uptime_interval([0, 5, 10, 15, 20]), 60);
+
+    // Úsek přes půlnoc se rozdělí na dva dny a součet sedí.
+    $ut_mid = strtotime('2026-09-10 00:00:00');
+    $ut_days = bk_uptime_by_day([[$ut_mid - 600, $ut_mid + 1200, 'silent']], $ut_mid - 3600, $ut_mid + 3600);
+    check('úsek přes půlnoc: 600 s do prvního dne, 1 200 s do druhého', [$ut_days['2026-09-09']['silent'] ?? null, $ut_days['2026-09-10']['silent'] ?? null], [600, 1200]);
+}
+
+// --- Zaokrouhlení výpadek neschová ---------------------------------------------
+// Den s výpadkem kratším než 43 s (0,05 % dne) se zaokrouhlil na 100,0 a pás
+// ukázal červený den s popiskem „100 % dostupnost". Totéž tři desetinná místa
+// u třiceti dní: pět sekund výpadku bylo 100,0.
+{
+    // 1440 minutových kontrol, jedna selže a další přijde za 30 s.
+    $pr_day = [];
+    for ($i = 0; $i < 1440; $i++) {
+        $pr_day[] = [$i * 60, 'up'];
+    }
+    $pr_day[] = [720 * 60 + 30, 'up'];
+    $pr_day[720] = [720 * 60, 'down'];
+    usort($pr_day, fn ($a, $b) => $a[0] <=> $b[0]);
+    $pr_sum = bk_uptime_summary(bk_uptime_segments($pr_day, 0, 86400, 60, false), 0, 86400);
+    check('den s 30 s výpadku: 30 s down', $pr_sum['down'], 30);
+    check('den s 30 s výpadku: na jedno desetinné místo 99,9, ne 100', bk_uptime_pct_round($pr_sum['pct'], 1, true), 99.9);
+    check('čistý den zůstane 100', bk_uptime_pct_round(100.0, 1), 100.0);
+    check('jinak se zaokrouhluje normálně', [bk_uptime_pct_round(57.25, 1), bk_uptime_pct_round(99.94, 1), bk_uptime_pct_round(99.95, 1)], [57.3, 99.9, 99.9]);
+    check('selhaná kontrola bez zapsaného času: pod 100', bk_uptime_pct_round(100.0, 1, true), 99.9);
+    check('nic neměřeno zůstane null', bk_uptime_pct_round(null, 1, true), null);
+    $pr_month = bk_uptime_totals([['up' => 30 * 86400 - 5, 'down' => 5]]);
+    check('třicet dní s 5 s výpadku: 99,999, ne 100,0', $pr_month['pct'], 99.999);
+    check('třicet dní bez výpadku: 100,0', bk_uptime_totals([['up' => 30 * 86400]])['pct'], 100.0);
+}
+
+// --- Chybějící data nikdy nedají 100 % (W1-B3) ----------------------------------
+// Tři ze čtyř částí skóre zdraví dávaly za nic plný počet: web nemá cpu/ram/hdd
+// (prahy 100), monitor bez časového razítka byl „čerstvý" (100) a latence bez
+// měření měla v infra skóre 100. Neměřená část teď vypadne a váhy se přepočtou;
+// když se nenaměřilo nic, je výsledek null („nedostatek dat").
+if (!defined('BK_DEFAULT_THRESHOLDS')
+    && preg_match('/\nconst BK_DEFAULT_THRESHOLDS = [^;]+;/', (string)file_get_contents(__DIR__ . '/../functions.php'), $hs_const)) {
+    eval(trim($hs_const[0]));
+}
+{
+    check('latence bez měření: null, ne 100', bk_latency_score(null), null);
+    check('rychlá latence dál 100', bk_latency_score(80), 100.0);
+    check('infra skóre bez dostupnosti i latence: nedostatek dat', bk_infra_score(null, null, 0, 0, 0), null);
+    // 90 % dostupnosti bez latence: (90·0,55 + 100·0,15 + 100·0,10) / 0,80 = 93
+    check('infra skóre bez latence se přepočte, nepřičte 100 za latenci', bk_infra_score(90.0, null, 0, 0, 0), 93);
+    check('infra skóre se vším naměřeným beze změny', bk_infra_score(100.0, 100, 0, 0, 0), 100);
+
+    // The asset score itself is bk_health_score() now (N-1, the w2m block
+    // below keeps these rules: nothing measured = null, a stale check never
+    // 100). What stays here are the limits it reads.
+    // Výchozí prahy jsou jedny (BK_DEFAULT_THRESHOLDS): RAM 95, disk 90.
+    check('výchozí prahy: cpu 90, ram 95, disk 90', BK_DEFAULT_THRESHOLDS, ['cpu' => 90, 'ram' => 95, 'hdd' => 90]);
+    $hs_vps = ['id' => 9, 'type' => 'vps', 'status' => 'up', 'cpu_threshold' => null, 'ram_threshold' => null, 'hdd_threshold' => null, 'preset_id' => null];
+    check('monitor bez vlastních prahů: null (výchozí doplní až ten, kdo čte)', bk_monitor_thresholds(null, $hs_vps), ['cpu' => null, 'ram' => null, 'hdd' => null]);
+    check('práh monitoru přebije výchozí', bk_monitor_thresholds(null, ['hdd_threshold' => 95] + $hs_vps)['hdd'], 95);
+}
+
+
+// --- Veřejná stránka ukazuje vybranou sadu (W1-G3) -------------------------------
+// Indexovaná veřejná stránka jmenovala každý server i domácí router. Servery,
+// router a služby pod agentem jsou teď mimo ni, dokud je vlastník nezapne;
+// weby a herní služby na ní zůstávají. NULL = nikdy nevybráno, rozhoduje typ.
+if (!defined('BK_PRIVATE_BY_DEFAULT_TYPES')
+    && preg_match('/\nconst BK_PRIVATE_BY_DEFAULT_TYPES = [^;]+;/', (string)file_get_contents(__DIR__ . '/../functions.php'), $pub_const)) {
+    eval(trim($pub_const[0]));
+}
+{
+    check_true('web bez volby je veřejný', bk_monitor_is_public(null, 'web'));
+    check_true('herní server bez volby je veřejný', bk_monitor_is_public(null, 'minecraft'));
+    check_false('server (vps) bez volby veřejný není', bk_monitor_is_public(null, 'vps'));
+    check_false('domácí router bez volby veřejný není', bk_monitor_is_public(null, 'openwrt'));
+    check_false('služba pod agentem bez volby veřejná není', bk_monitor_is_public(null, 'agent_service'));
+    check_false('typ se čte bez ohledu na velikost písmen', bk_monitor_is_public(null, 'OpenWrt'));
+    check_true('vlastník může router na stránku dát', bk_monitor_is_public(1, 'openwrt'));
+    check_false('a web z ní sundat', bk_monitor_is_public('0', 'web'));
+    check_true('prázdná hodnota = nikdy nevybráno, rozhodne typ', bk_monitor_is_public('', 'discord'));
+}
+
+// --- Jeden celkový verdikt (W1-B4) ------------------------------------------------
+// public_status i odznak říkaly „v pořádku", dokud nic nebylo dole: zhoršený
+// monitor, neznámý stav i zastavený sběr dat se tvářily jako vše v pořádku.
+{
+    $vd = fn (string $status, ?string $checked = '2026-09-23 10:00:00', int $maint = 0): array
+        => ['status' => $status, 'last_checked' => $checked, 'maintenance' => $maint];
+    check('vše běží a sběr je čerstvý: v pořádku', bk_overall_verdict([$vd('up'), $vd('up')], true)['verdict'], 'healthy');
+    check('jeden zhoršený monitor: zhoršeno', bk_overall_verdict([$vd('up'), $vd('warning')], true)['verdict'], 'degraded');
+    check('výpadek přebije zhoršení', bk_overall_verdict([$vd('warning'), $vd('down')], true)['verdict'], 'down');
+    check('neznámý stav změřeného monitoru: zhoršeno, ne v pořádku', bk_overall_verdict([$vd('up'), $vd('unknown')], true)['verdict'], 'degraded');
+    check('údržba: údržba, ne v pořádku', bk_overall_verdict([$vd('up'), $vd('up', null, 1)], true)['verdict'], 'maintenance');
+    check('zastavený sběr: neznámý, ne v pořádku', bk_overall_verdict([$vd('up')], false)['verdict'], 'unknown');
+    check('zastavený sběr výpadek neschová', bk_overall_verdict([$vd('down')], false)['verdict'], 'down');
+    check('prázdná sada: neznámý', bk_overall_verdict([], true)['verdict'], 'unknown');
+    check('nový monitor bez první kontroly verdikt nekazí', bk_overall_verdict([$vd('up'), $vd('unknown', null)], true)['verdict'], 'healthy');
+    check('sada jen z nezměřených monitorů: neznámý', bk_overall_verdict([$vd('unknown', null)], true)['verdict'], 'unknown');
+    check('počty podle stavů',
+        bk_overall_verdict([$vd('up'), $vd('down'), $vd('warning'), $vd('unknown'), $vd('unknown', null), $vd('maintenance')], true)['counts'],
+        ['up' => 1, 'down' => 1, 'warning' => 1, 'maintenance' => 1, 'unknown' => 1, 'unmeasured' => 1]);
+}
+
+
+// --- Řádky chyb z logu routeru (W1-C3) --------------------------------------------
+// Agent 0.1.8 posílá posledních pět chybových řádků, zamaskovaných už na
+// routeru. Server masky opakuje (starší nebo cizí agent), drží nejvýš pět
+// řádků po 200 znacích a s vypnutým přepínačem monitoru neuloží nic.
+{
+    check('IPv4 se zamaskuje', bk_mask_log_line('DHCPACK(br-lan) 192.168.1.23 to host'), 'DHCPACK(br-lan) <ipv4> to host');
+    check('MAC se zamaskuje', bk_mask_log_line('station aa:bb:cc:dd:ee:0f left'), 'station <mac> left');
+    check('IPv6 se zamaskuje', bk_mask_log_line('route to fe80::1c2:3ff:fe44:5566 failed'), 'route to <ipv6> failed');
+    check('čas 12:34:56 IPv6 není', bk_mask_log_line('at 12:34:56 retry'), 'at 12:34:56 retry');
+    check('e-mail se zamaskuje', bk_mask_log_line('mail for jan.novak@example.com bounced'), 'mail for <email> bounced');
+    check('místní jméno se zamaskuje', bk_mask_log_line('lookup nas.lan failed'), 'lookup <host> failed');
+    check('dlouhé hex id se zamaskuje', bk_mask_log_line('serial 0123456789abcdef bad'), 'serial <id> bad');
+    check('netisknutelný bajt je otazník', bk_mask_log_line("bad\x01byte"), 'bad?byte');
+    check('řádek nad 200 znaků se zkrátí a řekne to', strlen(bk_mask_log_line(str_repeat('a ', 150))), 200);
+    check_true('a končí třemi tečkami', str_ends_with(bk_mask_log_line(str_repeat('a ', 150)), '...'));
+
+    $ll = bk_sanitize_log_lines([
+        ['ts' => 1758600000, 'prog' => 'netifd', 'msg' => 'Interface wan is down', 'count' => 3],
+        ['ts' => 'x', 'prog' => 'bad prog!', 'msg' => 'kernel: oops', 'count' => 0],
+        ['ts' => 1, 'prog' => 'a', 'msg' => 42],
+        'není objekt',
+        ['msg' => '   '],
+    ]);
+    check('položka bez textu a neplatné kusy vypadnou', count($ll), 2);
+    check('platná položka projde beze změny', $ll[0], ['ts' => 1758600000, 'prog' => 'netifd', 'msg' => 'Interface wan is down', 'count' => 3]);
+    check('neplatný čas, program a počet: null, null, 1', [$ll[1]['ts'], $ll[1]['prog'], $ll[1]['count']], [null, null, 1]);
+    check('nejvýš pět řádků', count(bk_sanitize_log_lines(array_fill(0, 9, ['msg' => 'x']))), 5);
+    check('prázdný seznam = log přečten, chyba žádná', bk_sanitize_log_lines([]), []);
+    check('nečitelný seznam je null', bk_sanitize_log_lines('řádky'), null);
+    check('mapa místo seznamu je null', bk_sanitize_log_lines(['a' => ['msg' => 'x']]), null);
+
+    $ld_report = ['log_errors_recent' => [['msg' => 'boom 10.0.0.1']], 'log_window_secs' => 7200, 'log_lines_state' => 'on'];
+    check('zapnuto: řádky, okno i stav se uloží',
+        bk_log_lines_details($ld_report, true),
+        ['log_errors_recent' => [['ts' => null, 'prog' => null, 'msg' => 'boom <ipv4>', 'count' => 1]], 'log_window_secs' => 7200, 'log_lines_state' => 'on']);
+    check('vypnuto u monitoru: žádný řádek, stav řekne proč',
+        bk_log_lines_details($ld_report, false),
+        ['log_errors_recent' => null, 'log_window_secs' => 7200, 'log_lines_state' => 'off_monitor']);
+    check('vypnuto na routeru zůstane vypnuto na routeru',
+        bk_log_lines_details(['log_errors_recent' => null, 'log_lines_state' => 'off_router'], false)['log_lines_state'], 'off_router');
+    check('starší agent bez klíčů nic nezanechá', bk_log_lines_details(['cpu' => 5], true), []);
+    check('záporné okno a neznámý stav jsou null',
+        bk_log_lines_details(['log_window_secs' => -5, 'log_lines_state' => 'maybe'], true), ['log_window_secs' => null, 'log_lines_state' => null]);
+}
+
+// --- Cloudflare Worker locations (cloudflare_colos.php) ----------------------
+// Until agents e13a2d4 the Worker put its egress IP's country (US) on every
+// colo: "🇺🇸 Mumbai, US". db.php rewrites that history from the server's copy
+// of the Worker's map, so the copy must say what the Worker says.
+require_once __DIR__ . '/../cloudflare_colos.php';
+$cf_worker_file = __DIR__ . '/../../../agents/cloudflare-agent.js';
+$cf_worker = is_readable($cf_worker_file) ? (string)file_get_contents($cf_worker_file) : '';
+check_true('Worker agents/cloudflare-agent.js je k přečtení (submodul agents)', $cf_worker !== '');
+$cf_body = preg_match('/\bconst COLO = \{(.*?)\n\};/s', $cf_worker, $cf_m) ? $cf_m[1] : '';
+preg_match_all('/\b([A-Z]{3})\s*:\s*\[\s*[\'"]([^\'"]+)[\'"]\s*,\s*[\'"]([^\'"]*)[\'"]\s*\]/u', $cf_body, $cf_entries, PREG_SET_ORDER);
+$cf_js = [];
+foreach ($cf_entries as $cf_e) {
+    $cf_js[$cf_e[1]] = [$cf_e[2], $cf_e[3]];
+}
+check('Workerova mapa se celá přečetla (každý kód má město i zemi)', count($cf_js), preg_match_all('/\b[A-Z]{3}\s*:/', $cf_body));
+$cf_php = bk_cf_colos();
+ksort($cf_js);
+ksort($cf_php);
+check('mapa kolokací na serveru = COLO ve Workeru', $cf_php, $cf_js);
+// The label the server rebuilds is the one the Worker builds.
+check_true('Worker skládá místo z města a země kolokace',
+    str_contains($cf_worker, "const geo = [city, cc].filter(Boolean).join(', ');")
+    && str_contains($cf_worker, '`${countryFlag(cc)} ${geo} (AS13335 Cloudflare)`'));
+check_true('Worker kreslí vlajku stejně (dvě regionální písmena, jinak glóbus)',
+    str_contains($cf_worker, "if (!code || code.length !== 2) return '🌐';")
+    && str_contains($cf_worker, '0x1F1E6 + c.charCodeAt(0) - 65'));
+check_true('Worker bez kolokace místo netvrdí, neznámý kód nechá pod glóbem',
+    str_contains($cf_worker, "const EDGE_UNKNOWN = '" . BK_CF_EDGE_UNKNOWN . "';")
+    && str_contains($cf_worker, 'if (!/^[A-Z]{3}$/.test(colo)) return EDGE_UNKNOWN;')
+    && str_contains($cf_worker, "const [city, cc] = COLO[colo] ?? [colo, ''];"));
+
+$cf_city_cc = [];
+$cf_bad = [];
+foreach ($cf_php as $cf_colo => [$cf_city, $cf_cc]) {
+    if (!preg_match('/^[A-Z]{2}$/', $cf_cc) || (isset($cf_city_cc[$cf_city]) && $cf_city_cc[$cf_city] !== $cf_cc)) {
+        $cf_bad[] = $cf_colo;
+    }
+    $cf_city_cc[$cf_city] = $cf_cc;
+}
+check('každá kolokace má dvoupísmennou zemi a město leží v jedné zemi', $cf_bad, []);
+
+check('vlajka DE', bk_cf_country_flag('DE'), '🇩🇪');
+check('vlajka z malých písmen jako ve Workeru', bk_cf_country_flag('us'), '🇺🇸');
+check('bez země glóbus', bk_cf_country_flag(''), '🌐');
+check('štítek kolokace', bk_cf_location_label('Frankfurt', 'DE'), '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)');
+check('neznámá kolokace: kód a glóbus', bk_cf_location_label('XYZ', ''), '🌐 XYZ (AS13335 Cloudflare)');
+
+$cf_cases = [
+    // What production showed: the right city, the US next to it.
+    '🇺🇸 Mumbai, US (AS13335 Cloudflare)' => '🇮🇳 Mumbai, IN (AS13335 Cloudflare)',
+    '🇺🇸 Frankfurt, US (AS13335 Cloudflare)' => '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)',
+    '🇺🇸 Zürich, US (AS13335 Cloudflare)' => '🇨🇭 Zürich, CH (AS13335 Cloudflare)',
+    // Flag and country disagree either way round.
+    '🇩🇪 Frankfurt, US (AS13335 Cloudflare)' => '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)',
+    '🇺🇸 Frankfurt, DE (AS13335 Cloudflare)' => '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)',
+    // The trace had no country: the city alone under a globe.
+    '🌐 Frankfurt (AS13335 Cloudflare)' => '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)',
+    // Colos the old map lacked were posted as their code.
+    '🇺🇸 TXL, US (AS13335 Cloudflare)' => '🇩🇪 Berlin, DE (AS13335 Cloudflare)',
+    '🇺🇸 SLC, US (AS13335 Cloudflare)' => '🇺🇸 Salt Lake City, US (AS13335 Cloudflare)',
+    // A code the map does not know: the code under a globe, no country.
+    '🇺🇸 XYZ, US (AS13335 Cloudflare)' => '🌐 XYZ (AS13335 Cloudflare)',
+    // The trace named no colo: only the egress country, or nothing at all.
+    '🇺🇸 US (AS13335 Cloudflare)' => '🌐 Cloudflare Edge (AS13335 Cloudflare)',
+    '🇩🇪 DE (AS13335 Cloudflare)' => '🌐 Cloudflare Edge (AS13335 Cloudflare)',
+    '🌐  (AS13335 Cloudflare)' => '🌐 Cloudflare Edge (AS13335 Cloudflare)',
+    // Left alone: already right, another provider, a city the map does not know.
+    '🇺🇸 Seattle, US (AS13335 Cloudflare)' => null,
+    '🇺🇸 Washington DC, US (AS13335 Cloudflare)' => null,
+    '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)' => null,
+    '🇺🇸 Frankfurt, US (RackNerd, LLC)' => null,
+    '🇺🇸 Prague, CZ (AS13335 Cloudflare, Inc.)' => null,
+    '🇺🇸 Ashburn, US (AS13335 Cloudflare)' => null,
+    '🇺🇸 Ab, US (AS13335 Cloudflare)' => null,
+    '🌐 Cloudflare Edge (AS13335 Cloudflare)' => null,
+    '🌐 XYZ (AS13335 Cloudflare)' => null,
+    'Frankfurt, US (AS13335 Cloudflare)' => null,
+    'Main Server' => null,
+    '' => null,
+];
+foreach ($cf_cases as $cf_in => $cf_out) {
+    check("opravený štítek: {$cf_in}", bk_cf_corrected_label((string)$cf_in), $cf_out);
+}
+$cf_again = [];
+foreach ($cf_php as $cf_colo => [$cf_city, $cf_cc]) {
+    if (bk_cf_corrected_label(bk_cf_location_label($cf_city, $cf_cc)) !== null) {
+        $cf_again[] = $cf_colo;
+    }
+}
+foreach ([BK_CF_EDGE_UNKNOWN, bk_cf_location_label('XYZ', '')] as $cf_now) {
+    if (bk_cf_corrected_label($cf_now) !== null) {
+        $cf_again[] = $cf_now;
+    }
+}
+check('co dnes posílá Worker, zůstane beze změny (oprava je idempotentní)', $cf_again, []);
+
+// --- UX wave 2, server half -------------------------------------------------
+// C-7: a strip day says how much of it was measured, and warning is available.
+$dc = fn (array $secs): array => bk_uptime_totals([$secs]);
+$c = bk_uptime_day_cell(null, null);
+check('den bez řádku: nodata, žádné procento', [$c['status'], $c['uptimePct']], ['nodata', null]);
+$c = bk_uptime_day_cell($dc(['unmeasured' => 86400]), null);
+check('den celý neměřený: nodata s pokrytím 0', [$c['status'], $c['coveragePct']], ['nodata', 0.0]);
+$c = bk_uptime_day_cell($dc(['up' => 86400]), ['up' => 288, 'down' => 0, 'warning' => 0]);
+check('celý den v pořádku: up, 100 %, pokrytí 100', [$c['status'], $c['uptimePct'], $c['coveragePct']], ['up', 100.0, 100.0]);
+$c = bk_uptime_day_cell($dc(['up' => 50400, 'unmeasured' => 36000]), ['up' => 168, 'down' => 0, 'warning' => 0]);
+check('14 h z 24 h měřeno: partial, ne zelený den', [$c['status'], $c['coveragePct'], $c['measuredSecs'], $c['expectedSecs']], ['partial', 58.3, 50400, 86400]);
+check('a popis říká, kolik se měřilo', [$c['detailKey'], $c['detailArgs']], ['day_partial_detail', [50400, 86400]]);
+$c = bk_uptime_day_cell($dc(['up' => 1800]), ['up' => 6, 'down' => 0, 'warning' => 0]);
+check('monitor založený večer: celé jeho půlhodina změřená je up', [$c['status'], $c['coveragePct']], ['up', 100.0]);
+$c = bk_uptime_day_cell($dc(['up' => 82800, 'warning' => 3600]), ['up' => 276, 'down' => 0, 'warning' => 12]);
+check('varování se počítá jako dostupnost, minuty zhoršení zvlášť', [$c['status'], $c['uptimePct'], $c['degradedMin']], ['warning', 100.0, 60]);
+$c = bk_uptime_day_cell($dc(['up' => 84600, 'down' => 1800]), ['up' => 282, 'down' => 6, 'warning' => 0]);
+check('výpadek: down, 30 min, dostupnost bez něj', [$c['status'], $c['downMin'], $c['uptimePct']], ['down', 30, 97.9]);
+$c = bk_uptime_day_cell($dc(['up' => 30000, 'silent' => 7200, 'unmeasured' => 49200]), ['up' => 100, 'down' => 1, 'warning' => 0]);
+check('mlčení agenta je výpadek i při děravém dni', [$c['status'], $c['detailKey']], ['down', 'day_silent_detail']);
+$c = bk_uptime_day_cell($dc(['up' => 3600, 'maintenance' => 82800]), ['up' => 12, 'down' => 0, 'warning' => 0]);
+check('údržba přes většinu dne: maintenance', $c['status'], 'maintenance');
+$c = bk_uptime_day_cell(bk_uptime_totals([['up' => 86400]]) + ['approx' => 1], ['up' => 1, 'down' => 0, 'warning' => 0]);
+check('den dopočítaný z počtů kontrol: pokrytí neznámé, ne 100', [$c['status'], $c['coveragePct'], $c['expectedSecs']], ['up', null, null]);
+// No check rows for a measured day (the log was pruned first): the sentence follows the seconds, never "0 checks".
+$c = bk_uptime_day_cell(bk_uptime_totals([['up' => 86400]]), null);
+check('den bez řádků kontrol: „Bez výpadku“, ne „Všech 0 kontrol“', [$c['status'], $c['detailKey'], $c['detailArgs']], ['up', 'day_up_time_detail', []]);
+$c = bk_uptime_day_cell(bk_uptime_totals([['up' => 84600, 'down' => 1800]]), null);
+check('výpadek bez řádků kontrol: délka ze sekund', [$c['status'], $c['detailKey'], $c['detailArgs'][0]], ['down', 'day_down_time_detail', 1800]);
+$c = bk_uptime_day_cell(bk_uptime_totals([['up' => 82800, 'warning' => 3600]]), ['up' => 0, 'down' => 0, 'warning' => 0]);
+check('zhoršení bez řádků kontrol: délka ze sekund', [$c['status'], $c['detailKey'], $c['detailArgs']], ['warning', 'day_warning_time_detail', [3600]]);
+
+// C-11: one status vocabulary; "unknown" is two different things.
+check('down česky', bk_status_label('down', true, 'cs'), ['key' => 'down', 'label' => 'Výpadek', 'tone' => 'down', 'icon' => 'circle-x']);
+check('údržba je info, ne OK', [bk_status_label('maintenance', true, 'cs')['label'], bk_status_label('maintenance', true)['tone']], ['Údržba', 'info']);
+check('nikdy nehlásil: čeká na první data, neutrální', [bk_status_label('unknown', false, 'cs')['key'], bk_status_label('unknown', false)['tone']], ['unknown_new', 'neutral']);
+check('hlásil a zmlkl: agent mlčí, varování', [bk_status_label('unknown', true, 'cs')['label'], bk_status_label('unknown', true)['tone']], ['Agent mlčí', 'warning']);
+check('neví se: strana varování', bk_status_label('unknown', null)['key'], 'unknown_stale');
+check('neznámé slovo je unknown, ne OK', bk_status_label('garbage', true)['key'], 'unknown_stale');
+check('anglicky', bk_status_label('paused', true, 'en')['label'], 'Paused');
+check('velká písmena nevadí', bk_status_label('UP', true, 'cs')['key'], 'up');
+// CR-3: cron stamps last_checked on a heartbeat every run - only a ping counts as reporting.
+check('heartbeat bez jediného signálu čeká na první data (ne „agent mlčí“)',
+    bk_monitor_has_reported(['type' => 'heartbeat', 'last_checked' => '2026-09-24 08:00:00', 'last_heartbeat' => null], []), false);
+check('heartbeat se signálem hlásil', bk_monitor_has_reported(['type' => 'heartbeat', 'last_checked' => null, 'last_heartbeat' => '2026-09-24 07:59:00'], []), true);
+check('ostatní typy dál podle poslední kontroly', bk_monitor_has_reported(['type' => 'web', 'last_checked' => '2026-09-24 08:00:00'], []), true);
+
+// charts-06/15: counters as increments, nothing across a reset or a gap in time.
+$cp = [[1000, 100], [1060, 110], [1120, 125], [1180, 5], [1240, 20], [5000, 900], [5060, 910]];
+check('přírůstky čítače: reset i mezera bez bodu', bk_counter_delta_points($cp), [[1060, 10.0], [1120, 15.0], [1240, 15.0], [5060, 10.0]]);
+check('bez časů se chová jako dřív', bk_counter_deltas([1.0, 3.0, null, 4.0, 6.0]), [null, 2.0, null, null, 2.0]);
+check('s časy mezera ve čase přeruší řetěz', bk_counter_deltas([1.0, 3.0, 10.0, 12.0], [0, 60, 900, 960]), [null, 2.0, null, 2.0]);
+check('prázdná řada', bk_counter_delta_points([]), []);
+
+// charts-29: a metric is not correlated with its own family.
+check('load 1/5/15 jsou jedna rodina', array_map('bk_metric_family', ['load1', 'load5', 'load15']), ['load', 'load', 'load']);
+check('paměť je jedna rodina', array_map('bk_metric_family', ['ram', 'ram_used_mb', 'ram_available_mb']), ['ram', 'ram', 'ram']);
+check('iowait má rodinu sám pro sebe', bk_metric_family('iowait'), 'iowait');
+check('šum Wi-Fi napříč pásmy', bk_metric_family('wifi_noise_5g'), 'wifi_noise');
+
+// charts-22: every metric has an English name, and a counter says it is an increment.
+$en_names = bk_metric_labels_en();
+$missing_en = array_values(array_diff(array_keys(bk_metric_column_map()), array_keys($en_names)));
+check('každá metrika má anglický název', $missing_en, []);
+$stale_en = array_values(array_diff(array_keys($en_names), array_keys(bk_metric_column_map()), ['response_time']));
+check('žádný anglický název bez metriky', $stale_en, []);
+check('česky zůstává český název', bk_metric_label('cpu', 'Využití CPU', false, 'cs'), 'Využití CPU');
+check('anglicky anglický název', bk_metric_label('cpu', 'Využití CPU', false, 'en'), 'CPU usage');
+check('čítač česky: přírůstek', bk_metric_label('fw_dropped', 'Firewall - zahozeno', true, 'cs'), 'Firewall - zahozeno (přírůstek)');
+check('čítač anglicky: increase', bk_metric_label('fw_dropped', 'Firewall - zahozeno', true, 'en'), 'Firewall - dropped (increase)');
+check('latency je odezva', bk_metric_label('latency', 'Doba odezvy (HTTP/Ping)', false, 'en'), 'Response time (HTTP/Ping)');
+check('neznámý klíč: český název, nikdy prázdno', bk_metric_label('nic_takoveho', 'Něco', false, 'en'), 'Něco');
+
+// C-3: the previous window's mean, null where too little was measured.
+check('průměr bodů', bk_series_mean([[1, 1], [2, 2.5], [3, 4.5]]), 2.667);
+check('null body se nepočítají', bk_series_mean([[1, 1], [2, null], [3, 3], [4, 5]]), 3.0);
+check('méně než 3 vzorky: null', bk_series_mean([[1, 10], [2, 20]]), null);
+check('prázdná řada: null, ne nula', bk_series_mean([]), null);
+check('SQL průměr jako řetězec', bk_aggregate_mean('12', '41.23456'), 41.235);
+check('SQL bez vzorků: null', bk_aggregate_mean('0', null), null);
+check('SQL se 2 vzorky: null', bk_aggregate_mean(2, '7.0'), null);
+check('SQL nulový průměr je změřená nula', bk_aggregate_mean(5, '0'), 0.0);
+
+// charts-15: which day an interface's bytes belong to.
+check('první čtení je základ, ne dnešní provoz', bk_iface_traffic_booking(null, 5e12, false, null), 0.0);
+check('předchozí čtení dnes: celý přírůstek', bk_iface_traffic_booking(1000.0, 5000.0, true, 7200), 4000.0);
+check('přes půlnoc krátce: přírůstek se připíše', bk_iface_traffic_booking(1000.0, 1500.0, false, 90), 500.0);
+check('přes půlnoc po dlouhé mezeře: nikam', bk_iface_traffic_booking(1000.0, 8e11, false, 3 * 86400), 0.0);
+check('restart: jen co se napočítalo od něj', bk_iface_traffic_booking(9000.0, 300.0, true, 60), 300.0);
+check('strop dne pro 1 Gbit/s', bk_iface_day_ceiling_bytes(1000.0), 1.08e13);
+check('neznámá rychlost: 10 Gbit/s', bk_iface_day_ceiling_bytes(null), 1.08e14);
+
+// C-12: the attention reasons, the same rules as the dashboard used.
+$ar = fn (array $m): array => array_map(fn ($r) => $r['kind'] . '/' . $r['severity'], bk_attention_reasons($m));
+check('výpadek je kritický', $ar(['status' => 'down', 'has_reported' => true]), ['status_down/critical']);
+check('varování je varování', $ar(['status' => 'warning', 'has_reported' => true]), ['status_warning/warning']);
+check('agent mlčí je varování', $ar(['status' => 'unknown', 'has_reported' => true]), ['status_unknown_stale/warning']);
+check('čeká na první data: žádný nález', $ar(['status' => 'unknown', 'has_reported' => false]), []);
+check('údržba: žádný nález', $ar(['status' => 'maintenance', 'has_reported' => true]), []);
+check('privátní cíl aktivní kontroly', $ar(['status' => 'up', 'type' => 'web', 'target' => 'https://192.168.1.1/']), ['unreachable/warning']);
+check('certifikát: vypršel kritický, brzy varování, daleko nic', [
+    $ar(['status' => 'up', 'ssl_days' => 0, 'ssl_alert_days' => 14]),
+    $ar(['status' => 'up', 'ssl_days' => 5, 'ssl_alert_days' => 14]),
+    $ar(['status' => 'up', 'ssl_days' => 40, 'ssl_alert_days' => 14]),
+], [['ssl_expired/critical'], ['ssl_expiring/warning'], []]);
+check('metrika nad limitem, neměřená nic', $ar(['status' => 'up', 'metrics' => [
+    'cpu' => ['value' => 95.2, 'limit' => 90], 'ram' => ['value' => null, 'limit' => 95], 'hdd' => ['value' => 40, 'limit' => 90]]]), ['metric_high/warning']);
+check('parametry metriky: jméno, hodnota, limit', bk_attention_reasons(['status' => 'up', 'metrics' => ['hdd' => ['value' => 91.6, 'limit' => 90]]])[0]['params'], ['Disk', 92, 90]);
+check('nový agent je informace', $ar(['status' => 'up', 'agent_version' => '0.1.7', 'agent_latest' => '0.1.8']), ['agent_update/info']);
+check('aktuální agent nic', $ar(['status' => 'up', 'agent_version' => '0.1.8', 'agent_latest' => '0.1.8']), []);
+check('červený postřeh je varování, ne kritický', bk_insight_severity(['color' => 'var(--color-red)']), 'warning');
+check('žlutý varování', bk_insight_severity(['color' => 'var(--color-yellow)']), 'warning');
+check('zelený je informace', bk_insight_severity(['color' => 'var(--color-green)']), 'info');
+check('bez barvy informace', bk_insight_severity([]), 'info');
+
+// --- First-run installer (site W1-5): installer.php ------------------------
+// Only function definitions and a direct-access guard; db.php is not needed
+// for the pure helpers tested here.
+require_once __DIR__ . '/../installer.php';
+check('SQL: středník v řetězci, v komentáři a v identifikátoru příkaz nerozdělí',
+    bk_install_split_sql("-- a; b\nCREATE TABLE `x;y` (a INT); # c; d\nINSERT INTO t VALUES ('1;2', \"it''s; \\\\'x\", 'a\\'b;');\n/* e; f */ SELECT 1;"),
+    ["CREATE TABLE `x;y` (a INT)", "INSERT INTO t VALUES ('1;2', \"it''s; \\\\'x\", 'a\\'b;')", 'SELECT 1']);
+check('SQL: "--" bez mezery není komentář (MySQL)', bk_install_split_sql("SELECT 1--2;"), ['SELECT 1--2']);
+check('SQL: komentář uvnitř příkazu zmizí, hodnoty zůstanou',
+    bk_install_split_sql("INSERT INTO t VALUES\n('a', '1'), -- první\n('b', '2');"), ["INSERT INTO t VALUES\n('a', '1'), \n('b', '2')"]);
+$in_schema = (string)file_get_contents(__DIR__ . '/../schema.sql');
+$in_statements = bk_install_split_sql($in_schema);
+// Defaults live in bk_settings_defaults() and the installer stores the
+// version after the import: schema.sql is tables and nothing else.
+check('schema.sql: každá tabulka, žádný zápis nastavení',
+    [count($in_statements), array_values(array_filter($in_statements, fn ($s) => !str_starts_with($s, 'CREATE TABLE')))],
+    [preg_match_all('/CREATE TABLE IF NOT EXISTS/', $in_schema), []]);
+
+[$in_cfg, $in_err] = bk_install_validate(['host' => 'localhost', 'port' => '', 'database' => 'user_status', 'user' => 'user_bk', 'password' => '']);
+check('prázdný port = 3306, prázdné heslo projde', [$in_err, $in_cfg['port'] ?? null, $in_cfg['password'] ?? null], [null, 3306, '']);
+foreach ([
+    [['host' => 'db;unix_socket=/x'], 'invalid_host'],
+    [['host' => ''], 'invalid_host'],
+    [['port' => '70000'], 'invalid_port'],
+    [['port' => ['x']], 'invalid_port'],
+    [['database' => 'a;b'], 'invalid_database'],
+    [['user' => ''], 'invalid_user'],
+    [['password' => "a\nb"], 'invalid_password'],
+    [['password' => 'heslo_databaze'], 'invalid_password'],
+    [['timezone' => 'Mars/Olymp'], 'invalid_timezone'],
+    [['timezone' => '+02:00'], 'invalid_timezone'],
+    [['timezone' => 'PST'], 'invalid_timezone'],
+] as [$in_bad, $in_code]) {
+    [, $in_got] = bk_install_validate($in_bad + ['host' => 'db.example.com', 'database' => 'd', 'user' => 'u', 'password' => 'p']);
+    check('instalátor odmítne ' . json_encode($in_bad), $in_got, $in_code);
+}
+// Chromium reports ICU's legacy names; date_default_timezone_set() takes them.
+foreach (['Asia/Calcutta', 'Europe/Kiev', 'Europe/Kyiv'] as $in_tz) {
+    [$in_cfg, $in_err] = bk_install_validate(['timezone' => $in_tz, 'host' => 'db.example.com', 'database' => 'd', 'user' => 'u', 'password' => 'p']);
+    check('instalátor přijme pásmo z Chrome ' . $in_tz, [$in_err, $in_cfg['timezone'] ?? null], [null, $in_tz]);
+}
+
+check('krok: bez configu = config', bk_install_step(false, false, null), 'config');
+check('krok: vzorový config, co se nepřipojí = config', bk_install_step(true, true, null), 'config');
+check('krok: skutečný config, co se nepřipojí = config_unreachable (výpadek, ne instalace)', bk_install_step(true, false, null), 'config_unreachable');
+check('krok: prázdná databáze = schema', bk_install_step(true, false, ['tables' => 0, 'schema' => 'missing', 'users' => 0]), 'schema');
+check('krok: schéma bez účtu = account', bk_install_step(true, false, ['tables' => 29, 'schema' => 'ready', 'users' => 0]), 'account');
+check('krok: účet existuje = installed (zámek)', bk_install_step(true, false, ['tables' => 29, 'schema' => 'ready', 'users' => 1]), 'installed');
+check('krok: počet účtů nejde přečíst = zamčeno', bk_install_step(true, false, ['tables' => null, 'schema' => null, 'users' => null]), 'installed');
+check('krok: účty i bez schématu = zamčeno', bk_install_step(true, false, ['tables' => 3, 'schema' => 'missing', 'users' => 2]), 'installed');
+// A directory the CI deploy uploads to had a working config.php: one that is
+// gone or back to the sample there is a broken deploy, not a first run.
+check('krok: složka z CI bez configu = config_unreachable', bk_install_step(false, false, null, true), 'config_unreachable');
+check('krok: složka z CI se vzorovým configem = config_unreachable', bk_install_step(true, true, null, true), 'config_unreachable');
+check('krok: složka z CI se skutečným configem, co se nepřipojí = config_unreachable', bk_install_step(true, false, null, true), 'config_unreachable');
+check('krok: složka z CI s připojenou databází se řídí databází',
+    [bk_install_step(true, false, ['tables' => 0, 'schema' => 'missing', 'users' => 0], true),
+        bk_install_step(true, false, ['tables' => 29, 'schema' => 'ready', 'users' => 1], true)], ['schema', 'installed']);
+// That lock keys off FTP-Deploy-Action's sync state next to installer.php. A
+// state-name, a server-dir one level up or another uploader moves or drops the
+// file, and the installer there opens again without a sound.
+$in_wf = (string)@file_get_contents(__DIR__ . '/../../../.github/workflows/deploy-status.yml');
+$in_step = preg_match('~uses: SamKirkland/FTP-Deploy-Action@.*?(?=\n      - |\z)~s', $in_wf, $in_m) ? $in_m[0] : '';
+check('krok: CI nahrává apps/status přes FTP-Deploy-Action do public_html/status/, bez state-name',
+    [(bool)preg_match('~^\s*local-dir: \./apps/status/$~m', $in_step), (bool)preg_match('~^\s*server-dir: public_html/status/$~m', $in_step),
+        (bool)preg_match('~^\s*state-name\s*:~m', $in_wf)], [true, true, false]);
+
+check('chyba připojení 1045 = access_denied', bk_install_connect_error(new PDOException("SQLSTATE[HY000] [1045] Access denied for user 'u'@'h' (using password: YES)")), ['error' => 'access_denied', 'driverCode' => 1045]);
+check('chyba připojení 1049 = unknown_database', bk_install_connect_error(new PDOException('SQLSTATE[HY000] [1049] Unknown database')), ['error' => 'unknown_database', 'driverCode' => 1049]);
+check('neznámá chyba = connect_failed', bk_install_connect_error(new PDOException('SQLSTATE[42000]: syntax')), ['error' => 'connect_failed', 'driverCode' => null]);
+
+check('cron: běžná cesta zůstane čitelná', bk_install_cron('/usr/bin/php', '/home/u/public_html/status/'), [
+    'schedule' => '* * * * *',
+    'command' => '/usr/bin/php -q /home/u/public_html/status/cron.php >/dev/null 2>&1',
+    'crontabLine' => '* * * * * /usr/bin/php -q /home/u/public_html/status/cron.php >/dev/null 2>&1',
+    'script' => '/home/u/public_html/status/cron.php',
+]);
+check("cron: mezera a apostrof v cestě se ošetří", bk_install_cron('php', "/home/u/my site's/status")['command'], "php -q '/home/u/my site'\\''s/status/cron.php' >/dev/null 2>&1");
+
+// The rendered config.php: every value var_export()ed, so no input becomes code.
+$in_sample = (string)file_get_contents(__DIR__ . '/../config.sample.php');
+$in_evil = "x'); echo 'PWNED'; //\\";
+$in_text = bk_install_render_config($in_sample, ['host' => 'db.example.com', 'port' => 3307, 'database' => 'u_bk', 'user' => 'u_bk', 'password' => $in_evil, 'timezone' => 'UTC'], '2026-09-23');
+check_true('config: hlavička instalátoru a heslo jako řetězec', is_string($in_text) && str_starts_with($in_text, "<?php\n// Written by the installer")
+    && str_contains($in_text, "define('DB_PASS', " . var_export($in_evil, true) . ");") && str_contains($in_text, "define('DB_PORT', 3307);"));
+$in_tmp = sys_get_temp_dir() . '/bk_install_cfg_' . bin2hex(random_bytes(4));
+file_put_contents($in_tmp . '.php', (string)$in_text);
+file_put_contents($in_tmp . '_run.php', "<?php require " . var_export($in_tmp . '.php', true) . "; echo json_encode([DB_HOST, DB_PORT, DB_PASS, TIMEZONE]);");
+exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($in_tmp . '_run.php') . ' 2>&1', $in_out, $in_rc);
+check('config: po načtení drží přesně zadané hodnoty a nic nespustí', [$in_rc, implode("\n", $in_out)], [0, json_encode(['db.example.com', 3307, $in_evil, 'UTC'])]);
+@unlink($in_tmp . '.php');
+@unlink($in_tmp . '_run.php');
+check('config: šablona bez DB_PASS = žádný poloviční soubor', bk_install_render_config(str_replace("define('DB_PASS'", "// define('DB_PASS'", $in_sample), $in_cfg ?? [], 'x'), null);
+file_put_contents($in_tmp . '.php', $in_sample);
+check_true('config: vzorový soubor se pozná podle zástupného hesla', bk_install_file_is_placeholder($in_tmp . '.php'));
+file_put_contents($in_tmp . '.php', (string)$in_text);
+check_false('config: skutečný ne', bk_install_file_is_placeholder($in_tmp . '.php'));
+@unlink($in_tmp . '.php');
+
+check('SQL: zdvojený apostrof v řetězci a poslední příkaz bez středníku',
+    bk_install_split_sql("INSERT INTO t VALUES ('it''s; ok');\nSELECT 2"), ["INSERT INTO t VALUES ('it''s; ok')", 'SELECT 2']);
+check('SQL: neukončený komentář spolkne zbytek, nic z něj se nespustí', bk_install_split_sql("SELECT 1; /* never closed; DROP TABLE x;"), ['SELECT 1']);
+$in_plain = ['host' => 'db.example.com', 'port' => 3306, 'database' => 'd', 'user' => 'u', 'password' => 'p', 'timezone' => ''];
+$in_no_tz = bk_install_render_config($in_sample, $in_plain, 'x');
+check_true('config: bez pásma zůstane TIMEZONE ze vzoru', is_string($in_no_tz) && str_contains($in_no_tz, "define('TIMEZONE', 'Europe/Prague');"));
+// R239: a template with CRLF line ends failed with "config.sample.php chybí".
+$in_crlf = bk_install_render_config(str_replace("\n", "\r\n", $in_sample), $in_plain, 'x');
+check_true('config: šablona s CRLF se vyplní, konce řádků zůstanou',
+    is_string($in_crlf) && str_contains($in_crlf, "define('DB_HOST', 'db.example.com');\r\n") && !str_contains($in_crlf, "heslo_databaze"));
+check('config: define dvakrát nebo šablona bez <?php = žádný soubor', [
+    bk_install_render_config($in_sample . "\ndefine('DB_HOST', 'other');\n", $in_plain, 'x'),
+    bk_install_render_config(substr($in_sample, strlen("<?php\n")), $in_plain, 'x'),
+], [null, null]);
+
+// Input edges: what is trimmed, what is not, and each field's limits.
+[$in_cfg, $in_err] = bk_install_validate(['host' => ' db.example.com ', 'port' => 3307, 'database' => ' user_bk$-1 ',
+    'user' => ' u_bk ', 'password' => ' p w ', 'timezone' => ' Europe/Prague ']);
+check('instalátor ořízne mezery u všeho kromě hesla, port bere i jako číslo z JSON', [$in_err, $in_cfg], [null,
+    ['host' => 'db.example.com', 'port' => 3307, 'database' => 'user_bk$-1', 'user' => 'u_bk', 'password' => ' p w ', 'timezone' => 'Europe/Prague']]);
+[$in_cfg, $in_err] = bk_install_validate(['host' => 'db.example.com', 'database' => 'd', 'user' => 'u']);
+check('chybějící heslo a pásmo jsou prázdné, ne chyba', [$in_err, $in_cfg['password'] ?? null, $in_cfg['timezone'] ?? null], [null, '', '']);
+foreach ([
+    [['host' => ['db.example.com']], 'invalid_host'],
+    [['port' => '0'], 'invalid_port'],
+    [['port' => '3306x'], 'invalid_port'],
+    [['database' => ''], 'invalid_database'],
+    [['database' => str_repeat('d', 65)], 'invalid_database'],
+    [['database' => ['d']], 'invalid_database'],
+    [['user' => str_repeat('u', 81)], 'invalid_user'],
+    [['user' => "u\x7F"], 'invalid_user'],
+    [['user' => ['u']], 'invalid_user'],
+    [['password' => str_repeat('p', 257)], 'invalid_password'],
+    [['password' => 'database_password'], 'invalid_password'],
+    [['password' => ['p']], 'invalid_password'],
+    [['timezone' => ['UTC']], 'invalid_timezone'],
+    [['port' => '65535', 'database' => str_repeat('d', 64), 'user' => str_repeat('u', 80), 'password' => str_repeat('p', 256)], null],
+] as [$in_bad, $in_code]) {
+    [, $in_got] = bk_install_validate($in_bad + ['host' => 'db.example.com', 'database' => 'd', 'user' => 'u', 'password' => 'p']);
+    check('instalátor na hraně ' . substr((string)json_encode($in_bad), 0, 60) . ' = ' . var_export($in_code, true), $in_got, $in_code);
+}
+
+// The response JSON is safe in any HTML context: the config text echoes input.
+check('JSON instalátoru: <, >, &, apostrof a uvozovky jako \\u, diakritika a lomítka beze změny',
+    bk_install_json(['t' => "<b>&'\"č/"]), '{"t":"\u003Cb\u003E\u0026\u0027\u0022č/"}');
+
+// Every error code has its own sentence, in both languages.
+require_once __DIR__ . '/../lang.php';
+$in_src = (string)file_get_contents(__DIR__ . '/../installer.php');
+preg_match_all("/^\\s*'([a-z_]+)' => '(install_(?:err_[a-z_]+|config_unwritable))',$/m", $in_src, $in_map);
+$in_messages = array_map('bk_install_message', $in_map[1]);
+check_true('chybové kódy instalátoru se našly', count($in_map[1]) > 10 && in_array('installer_locked', $in_map[1], true));
+check('každý chybový kód má vlastní přeloženou větu', [count(array_unique($in_messages)),
+    array_values(array_filter($in_messages, fn ($m) => $m === '' || str_starts_with($m, 'install_')))], [count($in_map[1]), []]);
+check('neznámý kód = obecná chyba instalátoru', bk_install_message('no_such_code'), bk_install_message('internal'));
+$in_cs = require __DIR__ . '/../lang/cs.php';
+$in_en = require __DIR__ . '/../lang/en.php';
+check('klíče instalátoru jsou v češtině i v angličtině', [array_values(array_diff($in_map[2], array_keys($in_cs))),
+    array_values(array_diff($in_map[2], array_keys($in_en)))], [[], []]);
+
+// CSRF: the session's token, sent as the header or the form field.
+$in_saved = [$_SESSION ?? null, $_POST, $_SERVER['HTTP_X_CSRF_TOKEN'] ?? null];
+$_SESSION = [];
+$_POST = [];
+unset($_SERVER['HTTP_X_CSRF_TOKEN']);
+check_false('CSRF: bez tokenu v session i v požadavku neprojde', bk_install_csrf_ok());
+$in_token = bk_install_csrf_token();
+check('CSRF: token je 64 hex znaků, uložený v session a stálý', [preg_match('/^[0-9a-f]{64}$/', $in_token), $_SESSION['csrf_token'] ?? null, bk_install_csrf_token()], [1, $in_token, $in_token]);
+check_false('CSRF: požadavek bez tokenu neprojde', bk_install_csrf_ok());
+$_SERVER['HTTP_X_CSRF_TOKEN'] = $in_token;
+check_true('CSRF: token v hlavičce projde', bk_install_csrf_ok());
+$_SERVER['HTTP_X_CSRF_TOKEN'] = str_repeat('0', 64);
+check_false('CSRF: cizí token v hlavičce neprojde', bk_install_csrf_ok());
+unset($_SERVER['HTTP_X_CSRF_TOKEN']);
+$_POST = ['csrf_token' => $in_token];
+check_true('CSRF: token z formuláře projde', bk_install_csrf_ok());
+$_SESSION = [];
+check_false('CSRF: token bez session neprojde', bk_install_csrf_ok());
+// Without a JSON body (the CLI has none) the input is the form.
+$_POST = ['host' => 'db.example.com', 'port' => '3307'];
+check('vstup bez JSON těla = pole formuláře', bk_install_input(), ['host' => 'db.example.com', 'port' => '3307']);
+
+// A connection test against a closed port fails fast and names no password.
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_db_dsn', 'bk_db_already_applied']);
+$in_pw = 'Pw-' . bin2hex(random_bytes(6));
+$in_conn = ['error' => 'connected'];
+$in_conn_msg = '';
+try {
+    bk_install_connect(['host' => '127.0.0.1', 'port' => 1, 'database' => 'd', 'user' => 'u', 'password' => $in_pw]);
+} catch (PDOException $e) {
+    $in_conn = bk_install_connect_error($e);
+    $in_conn_msg = $e->getMessage();
+}
+check('připojení na zavřený port = host_unreachable (bez pdo_mysql connect_failed)', $in_conn['error'],
+    extension_loaded('pdo_mysql') ? 'host_unreachable' : 'connect_failed');
+check_false('a text chyby PDO heslo neobsahuje', str_contains($in_conn_msg, $in_pw));
+
+if (!class_exists('BkInstallFakePdo')) {
+    /** A PDOException as PDO raises it for MySQL: SQLSTATE as the code, the MySQL number in errorInfo[1]. */
+    final class BkInstallFakePdoError extends PDOException {
+        public function __construct(string $state, int $number) {
+            parent::__construct("SQLSTATE[{$state}]: [{$number}] simulated");
+            $this->code = $state;
+            $this->errorInfo = [$state, $number, 'simulated'];
+        }
+    }
+
+    /**
+     * In-memory SQLite that answers chosen statements the way MySQL would:
+     * $fail maps an SQL fragment to [SQLSTATE, MySQL error number] to throw,
+     * $answer maps a fragment to the one value its query returns instead.
+     */
+    final class BkInstallFakePdo extends PDO {
+        /** @var array<string, array{0: string, 1: int}> */
+        public array $fail = [];
+        /** @var array<string, string> */
+        public array $answer = [];
+
+        public function __construct() {
+            parent::__construct('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+        }
+
+        private function simulate(string $sql): string {
+            foreach ($this->fail as $fragment => [$state, $number]) {
+                if (str_contains($sql, $fragment)) {
+                    throw new BkInstallFakePdoError($state, $number);
+                }
+            }
+            foreach ($this->answer as $fragment => $value) {
+                if (str_contains($sql, $fragment)) {
+                    return 'SELECT ' . $this->quote($value);
+                }
+            }
+            return $sql;
+        }
+
+        public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): PDOStatement|false {
+            return parent::query($this->simulate($query), $fetchMode, ...$fetchModeArgs);
+        }
+
+        public function exec(string $statement): int|false {
+            return parent::exec($this->simulate($statement));
+        }
+    }
+}
+
+// What the database holds decides the step; anything unreadable locks.
+$in_fresh = new BkInstallFakePdo();
+$in_fresh->answer = ['information_schema.tables' => '0'];
+$in_fresh->fail = ['FROM settings' => ['42S02', 1146], 'FROM users' => ['42S02', 1146]];
+$in_seen = bk_install_inspect($in_fresh);
+check('databáze: prázdná = schéma chybí, 0 účtů, krok schema', [$in_seen, bk_install_step(true, false, $in_seen)],
+    [['tables' => 0, 'schema' => 'missing', 'users' => 0], 'schema']);
+$in_live = new BkInstallFakePdo();
+$in_live->answer = ['information_schema.tables' => '2'];
+$in_live->exec('CREATE TABLE settings (key_name TEXT PRIMARY KEY, key_value TEXT)');
+$in_live->exec('CREATE TABLE users (id INTEGER PRIMARY KEY, role TEXT)');
+$in_seen = bk_install_inspect($in_live);
+check('databáze: tabulky bez schema_version = partial, krok schema', [$in_seen, bk_install_step(true, false, $in_seen)],
+    [['tables' => 2, 'schema' => 'partial', 'users' => 0], 'schema']);
+$in_live->exec("INSERT INTO settings VALUES ('schema_version', '')");
+check('databáze: prázdná schema_version je pořád partial', bk_install_inspect($in_live)['schema'], 'partial');
+$in_live->exec("UPDATE settings SET key_value = '42' WHERE key_name = 'schema_version'");
+$in_seen = bk_install_inspect($in_live);
+check('databáze: schema_version zapsaná = ready, krok account', [$in_seen, bk_install_step(true, false, $in_seen)],
+    [['tables' => 2, 'schema' => 'ready', 'users' => 0], 'account']);
+$in_live->exec("INSERT INTO users (id, role) VALUES (1, 'admin'), (2, 'viewer')");
+$in_seen = bk_install_inspect($in_live);
+check('databáze: dva účty = installed', [$in_seen['users'], bk_install_step(true, false, $in_seen)], [2, 'installed']);
+// MySQL's "SELECT command denied" (1142) is not a missing table. The fake
+// has no information_schema, so the table count (only a hint) is null too.
+$in_denied = new BkInstallFakePdo();
+$in_denied->fail = ['FROM settings' => ['42000', 1142], 'FROM users' => ['42000', 1142]];
+$in_seen = bk_install_inspect($in_denied);
+check('databáze: SELECT zakázán (ne chybějící tabulka) = nic nevíme a instalátor se zamkne', [$in_seen, bk_install_step(true, false, $in_seen)],
+    [['tables' => null, 'schema' => null, 'users' => null], 'installed']);
+
+// An administrator is whoever the users table says, not the session.
+$_SESSION = ['admin_logged_in' => true, 'admin_id' => 1];
+check_false('admin: bez databáze ne', bk_install_is_admin(null));
+check_false('admin: databáze bez tabulky users ne',
+    bk_install_is_admin(new PDO('sqlite::memory:', null, null, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION])));
+check_true('admin: účet s rolí admin ano', bk_install_is_admin($in_live));
+$_SESSION['admin_id'] = 2;
+check_false('admin: session sesazeného admina ne', bk_install_is_admin($in_live));
+$_SESSION = ['admin_id' => 1];
+check_false('admin: bez přihlášení ne', bk_install_is_admin($in_live));
+if ($in_saved[0] === null) {
+    unset($_SESSION);
+} else {
+    $_SESSION = $in_saved[0];
+}
+$_POST = $in_saved[1];
+if ($in_saved[2] !== null) {
+    $_SERVER['HTTP_X_CSRF_TOKEN'] = $in_saved[2];
+}
+
+// schema.sql import: "already exists" is what a re-run produces and is
+// skipped; any other error stops at its statement and goes to the log only.
+$in_imp = new BkInstallFakePdo();
+$in_imp->fail = ['dup_1050' => ['42S01', 1050], 'dup_1060' => ['42S21', 1060], 'dup_1061' => ['42000', 1061],
+    'dup_1062' => ['23000', 1062], 'dup_1826' => ['HY000', 1826], 'gone_1146' => ['42S02', 1146]];
+$in_res = bk_install_import_schema($in_imp, "CREATE TABLE a (x INT);\nSELECT 'dup_1050';\nSELECT 'dup_1060';\nSELECT 'dup_1061';\n"
+    . "SELECT 'dup_1062';\nSELECT 'dup_1826';\nINSERT INTO a VALUES (7);");
+check('import: chyby "už existuje" přeskočí a doběhne', [$in_res, (int)$in_imp->query('SELECT COUNT(*) FROM a')->fetchColumn()],
+    [['ok' => true, 'executed' => 7, 'total' => 7], 1]);
+$in_log = (string)tempnam(sys_get_temp_dir(), 'bk_inst_log');
+$in_log_prev = ini_set('error_log', $in_log);
+$in_res = bk_install_import_schema($in_imp, "CREATE TABLE b (x INT);\nSELECT 'gone_1146';\nINSERT INTO b VALUES (1);");
+ini_set('error_log', (string)$in_log_prev);
+check('import: jiná chyba zastaví import na čísle příkazu', [$in_res, (int)$in_imp->query('SELECT COUNT(*) FROM b')->fetchColumn()],
+    [['ok' => false, 'executed' => 1, 'total' => 3, 'statement' => 2, 'driverCode' => 1146], 0]);
+check_true('a text chyby MySQL jde jen do logu serveru', str_contains((string)file_get_contents($in_log), '[installer] schema.sql statement 2 failed'));
+@unlink($in_log);
+
+// The migrations (migrations.php) count the same errors as done, except a
+// duplicate row: 1062 there is a UNIQUE index the data breaks. Any other
+// error is logged with its step and reported, and the steps after it still
+// run; db.php stores schema_version only when nothing is reported.
+bk_test_load_functions(__DIR__ . '/../migrations.php', ['bk_schema_migrations', 'bk_schema_migrate',
+    'bk_data_fixes', 'bk_data_fixes_apply', 'bk_cf_relabel_location_history']);
+$mg_pdo = new BkInstallFakePdo();
+$mg_pdo->fail = $in_imp->fail;
+$mg_rows = fn (): int => (int)$mg_pdo->query('SELECT COUNT(*) FROM m')->fetchColumn();
+$mg_log = (string)tempnam(sys_get_temp_dir(), 'bk_migr_log');
+$mg_log_prev = ini_set('error_log', $mg_log);
+$mg_done = bk_schema_migrate($mg_pdo, [
+    'CREATE TABLE m (x INT)', "SELECT 'dup_1050'", "SELECT 'dup_1060'", "SELECT 'dup_1061'", "SELECT 'dup_1826'",
+    'zápis' => static function (PDO $pdo): void { $pdo->exec('INSERT INTO m VALUES (1)'); },
+    'hotový krok PHP' => static function (PDO $pdo): void { $pdo->exec("SELECT 'dup_1061'"); },
+]);
+$mg_done_rows = $mg_rows();
+$mg_failed = bk_schema_migrate($mg_pdo, [
+    "SELECT 'gone_1146'",
+    'INSERT INTO m VALUES (2)',
+    'krok PHP' => static function (PDO $pdo): void { $pdo->exec("SELECT 'gone_1146'"); },
+    'INSERT INTO m VALUES (3)',
+]);
+// What MySQL answers a unique index over two equal rows.
+$mg_pdo->fail['CREATE UNIQUE INDEX u'] = ['23000', 1062];
+$mg_dup_row = bk_schema_migrate($mg_pdo, ['CREATE UNIQUE INDEX u ON m (x)']);
+ini_set('error_log', (string)$mg_log_prev);
+$mg_logged = (string)file_get_contents($mg_log);
+@unlink($mg_log);
+check('migrace: "už existuje" (1050/1060/1061/1826) je hotové, kroky SQL i PHP proběhnou a nic se nenahlásí',
+    [$mg_done, $mg_done_rows], [[], 1]);
+check('migrace: duplicitní řádek (1062) hotový není, unikátní index nad porušenými daty chybí doopravdy', [
+    $mg_dup_row, str_contains($mg_logged, '[db] migration 1 of 1 failed (CREATE UNIQUE INDEX u ON m (x)): SQLSTATE[23000]'),
+], [[1], true]);
+check('migrace: skutečná chyba se nahlásí číslem kroku a kroky za ní přesto proběhnou', [$mg_failed, $mg_rows()], [[1, 3], 3]);
+check_true('migrace: chyba jde do logu s krokem, jeho příkazem nebo jménem a textem MySQL',
+    str_contains($mg_logged, "[db] migration 1 of 4 failed (SELECT 'gone_1146'): SQLSTATE[42S02]")
+    && str_contains($mg_logged, '[db] migration 3 of 4 failed (krok PHP): SQLSTATE[42S02]'));
+check_false('migrace: hotové kroky v logu nejsou', str_contains($mg_logged, 'dup_'));
+$mg_thrown = null;
+try {
+    bk_schema_migrate($mg_pdo, ['chyba kódu' => static function (PDO $pdo): void { throw new RuntimeException('bug'); }]);
+} catch (RuntimeException $e) {
+    $mg_thrown = $e->getMessage();
+}
+check('migrace: jinou výjimku než PDOException runner nespolkne', $mg_thrown, 'bug');
+$mg_steps = bk_schema_migrations();
+$mg_sql = array_values(array_filter($mg_steps, 'is_string'));
+check('seznam migrací: krok je příkaz SQL, nebo funkce se jménem do logu',
+    count(array_filter($mg_steps, fn ($step, $key) => is_string($step) || ($step instanceof Closure && is_string($key)), ARRAY_FILTER_USE_BOTH)),
+    count($mg_steps));
+check('seznam migrací: žádný příkaz se neopakuje (dvojí MODIFY status je pryč)', count(array_unique($mg_sql)), count($mg_sql));
+
+check('poslední krok migrací spouští jednorázové opravy dat', array_key_last($mg_steps), 'one-time data fixes');
+
+// A deploy uploads db.php and migrations.php one after the other, and db.php
+// requires migrations.php before it compares the versions. db.php up to r022
+// declared the Cloudflare relabel itself: under that name in migrations.php,
+// every request due to migrate between the two uploads died on the
+// redeclaration. Here that db.php's declaration, then the new list.
+$mg_mixed = sys_get_temp_dir() . '/bk_mixed_upload_' . bin2hex(random_bytes(4)) . '.php';
+file_put_contents($mg_mixed, "<?php\nfunction bk_cf_fix_location_history(PDO \$pdo): int { return 0; }\nrequire_once "
+    . var_export(realpath(__DIR__ . '/../migrations.php'), true) . ";\necho 'ok';\n");
+exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg($mg_mixed) . ' 2>&1', $mg_mixed_out, $mg_mixed_rc);
+@unlink($mg_mixed);
+check('migrations.php se načte i vedle db.php r022: žádná funkce dvakrát', [$mg_mixed_rc, $mg_mixed_out], [0, ['ok']]);
+
+// One-time data fixes (M28): the last step runs each fix the database has not
+// had and keeps its id, so a fix that ran never runs again on a later bump. A
+// failed one is logged with its id and left out of the record, the fixes
+// after it still run, and its error fails the step.
+$df_list = bk_data_fixes();
+check('seznam oprav dat: každá má textové id a je funkcí, převod cpanel je v něm', [
+    count(array_filter(array_keys($df_list), 'is_string')), count(array_filter($df_list, fn ($f) => $f instanceof Closure)),
+    isset($df_list['cpanel-monitors-to-web']),
+], [count($df_list), count($df_list), true]);
+$df_pdo = new BkInstallFakePdo();
+$df_pdo->exec('CREATE TABLE r (id TEXT)');
+$df_fix = fn (string $id): Closure => static function (PDO $pdo) use ($id): void { $pdo->exec("INSERT INTO r VALUES ('{$id}')"); };
+$df_log = (string)tempnam(sys_get_temp_dir(), 'bk_fix_log');
+$df_log_prev = ini_set('error_log', $df_log);
+$df_first = bk_data_fixes_apply($df_pdo, ['a' => $df_fix('a'), 'b' => $df_fix('b')], []);
+$df_again = bk_data_fixes_apply($df_pdo, ['a' => $df_fix('a'), 'b' => $df_fix('b'), 'c' => $df_fix('c')], $df_first['applied']);
+$df_pdo->fail["INSERT INTO r VALUES ('e')"] = ['42S22', 1054];
+$df_failed = bk_data_fixes_apply($df_pdo, ['d' => $df_fix('d'), 'e' => $df_fix('e'), 'f' => $df_fix('f')], ['a', 'b', 'c']);
+ini_set('error_log', (string)$df_log_prev);
+$df_logged = (string)file_get_contents($df_log);
+@unlink($df_log);
+check('opravy dat: každá proběhne jednou a záznam drží jejich id v pořadí',
+    [$df_first, $df_again], [['applied' => ['a', 'b'], 'error' => null], ['applied' => ['a', 'b', 'c'], 'error' => null]]);
+check('opravy dat: chybná se nezapíše, ty za ní přesto proběhnou a chyba se vrátí', [
+    $df_failed['applied'], $df_failed['error'] instanceof PDOException, $df_pdo->query('SELECT id FROM r')->fetchAll(PDO::FETCH_COLUMN),
+], [['a', 'b', 'c', 'd', 'f'], true, ['a', 'b', 'c', 'd', 'f']]);
+check_true('a do logu jde s id a textem databáze', str_contains($df_logged, '[db] data fix e failed: SQLSTATE[42S22]'));
+
+// The type cpanel is retired (D7): a cpanel monitor becomes a web check of
+// its host, the address it had goes to cpanel_stats_url; other types stay.
+$df_cp = new BkInstallFakePdo();
+$df_cp->exec('CREATE TABLE monitors (id INTEGER PRIMARY KEY, type TEXT, target TEXT, cpanel_stats_url TEXT)');
+$df_cp->exec("INSERT INTO monitors VALUES (1, 'cpanel', 'https://hosting.example.test/cpanel_stats.php?key=k1', NULL),
+    (2, 'web', 'https://web.example.test', NULL), (3, 'cpanel', 'http://plain.example.test:2082/s.php', 'https://old.example.test/s.php')");
+$df_list['cpanel-monitors-to-web']($df_cp);
+check('oprava cpanel: web hostitele s adresou exportéru v cpanel_stats_url, jiný typ beze změny',
+    $df_cp->query('SELECT id, type, target, cpanel_stats_url FROM monitors ORDER BY id')->fetchAll(PDO::FETCH_NUM), [
+        [1, 'web', 'https://hosting.example.test', 'https://hosting.example.test/cpanel_stats.php?key=k1'],
+        [2, 'web', 'https://web.example.test', null],
+        [3, 'web', 'http://plain.example.test', 'http://plain.example.test:2082/s.php'],
+    ]);
+
+// Nothing serialises the list: a request running it at the same time can
+// give a monitor its asset between this run's SELECT and its UPDATE (here a
+// trigger on this run's INSERT). The monitor keeps that asset and the one
+// made here is deleted, so no asset is left without a monitor.
+$df_as = new BkInstallFakePdo();
+$df_as->exec('CREATE TABLE assets (id INTEGER PRIMARY KEY, name TEXT)');
+$df_as->exec('CREATE TABLE monitors (id INTEGER PRIMARY KEY, name TEXT, asset_id INTEGER)');
+$df_as->exec("INSERT INTO monitors VALUES (1, 'web', NULL), (2, 'db', NULL)");
+$df_as->exec("INSERT INTO assets VALUES (900, 'web (other request)')");
+$df_as->exec('CREATE TRIGGER other_request AFTER INSERT ON assets BEGIN
+    UPDATE monitors SET asset_id = 900 WHERE id = 1 AND asset_id IS NULL; END');
+$df_list['one-asset-per-monitor']($df_as);
+check('oprava assetů: monitor si nechá asset souběžného běhu, nový se smaže, žádný nezůstane bez monitoru', [
+    $df_as->query('SELECT m.id, a.name FROM monitors m JOIN assets a ON a.id = m.asset_id ORDER BY m.id')->fetchAll(PDO::FETCH_NUM),
+    (int)$df_as->query('SELECT COUNT(*) FROM assets WHERE id NOT IN (SELECT asset_id FROM monitors WHERE asset_id IS NOT NULL)')->fetchColumn(),
+], [[[1, 'web (other request)'], [2, 'db']], 0]);
+
+// The Cloudflare relabel only rewrites data. Like the named foreign key, its
+// error is logged and fails nothing: counted as a failed step, a checked_from
+// that is not utf8mb4 (1253 on the COLLATE) kept the version behind for good,
+// although every schema step was done. It counts as run.
+$mg_cf = new BkInstallFakePdo();
+$mg_cf->fail = ['COLLATE utf8mb4_bin' => ['42000', 1253]];
+$mg_log = (string)tempnam(sys_get_temp_dir(), 'bk_migr_log');
+$mg_log_prev = ini_set('error_log', $mg_log);
+$mg_cf_run = bk_data_fixes_apply($mg_cf, ['cloudflare-location-history' => $df_list['cloudflare-location-history']], []);
+ini_set('error_log', (string)$mg_log_prev);
+$mg_logged = (string)file_get_contents($mg_log);
+@unlink($mg_log);
+check('oprava dat: chyba přepisu míst Cloudflare jde do logu a nic neshodí', [
+    $mg_cf_run, str_contains($mg_logged, '[db] data fix: the Cloudflare location history was not rewritten: SQLSTATE[42000]'),
+], [['applied' => ['cloudflare-location-history'], 'error' => null], true]);
+
+// A failed run is kept with its version and time (schema_migrations_failed),
+// and for 10 minutes no request runs the list again. A record for another
+// version, or one that does not read, holds nothing back.
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_schema_failure', 'bk_schema_migrations_due']);
+$mg_record = (string)json_encode(['version' => 'v2', 'at' => 1000, 'retry' => 1600, 'steps' => [3, 7]]);
+$mg_failure = bk_schema_failure($mg_record, 'v2');
+check('migrace: neúspěšný běh se přečte s časem, dalším pokusem a kroky', $mg_failure, ['at' => 1000, 'retry' => 1600, 'steps' => [3, 7]]);
+check('migrace: do dalšího pokusu seznam neběží, od něj ano', [
+    bk_schema_migrations_due($mg_failure, 1000), bk_schema_migrations_due($mg_failure, 1599), bk_schema_migrations_due($mg_failure, 1600),
+], [false, false, true]);
+check_true('migrace: hodiny vrácené před selhání nečekají', bk_schema_migrations_due($mg_failure, 999));
+check('migrace: záznam pro jinou verzi, nečitelný, s časem jako text nebo žádný nic nedrží', [
+    bk_schema_failure($mg_record, 'v3'), bk_schema_failure('{', 'v2'), bk_schema_failure(null, 'v2'),
+    bk_schema_failure((string)json_encode(['version' => 'v2', 'at' => '1000', 'retry' => 1600]), 'v2'),
+    bk_schema_migrations_due(null, 1000),
+], [null, null, null, null, true]);
+
+check('cron: pod CLI je PHP binárka ta, která běží', bk_install_php_cli(), ['path' => PHP_BINARY, 'found' => true]);
+$in_req = bk_install_requirements();
+check('požadavky: verze PHP testů vyhoví, formulář dostane čtyři rozšíření jako ano/ne',
+    [$in_req['php'], $in_req['phpOk'], array_keys($in_req['extensions']), array_filter($in_req['extensions'], 'is_bool') === $in_req['extensions']],
+    [PHP_VERSION, true, ['pdo_mysql', 'curl', 'mbstring', 'openssl'], true]);
+
+// Putting config.php in place: one rename, never over a real config.
+$in_dir = sys_get_temp_dir() . '/bk_install_dir_' . bin2hex(random_bytes(4));
+mkdir($in_dir, 0755);
+$in_path = $in_dir . '/config.php';
+check_true('zápis: do zapisovatelné složky jde', bk_install_can_write($in_dir));
+$in_new = "<?php // new\n";
+$in_res = bk_install_write_config($in_dir, $in_new);
+clearstatcache();
+check('zápis: nový config.php, práva 0640, žádný .tmp', [$in_res, (string)@file_get_contents($in_path), fileperms($in_path) & 0777, glob($in_dir . '/*.tmp')],
+    ['written', $in_new, 0640, []]);
+check('zápis: skutečný config.php zůstane, jak je', [bk_install_write_config($in_dir, 'x'), (string)file_get_contents($in_path)], ['exists', $in_new]);
+file_put_contents($in_path, $in_sample);
+clearstatcache();
+check('zápis: vzorový config.php se nahradí', [bk_install_write_config($in_dir, (string)$in_text), (string)file_get_contents($in_path) === $in_text], ['written', true]);
+if (!(function_exists('posix_geteuid') && posix_geteuid() === 0)) {
+    // Read-only directory (the host's choice): a writable placeholder is
+    // overwritten in place, otherwise the app gets the text for copying.
+    file_put_contents($in_path, $in_sample);
+    chmod($in_dir, 0555);
+    clearstatcache();
+    check('zápis: složka jen pro čtení, vzorový config.php zapisovatelný = přepíše se na místě',
+        [bk_install_can_write($in_dir), bk_install_write_config($in_dir, (string)$in_text), (string)file_get_contents($in_path) === $in_text, glob($in_dir . '/*.tmp')],
+        [true, 'written', true, []]);
+    chmod($in_dir, 0755);
+    unlink($in_path);
+    chmod($in_dir, 0555);
+    clearstatcache();
+    check('zápis: složka jen pro čtení bez config.php = unwritable', [bk_install_can_write($in_dir), bk_install_write_config($in_dir, 'x'), file_exists($in_path)],
+        [false, 'unwritable', false]);
+    chmod($in_dir, 0755);
+    file_put_contents($in_path, $in_sample);
+    chmod($in_path, 0444);
+    chmod($in_dir, 0555);
+    clearstatcache();
+    check('zápis: ani složka, ani vzorový config.php = unwritable, soubor beze změny',
+        [bk_install_can_write($in_dir), bk_install_write_config($in_dir, 'x'), (string)file_get_contents($in_path) === $in_sample], [false, 'unwritable', true]);
+    chmod($in_dir, 0755);
+    chmod($in_path, 0644);
+} else {
+    echo "  (přeskočeno: pod rootem nejde složku zamknout proti zápisu)\n";
+}
+@unlink($in_path);
+@rmdir($in_dir);
+
+// --- UX wave 2 on main (w2m), server: health score, tips, flags ---------------
+// N-1: the health score counts only what was measured; an unmeasured part
+// drops out and the rest renormalises, too little data is null ("—").
+// CR-9b: the tips join the findings feed without repeating a reason.
+// Public page flags: the country comes from the label, never a guess.
+foreach (['BK_HEALTH_FORMULA_VERSION', 'BK_HEALTH_MIN_COMPONENTS', 'BK_HEALTH_AVAILABILITY_DAYS', 'BK_HEALTH_ALERT_COST'] as $hs_name) {
+    if (!defined($hs_name) && preg_match('/\nconst ' . $hs_name . ' = [^;]+;/', (string)file_get_contents(__DIR__ . '/../functions.php'), $hs_c)) {
+        eval(trim($hs_c[0]));
+    }
+}
+foreach (['BK_HEALTH_COMPONENTS', 'BK_HEALTH_ROUTER_LATCHES'] as $hs_name) {
+    if (!defined($hs_name) && preg_match('/\nconst ' . $hs_name . ' = \[\n.*?\n\];/s', (string)file_get_contents(__DIR__ . '/../functions.php'), $hs_c)) {
+        eval(trim($hs_c[0]));
+    }
+}
+{
+    $hs_full = ['availability' => 100.0, 'latency_ms' => 20.0, 'latency_kind' => 'wan',
+        'alerts' => [], 'age_secs' => 30, 'cadence_secs' => 60,
+        'cpu_pct' => 10.0, 'cpu_limit' => 90.0, 'ram_pct' => 20.0, 'ram_limit' => 95.0,
+        'disk_pct' => 30.0, 'disk_limit' => 90.0, 'smart_failed' => false,
+        'cpu_temp_c' => 50.0, 'disk_temp_c' => 40.0, 'disk_temp_limit' => 70.0];
+    $hs = bk_health_score($hs_full);
+    check('zdraví: vše změřené a v pořádku = 100, dobré, váha 100, 7 složek, žádná srážka',
+        [$hs['score'], $hs['grade'], $hs['measuredWeight'], $hs['measuredComponents'], $hs['formulaVersion'], $hs['deductions']], [100, 'good', 100, 7, 1, []]);
+    $hs_pts = fn (array $in, string $key) => array_column(bk_health_score($in)['components'], 'points', 'key')[$key] ?? 'chybí';
+
+    // --- curves and their bounds --------------------------------------------
+    check('zdraví: 99,9 % dostupnosti = 98 bodů, 95 % = 0, pod 95 % dál 0, nad 100 % jen 100',
+        [$hs_pts(['availability' => 99.9] + $hs_full, 'availability'), $hs_pts(['availability' => 95.0] + $hs_full, 'availability'),
+         $hs_pts(['availability' => 40.0] + $hs_full, 'availability'), $hs_pts(['availability' => 100.4] + $hs_full, 'availability')], [98, 0, 0, 100]);
+    check('zdraví: WAN 30 ms plný počet, 300 ms nula, 165 ms polovina, 2 s dál nula',
+        [$hs_pts(['latency_ms' => 30.0] + $hs_full, 'latency'), $hs_pts(['latency_ms' => 300.0] + $hs_full, 'latency'),
+         $hs_pts(['latency_ms' => 165.0] + $hs_full, 'latency'), $hs_pts(['latency_ms' => 2000.0] + $hs_full, 'latency')], [100, 0, 50, 0]);
+    check('zdraví: kontrola z hostingu má vlastní křivku (300 ms plný počet, 3 s nula)',
+        [$hs_pts(['latency_ms' => 300.0, 'latency_kind' => 'check'] + $hs_full, 'latency'), $hs_pts(['latency_ms' => 3000.0, 'latency_kind' => 'check'] + $hs_full, 'latency')], [100, 0]);
+    check('zdraví: záporná odezva není měření',
+        array_column(bk_health_score(['latency_ms' => -5.0] + $hs_full)['components'], null, 'key')['latency']['points'], null);
+    check('zdraví: CPU do 65 °C plný počet (práh tipu), 90 °C nula, 77,5 °C polovina',
+        [$hs_pts(['cpu_temp_c' => 65.0] + $hs_full, 'temperature'), $hs_pts(['cpu_temp_c' => 90.0] + $hs_full, 'temperature'), $hs_pts(['cpu_temp_c' => 77.5] + $hs_full, 'temperature')], [100, 0, 50]);
+    check('zdraví: disk podle limitu své třídy (SSD 67 z 70 °C = 30, NVMe 67 z 80 = 100, rotační 55 z 60 = 50)',
+        [$hs_pts(['disk_temp_c' => 67.0] + $hs_full, 'temperature'), $hs_pts(['disk_temp_c' => 67.0, 'disk_temp_limit' => 80.0] + $hs_full, 'temperature'),
+         $hs_pts(['disk_temp_c' => 55.0, 'disk_temp_limit' => 60.0] + $hs_full, 'temperature')], [30, 100, 50]);
+    check('zdraví: CPU 20 bodů pod limitem plný počet, na limitu nula, RAM 85 z 95 polovina',
+        [$hs_pts(['cpu_pct' => 70.0] + $hs_full, 'cpu_ram'), $hs_pts(['cpu_pct' => 90.0] + $hs_full, 'cpu_ram'), $hs_pts(['ram_pct' => 85.0] + $hs_full, 'cpu_ram')], [100, 0, 50]);
+    check('zdraví: disk se selhaným SMART = 0 i s volným místem', $hs_pts(['smart_failed' => true] + $hs_full, 'disk'), 0);
+    $hs_warn = ['kind' => 'status_warning', 'severity' => 'warning', 'params' => []];
+    $hs_crit = ['kind' => 'status_down', 'severity' => 'critical', 'params' => []];
+    check('zdraví: kritické upozornění 50 bodů, s třemi varováními nula (ne záporně), info nic nestojí',
+        [$hs_pts(['alerts' => [$hs_crit]] + $hs_full, 'alerts'), $hs_pts(['alerts' => [$hs_crit, $hs_warn, $hs_warn, $hs_warn]] + $hs_full, 'alerts'),
+         $hs_pts(['alerts' => [['kind' => 'agent_update', 'severity' => 'info', 'params' => []]]] + $hs_full, 'alerts')], [50, 0, 100]);
+    check('zdraví: čerstvost 3 intervaly plná, 10 intervalů polovina, dál nula',
+        [$hs_pts(['age_secs' => 180] + $hs_full, 'freshness'), $hs_pts(['age_secs' => 181] + $hs_full, 'freshness'), $hs_pts(['age_secs' => 600] + $hs_full, 'freshness'), $hs_pts(['age_secs' => 601] + $hs_full, 'freshness')],
+        [100, 50, 50, 0]);
+    check('zdraví: skóre zůstává v 0-100 i při nejhorším', bk_health_score(['availability' => 0.0, 'latency_ms' => 9000.0, 'alerts' => [$hs_crit, $hs_crit, $hs_crit],
+        'age_secs' => 99999, 'cadence_secs' => 60, 'cpu_pct' => 100.0, 'smart_failed' => true, 'cpu_temp_c' => 120.0])['score'], 0);
+
+    // --- named deductions ------------------------------------------------------
+    // CPU 71 °C: (90 - 71) / 25 = 76 points; 24 lost x 10/100 = 2.4 of the score.
+    $hs = bk_health_score(['cpu_temp_c' => 71.0] + $hs_full);
+    check('zdraví: srážka se jmenuje (teplota CPU 71 °C nad 65 °C = -2,4)', [$hs['score'], $hs['deductions']],
+        [98, [['component' => 'temperature', 'kind' => 'cpu_temp_high', 'params' => [], 'points' => 2.4, 'value' => 71.0, 'limit' => 65.0, 'unit' => '°C']]]);
+    // CPU 80 % (50 b.) beats RAM 80 % (75 b.): only CPU is named, 50 x 15/100.
+    $hs = bk_health_score(['cpu_pct' => 80.0, 'ram_pct' => 80.0] + $hs_full);
+    check('zdraví: u horšího ze dvou čtení se jmenuje jen to, které rozhodlo',
+        array_map(fn ($d) => [$d['kind'], $d['points'], $d['limit']], $hs['deductions']), [['cpu_high', 7.5, 70.0]]);
+    $hs = bk_health_score(['smart_failed' => true] + $hs_full);
+    check('zdraví: selhaný SMART je srážka celé složky disku', array_map(fn ($d) => [$d['kind'], $d['points']], $hs['deductions']), [['smart_failed', 10.0]]);
+    // Three criticals = 150 of a 100-point component: each keeps a third.
+    $hs = bk_health_score(['alerts' => [$hs_crit, ['kind' => 'wan_lost', 'severity' => 'critical', 'params' => []], ['kind' => 'ssl_expired', 'severity' => 'critical', 'params' => []]]] + $hs_full);
+    check('zdraví: tři kritická upozornění si rozdělí jen váhu složky (3 x 5,0 = 15)',
+        [array_column($hs['deductions'], 'points'), array_sum(array_column($hs['deductions'], 'points'))], [[5.0, 5.0, 5.0], 15.0]);
+    // availability 99 % (-6), WAN 165 ms (-5), one warning (-3), CPU 80 % (-7.5),
+    // CPU 71 °C (-2.4): 100 - 23.9 = 76.1.
+    $hs_mix = ['availability' => 99.0, 'latency_ms' => 165.0, 'alerts' => [$hs_warn], 'cpu_pct' => 80.0, 'cpu_temp_c' => 71.0] + $hs_full;
+    $hs = bk_health_score($hs_mix);
+    check('zdraví: srážky od největší, s vlastními čísly',
+        array_map(fn ($d) => [$d['kind'], $d['points']], $hs['deductions']),
+        [['cpu_high', 7.5], ['availability_low', 6.0], ['latency_high', 5.0], ['status_warning', 3.0], ['cpu_temp_high', 2.4]]);
+    check('zdraví: jmenované srážky dávají dohromady 100 minus skóre před zaokrouhlením (76,1)',
+        [$hs['score'], round(array_sum(array_column($hs['deductions'], 'points')), 1)], [76, 23.9]);
+    check('zdraví: a srážky složek taky', round(array_sum(array_map(fn ($c) => (float)($c['deduction'] ?? 0), $hs['components'])), 1), 23.9);
+    // 99.99 %: 99.8 points, 0.2 lost x 30/100 = 0.06 - below what the ring shows.
+    check('zdraví: srážka pod 0,1 bodu se vynechá', [bk_health_score(['availability' => 99.99] + $hs_full)['score'], bk_health_score(['availability' => 99.99] + $hs_full)['deductions']], [100, []]);
+    check('zdraví: srážka dostupnosti nese okno 7 dní', array_values(array_filter($hs['deductions'], fn ($d) => $d['kind'] === 'availability_low'))[0]['params'] ?? null, [7]);
+
+    // --- renormalisation, missing data, minimum -------------------------------
+    // A website: no hardware. 99 % (80 b.), 300 ms (100), no alert, fresh:
+    // (80·30 + 100·10 + 100·15 + 100·10) / 65 = 90,8 -> 91.
+    $hs_web = ['availability' => 99.0, 'latency_ms' => 300.0, 'latency_kind' => 'check',
+        'alerts' => [], 'age_secs' => 60, 'cadence_secs' => 300];
+    $hs = bk_health_score($hs_web);
+    check('zdraví: web bez hardwaru se přepočte jen ze změřeného', [$hs['score'], $hs['measuredWeight'], $hs['measuredComponents']], [91, 65, 4]);
+    check('zdraví: přepočtená srážka dostupnosti (20 · 30 / 65 = 9,2)', array_map(fn ($d) => [$d['kind'], $d['points']], $hs['deductions']), [['availability_low', 9.2]]);
+    $hs_hw = array_filter($hs['components'], fn ($c) => in_array($c['key'], ['cpu_ram', 'disk', 'temperature'], true));
+    check('zdraví: neměřená část má body i srážku null, ne 100 a 0',
+        [array_values(array_unique(array_column($hs_hw, 'points'))), array_values(array_unique(array_column($hs_hw, 'deduction')))], [[null], [null]]);
+    check('zdraví: bez dostupnosti žádné skóre, i když zbytek měří', bk_health_score(['availability' => null] + $hs_full)['score'], null);
+    check('zdraví: dostupnost a jedna další složka je málo dat (null, bez srážek)',
+        [bk_health_score(['availability' => 90.0, 'age_secs' => 10, 'cadence_secs' => 60])['score'], bk_health_score(['availability' => 90.0, 'age_secs' => 10, 'cadence_secs' => 60])['deductions']], [null, []]);
+    check('zdraví: dostupnost a dvě další složky už stačí',
+        bk_health_score(['availability' => 100.0, 'age_secs' => 10, 'cadence_secs' => 60, 'alerts' => []])['score'], 100);
+    check('zdraví: nic neměřeno = null, ne 100', [bk_health_score([])['score'], bk_health_score([])['grade'], bk_health_score([])['measuredComponents']], [null, null, 0]);
+    $hs_pub = bk_health_score(['public' => true] + $hs_full);
+    check('zdraví veřejně: bez teplot, disků a CPU/RAM', array_column($hs_pub['components'], 'key'), ['availability', 'latency', 'alerts', 'freshness']);
+    $hs_pub = bk_health_score(['public' => true, 'disk_temp_c' => 69.0, 'cpu_pct' => 89.0] + $hs_full);
+    check('zdraví veřejně: horký disk ani plné CPU skóre nesníží ani nejmenují', [$hs_pub['score'], $hs_pub['deductions']], [100, []]);
+    check('zdraví: stupně na hranicích (90 dobré, 89 a 70 slušné, 69 špatné, bez skóre nic)',
+        [bk_health_grade(90), bk_health_grade(89), bk_health_grade(70), bk_health_grade(69), bk_health_grade(null)], ['good', 'fair', 'fair', 'poor', null]);
+
+    // --- inputs from a stored monitor -----------------------------------------
+    $hs_now = 1_800_000_000;
+    $hs_lim = ['cpu' => 90, 'ram' => 95, 'hdd' => 90];
+    $hs_router = ['id' => 5, 'type' => 'openwrt', 'status' => 'up', 'target' => 'router', 'last_checked' => date('Y-m-d H:i:s', $hs_now - 30)];
+    $hs_det = ['agent_last_seen' => $hs_now - 20, 'cpu' => 12, 'ram' => 40, 'hdd' => 50, 'temperature' => 55,
+        'storage_disks' => [['smart' => ['state' => 'ok', 'passed' => true, 'temperature_c' => 41]], ['smart' => ['state' => 'ok', 'passed' => true, 'temperature_c' => 67]],
+            ['transport' => 'nvme', 'smart' => ['state' => 'ok', 'passed' => true, 'temperature_c' => 75]]]];
+    $hs_in = bk_health_inputs($hs_router, $hs_det, 99.95, ['avg' => 14.0, 'n' => 50], $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: router měří WAN, rozhoduje disk nejblíž limitu své třídy (SSD 67/70, ne NVMe 75/80), čerstvost z agenta',
+        [$hs_in['latency_kind'], $hs_in['latency_ms'], $hs_in['disk_temp_c'], $hs_in['disk_temp_limit'], $hs_in['smart_failed'], $hs_in['age_secs'], $hs_in['cadence_secs'], $hs_in['alerts']],
+        ['wan', 14.0, 67.0, 70.0, false, 20, 60, []]);
+    // CORR-2: a VPS agent reports every five minutes (the install cron), a
+    // router every minute; 4 min 10 s after its report a VPS is on time.
+    $hs_late = ['last_checked' => date('Y-m-d H:i:s', $hs_now - 250)];
+    $hs_vps = bk_health_inputs(['type' => 'vps'] + $hs_late + $hs_router, ['agent_last_seen' => $hs_now - 250] + $hs_det, 100.0, null, $hs_lim, 14, $hs_now, false);
+    $hs_rtr = bk_health_inputs($hs_late + $hs_router, ['agent_last_seen' => $hs_now - 250] + $hs_det, 100.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: agent VPS hlásí po 5 min, router po minutě (250 s je u VPS včas, u routeru ne)',
+        [$hs_vps['cadence_secs'], in_array('stale', array_column(bk_health_score($hs_vps)['deductions'], 'kind'), true),
+         $hs_rtr['cadence_secs'], in_array('stale', array_column(bk_health_score($hs_rtr)['deductions'], 'kind'), true)],
+        [300, false, 60, true]);
+    $hs_in = bk_health_inputs($hs_router, ['storage_disks' => [['rotational' => true, 'smart' => ['passed' => true, 'temperature_c' => 58]], ['smart' => ['passed' => true, 'temperature_c' => 67]]]] + $hs_det, 99.95, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: rotační disk 58 °C (limit 60) je blíž limitu než SSD 67 (limit 70)', [$hs_in['disk_temp_c'], $hs_in['disk_temp_limit']], [58.0, 60.0]);
+    $hs_in = bk_health_inputs(['type' => 'web', 'status' => 'unknown', 'last_checked' => null] + $hs_router, [], null, ['avg' => 80.0, 'n' => 1], $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: monitor, který se nikdy neozval, nemá upozornění, čerstvost ani odezvu z jednoho čtení',
+        [$hs_in['alerts'], $hs_in['age_secs'], $hs_in['latency_ms'], $hs_in['latency_kind']], [null, null, null, 'check']);
+    check('zdraví: takový monitor nemá skóre, ne 100', bk_health_score($hs_in)['score'], null);
+    $hs_in = bk_health_inputs(['type' => 'web', 'status' => 'up', 'target' => 'https://example.org', 'last_checked' => date('Y-m-d H:i:s', $hs_now - 7200)] + $hs_router, [], 100.0, null, $hs_lim, 14, $hs_now, false);
+    // availability 100, alerts 100, freshness 0: (3000 + 1500) / 55 = 81.8.
+    check('zdraví: web s poslední kontrolou před dvěma hodinami nedostane 100 (čerstvost 0)',
+        [bk_health_score($hs_in)['score'], array_map(fn ($d) => [$d['kind'], $d['points']], bk_health_score($hs_in)['deductions'])], [82, [['stale', 18.2]]]);
+    $hs_in = bk_health_inputs(['status' => 'down'] + $hs_router, ['ssl_days_remaining' => 3] + $hs_det, 99.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: výpadek je kritický, certifikát za 3 dny varování (se dny)',
+        array_map(fn ($a) => [$a['kind'], $a['severity'], $a['params']], $hs_in['alerts']), [['status_down', 'critical', []], ['ssl_expiring', 'warning', [3]]]);
+    $hs_in = bk_health_inputs($hs_router, $hs_det, 99.0, null, $hs_lim, 14, $hs_now, false, 2);
+    check('zdraví/vstupy: otevřený incident běžícího monitoru je jedno varování (i dva incidenty)',
+        array_map(fn ($a) => [$a['kind'], $a['severity']], $hs_in['alerts']), [['incident_open', 'warning']]);
+    $hs_in = bk_health_inputs(['status' => 'down'] + $hs_router, $hs_det, 99.0, null, $hs_lim, 14, $hs_now, false, 1);
+    check('zdraví/vstupy: incident padlého monitoru se nepočítá dvakrát', array_column($hs_in['alerts'], 'kind'), ['status_down']);
+    $hs_latched = ['wan_alert_sent' => true, 'conntrack_full_sent' => true, 'dns_resolver_alert_sent' => false] + $hs_det;
+    $hs_in = bk_health_inputs($hs_router, $hs_latched, 99.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: západky routeru (WAN bez internetu kritická, plná tabulka spojení varování)',
+        array_map(fn ($a) => [$a['kind'], $a['severity']], $hs_in['alerts']), [['wan_lost', 'critical'], ['conntrack_full', 'warning']]);
+    $hs_in = bk_health_inputs($hs_router, $hs_latched, 99.0, null, $hs_lim, 14, $hs_now, true);
+    check('zdraví/vstupy: veřejně žádné vnitřnosti routeru', $hs_in['alerts'], []);
+    // 10 cadences of 60 s: 600 s is still current, 601 s is a stale snapshot.
+    $hs_in = bk_health_inputs($hs_router, ['agent_last_seen' => $hs_now - 600] + $hs_latched, 99.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: hlášení staré 10 intervalů ještě platí', [$hs_in['cpu_pct'], $hs_in['cpu_temp_c'], count($hs_in['alerts'])], [12.0, 55.0, 2]);
+    $hs_in = bk_health_inputs(['last_checked' => date('Y-m-d H:i:s', $hs_now - 601)] + $hs_router, ['agent_last_seen' => $hs_now - 601] + $hs_latched, 99.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: starší hlášení nemá hardware ani západky (je to minulost), čerstvost ano',
+        [$hs_in['cpu_pct'], $hs_in['ram_pct'], $hs_in['disk_pct'], $hs_in['cpu_temp_c'], $hs_in['disk_temp_c'], $hs_in['smart_failed'], $hs_in['alerts'], $hs_in['age_secs']],
+        [null, null, null, null, null, null, [], 601]);
+    $hs_in = bk_health_inputs($hs_router, ['cpu' => 80, 'hdd' => 80] + $hs_det, 99.0, null, ['cpu' => null, 'ram' => null, 'hdd' => null], 14, $hs_now, false);
+    check('zdraví: nenastavený limit není 0 %, platí výchozí (CPU 80 z 90 = 50, disk 80 z 90 = 50)',
+        [$hs_in['cpu_limit'], $hs_pts($hs_in, 'cpu_ram'), $hs_pts($hs_in, 'disk')], [null, 50, 50]);
+    check('zdraví: nulový limit taky ne (CPU i disk)', [$hs_pts(['cpu_pct' => 80.0, 'cpu_limit' => 0.0] + $hs_full, 'cpu_ram'), $hs_pts(['disk_pct' => 80.0, 'disk_limit' => 0.0] + $hs_full, 'disk')], [50, 50]);
+    $hs_in = bk_health_inputs($hs_router, ['storage_disks' => [['smart' => ['state' => 'failing', 'passed' => false]]]] + $hs_det, 99.0, null, $hs_lim, 14, $hs_now, false);
+    check('zdraví/vstupy: selhávající disk se pozná', $hs_in['smart_failed'], true);
+
+    // --- words -----------------------------------------------------------------
+    $hs_lang = $GLOBALS['BK_LANG'] ?? null;
+    $GLOBALS['BK_LANG'] = 'cs';
+    check('zdraví/slova: česky desetinná čárka, dostupnost se nezaokrouhlí nahoru na 100',
+        [bk_health_value_text(99.996, '%', 'availability_low'), bk_health_value_text(1234.4, 'ms', 'latency_high'), bk_health_value_text(720, 's', 'stale'), bk_health_value_text(71.4, '°C', 'cpu_temp_high')],
+        ['99,99 %', '1 234 ms', '12 min', '71 °C']);
+    $GLOBALS['BK_LANG'] = 'en';
+    check('zdraví/slova: anglicky desetinná tečka', [bk_health_value_text(99.25, '%', 'availability_low'), bk_health_value_text(1234.4, 'ms', 'latency_high')], ['99.25 %', '1,234 ms']);
+    if ($hs_lang === null) {
+        unset($GLOBALS['BK_LANG']);
+    } else {
+        $GLOBALS['BK_LANG'] = $hs_lang;
+    }
+
+    // --- the network -------------------------------------------------------------
+    check('síť bez skóre: null, ne průměr ničeho', [bk_health_network([])['score'], bk_health_network([1 => bk_health_score([])])['assetsScored']], [null, 0]);
+    $hs_net = bk_health_network([1 => bk_health_score($hs_full), 2 => bk_health_score($hs_web), 3 => bk_health_score([])]);
+    check('síť: průměr skóre (100 a 91), každé zařízení jednou', [$hs_net['score'], $hs_net['assetsScored'], $hs_net['assetsTotal'], $hs_net['grade']], [96, 2, 3, 'good']);
+    $hs_nc = array_column($hs_net['components'], null, 'key');
+    check('síť: složka jen ze zařízení, která ji měří', [$hs_nc['availability']['points'], $hs_nc['availability']['assets'], $hs_nc['temperature']['points'], $hs_nc['temperature']['assets']], [90, 2, 100, 1]);
+    check('síť: méně než polovina změřených zařízení = null (1 ze 3)',
+        bk_health_network([1 => bk_health_score($hs_full), 2 => bk_health_score([]), 3 => bk_health_score([])])['score'], null);
+    check('síť: polovina stačí (1 ze 2)', bk_health_network([1 => bk_health_score($hs_full), 2 => bk_health_score([])])['score'], 100);
+    $hs_paused = bk_health_score([]) + ['paused' => true];
+    $hs_net = bk_health_network([1 => bk_health_score($hs_full), 2 => bk_health_score([]), 3 => $hs_paused, 4 => $hs_paused]);
+    check('síť: pozastavená zařízení do sítě nepatří (1 ze 2, ne ze 4)', [$hs_net['score'], $hs_net['assetsTotal']], [100, 2]);
+    $hs_net = bk_health_network([7 => bk_health_score(['cpu_temp_c' => 71.0] + $hs_full), 8 => bk_health_score($hs_web)], [7 => 'Router', 8 => 'Web']);
+    check('síť: jmenované srážky zařízení vydělené počtem změřených, od největší',
+        array_map(fn ($d) => [$d['monitorId'], $d['monitorName'], $d['kind'], $d['points']], $hs_net['deductions']),
+        [[8, 'Web', 'availability_low', 4.6], [7, 'Router', 'cpu_temp_high', 1.2]]);
+    $hs_many = [];
+    foreach (range(1, 4) as $hs_i) {
+        $hs_many[$hs_i] = bk_health_score($hs_mix);
+    }
+    check('síť: nejvýš pět srážek', count(bk_health_network($hs_many)['deductions']), 5);
+    check('síť bez skóre nejmenuje srážky', bk_health_network([1 => bk_health_score(['cpu_temp_c' => 71.0] + $hs_full), 2 => bk_health_score([]), 3 => bk_health_score([])])['deductions'], []);
+
+    // CR-9b: tips as findings.
+    $tf_tips = [
+        ['severity' => 'critical', 'text' => 'CPU vysoko', 'kind' => 'knowledge_tip_cpu_high'],
+        ['severity' => 'warn', 'text' => 'RAM se plní', 'kind' => 'knowledge_tip_ram_high'],
+        ['severity' => 'critical', 'text' => 'Certifikát brzy vyprší', 'kind' => 'knowledge_tip_ssl_expiring'],
+        ['severity' => 'critical', 'text' => 'Chybí proces nginx', 'kind' => 'knowledge_tip_process_missing'],
+        ['severity' => 'critical', 'text' => 'Chybí proces mysqld', 'kind' => 'knowledge_tip_process_missing'],
+        ['severity' => 'info', 'text' => 'Starý tip bez klíče'],
+    ];
+    $tf_reasons = [['kind' => 'metric_high', 'severity' => 'warning', 'params' => ['CPU', 92, 90]], ['kind' => 'ssl_expiring', 'severity' => 'warning', 'params' => [3]]];
+    $tf = bk_tip_findings($tf_tips, $tf_reasons);
+    check('tipy: CPU a certifikát vedle stejného důvodu zmizí, RAM pod limitem zůstane',
+        array_column($tf, 'kind'), ['knowledge_tip_ram_high', 'knowledge_tip_process_missing', 'knowledge_tip_process_missing-' . substr(md5('Chybí proces mysqld'), 0, 8)]);
+    check('tipy: warn je varování, critical kritický', array_column($tf, 'severity'), ['warning', 'critical', 'critical']);
+    check('tipy: bez důvodu zůstanou všechny s klíčem', count(bk_tip_findings($tf_tips, [])), 5);
+
+    // Flags from location labels.
+    check('vlajka: země z regionálních písmen', bk_location_country('🇩🇪 Frankfurt, DE (AS13335 Cloudflare)'), 'DE');
+    check('vlajka: země z ", CC" bez emoji', bk_location_country('Praha, CZ (Example ISP)'), 'CZ');
+    check('vlajka: stará cloudflarová Mumbai, US je Indie', bk_location_country('🇺🇸 Mumbai, US (AS13335 Cloudflare)'), 'IN');
+    check('vlajka: glóbus, Main Server, Agent a nic = žádná země',
+        [bk_location_country(BK_CF_EDGE_UNKNOWN), bk_location_country('Main Server'), bk_location_country('Agent'), bk_location_country(null), bk_location_country('')], [null, null, null, null, null]);
+}
+
+// =======================================================================
+// config.php that prints something (27 Sep 2026)
+//
+// A hand edit left "Ah" before <?php: every JSON answer began with it and
+// /app could not read any of them. db.php now holds such output back and
+// describes it; these are the descriptions, from real PHP includes.
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_config_output_issue', 'bk_config_output_excerpt']);
+$co_include = function (string $source): string {
+    $file = tempnam(sys_get_temp_dir(), 'bk_cfg_out');
+    file_put_contents($file, $source);
+    ob_start();
+    try {
+        include $file;
+    } finally {
+        $printed = (string)ob_get_clean();
+        unlink($file);
+    }
+    return $printed;
+};
+$co_case = function (string $source) use ($co_include): ?array {
+    $printed = $co_include($source);
+    return $printed === '' ? null : bk_config_output_issue($printed, $source);
+};
+check('config.php: "Ah" před <?php = 2 bajty před značkou',
+    $co_case("Ah<?php\n\$bk_co_1 = 1;\n"), ['bytes' => 2, 'where' => ['before_open_tag'], 'excerpt' => 'Ah']);
+check('config.php: BOM = 3 bajty před značkou, v úryvku vidět',
+    $co_case("\xEF\xBB\xBF<?php\n\$bk_co_2 = 1;\n"), ['bytes' => 3, 'where' => ['before_open_tag'], 'excerpt' => '\\xEF\\xBB\\xBF']);
+// PHP swallows the one newline right after the closing tag, LF or CRLF: the
+// classic ending prints nothing and must not raise a false alarm. (No closing
+// tag in a line comment here: it would end PHP mode.)
+check('config.php: klasické ?> a jeden konec řádku nevypíše nic', $co_case("<?php\n\$bk_co_3 = 1;\n?>\n"), null);
+check('config.php: ?> a CRLF taky nic', $co_case("<?php\r\n\$bk_co_4 = 1;\r\n?>\r\n"), null);
+check('config.php: prázdný řádek navíc za ?> = 1 bajt za značkou',
+    $co_case("<?php\n\$bk_co_5 = 1;\n?>\n\n"), ['bytes' => 1, 'where' => ['after_close_tag'], 'excerpt' => '\\n']);
+check('config.php: obojí najednou',
+    $co_case("Ah<?php\n?>\n \n")['where'] ?? null, ['before_open_tag', 'after_close_tag']);
+check('config.php: echo uvnitř souboru = z kódu',
+    $co_case("<?php echo 'debug';\n")['where'] ?? null, ['inside']);
+$co_secret = $co_case("define('DB_PASS', 'hunter2x');<?php\n");
+check_false('úryvek je nanejvýš 16 bajtů a heslo v něm není', str_contains((string)($co_secret['excerpt'] ?? 'hunter2x'), 'hunter2x'));
+check('úryvek: 16 bajtů a výpustka', bk_config_output_excerpt(str_repeat('a b ', 10)), 'a b a b a b a b …');
+check('úryvek: token s číslicí se zamaskuje, obyčejné slovo ne', bk_config_output_excerpt('Ahoj k3y9Zq'), 'Ahoj •••');
+// What a hand edit can leave before <?php: a password from the clipboard. Its
+// symbols must not split it into short harmless-looking runs, and a token
+// that crosses byte 16 must not show its first bytes.
+check('úryvek: heslo se symboly celé zamaskované, nic z něj', array_map('bk_config_output_excerpt', [
+    'xK#9pL!mQ2&vR7', 'Tr0ub4dor&3!xyz', "DB_PASS','Heslo", 'xKpLmQrT', "\xEF\xBB\xBFHeslo",
+]), ['•••', '•••', '•••', '•••', '•••']);
+check('úryvek: token přes 16. bajt bez začátku', array_map('bk_config_output_excerpt', [
+    'Ahoj sk_live_ABCDEF', 'Ahoj Ahoj sk_live_ABCDEFGHIJ', 'Ahoj abcdefghijklmnop', 'xxxxxxxxxx 9f3kQzP8Lm2',
+    'password: abcdefgh1234', 'Ah <?php x SECRETPASSWORD',
+]), ['Ahoj •••', 'Ahoj Ahoj •••', 'Ahoj •••', 'xxxxxxxxxx •••', '••• •••', 'Ah <?php x •••']);
+// The limit of it: a lone word of 6 to 11 small letters reads like any other
+// word, so a password that is one stays visible.
+check('úryvek: krátká a obyčejná slova zůstanou čitelná', array_map('bk_config_output_excerpt', [
+    'Ah', 'Warning', "Ahoj\n", 'pw=hunter hunter',
+]), ['Ah', 'Warning', 'Ahoj\\n', '••• hunter']);
+
+// --- Outages, not rows (R151, R256) --------------------------------------------
+$or_segs = [[0, 60, 'up'], [60, 120, 'down'], [120, 180, 'down'], [180, 200, 'unmeasured'], [200, 260, 'down'],
+    [260, 300, 'up'], [300, 360, 'silent'], [360, 400, 'maintenance'], [400, 460, 'down']];
+check('výpadky: běh dole i s mezerou v měření je jeden, ticho agenta a další výpadek po údržbě dva další',
+    bk_outage_runs([7 => ['from' => 0, 'segments' => $or_segs]]),
+    [['monitor_id' => 7, 'started' => 60, 'secs' => 180, 'first_down' => 60, 'ongoing' => false],
+     ['monitor_id' => 7, 'started' => 300, 'secs' => 60, 'first_down' => null, 'ongoing' => false],
+     ['monitor_id' => 7, 'started' => 400, 'secs' => 60, 'first_down' => 400, 'ongoing' => true]]);
+check('výpadek, který běžel už na začátku okna, nemá začátek', bk_outage_runs([3 => ['from' => 60, 'segments' => [[60, 120, 'down'], [120, 180, 'up']]]]),
+    [['monitor_id' => 3, 'started' => null, 'secs' => 60, 'first_down' => 60, 'ongoing' => false]]);
+check('bez výpadku žádný', bk_outage_runs([1 => ['from' => 0, 'segments' => [[0, 60, 'up'], [60, 90, 'warning']]]]), []);
+
+// --- The tile catalogue: a failed count is no count (R237) ---------------------
+// It became 0 and the editor marked a measured metric "nesbírá data"; the
+// failure now reaches the action's catch, which answers 500.
+$dl_src = (string)file_get_contents(__DIR__ . '/../api.php');
+$dl_from = strpos($dl_src, "if (\$action === 'dashboard_layout')");
+$dl_body = $dl_from === false ? '' : substr($dl_src, $dl_from, (int)strpos($dl_src, "\nif (\$action === ", $dl_from + 10) - $dl_from);
+check_true('katalog dlaždic: selhaný počet vzorků není nula', $dl_body !== ''
+    && str_contains($dl_body, 'SELECT COUNT(*) FROM vps_metrics') && !preg_match('/catch \(Throwable \$e\) \{\s*\$count = 0;/', $dl_body));
+
+// --- upload_logo keeps the old logo until the new one is in place (R238) -------
+bk_test_load_functions(__DIR__ . '/../api.php', ['bk_logo_replace']);
+$lg_dir = sys_get_temp_dir() . '/bk_r238_' . getmypid();
+@mkdir($lg_dir);
+file_put_contents($lg_dir . '/custom-logo.png', 'staré');
+file_put_contents($lg_dir . '/nahrany.tmp', 'nové');
+try {
+    bk_logo_replace($lg_dir, $lg_dir . '/nahrany.tmp', 'jpg', fn (string $from, string $to): bool => false);
+    check_true('nepodařený přesun nového loga musí selhat', false);
+} catch (RuntimeException $e) {
+    check('nepodařený přesun nechá staré logo na místě', array_map('basename', glob($lg_dir . '/custom-logo.*') ?: []), ['custom-logo.png']);
+}
+$lg_dest = bk_logo_replace($lg_dir, $lg_dir . '/nahrany.tmp', 'jpg', fn (string $from, string $to): bool => rename($from, $to));
+check('podařené nahrání: jen nové logo a v něm nový obsah',
+    [array_map('basename', glob($lg_dir . '/custom-logo.*') ?: []), basename($lg_dest), (string)file_get_contents($lg_dest)],
+    [['custom-logo.jpg'], 'custom-logo.jpg', 'nové']);
+array_map('unlink', glob($lg_dir . '/*') ?: []);
+@rmdir($lg_dir);
+
+// --- cPanel: both transport paths hand over the CPU (R206) ---------------------
+check('cPanel bez cURL i s ním předá CPU z exportéru',
+    [bk_cpanel_up_result(['status' => 'ok', 'cpu' => ['percent' => 12.5]], 80)['cpu'], bk_cpanel_up_result(['status' => 'ok'], 80)['cpu']],
+    [['percent' => 12.5], null]);
+$cp_src = (string)file_get_contents(__DIR__ . '/../functions.php');
+$cp_fn = substr($cp_src, (int)strpos($cp_src, 'function check_cpanel('), 6000);
+check('obě cesty check_cpanel skládají odpověď stejně', substr_count($cp_fn, 'return bk_cpanel_up_result($data, $duration);'), 2);
+
+// --- The Dependabot manifest names what the CDN loads (R126) -------------------
+// It said echarts 6.1.0 while BK_CDN_ECHARTS loads 5.5.1, so a 5.x fix never
+// opened a PR. Every library in it must match its BK_CDN_* URL.
+$cdn_manifest = json_decode((string)file_get_contents(__DIR__ . '/../package.json'), true)['dependencies'] ?? [];
+check('manifest pro Dependabot = verze z CDN', [$cdn_manifest['echarts'] ?? null, $cdn_manifest['@fortawesome/fontawesome-free'] ?? null], [
+    preg_match('/echarts@([0-9.]+)\//', BK_CDN_ECHARTS, $cdn_m) ? $cdn_m[1] : 'chybí',
+    preg_match('/fontawesome-free@([0-9.]+)\//', BK_CDN_FONTAWESOME, $cdn_m) ? $cdn_m[1] : 'chybí',
+]);
+
+// --- A 2FA code typed with a space is the same code (R226) ---------------------
+$tt_secret = bk_totp_generate_secret();
+$tt_code = bk_totp_calculate($tt_secret, floor(time() / 30));
+check('kód 2FA s mezerou uprostřed i na krajích projde, jiný ne', [
+    bk_totp_verify_code($tt_secret, substr($tt_code, 0, 3) . ' ' . substr($tt_code, 3)),
+    bk_totp_verify_code($tt_secret, ' ' . $tt_code . ' '),
+    bk_totp_verify_code($tt_secret, '000 000') && $tt_code !== '000000',
+], [true, true, false]);
+
+// --- Every audited action has a label in /app (R302) --------------------------
+// About 25 of them showed their raw code ("router_rec_mute") in the log.
+$au_actions = [];
+foreach (glob(__DIR__ . '/../*.php') as $au_file) {
+    preg_match_all('/bk_audit_log\(\s*\$pdo\s*,\s*(?:\$[a-z_]+\s*\?\s*)?\x27([a-z_0-9]+)\x27(?:\s*:\s*\x27([a-z_0-9]+)\x27)?/',
+        (string)file_get_contents($au_file), $au_m, PREG_SET_ORDER);
+    foreach ($au_m as $au_one) {
+        $au_actions[$au_one[1]] = true;
+        if (!empty($au_one[2])) {
+            $au_actions[$au_one[2]] = true;
+        }
+    }
+}
+$au_spa = (string)file_get_contents(__DIR__ . '/../../monitor/src/components/user-audit-log.tsx');
+$au_missing = array_values(array_filter(array_keys($au_actions), fn (string $a): bool => !str_contains($au_spa, "    {$a}: t('uaudit.")));
+sort($au_missing);
+check_true('auditní akce se v testu najdou', count($au_actions) > 40);
+check('každá auditní akce má v aplikaci popisek', $au_missing, []);
+
+// --- The htmode a router recommendation names (R204) ---------------------------
+check('režim jen se šířkou, kterou generace má: HT80 neexistuje', [
+    bk_rec_htmode(4, 40), bk_rec_htmode(4, 80), bk_rec_htmode(5, 80), bk_rec_htmode(6, 160), bk_rec_htmode(7, 320), bk_rec_htmode(null, 80),
+], ['HT40', null, 'VHT80', 'HE160', 'EHT320', null]);
+
+// --- health.php: the error log check (R281) ------------------------------------
+bk_test_load_functions(__DIR__ . '/../health.php', ['bk_error_log_writable']);
+$el_dir = sys_get_temp_dir() . '/bk_r281_' . getmypid();
+@mkdir($el_dir);
+check('error log: bez souboru (log serveru) i syslog jsou v pořádku', [bk_error_log_writable(''), bk_error_log_writable('syslog')], [true, true]);
+check_true('ještě nevytvořený soubor v zapisovatelném adresáři je v pořádku', bk_error_log_writable($el_dir . '/php_errors.log'));
+check_false('soubor v adresáři, který neexistuje, ne', bk_error_log_writable($el_dir . '/neni/php_errors.log'));
+@rmdir($el_dir);
+
+// --- Digest averages without the agents that measure nothing (R51) ------------
+check('průměr CPU vynechá agenta, který CPU neměří (60 a nic je 60, ne 30)',
+    bk_digest_avg([['cpu_usage' => 60], ['cpu_usage' => null], ['cpu_usage' => '20.0']], 'cpu_usage'), 40.0);
+check('nikdo neměří: průměr není', bk_digest_avg([['cpu_usage' => null], []], 'cpu_usage'), null);
+check('buňka tabulky: číslo s %, nic jako pomlčka', [bk_digest_pct_cell(42.5), bk_digest_pct_cell('7'), bk_digest_pct_cell(null)],
+    ['42.5%', '7%', '—']);
+
+// --- Digest trend without a comparison (R17) -----------------------------------
+check('trend bez srovnání není „beze změny“', strip_tags(bk_trend_glyph(null)), '—');
+check('trend beze změny zůstává =', strip_tags(bk_trend_glyph('flat')), '=');
+
+// --- Router week across the change of the clock (R154) --------------------------
+$rw_tz = date_default_timezone_get();
+date_default_timezone_set('Europe/Prague');
+check('týden po jarní změně času má i neděli', bk_router_rec_window('2026-03-30')['days'],
+    ['2026-03-23', '2026-03-24', '2026-03-25', '2026-03-26', '2026-03-27', '2026-03-28', '2026-03-29']);
+check('a předchozí týden navazuje', bk_router_rec_window('2026-03-30')['prev_days'][6], '2026-03-22');
+date_default_timezone_set($rw_tz);
+
+// --- A JavaScript string inside an HTML attribute (R331) ----------------------
+foreach (["O'Brien", "x');alert(1);//", 'a"b<c>&d', 'Žluťoučký kůň', ''] as $js_in) {
+    $js_out = bk_js_arg($js_in);
+    check_true("JS argument nemá v atributu syrovou uvozovku ani závorku: {$js_in}", strpbrk($js_out, "'\"<>") === false);
+    check("JS argument se po dekódování atributu přečte zpět: {$js_in}", json_decode(html_entity_decode($js_out, ENT_QUOTES)), $js_in);
+}
+$js_admin = (string)file_get_contents(__DIR__ . '/../admin.php');
+check('admin.php nemá v onclick escapovaný řetězec v apostrofech', preg_match_all("/onclick=\"[^\"]*'<\?php echo htmlspecialchars\(/", $js_admin), 0);
+
+// --- A watched process with a long name (R164) ---------------------------------
+check_true('dlouhé jméno najde svých 15 znaků z comm', bk_process_running('systemd-resolved', ['sshd', 'systemd-resolve']));
+check_true('krátké jméno se hledá celé', bk_process_running('sshd', ['sshd']) && !bk_process_running('ssh', ['sshd']));
+check_false('dlouhé jméno nenajde jiný začátek', bk_process_running('systemd-resolved', ['systemd-network']));
+check_false('chybějící proces chybí', bk_process_running('nginx', ['sshd', 'cron']));
+
+// --- HTTP check stages as differences of curl's timers (R178) ------------------
+check('fáze HTTPS: každá jen svůj kus', bk_http_stage_ms(0.020, 0.050, 0.120, 0.300, 0.325), ['tcp' => 30, 'tls' => 70, 'http' => 180, 'body' => 25]);
+check('fáze HTTP bez TLS: odpověď od spojení', bk_http_stage_ms(0.010, 0.040, 0.0, 0.140, 0.150), ['tcp' => 30, 'tls' => 0, 'http' => 100, 'body' => 10]);
+$hs = bk_http_stage_ms(0.020, 0.050, 0.120, 0.300, 0.325);
+check('součet fází po vyhledání jména je celková doba', array_sum($hs) + 20, 325);
+
+// --- A TeamSpeak check's host figures only from a fresh agent report (R18) -----
+$th_now = 1790000000;
+$th_det = ['cpu' => 41.5, 'ram' => 63, 'hdd' => '70', 'ts3_process' => ['cpu' => 3.2, 'ram_mb' => 120]];
+check('čerstvé hlášení agenta dá čísla stroje i procesu', bk_ts3_host_metrics($th_det + ['agent_last_seen' => $th_now - 60], $th_now), [41.5, 63.0, 70.0, 3.2, 120.0]);
+check('hlášení staré hodinu nic nedá', bk_ts3_host_metrics($th_det + ['agent_last_seen' => $th_now - 3600], $th_now), [null, null, null, null, null]);
+check('bez agenta nic', bk_ts3_host_metrics(['cpu' => 41.5], $th_now), [null, null, null, null, null]);
+check('čísla půjčená od agenta stroje platí podle jeho hlášení (R48)', bk_ts3_host_metrics($th_det + ['borrowed_agent_last_seen' => $th_now - 60], $th_now), [41.5, 63.0, 70.0, 3.2, 120.0]);
+
+// --- The fork count is a count, not a rate (R249) -------------------------------
+check('počet nových procesů nemá jednotku za sekundu', [bk_metric_column_map()['fork_rate']['unit'] ?? 'chybí', !empty(bk_metric_column_map()['fork_rate']['counter'])], ['', false]);
+
+// --- Escalation message (R248) --------------------------------------------------
+$esc_outage = bk_escalation_text(['title' => 'Výpadek: Web', 'monitor_id' => 4, 'monitor_name' => 'Web'], 15, 1800);
+$esc_manual = bk_escalation_text(['title' => 'Plánované práce', 'monitor_id' => null, 'monitor_name' => null], 15, 1800);
+check_true('eskalace výpadku mluví o výpadku a službě', str_contains($esc_outage, 'nepřevzal výpadek') && str_contains($esc_outage, '**Služba:** Web'));
+check_true('ohlášený incident se nevydává za výpadek ani za odeslané upozornění',
+    !str_contains($esc_manual, 'výpadek') && !str_contains($esc_manual, 'upozornění odešlo') && str_contains($esc_manual, 'ohlášen ručně'));
+
+// --- What the geolocation API answered (bk_location_from_geo) ------------------
+foreach ([[false, 'bez odpovědi'], ['', 'prázdná odpověď'], ['nope', 'nečitelná odpověď'], ['{"status":"fail","message":"quota"}', 'odmítnutí'], ['{"status":"success","city":"Prague"}', 'bez země']] as [$geo_in, $geo_why]) {
+    check("lokalita: {$geo_why} nic nevymyslí", bk_location_from_geo($geo_in), null);
+}
+check('lokalita: skutečná odpověď se složí', bk_location_from_geo('{"status":"success","city":"Frankfurt","countryCode":"DE","org":"Example Hosting GmbH Extra"}'), get_country_emoji('DE') . ' Frankfurt, DE (Example Hosting GmbH)');
+
+// --- Discord's status breakdown counts every member the widget lists (R301) ----
+// It was counted in the app from the 15 members kept for the list, next to the
+// total online count.
+$dc_members = array_merge(array_fill(0, 12, ['status' => 'online']), array_fill(0, 6, ['status' => 'idle']),
+    [['status' => 'dnd'], ['status' => 'Online'], []]);
+check('rozpad stavů ze všech členů widgetu', bk_discord_status_counts($dc_members), ['online' => 14, 'idle' => 6, 'dnd' => 1]);
+
+// --- The certificate is read where the request ended (R200) --------------------
+// curl follows redirects and reports the last URL's scheme, but the certificate
+// was read on the first URL's host: http://a.cz -> https://www.a.cz read a.cz:443.
+check('certifikát cíle přesměrování', bk_tls_target('http://example.cz/', 'https://www.example.cz/'), ['www.example.cz', 443]);
+check('i s jeho portem', bk_tls_target('https://example.cz/', 'https://example.cz:8443/x'), ['example.cz', 8443]);
+check('bez přesměrování původní adresa', bk_tls_target('https://example.cz:4443/', ''), ['example.cz', 4443]);
+
+// --- The visitor's address behind a proxy of your own (R135) -------------------
+// trusted_proxies promised nginx and HAProxy, but only Cloudflare's header was
+// read: behind nginx every sign-in and lockout saw the proxy's address.
+$ci_server = $_SERVER;
+$ci_settings = $GLOBALS['system_settings'] ?? [];
+$GLOBALS['system_settings']['trusted_proxies'] = '10.0.0.0/8';
+$ci_ip = function (string $remote, ?string $xff, ?string $cf = null): ?string {
+    $_SERVER['REMOTE_ADDR'] = $remote;
+    unset($_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['HTTP_CF_CONNECTING_IP']);
+    if ($xff !== null) {
+        $_SERVER['HTTP_X_FORWARDED_FOR'] = $xff;
+    }
+    if ($cf !== null) {
+        $_SERVER['HTTP_CF_CONNECTING_IP'] = $cf;
+    }
+    return bk_client_ip();
+};
+check('za vlastní proxy je návštěvník v X-Forwarded-For', $ci_ip('10.0.0.5', '203.0.113.9'), '203.0.113.9');
+check('adresa, kterou si návštěvník napsal sám vlevo, se nebere', $ci_ip('10.0.0.5', '6.6.6.6, 203.0.113.9'), '203.0.113.9');
+check('přes dvě důvěryhodné proxy', $ci_ip('10.0.0.5', '203.0.113.9, 10.0.0.7'), '203.0.113.9');
+check('od nedůvěryhodné adresy se hlavičce nevěří', $ci_ip('198.51.100.1', '6.6.6.6'), '198.51.100.1');
+check('bez hlavičky adresa proxy', $ci_ip('10.0.0.5', null), '10.0.0.5');
+check('nesmysl v hlavičce = adresa proxy', $ci_ip('10.0.0.5', 'nesmysl'), '10.0.0.5');
+check('Cloudflare dál podle své hlavičky', $ci_ip('173.245.48.1', '6.6.6.6', '203.0.113.9'), '203.0.113.9');
+// nginx passes a header it does not set through: Cloudflare's, sent by the
+// visitor to a proxy of your own, would name any address it liked.
+check('hlavičce Cloudflaru se věří jen od Cloudflaru', $ci_ip('10.0.0.5', '203.0.113.9', '6.6.6.6'), '203.0.113.9');
+check('Cloudflare před vlastní proxy: návštěvník z X-Forwarded-For', $ci_ip('10.0.0.5', '203.0.113.9, 173.245.48.1', '203.0.113.9'), '203.0.113.9');
+$_SERVER = $ci_server;
+$GLOBALS['system_settings'] = $ci_settings;
+
+$failed = bk_test_report('čisté funkce');
+exit($failed > 0 ? 1 : 0);

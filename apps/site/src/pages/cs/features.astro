@@ -1,0 +1,363 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import { demoUrl } from '../../config';
+---
+
+<Layout title="Funkce | Blood Kings Monitoring" description="Prozkoumejte podrobné funkce Blood Kings Monitoring: od vzdálených agentů, přes SSL monitorování, až po pokročilé notifikace na Discord a e-mail.">
+  <section class="page-header section">
+    <div class="container text-center">
+      <span class="badge badge-accent">Funkce v detailech</span>
+      <h1>Všechny funkce, jak jsou dnes hotové.</h1>
+      <p class="section-subtitle">Objevte kompletní sadu nástrojů navrženou pro sysadminy, devops inženýry a nezávislé vývojáře.</p>
+    </div>
+  </section>
+
+  <!-- Deep Dive Features -->
+  <section class="section bg-dim">
+    <div class="container features-deep-grid">
+      <!-- Feature 1 -->
+      <div class="feature-row">
+        <div class="feature-text">
+          <span class="feature-number">01</span>
+          <h2>Lehcí vzdálení agenti</h2>
+          <p>
+            Agenti jsou obyčejné skripty (Bash, Python, PowerShell a ash na OpenWrt), které kromě interpretu a curl nic nepotřebují. Spustí je cron, odešlou jedno hlášení a skončí.
+          </p>
+          <ul class="feature-bullets">
+            <li><strong>Krátká instalace:</strong> Na Linuxu a OpenWrt stáhnout, zaregistrovat tokenem a přidat do cronu; na Windows naplánovaná úloha, v Dockeru jeden kontejner.</li>
+            <li><strong>Zabezpečená komunikace:</strong> Agenty posílají data šifrovaně přes HTTPS na váš centrální server.</li>
+            <li><strong>Přímé systémové metriky:</strong> Monitorují CPU, RAM, zaplnění disků a síťový provoz přímo z jádra.</li>
+          </ul>
+        </div>
+        <div class="feature-visual-mock card">
+          <div class="mock-terminal">
+            <div class="terminal-header"><span></span><span></span><span></span></div>
+            <div class="terminal-body">
+              <p class="green-text">$ ./agent.sh --register YOUR_REGISTRATION_TOKEN https://YOUR-DOMAIN/status/agent_api.php</p>
+              <p>Registruji nového agenta na https://YOUR-DOMAIN/status/agent_api.php...</p>
+              <p>OK: Agent byl úspěšně zaregistrován a nastavení bylo uloženo do /opt/bk-agent/agent.cfg (AGENT_KEY=…)</p>
+              <p class="green-text">$ ./agent.sh --verbose</p>
+              <p>…</p>
+              <p>OK: Statistiky úspěšně odeslány.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Feature 2 -->
+      <div class="feature-row reverse">
+        <div class="feature-text">
+          <span class="feature-number">02</span>
+          <h2>Krásné Veřejné Status Stránky</h2>
+          <p>
+            Ukažte svým uživatelům, že jsou vaše služby v bezpečí. Vytvářejte plně přizpůsobitelné status stránky na vlastní subdoméně.
+          </p>
+          <ul class="feature-bullets">
+            <li><strong>Veřejné jen to, co zvolíte:</strong> Status stránka ukáže jen monitory označené jako veřejné, bez jejich adres a interních textů chyb.</li>
+            <li><strong>Historie incidentů:</strong> Tvořte transparentní protokoly a plány údržby služeb.</li>
+            <li><strong>Vlastní branding:</strong> Přidejte logo, upravte barvy a přizpůsobte si vzhled do detailů.</li>
+          </ul>
+        </div>
+        <div class="fact-panel card">
+          <p class="fact-panel-title">Co nese veřejná stavová stránka</p>
+          <ul class="fact-list">
+            <li>Aktuální stav monitorů, které zveřejníte</li>
+            <li>Incidenty s jejich aktualizacemi</li>
+            <li>Plánovaná údržba</li>
+            <li>Odběratelé e-mailů (s potvrzením)</li>
+            <li>SVG odznak a RSS kanál</li>
+            <li>Vaše logo, barevný motiv a odkazy v navigaci</li>
+          </ul>
+          <a class="fact-panel-link" href={demoUrl('cs')} rel="noopener">Otevřít živou stavovou stránku →</a>
+        </div>
+      </div>
+
+      <!-- Feature 3 -->
+      <div class="feature-row">
+        <div class="feature-text">
+          <span class="feature-number">03</span>
+          <h2>Okamžitá Upozornění</h2>
+          <p>
+            Nenechte své zákazníky odhalit výpadek dříve než vy. Blood Kings nabízí integraci do všech hlavních komunikačních kanálů.
+          </p>
+          <ul class="feature-bullets">
+            <li><strong>Discord a Slack:</strong> Každá výstraha uvede monitor, jeho nový stav, čas a chybu, kterou kontrola zaznamenala.</li>
+            <li><strong>E-mail (SMTP):</strong> Spolehlivé doručení výstrah přímo do schránky.</li>
+            <li><strong>Další kanály:</strong> SMS (Twilio), WhatsApp (CallMeBot), Telegram, Pushover a PagerDuty a k tomu eskalační webhook pro incidenty, které nikdo nepotvrdil.</li>
+          </ul>
+        </div>
+        <div class="fact-panel card">
+          <p class="fact-panel-title">Kanály upozornění, které dnes kód umí</p>
+          <ul class="fact-list">
+            <li>E-mail (SMTP nebo PHP mail)</li>
+            <li>SMS přes Twilio</li>
+            <li>WhatsApp přes CallMeBot</li>
+            <li>Discord, Slack a Telegram</li>
+            <li>Pushover a PagerDuty</li>
+            <li>Eskalační webhook pro nepotvrzené incidenty</li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Feature 4 -->
+      <div class="feature-row reverse">
+        <div class="feature-text">
+          <span class="feature-number">04</span>
+          <h2>Monitoring, který přizná vlastní selhání</h2>
+          <p>
+            Nejhorší výpadek je ten, který monitoring prospí. Když přestane běžet sběr dat, plná zelená obrazovka
+            tvrdí, že je vše v pořádku - proto jsme mlčení znemožnili.
+          </p>
+          <ul class="feature-bullets">
+            <li><strong>Heartbeat monitory:</strong> Zálohy a cronjoby se hlásí samy. Není co pingnout, a přesto o nich víte.</li>
+            <li><strong>Hlídač zvenku:</strong> Cloudflare Worker kontroluje sběr dat mimo váš server a ozve se, když přestane.</li>
+            <li><strong>Nic se nedomýšlí:</strong> Co se nezměřilo, zůstane prázdné. Pomlčka je poctivá, vymyšlená nula ne.</li>
+          </ul>
+        </div>
+        <div class="fact-panel card">
+          <p class="fact-panel-title">Jak se pozná ticho</p>
+          <ul class="fact-list">
+            <li>Každý heartbeat monitor čeká ping v rámci svého intervalu</li>
+            <li>Cloudflare Worker zvenku kontroluje, že sběr dat pořád běží</li>
+            <li>Přehled stará data označí, místo aby je vydával za aktuální</li>
+            <li>Co nikdo nezměřil, zůstane prázdné, nikdy nula</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA Section -->
+  <section class="section">
+    <div class="container text-center cta-container">
+      <h2>Jste připraveni převzít kontrolu?</h2>
+      <p>Vyzkoušejte Blood Kings Monitoring ještě dnes. Je to zcela zdarma a open source.</p>
+      <div class="cta-buttons">
+        <a href="/cs/download/" class="btn btn-primary">Stáhnout a nainstalovat</a>
+        <a href="/cs/docs/" class="btn btn-secondary">Prostudovat dokumentaci</a>
+      </div>
+
+
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .page-header {
+    background: radial-gradient(circle at 50% 100%, var(--surface-1) 0%, transparent 60%);
+    border-bottom: 1px solid var(--border);
+    padding: 6rem 0 4rem;
+  }
+
+  .page-header h1 {
+    font-size: 3rem;
+    font-weight: 800;
+  }
+
+  /* Feature Rows grid deep dive */
+  .features-deep-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6rem;
+  }
+
+  .feature-row {
+    display: grid;
+    grid-template-columns: 1fr 1.1fr;
+    gap: 5rem;
+    align-items: center;
+  }
+
+  .feature-row.reverse {
+    direction: rtl;
+  }
+
+  .feature-row.reverse > * {
+    direction: ltr;
+    text-align: left;
+  }
+
+  .feature-text {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .feature-number {
+    font-family: var(--font-heading);
+    font-size: 1.25rem;
+    font-weight: 800;
+    color: var(--brand-500);
+    letter-spacing: 0.1em;
+  }
+
+  .feature-text h2 {
+    font-size: 2rem;
+    font-weight: 800;
+  }
+
+  .feature-bullets {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    margin-top: 1rem;
+  }
+
+  .feature-bullets li {
+    position: relative;
+    padding-left: 1.5rem;
+    font-size: 0.95rem;
+  }
+
+  .feature-bullets li::before {
+    content: '✓';
+    position: absolute;
+    left: 0;
+    color: var(--brand-500);
+    font-weight: 800;
+  }
+
+  /* Visual mockups */
+  .feature-visual-mock {
+    height: 300px;
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5rem;
+    overflow: hidden;
+  }
+
+  .mock-terminal {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+  }
+
+  .terminal-header {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 1rem;
+  }
+
+  .terminal-header span {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: #3f3f46;
+  }
+
+  .terminal-body {
+    color: var(--code-text);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+
+  .green-text {
+    color: var(--up);
+  }
+
+  /* Fact panels: plain lists of what the code does, in place of the drawn
+     mock status page and mock alerts that used to stand here. */
+  .fact-panel {
+    display: grid;
+    gap: 1rem;
+    align-content: start;
+    padding: 1.75rem;
+  }
+
+  .fact-panel-title {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-low);
+  }
+
+  .fact-list {
+    list-style: none;
+    display: grid;
+    gap: 0.65rem;
+  }
+
+  .fact-list li {
+    position: relative;
+    padding-left: 1.25rem;
+    font-size: var(--text-sm);
+    color: var(--text-mid);
+  }
+
+  .fact-list li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.55em;
+    width: 6px;
+    height: 6px;
+    border-radius: 1px;
+    background: var(--brand-500);
+  }
+
+  .fact-panel-link {
+    width: fit-content;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--brand-500);
+  }
+
+  /* CTA container styling */
+  .cta-container {
+    padding: 5rem 2rem;
+    background: radial-gradient(circle at 50% 50%, var(--surface-2) 0%, transparent 70%);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border);
+    /* Block margins only: a `margin: 4rem 0 2rem` shorthand zeroed the
+       .container's auto inline margins and pinned the box to the left edge
+       on screens wider than --max-width (V-20). */
+    margin-block: 4rem 2rem;
+  }
+
+  .cta-container h2 {
+    font-size: 2.25rem;
+    font-weight: 800;
+    margin-bottom: 0.5rem;
+  }
+
+  .cta-container p {
+    font-size: 1.1rem;
+    margin-bottom: 2rem;
+  }
+
+  .cta-buttons {
+    display: flex;
+    gap: 1.2rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  /* Responsive media rules */
+  @media (max-width: 992px) {
+    .feature-row {
+      grid-template-columns: 1fr;
+      gap: 2.5rem;
+    }
+    .feature-row.reverse {
+      direction: ltr;
+    }
+    .feature-visual-mock {
+      height: auto;
+      min-height: 220px;
+    }
+  }
+
+  @media (max-width: 480px) {
+    .page-header h1 {
+      font-size: 2.25rem;
+    }
+  }
+</style>

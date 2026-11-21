@@ -1,0 +1,115 @@
+---
+import Layout from '../layouts/Layout.astro';
+import AgentSelector from '../components/AgentSelector.astro';
+import InstallServer from '../components/InstallServer.astro';
+---
+
+<Layout title="Download & Setup | Blood Kings Monitoring" description="Install Blood Kings Monitoring on PHP hosting with MySQL and a cron job, then add agents for Linux, OpenWrt routers, Windows and Docker.">
+  <section class="page-header section">
+    <div class="container text-center">
+      <span class="badge badge-accent">Download Center</span>
+      <h1>Deploy Blood Kings Monitoring</h1>
+      <p class="section-subtitle">Install the central server on your PHP hosting, then add lightweight agents to the machines and routers you want to watch.</p>
+    </div>
+  </section>
+
+  <!-- Server Deployment Panel; every "Install" CTA lands on #server. -->
+  <section class="section bg-dim" id="server">
+    <div class="container">
+      <div class="download-section-header">
+        <h2>1. Install the server</h2>
+        <p>The server runs the checks, collects what the agents send, sends the alerts and serves the status pages. It is plain PHP with a MySQL database: no image to pull and nothing to build on the hosting.</p>
+      </div>
+
+      <InstallServer lang="en" />
+    </div>
+  </section>
+
+  <!-- Agent Deployment Section; the server guide's last step links #agents. -->
+  <section class="section" id="agents">
+    <div class="container">
+      <div class="download-section-header">
+        <h2>2. Agents on your machines and routers</h2>
+        <p>To see what happens inside a machine (CPU, memory, disks, network) or on a router (Wi-Fi, WAN, connected clients), install an agent on it.</p>
+      </div>
+      <AgentSelector lang="en" />
+    </div>
+  </section>
+
+  <!-- GitHub Source Code CTA -->
+  <section class="section bg-dim">
+    <div class="container text-center github-cta-card">
+      <div class="card">
+        <h2>Want to contribute?</h2>
+        <p>The Blood Kings Monitoring system is open-source under the MIT License. The bundled PHPMailer (e-mail sending) keeps its own LGPL-2.1 licence, see <a href="https://github.com/BKPepe/monitoring/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">THIRD_PARTY_NOTICES.md</a>. Contributions, documentation guides, and issue reports are welcome on GitHub.</p>
+        <div class="github-links-row">
+          <a href="https://github.com/BKPepe/monitoring" target="_blank" rel="noopener" class="btn btn-primary">
+            💻 GitHub Repository
+          </a>
+          <a href="https://github.com/BKPepe/monitoring/releases" target="_blank" rel="noopener" class="btn btn-secondary">
+            📦 Explore GitHub Releases
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</Layout>
+
+<style>
+  .page-header {
+    background: radial-gradient(circle at 50% 100%, var(--surface-1) 0%, transparent 60%);
+    border-bottom: 1px solid var(--border);
+    padding: 6rem 0 4rem;
+  }
+
+  .page-header h1 {
+    font-size: 3rem;
+    font-weight: 800;
+  }
+
+  .download-section-header {
+    margin-bottom: 3rem;
+    max-width: 600px;
+  }
+
+  .download-section-header h2 {
+    font-size: 1.8rem;
+    font-weight: 800;
+  }
+
+  .download-section-header p {
+    font-size: 1rem;
+    color: var(--text-mid);
+    margin-top: 0.3rem;
+  }
+
+  .github-cta-card {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .github-cta-card h2 {
+    font-size: 1.8rem;
+    font-weight: 800;
+  }
+
+  .github-cta-card p {
+    font-size: 1rem;
+    max-width: 680px;
+    margin: 0.5rem auto 2rem;
+  }
+
+  .github-links-row {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 768px) {
+    .page-header h1 {
+      font-size: 2.25rem;
+    }
+  }
+</style>

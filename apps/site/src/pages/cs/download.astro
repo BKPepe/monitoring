@@ -1,0 +1,115 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import AgentSelector from '../../components/AgentSelector.astro';
+import InstallServer from '../../components/InstallServer.astro';
+---
+
+<Layout title="Download & Instalace | Blood Kings Monitoring" description="Nainstalujte Blood Kings Monitoring na PHP hosting s MySQL a cronem a přidejte agenty pro Linux, routery s OpenWrt, Windows a Docker.">
+  <section class="page-header section">
+    <div class="container text-center">
+      <span class="badge badge-accent">Download centrum</span>
+      <h1>Spusťte Blood Kings Monitoring</h1>
+      <p class="section-subtitle">Nainstalujte centrální server na svůj PHP hosting a pak přidejte lehké agenty na stroje a routery, které chcete hlídat.</p>
+    </div>
+  </section>
+
+  <!-- Server Deployment Panel; every "Install" CTA lands on #server. -->
+  <section class="section bg-dim" id="server">
+    <div class="container">
+      <div class="download-section-header">
+        <h2>1. Instalace serveru</h2>
+        <p>Server spouští kontroly, přijímá data od agentů, posílá upozornění a zobrazuje stavové stránky. Je to obyčejné PHP s databází MySQL: žádný obraz ke stažení a na hostingu se nic nesestavuje.</p>
+      </div>
+
+      <InstallServer lang="cs" />
+    </div>
+  </section>
+
+  <!-- Agent Deployment Section; the server guide's last step links #agents. -->
+  <section class="section" id="agents">
+    <div class="container">
+      <div class="download-section-header">
+        <h2>2. Agenti na strojích a routerech</h2>
+        <p>Chcete-li vidět, co se děje uvnitř stroje (CPU, paměť, disky, síť) nebo na routeru (Wi-Fi, WAN, připojení klienti), nainstalujte na něj agenta.</p>
+      </div>
+      <AgentSelector lang="cs" />
+    </div>
+  </section>
+
+  <!-- GitHub Source Code CTA -->
+  <section class="section bg-dim">
+    <div class="container text-center github-cta-card">
+      <div class="card">
+        <h2>Chcete přispět k vývoji?</h2>
+        <p>Projekt Blood Kings Monitoring je open source pod licencí MIT. Přibalený PHPMailer (odesílání e-mailů) má vlastní licenci LGPL-2.1, viz <a href="https://github.com/BKPepe/monitoring/blob/main/THIRD_PARTY_NOTICES.md" target="_blank" rel="noopener">THIRD_PARTY_NOTICES.md</a>. Zdrojové kódy, dokumentaci a tracker chyb naleznete na našem GitHubu.</p>
+        <div class="github-links-row">
+          <a href="https://github.com/BKPepe/monitoring" target="_blank" rel="noopener" class="btn btn-primary">
+            💻 GitHub Repozitář
+          </a>
+          <a href="https://github.com/BKPepe/monitoring/releases" target="_blank" rel="noopener" class="btn btn-secondary">
+            📦 Všechny GitHub Releases
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</Layout>
+
+<style>
+  .page-header {
+    background: radial-gradient(circle at 50% 100%, var(--surface-1) 0%, transparent 60%);
+    border-bottom: 1px solid var(--border);
+    padding: 6rem 0 4rem;
+  }
+
+  .page-header h1 {
+    font-size: 3rem;
+    font-weight: 800;
+  }
+
+  .download-section-header {
+    margin-bottom: 3rem;
+    max-width: 600px;
+  }
+
+  .download-section-header h2 {
+    font-size: 1.8rem;
+    font-weight: 800;
+  }
+
+  .download-section-header p {
+    font-size: 1rem;
+    color: var(--text-mid);
+    margin-top: 0.3rem;
+  }
+
+  .github-cta-card {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+
+  .github-cta-card h2 {
+    font-size: 1.8rem;
+    font-weight: 800;
+  }
+
+  .github-cta-card p {
+    font-size: 1rem;
+    max-width: 680px;
+    margin: 0.5rem auto 2rem;
+  }
+
+  .github-links-row {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 768px) {
+    .page-header h1 {
+      font-size: 2.25rem;
+    }
+  }
+</style>

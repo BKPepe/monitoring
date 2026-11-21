@@ -1,0 +1,107 @@
+# LiteSpeed / Apache SPA fallback rule pro React aplikaci v /app/
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{REQUEST_URI} ^/app/ [NC]
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^app/ /app/index.html [QSA,L]
+</IfModule>
+
+# Blood Kings Status - Custom Error Documents & Rewrites
+ErrorDocument 404 /status/error.php?code=404
+ErrorDocument 403 /status/error.php?code=403
+ErrorDocument 410 /status/error.php?code=410
+ErrorDocument 500 /status/error.php?code=500
+ErrorDocument 503 /status/error.php?code=503
+
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>
+
+# Komprese textových odpovědí (HTML/CSS/JS/JSON) - platí i pro dynamický výstup
+# PHP skriptů (index.php, api.php...), ne jen statické soubory, protože mod_deflate
+# komprimuje podle Content-Type odpovědi, ne podle zdroje.
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/css text/plain text/xml text/javascript
+    AddOutputFilterByType DEFLATE application/javascript application/json application/xml
+    AddOutputFilterByType DEFLATE image/svg+xml
+</IfModule>
+
+# Cache hlavičky jen pro statické assety (podle MIME typu - PHP výstup má vždy
+# text/html a sem proto nespadá, i kdyby se v budoucnu accidentally rozšířilo).
+# CSS/JS mají delší TTL, protože assets/style.css se už linkuje s cache-busting
+# parametrem (?v=<?php echo filemtime(...) ?>), takže obsahová změna = nová URL.
+# Obrázky/favicon zatím verzované nejsou, proto kratší TTL jako bezpečnější default.
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 1 year"
+    ExpiresByType application/javascript "access plus 1 year"
+    ExpiresByType text/javascript "access plus 1 year"
+    ExpiresByType image/png "access plus 1 month"
+    ExpiresByType image/jpeg "access plus 1 month"
+    ExpiresByType image/webp "access plus 1 month"
+    ExpiresByType image/svg+xml "access plus 1 month"
+    ExpiresByType image/x-icon "access plus 1 month"
+</IfModule>
+
+# Blokace přímého přístupu ke konfiguraci na úrovni webserveru - nezávislé na
+# PHP guardu v config.php (count(get_included_files()) === 1). Druhá vrstva
+# ochrany: i kdyby se PHP interpret pro tuto cestu někdy přestal spouštět
+# (špatná konfigurace, migrace na jiný webserver...), soubor se stejně nikdy
+# neposlouží jako čistý text s DB heslem uvnitř. Syntaxe pro Apache 2.4+ i 2.2.
+# config.php.<hex>.tmp is the installer's half-step before its rename; it holds
+# the same password and must never be served either, even for that instant.
+<FilesMatch "^(config(\.sample)?\.php|config\.php\.[0-9a-f]+\.tmp)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Files that ship with the code but are not pages. schema.sql is a map of the
+# database, the deploy sync state lists every deployed file with its hash, and
+# README.md is internal documentation - all three were served to anyone.
+# Nothing reads them over HTTP: the installer (api.php?action=install_*) reads
+# schema.sql from disk and looks on disk for the sync state (its lock in a
+# CI-deployed directory), and the deploy reads the sync state over FTP.
+# .user.ini is PHP's own per-directory configuration (the session cookie
+# flags); the server reads it from disk, and nobody needs to learn from it how
+# PHP is set up here. installer.php only defines functions for api.php and
+# answers 404 on its own; this is the layer that does not depend on PHP.
+# error_log is where a cPanel host's PHP writes its errors, next to the script
+# that raised them: database messages, and the masked start of anything
+# config.php prints. Nobody needs it over HTTP: an administrator reads it in
+# the hosting panel or over FTP.
+<FilesMatch "^(schema\.sql|README\.md|package\.json|\.ftp-deploy-sync-state\.json|\.user\.ini|installer\.php|error_log)$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Whole directories of code that is included, never requested: the test suites
+# (which ran for anyone who opened them - run_api_tests.php drops and recreates
+# databases), the vendored mailer and the language arrays. 404 rather than 403,
+# so a probe does not learn they exist. Uploaded files stay reachable one by one;
+# only the directory itself stops listing its contents.
+#
+# Deliberately NOT "Options -Indexes": on a host whose AllowOverride lacks
+# Options, that single line turns every request under /status into a 500 -
+# agent_api.php, heartbeat.php and cron.php included. Only the constructs this
+# file already relies on are used here.
+#
+# assets/ (style.css, the logos, the favicon) listed its files the same way;
+# its files are linked from every page, only the listing itself closes.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(tests|lib|lang)(/|$) - [R=404,L]
+    RewriteRule ^(uploads|assets)/?$ - [R=404,L]
+</IfModule>

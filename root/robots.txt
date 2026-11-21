@@ -1,0 +1,33 @@
+# bloodkings.eu - rules for the monitoring under /app/ and /status/ only.
+# Everything else on this host (the game portal) stays open to crawlers.
+# Cloudflare prepends its managed content-signals block above this file.
+#
+# Longest match wins: the public status page, its bundle and the read-only
+# API calls it renders from stay crawlable, so a search engine indexes the
+# real page and not its loading or failure state. The private app and the
+# machine endpoints (agents, heartbeats, cron, admin) stay out.
+
+User-agent: *
+Allow: /app/public
+Allow: /app/assets/
+Disallow: /app/
+Allow: /status/api.php?action=public_status
+Allow: /status/api.php?action=ui_config
+Allow: /status/api.php?action=status_page
+Allow: /status/api.php?action=monitors&scope=public
+Allow: /status/api.php?action=daily_uptime
+Allow: /status/api.php?action=uptime_windows
+Allow: /status/api.php?action=regions
+Allow: /status/api.php?action=events
+Allow: /status/api.php?action=incidents
+Disallow: /status/api.php
+Disallow: /status/agent_api.php
+Disallow: /status/heartbeat.php
+Disallow: /status/metrics.php
+Disallow: /status/node_api.php
+Disallow: /status/cron.php
+Disallow: /status/health.php
+Disallow: /status/cpanel_stats.php
+Disallow: /status/admin.php
+
+Sitemap: https://bloodkings.eu/sitemap.xml

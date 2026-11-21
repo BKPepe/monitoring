@@ -1,0 +1,142 @@
+name: Deploy the Monitor SPA (/app) to cPanel
+
+# Runs only from deploy-hosting.yml, which decides what changed and keeps the
+# FTP deploys in one queue (see there). Its own push trigger and concurrency
+# group are gone: a called workflow must not hold the caller's group (GitHub
+# cancels it as a deadlock), and the shared group lost deploys.
+on:
+  workflow_call:
+
+jobs:
+  build-and-deploy:
+    name: Build React SPA, Deploy via FTP
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          check-latest: true
+          cache: 'npm'
+          cache-dependency-path: 'package-lock.json'
+
+      # Only the SPA goes to /app. apps/site is published to Pages by
+      # deploy.yml and quality.yml builds every workspace, so building it here
+      # only let a broken site hold back an /app deploy.
+      - name: Build React Monitor SPA
+        run: |
+          npm ci
+          npm run build --workspace=apps/monitor
+          echo "SPA built successfully."
+
+      # `timeout` je necinnost ridiciho socketu, ne celkovy limit. Pri 60 s
+      # padal deploy na "Timeout (control socket)" pokazde, kdyz hosting pod
+      # zatezi zaseknul prenos vetsiho souboru - server pritom odpovida
+      # normalne, jen pomalu. 300 s ceka, misto aby to shodilo cely deploy.
+      - name: FTP Deploy React Dashboard to public_html/app/
+        uses: SamKirkland/FTP-Deploy-Action@v4.4.0
+        with:
+          server: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          username: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          password: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+          local-dir: ./apps/monitor/dist/
+          server-dir: public_html/app/
+          protocol: ftps
+          timeout: 300000
+          # Verify the certificate (the action's default is "loose"); the
+          # hosting's certificate is valid for FTP_SERVER.
+          security: strict
+          exclude: |
+            **/.git*
+            status/**
+
+      # FTP-Deploy-Action umí dotfiles v kořeni local-dir tiše přeskočit
+      # (stavový diff) - a bez .htaccess vrací F5 na /app/<route> 404.
+      # Soubor se proto nahrává ještě explicitně přes curl, ať tam JE.
+      # Only after the SPA upload went through: a new .htaccess over the old
+      # SPA can rewrite to a file that is not on the server yet.
+      - name: Upload SPA .htaccess explicitly
+        env:
+          FTP_HOST: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          FTP_USER: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          FTP_PASS: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+        run: |
+          set -eu
+          # The hosting allows only a few concurrent FTP sessions and right
+          # after the big SPA upload they are not free yet, so the first try
+          # can end in "server response timeout". Three spaced tries, only
+          # then is it an error.
+          for attempt in 1 2 3; do
+            if curl --silent --show-error --ssl-reqd --ftp-pasv \
+              --connect-timeout 20 --max-time 180 \
+              --user "$FTP_USER:$FTP_PASS" \
+              -T apps/monitor/dist/.htaccess \
+              "ftp://$FTP_HOST/public_html/app/.htaccess"; then
+              echo ".htaccess nahran (pokus $attempt)."
+              exit 0
+            fi
+            echo "pokus $attempt selhal, cekam 20 s na uvolneni sezeni..."
+            sleep 20
+          done
+          echo "Ani na treti pokus se .htaccess nepodarilo nahrat."
+          exit 1
+
+      # Deep link se MUSI dat obnovit (F5). Kontrola po kazdem deployi -
+      # regrese rewrite pravidla shodi workflow, ne az uzivatele.
+      # Deep link se MUSI dat obnovit (F5). Blokujici: kdyz se rozbije,
+      # ma spadnout deploy, ne az uzivatel. Historicky to shodila registrace
+      # aplikace na URL /app v cPanelu (Passenger context ignoroval
+      # .htaccess) - prvni misto, kam se pri selhani podivat.
+      # It only reads what is live, so it runs after a failed step too: a
+      # half-finished upload is what it has to catch.
+      - name: Verify SPA deep-link refresh works
+        if: ${{ !cancelled() }}
+        env:
+          FTP_HOST: ${{ secrets.FTP_SERVER || secrets.server || secrets.FTP_server }}
+          FTP_USER: ${{ secrets.FTP_USERNAME || secrets.username || secrets.FTP_username }}
+          FTP_PASS: ${{ secrets.FTP_PASSWORD || secrets.FTP_password }}
+        run: |
+          sleep 5
+          code=$(curl -s -o /tmp/deeplink.html -w "%{http_code}" "https://bloodkings.eu/app/infrastructure/1")
+          if [ "$code" != "200" ] || ! grep -q "id=.root." /tmp/deeplink.html; then
+            echo "Deep link /app/infrastructure/1 vraci $code misto SPA (ocekavano 200 + aplikace)."
+            echo ""
+            echo "Nejcastejsi pricina: v cPanel -> Application Manager je aplikace"
+            echo "registrovana na Base Application URL '/app'. Passenger si to URI"
+            echo "vezme a .htaccess se v nem neprocesuje. Prereguistruj ji na jine URL."
+            echo ""
+            echo "--- obsah .htaccess na serveru ---"
+            curl --silent --ssl-reqd --user "$FTP_USER:$FTP_PASS" \
+              "ftp://$FTP_HOST/public_html/app/.htaccess" || echo "(soubor nejde stahnout)"
+            exit 1
+          fi
+          echo "SPA fallback OK (HTTP $code)."
+
+          # A missing build file is a real 404, not the app page with 200: a
+          # stale tab must see "file gone" and reload once (W1-F4).
+          code=$(curl -s -o /dev/null -w "%{http_code}" "https://bloodkings.eu/app/assets/missing-$GITHUB_SHA.js")
+          if [ "$code" != "404" ]; then
+            echo "/app/assets/missing-*.js vraci $code misto 404 - .htaccess nepusti assets/ pred fallbackem?"
+            exit 1
+          fi
+          echo "Chybejici asset: 404 OK."
+
+          # The public status page is the one indexable page of the app
+          # (W1-G4): its own head with the canonical and no noindex, while
+          # everything else served from index.html keeps X-Robots-Tag.
+          curl -s -D /tmp/public.h -o /tmp/public.html "https://bloodkings.eu/app/public?v=$GITHUB_SHA"
+          if ! grep -q '<link rel="canonical" href="https://bloodkings.eu/app/public"' /tmp/public.html \
+            || grep -qi 'name="robots"' /tmp/public.html || grep -qi '^x-robots-tag' /tmp/public.h; then
+            echo "/app/public neni indexovatelna (chybi canonical, nebo nese noindex) - servira .htaccess public.html?"
+            cat /tmp/public.h
+            exit 1
+          fi
+          if ! curl -sI "https://bloodkings.eu/app/?v=$GITHUB_SHA" | grep -qi '^x-robots-tag: noindex'; then
+            echo "/app/ nema X-Robots-Tag noindex - soukroma cast aplikace by se mohla indexovat."
+            exit 1
+          fi
+          echo "Indexace: /app/public ano, /app/ noindex - OK."

@@ -1,0 +1,2473 @@
+<?php
+/**
+ * Tests of the collection/notification/e-mail layer - no DB and no network.
+ *
+ * Running:  php apps/status/tests/run_pipeline_tests.php
+ *
+ * These three areas (the cron pipeline, e-mail templates, notification
+ * channels) had no coverage at all, although they are what decides whether
+ * the user learns about an outage - and whether the system shows invented data.
+ * What is deterministic gets tested: collection state evaluation, e-mail language,
+ * e-mails, recipient/channel selection and text assembly.
+ */
+
+require_once __DIR__ . '/../lang.php';
+
+require_once __DIR__ . '/assert_helpers.php';
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_get_collection_issues', 'bk_agent_is_silent', 'bk_agent_offline_secs', 'bk_disk_label', 'bk_ranged_int', 'bk_get_network_insights', 'bk_lte_backup_state', 'bk_wan_link_state', 'bk_with_email_lang', 'bk_enrich_threshold_tip',
+    'bk_relative_time_label', 'bk_format_duration', 'bk_baseline_anomaly_from_stats',
+    'bk_half_window_rate', 'bk_latency_score', 'bk_notification_kinds', 'bk_reports_24h_applies',
+]);
+// Every check_* copy taken from functions.php below times its answer with
+// db.php's bk_response_ms(), which a functions.php extract does not carry.
+// The agent-silence rule reads the offline timeout through get_setting().
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_response_ms', 'get_setting', 'bk_settings_defaults']);
+
+
+// =======================================================================
+// 1. DATA COLLECTION - bk_get_collection_issues
+// The project's hard rule: a collection outage MUST be visible. These tests
+// guard that it is reported exactly when collection truly stops - no sooner, no later.
+// =======================================================================
+if (function_exists('bk_get_collection_issues')) {
+    $healthy_monitor = ['status' => 'up', 'last_checked' => date('Y-m-d H:i:s')];
+
+    check('zdravý monitor bez agenta nehlásí nic',
+        count(bk_get_collection_issues($healthy_monitor, [])), 0);
+
+    // The cPanel exporter is failing - exactly the scenario nobody saw for two weeks.
+    $issues = bk_get_collection_issues($healthy_monitor, [
+        'cpanel_stats_error' => ['error' => 'HTTP 403', 'hint' => 'Špatný klíč', 'since' => '2026-08-01T10:00:00+02:00'],
+    ]);
+    check('selhání cPanel sběru se hlásí', count($issues), 1);
+    check('typ problému je cpanel_stats', $issues[0]['type'] ?? null, 'cpanel_stats');
+    check('hint se propaguje k adminovi', $issues[0]['hint'] ?? null, 'Špatný klíč');
+    check('začátek výpadku se propaguje', $issues[0]['since'] ?? null, '2026-08-01T10:00:00+02:00');
+
+    // A silent agent: reported only after the timeout expires, not sooner.
+    // The timeout is the setting's default here, 50 minutes.
+    $fresh = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => time() - 60]);
+    check('čerstvý agent nehlásí problém', count($fresh), 0);
+
+    $stale = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => time() - 7200]);
+    check_true('mlčící agent se hlásí',
+        count(array_filter($stale, fn($i) => $i['type'] === 'agent_silent')) === 1);
+
+    // A monitor that never had an agent must not report "the agent is silent".
+    $never = bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => 0]);
+    check('monitor bez agenta nehlásí mlčení agenta',
+        count(array_filter($never, fn($i) => $i['type'] === 'agent_silent')), 0);
+
+    // Timeout 0 switches the detection off. It used to make every agent
+    // that ever reported "silent" here - in the admin's banner and in the
+    // daily reminder - while cron and the app treated it as off.
+    $ci_saved = $GLOBALS['system_settings'] ?? null;
+    $GLOBALS['system_settings'] = ['agent_offline_timeout' => '0'];
+    check('vypnutá detekce: ani dva dny tichý agent se nehlásí',
+        count(array_filter(bk_get_collection_issues($healthy_monitor, ['agent_last_seen' => time() - 172800]),
+            fn($i) => $i['type'] === 'agent_silent')), 0);
+    check('vypnutá detekce: verdikt o mlčení není', bk_agent_is_silent(['agent_last_seen' => time() - 172800]), null);
+    check('vypnutá detekce: žádné sekundy', bk_agent_offline_secs(), null);
+    $GLOBALS['system_settings'] = ['agent_offline_timeout' => '10'];
+    check('limit 10 minut: 11 minut ticha je mlčení, 9 ne',
+        [bk_agent_is_silent(['agent_last_seen' => 1000], 1000 + 660), bk_agent_is_silent(['agent_last_seen' => 1000], 1000 + 540)],
+        [true, false]);
+    check('nikdy nehlásil: verdikt o mlčení není', bk_agent_is_silent([], 5000), null);
+    $GLOBALS['system_settings'] = $ci_saved;
+
+    // An unreadable report counts until a readable one gets through: a record
+    // older than the last accepted report is stale. The guard reads
+    // agent_last_seen for every agent, silent or not.
+    $ci_warnings = [];
+    set_error_handler(function (int $no, string $msg) use (&$ci_warnings): bool {
+        $ci_warnings[] = $msg;
+        return true;
+    });
+    $ci_unreadable = fn(int $unreadable_ago): array => array_column(bk_get_collection_issues($healthy_monitor, [
+        'agent_last_seen' => time() - 60,
+        'report_unreadable' => ['at' => time() - $unreadable_ago, 'since' => time() - 3600, 'reason' => 'Syntax error'],
+    ]), 'type');
+    check('nečitelné hlášení starší než poslední čitelné se nehlásí', $ci_unreadable(3600), []);
+    check('novější nečitelné hlášení se hlásí', $ci_unreadable(30), ['report_unreadable']);
+    restore_error_handler();
+    check('a hodnocení nevyvolá žádné varování PHP', $ci_warnings, []);
+
+    // Stopped checks - a paused monitor is a legitimate state, not a fault.
+    $paused = bk_get_collection_issues(
+        ['status' => 'paused', 'last_checked' => date('Y-m-d H:i:s', time() - 86400)], []);
+    check('pozastavený monitor nehlásí zastavené kontroly',
+        count(array_filter($paused, fn($i) => $i['type'] === 'checks_stalled')), 0);
+
+    $stalled = bk_get_collection_issues(
+        ['status' => 'up', 'last_checked' => date('Y-m-d H:i:s', time() - 3600)], []);
+    check_true('zastavené kontroly se hlásí',
+        count(array_filter($stalled, fn($i) => $i['type'] === 'checks_stalled')) === 1);
+
+    // --- Router (CORE 3.6, X15): SMART and the two records of dropped data ---
+    // A disk card showing yesterday's values as if they were current is the
+    // same silent loss as a dead exporter.
+    $ci_probe = bk_get_collection_issues($healthy_monitor, ['agent_tools' => ['smart_probe_running_s' => 1000]]);
+    check_true('zaseknuté čtení SMART se hlásí',
+        count(array_filter($ci_probe, fn($i) => $i['type'] === 'smart_probe_stuck')) === 1);
+    check('a říká, jak dlouho už visí', $ci_probe[0]['message'] ?? null,
+        sprintf(t('collection_issue_smart_probe_stuck'), 16));
+    check('krátká sonda SMART není problém',
+        count(bk_get_collection_issues($healthy_monitor, ['agent_tools' => ['smart_probe_running_s' => 120]])), 0);
+
+    $ci_disk = fn(?int $checked): array => ['storage_disks' => [[
+        'name' => 'sdb', 'smart' => ['state' => 'error', 'checked_at' => $checked, 'model' => 'WDC WD10JPVX'],
+    ]]];
+    check_true('den nečitelný SMART se hlásí',
+        count(array_filter(bk_get_collection_issues($healthy_monitor, $ci_disk(time() - 90000)),
+            fn($i) => $i['type'] === 'smart_read_failing')) === 1);
+    check('nikdy nepřečtený SMART se hlásí taky',
+        bk_get_collection_issues($healthy_monitor, $ci_disk(null))[0]['message'] ?? null,
+        sprintf(t('collection_issue_smart_read_failing'), 'WDC WD10JPVX (sdb)', t('collection_issue_smart_read_never')));
+    check('čerstvě selhané čtení ještě není výpadek sběru',
+        count(bk_get_collection_issues($healthy_monitor, $ci_disk(time() - 600))), 0);
+    check('disk v pořádku nehlásí nic',
+        count(bk_get_collection_issues($healthy_monitor, ['storage_disks' => [[
+            'name' => 'sda', 'smart' => ['state' => 'ok', 'checked_at' => time() - 90000],
+        ]]])), 0);
+
+    $ci_dropped = bk_get_collection_issues($healthy_monitor, ['details_dropped' => ['storage_disks', 'wifi_radios']]);
+    check('zahozený seznam disků se jmenuje', $ci_dropped[0]['message'] ?? null,
+        sprintf(t('collection_issue_storage_list_dropped'), 'storage_disks, wifi_radios'));
+    check('prázdný details_dropped nic nehlásí',
+        count(bk_get_collection_issues($healthy_monitor, ['details_dropped' => []])), 0);
+
+    // G42: minute reports that never arrived. The counting is cron's, this
+    // only reads it - a partial loss used to be invisible until the agent
+    // went silent for the whole 3000 s.
+    $ci_missing = bk_get_collection_issues($healthy_monitor,
+        ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time() - 600]]);
+    check('chybějící minutová hlášení se hlásí i s počty', $ci_missing[0]['message'] ?? null,
+        sprintf(t('collection_issue_reports_missing'), 160, 1440));
+    check('agentovy vlastní přeskoky se k tomu dopíšou',
+        bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+            'runs_skipped_lock' => 96, 'runs_skipped_post' => 4])[0]['message'] ?? null,
+        sprintf(t('collection_issue_reports_missing'), 160, 1440) . ' ' . sprintf(t('collection_issue_reports_missing_skips'), 96, 4));
+    // Agent 0.1.9: runs the lock takeover stopped are the third reason, in a
+    // sentence of their own; an older agent's missing counter adds nothing.
+    check('běh ukončený po 5 minutách visení se dopíše jako třetí důvod',
+        bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+            'runs_skipped_lock' => 96, 'runs_skipped_post' => 4, 'runs_skipped_killed' => 3])[0]['message'] ?? null,
+        sprintf(t('collection_issue_reports_missing'), 160, 1440) . ' ' . sprintf(t('collection_issue_reports_missing_skips'), 96, 4)
+            . ' ' . sprintf(t('collection_issue_reports_missing_killed'), 3));
+    check('samotné ukončené běhy se dopíšou i bez ostatních přeskoků',
+        bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+            'runs_skipped_lock' => 0, 'runs_skipped_post' => 0, 'runs_skipped_killed' => 2])[0]['message'] ?? null,
+        sprintf(t('collection_issue_reports_missing'), 160, 1440) . ' ' . sprintf(t('collection_issue_reports_missing_killed'), 2));
+    check('nula ani chybějící počet ukončených běhů (agent do 0.1.8) nic nedopíše',
+        [bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+            'runs_skipped_killed' => 0])[0]['message'] ?? null,
+         bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1280, 'checked_at' => time()],
+            'runs_skipped_killed' => null])[0]['message'] ?? null],
+        [sprintf(t('collection_issue_reports_missing'), 160, 1440), sprintf(t('collection_issue_reports_missing'), 160, 1440)]);
+    $ci_killed_cs = (require __DIR__ . '/../lang/cs.php')['collection_issue_reports_missing_killed'] ?? '';
+    $ci_killed_en = (require __DIR__ . '/../lang/en.php')['collection_issue_reports_missing_killed'] ?? '';
+    check('třetí důvod má český i anglický text a oba nesou počet',
+        [sprintf($ci_killed_cs, 3), sprintf($ci_killed_en, 3)],
+        ['Běh visel 5 minut a byl ukončen: 3×.', 'A run hung for 5 minutes and was stopped: 3×.']);
+    check('ztráta pod deseti procenty se nehlásí',
+        count(bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 1300, 'checked_at' => time()]])), 0);
+    check('krátké okno (router po restartu) se nesoudí',
+        count(bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 100, 'received' => 10, 'checked_at' => time()]])), 0);
+    // R140: agent.sh, agent.py and agent.ps1 run every 5 minutes as installed,
+    // 288 reports a day. A count stored when cron still held them to the
+    // minute said "1152 of 1440 missing" on every healthy server.
+    check('serverový agent na 5minutovém cronu se minutovými hlášeními nesoudí',
+        [count(bk_get_collection_issues($healthy_monitor, ['agent_type' => 'bash', 'reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => time()]])),
+         count(bk_get_collection_issues($healthy_monitor, ['agent_type' => 'powershell', 'reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => time()]])),
+         count(bk_get_collection_issues($healthy_monitor, ['reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => time()]]))],
+        [0, 0, 0]);
+    check('router se stejnými počty dál hlásí chybějící minuty',
+        bk_get_collection_issues($healthy_monitor, ['agent_type' => 'openwrt', 'reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => time()]])[0]['type'] ?? null,
+        'reports_missing');
+
+    $ci_ingest = bk_get_collection_issues($healthy_monitor, ['ingest_issues' => [
+        ['type' => 'passthrough_too_large', 'key' => 'logread', 'bytes' => 12000],
+        ['type' => 'metrics_insert_failed'],
+    ]]);
+    check('neuložená část hlášení se jmenuje', $ci_ingest[0]['message'] ?? null,
+        sprintf(t('collection_issue_ingest_dropped'), 'passthrough_too_large (logread), metrics_insert_failed'));
+    check('prázdné ingest_issues nic nehlásí',
+        count(bk_get_collection_issues($healthy_monitor, ['ingest_issues' => []])), 0);
+}
+
+// =======================================================================
+// 1b. NETWORK INSIGHTS - a radio without a measured noise floor (CORE 3.10)
+// `?? -95` used to turn "iwinfo printed unknown" into a clean band nobody
+// measured - and agent 0.1.7 sends null exactly where that happened.
+// =======================================================================
+if (function_exists('bk_get_network_insights')) {
+    // The insights start with one query; a stub that refuses it leaves the
+    // rest of the function exactly as production runs it.
+    $ni_pdo = new class {
+        public function prepare(string $sql) { throw new PDOException('no db in a pure test'); }
+    };
+    $ni = fn (array $radio): int => count(bk_get_network_insights($ni_pdo, ['id' => 2], ['wifi_radios' => [$radio]]));
+    check('rádio bez změřeného šumu rušení nehlásí', $ni(['radio' => 'phy0-ap0', 'ssid' => 'X', 'noise' => null]), 0);
+    check('a chybějící klíč šumu taky ne', $ni(['radio' => 'phy0-ap0', 'ssid' => 'X']), 0);
+    check('změřený šum −60 dBm rušení hlásí', $ni(['radio' => 'phy0-ap0', 'ssid' => 'X', 'noise' => -60]), 1);
+    check('čistý kanál −95 dBm nehlásí', $ni(['radio' => 'phy0-ap0', 'ssid' => 'X', 'noise' => -95]), 0);
+
+    // X17: a lookup made on a line saturated by the router's own speed test is
+    // slow because of the test. The value is stored and charted, only not
+    // turned into advice.
+    $ni_dns = fn (array $extra): int => count(bk_get_network_insights($ni_pdo, ['id' => 2], array_merge(['dns_latency_ms' => 620.0], $extra)));
+    check('pomalé DNS se běžně hlásí', $ni_dns([]), 1);
+    check('pomalé DNS během testu se nehlásí', $ni_dns(['speedtest_active' => true]), 0);
+
+    // G31: the OOM counter only resets at the next reboot, so without the
+    // event's timestamp the warning hung on the page for weeks.
+    $ni_oom = fn (array $extra): int => count(bk_get_network_insights($ni_pdo, ['id' => 2], array_merge(['oom_kills' => 3], $extra)));
+    check('OOM z posledních 24 h se hlásí', $ni_oom(['oom_kill_at' => time() - 3600]), 1);
+    check('týden starý OOM už ne', [$ni_oom(['oom_kill_at' => time() - 7 * 86400]), $ni_oom([])], [0, 0]);
+
+    // R274: the count is of the last 500 log lines, not of 24 hours.
+    $ni_log = fn (array $d): string => (string)(array_values(array_filter(bk_get_network_insights($ni_pdo, ['id' => 2], $d),
+        fn (array $i): bool => ($i['icon'] ?? '') === 'fa-file-lines'))[0]['text'] ?? '');
+    check('chyby v logu: okno z hlášení agenta, bez něj 500 řádků, nikdy 24 hodin', [
+        $ni_log(['log_errors_24h' => 80, 'log_window_secs' => 18000]),
+        $ni_log(['log_errors_24h' => 80, 'log_window_secs' => 600]),
+        $ni_log(['log_errors_24h' => 80]),
+    ], [
+        'Systémový log hlásí 80 chyb za posledních 5 h.',
+        'Systémový log hlásí 80 chyb za posledních 10 min.',
+        'Systémový log hlásí 80 chyb v posledních 500 řádcích.',
+    ]);
+
+    // R205: a failed traffic query was swallowed, and link_traffic answered
+    // 200 with no interfaces - a router that transferred nothing.
+    bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_get_interface_traffic_stats']);
+    try {
+        bk_get_interface_traffic_stats($ni_pdo, 2);
+        check_true('selhaný dotaz na provoz rozhraní se nespolkne', false);
+    } catch (PDOException $e) {
+        check_true('selhaný dotaz na provoz rozhraní se nespolkne', true);
+    }
+
+    // R272: the LTE insight's detail spoke of a missing SIM for every reason,
+    // also with the modem's interface down.
+    $ni_lte = fn (array $d): string => (string)(array_values(array_filter(bk_get_network_insights($ni_pdo, ['id' => 2], $d),
+        fn (array $i): bool => ($i['icon'] ?? '') === 'fa-sim-card'))[0]['detail'] ?? '');
+    check_true('LTE dole: detail mluví o rozhraní, ne o SIM',
+        str_contains($ni_lte(['lte_up' => false]), 'Rozhraní k modemu neběží') && !str_contains($ni_lte(['lte_up' => false]), 'SIM'));
+    check_true('nepřihlášený modem: detail o síti', str_contains($ni_lte(['lte_up' => true, 'lte_connected' => false]), 'nepřihlásil'));
+    check_true('chybějící SIM: detail o SIM', str_contains($ni_lte(['lte_up' => true, 'lte_sim_state' => 'no_sim']), 'SIM'));
+
+    // R108: an insight counted 'status_changed_down' in monitor_events, a
+    // type nobody stores (the timeline derives it), so it never fired. Every
+    // event type the insights count is one log_monitor_event() writes.
+    $ni_src = (string)file_get_contents(__DIR__ . '/../functions.php');
+    $ni_from = strpos($ni_src, 'function bk_get_network_insights(');
+    $ni_body = substr($ni_src, $ni_from, (int)strpos($ni_src, "\nfunction ", $ni_from + 10) - $ni_from);
+    preg_match_all("/event_type = '([a-z0-9_]+)'/", $ni_body, $ni_types);
+    $ni_writers = '';
+    foreach (glob(__DIR__ . '/../*.php') as $ni_file) {
+        $ni_writers .= (string)file_get_contents($ni_file);
+    }
+    $ni_unwritten = array_values(array_filter(array_unique($ni_types[1]),
+        fn (string $type): bool => !preg_match("/log_monitor_event\\([^;]*'" . preg_quote($type, '/') . "'/", $ni_writers)));
+    check_true('postřehy počítají nějaké typy událostí', count($ni_types[1]) > 0);
+    check('a jen ty, které někdo zapisuje', $ni_unwritten, []);
+}
+
+// =======================================================================
+// 2. E-MAILY - bk_with_email_lang
+// E-mails have no visitor, so the setting decides the language. The test guards
+// that the globals switch AND switch back - otherwise the first sent e-mail
+// would flip the language of the whole running request (and the user's page).
+// =======================================================================
+if (function_exists('bk_with_email_lang')) {
+    $GLOBALS['BK_LANG'] = 'cs';
+    $GLOBALS['BK_STRINGS'] = require __DIR__ . '/../lang/cs.php';
+
+    $en_text = bk_with_email_lang('en', fn() => t('day_no_data'));
+    $cs_text = bk_with_email_lang('cs', fn() => t('day_no_data'));
+    check_true('EN a CS text se liší', $en_text !== $cs_text);
+    check_true('EN text není prázdný', is_string($en_text) && $en_text !== '');
+
+    check('jazyk se po odeslání vrátí zpět', $GLOBALS['BK_LANG'], 'cs');
+    check('slovník se po odeslání vrátí zpět', t('day_no_data'), $cs_text);
+
+    // A nonsense language code must not break sending - fallback to Czech.
+    $fallback = bk_with_email_lang('xx', fn() => t('day_no_data'));
+    check('neznámý jazyk padá na češtinu', $fallback, $cs_text);
+
+    // An exception inside the builder must not leave the globals switched.
+    try {
+        bk_with_email_lang('en', function () { throw new RuntimeException('boom'); });
+    } catch (RuntimeException $e) {
+        // expected
+    }
+    check('výjimka v šabloně nenechá přepnutý jazyk', $GLOBALS['BK_LANG'], 'cs');
+
+    // Whom the e-mail speaks to: the account's own language, the global
+    // setting while it has none. Alerts, the reminder, the digest and the
+    // admin notices all ask the one helper instead of a copy each.
+    bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defaults']);
+    bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_recipient_lang', 'bk_render_per_lang']);
+    $rl_saved = $GLOBALS['system_settings'] ?? null;
+    $GLOBALS['system_settings'] = ['email_lang' => 'en'];
+    check('vlastní jazyk příjemce má přednost',
+        [bk_recipient_lang(['email_lang' => 'cs']), bk_recipient_lang(['email_lang' => 'en'])], ['cs', 'en']);
+    check('bez vlastního jazyka platí globální nastavení',
+        [bk_recipient_lang(['email_lang' => null]), bk_recipient_lang([]), bk_recipient_lang(['email_lang' => 'de'])],
+        ['en', 'en', 'en']);
+    $GLOBALS['system_settings'] = $rl_saved;
+
+    // Fifty recipients in two languages are two renders, each in its own
+    // language, and the request's language stays where it was.
+    $rl_calls = 0;
+    $rl_render = bk_render_per_lang(function () use (&$rl_calls): string {
+        $rl_calls++;
+        return t('day_no_data');
+    });
+    check('zpráva se vykreslí v jazyce příjemce',
+        [$rl_render('en'), $rl_render('cs'), $rl_render('en'), $rl_render('cs')], [$en_text, $cs_text, $en_text, $cs_text]);
+    check('a každý jazyk jen jednou', $rl_calls, 2);
+    check('jazyk požadavku zůstane', $GLOBALS['BK_LANG'], 'cs');
+}
+
+// =======================================================================
+// 3. ALERT TEXTS - bk_enrich_threshold_tip
+// Tip enrichment may only use data that really arrived. An invented
+// "top process" or "Wi-Fi clients: 0" would be exactly the kind of lie this
+// project went through a fabricated-data purge over.
+// =======================================================================
+if (function_exists('bk_enrich_threshold_tip')) {
+    $GLOBALS['BK_LANG'] = 'cs';
+    $GLOBALS['BK_STRINGS'] = require __DIR__ . '/../lang/cs.php';
+
+    $empty = bk_enrich_threshold_tip([], 'cpu');
+    check_false('bez dat se nevymýšlí top proces', str_contains($empty, '%)'));
+
+    $with_proc = bk_enrich_threshold_tip([
+        'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61]],
+        'load1' => 2.8, 'load5' => 2.4, 'load15' => 2.1,
+        'wifi_clients_count' => 27,
+    ], 'cpu');
+    check_true('viník je v textu', str_contains($with_proc, 'hostapd'));
+    check_true('podíl viníka je v textu', str_contains($with_proc, '61'));
+    check_true('load average je v textu', str_contains($with_proc, '2.8'));
+    check_true('kontext Wi-Fi klientů je v textu', str_contains($with_proc, '27'));
+    check_true('doporučení je v textu', str_contains(mb_strtolower($with_proc), 'doporučení'));
+
+    // Without Wi-Fi telemetry, clients must not be written about at all.
+    $no_wifi = bk_enrich_threshold_tip([
+        'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61]],
+    ], 'cpu');
+    check_false('bez telemetrie se nepíše o klientech', str_contains(mb_strtolower($no_wifi), 'klient'));
+
+    // Channel utilisation from iwinfo survey: the busiest radio that REALLY
+    // measured it is taken - a driver without survey support (busy_pct null)
+    // must neither produce an invented zero nor enter the selection.
+    $busy_tip = bk_enrich_threshold_tip([
+        'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61]],
+        'wifi_radios' => [
+            ['radio' => 'wlan0', 'busy_pct' => 34],
+            ['radio' => 'wlan1', 'busy_pct' => 71],
+            ['radio' => 'wlan2', 'busy_pct' => null],
+        ],
+    ], 'cpu');
+    check_true('vytížení kanálu je v textu', str_contains($busy_tip, '71'));
+    check_true('jmenuje se nejvytíženější rádio', str_contains($busy_tip, 'wlan1'));
+
+    // The generic kt_rec_wifi advice MAY talk about the channel - what must not be
+    // invented is a MEASUREMENT. The radio name appears only with a measured value.
+    $busy_none = bk_enrich_threshold_tip([
+        'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61]],
+        'wifi_radios' => [['radio' => 'wlan0', 'busy_pct' => null]],
+    ], 'cpu');
+    check_false('samá null měření = žádné jméno rádia s číslem', str_contains($busy_none, 'wlan0'));
+
+    // The RAM variant takes the memory ranking, not CPU.
+    $ram_tip = bk_enrich_threshold_tip([
+        'top_ram_processes' => [['name' => 'java', 'ram_mb' => 2048]],
+    ], 'ram');
+    check_true('RAM tip jmenuje paměťového viníka', str_contains($ram_tip, 'java'));
+}
+
+// =======================================================================
+// 4. ANOMALY AND TREND DETECTION (the basis for notifications and insights)
+// =======================================================================
+if (function_exists('bk_baseline_anomaly_from_stats')) {
+    // A stable series (30 values of 20.0: mean 20, deviation 0) + a value in
+    // the norm = no anomaly.
+    check('hodnota v normálu není anomálie',
+        bk_baseline_anomaly_from_stats(20.0, 0.0, 30, 21.0, 5.0), null);
+
+    // A marked deviation above the baseline must be an anomaly; the floor of
+    // 5 stands in for the flat history's zero deviation.
+    check('výrazný výkyv je anomálie',
+        bk_baseline_anomaly_from_stats(20.0, 0.0, 30, 90.0, 5.0),
+        ['low' => 7.5, 'high' => 32.5, 'mean' => 20.0, 'current' => 90.0]);
+
+    // Empty history must claim nothing (there is nothing to compare with):
+    // AVG and STDDEV_POP over no rows are NULL, COUNT is 0.
+    check('bez historie se anomálie nehlásí',
+        bk_baseline_anomaly_from_stats(null, null, 0, 90.0, 5.0), null);
+    // A query that returned nothing is not zero samples, and says nothing either.
+    check('bez odpovědi dotazu se anomálie nehlásí',
+        bk_baseline_anomaly_from_stats(20.0, 0.0, null, 90.0, 5.0), null);
+    // Under 20 values the mean and deviation mean nothing yet.
+    check('s 19 hodnotami se anomálie nehlásí',
+        bk_baseline_anomaly_from_stats(20.0, 0.0, 19, 90.0, 5.0), null);
+    check_true('s 20 hodnotami už ano',
+        is_array(bk_baseline_anomaly_from_stats(20.0, 0.0, 20, 90.0, 5.0)));
+}
+
+if (function_exists('bk_half_window_rate')) {
+    // Growing disk usage - the basis for the "full in N days" prediction.
+    $rows = [];
+    for ($i = 0; $i < 14; $i++) {
+        $rows[] = ['checked_at' => date('Y-m-d H:i:s', strtotime("-" . (14 - $i) . " days")), 'hdd_usage' => 50 + $i];
+    }
+    $rate = bk_half_window_rate($rows, 'hdd_usage');
+    check_true('růst disku se detekuje', is_array($rate) && $rate['rate_per_day'] > 0);
+
+    // A flat series must not generate a fill-up forecast.
+    $flat = [];
+    for ($i = 0; $i < 14; $i++) {
+        $flat[] = ['checked_at' => date('Y-m-d H:i:s', strtotime("-" . (14 - $i) . " days")), 'hdd_usage' => 50];
+    }
+    $flat_rate = bk_half_window_rate($flat, 'hdd_usage');
+    check_true('plochá řada nemá růst',
+        $flat_rate === null || abs($flat_rate['rate_per_day']) < 0.01);
+}
+
+// =======================================================================
+// 5. FORMATTING IN NOTIFICATIONS
+// =======================================================================
+if (function_exists('bk_relative_time_label')) {
+    check_true('relativní čas vrací text', is_string(bk_relative_time_label(time() - 300)));
+}
+if (function_exists('bk_latency_score')) {
+    check_true('nízká latence skóruje lépe než vysoká',
+        bk_latency_score(20) > bk_latency_score(2000));
+}
+
+// --- Nova metrika od agenta nesmi tise zmizet ----------------------------
+//
+// agent_api.php dlouho skladal details z pevneho seznamu poli a cokoli mimo
+// nej zahodil. Chyba se pozna az rucnim hledanim - v UI vypada chybejici
+// udaj stejne jako "zatim nezmereno". Tenhle test cte pravidla propousteni
+// primo ze zdroje a overuje je na modelovych datech.
+$agent_src = file_get_contents(__DIR__ . '/../agent_report.php');
+
+check_true(
+    'agent_api propousti neznama pole',
+    str_contains($agent_src, '$bk_passthrough_added') && str_contains($agent_src, 'foreach ($data as $bk_key')
+);
+
+// Simulace stejnych pravidel, jaka ma agent_api: co projde a co ne.
+$passthrough = function (array $data, array $known) {
+    $skip = ['agent_key', 'api_key', 'token', 'secret', 'password', 'action_result', 'service_check_results', 'pending_action'];
+    $out = $known;
+    $added = 0;
+    foreach ($data as $k => $v) {
+        if (!is_string($k) || $k === '' || array_key_exists($k, $known) || in_array($k, $skip, true)) continue;
+        if (!preg_match('/^[a-z][a-z0-9_]{0,63}$/i', $k)) continue;
+        if (is_scalar($v) || $v === null) { $out[$k] = $v; $added++; }
+        elseif (is_array($v)) {
+            $enc = json_encode($v, JSON_UNESCAPED_UNICODE);
+            if ($enc !== false && strlen($enc) <= 8192) { $out[$k] = $v; $added++; }
+        }
+        if ($added >= 64) break;
+    }
+    return $out;
+};
+
+$known = ['cpu' => 12.5, 'ram' => 40.0];
+$result = $passthrough([
+    'cpu' => 99.0,                    // znamy klic - server si drzi svou verzi
+    'brand_new_metric' => 42,         // presne to, co drive mizelo
+    'nested' => ['a' => 1],           // male pole projde
+    'agent_key' => 'tajne',           // nikdy do details
+    'bad key!' => 1,                  // nevalidni nazev
+    'huge' => array_fill(0, 5000, 'xxxxxxxxxx'), // pres limit velikosti
+], $known);
+
+check('nova metrika projde', $result['brand_new_metric'] ?? null, 42);
+check('male pole projde', $result['nested']['a'] ?? null, 1);
+check('typovany klic serveru se neprepise', $result['cpu'], 12.5);
+check_false('agent_key se neuklada', array_key_exists('agent_key', $result));
+check_false('nevalidni nazev se neuklada', array_key_exists('bad key!', $result));
+check_false('prilis velke pole se neuklada', array_key_exists('huge', $result));
+
+// --- Denni agregace dostupnosti ------------------------------------------
+//
+// SLA za dlouha obdobi se pocita z uptime_daily, protoze monitor_logs se
+// mazou po 30 dnech. Testuje se samotny vypocet a poradi zdroju - bez DB,
+// nad modelovymi souhrny.
+$agg_src = file_get_contents(__DIR__ . '/../functions.php');
+
+check_true(
+    'rollup bezi pred mazanim logu',
+    (function () {
+        $cron = file_get_contents(__DIR__ . '/../cron.php');
+        $rollup_pos = strpos($cron, 'bk_rollup_daily_uptime');
+        $delete_pos = strpos($cron, 'DELETE FROM monitor_logs');
+        // Kdyby se mazalo driv, prisla by se data prave o ten den, ktery
+        // se chysta zmizet - presne tomu ma agregace zabranit.
+        return $rollup_pos !== false && $delete_pos !== false && $rollup_pos < $delete_pos;
+    })()
+);
+
+check_true(
+    'casovy souhrn dnu (W1-B1) bezi taky pred mazanim logu',
+    (function () {
+        $cron = file_get_contents(__DIR__ . '/../cron.php');
+        $time_pos = strpos($cron, 'bk_rollup_daily_uptime_time(');
+        $delete_pos = strpos($cron, 'DELETE FROM monitor_logs');
+        // Den, jehoz logy uz jsou smazane, se v case prepocitat neda - zustal
+        // by jen s pocty kontrol a mlceni agenta by v nem nebylo.
+        return $time_pos !== false && $delete_pos !== false && $time_pos < $delete_pos;
+    })()
+);
+
+check_true(
+    'rollup ignoruje udrzbu a neznamy stav',
+    str_contains($agg_src, "AND status IN ('up', 'down', 'warning')")
+);
+
+check_true(
+    'rollup je idempotentni (ON DUPLICATE KEY UPDATE)',
+    str_contains($agg_src, 'ON DUPLICATE KEY UPDATE')
+);
+
+// Vypocet dostupnosti ze souhrnu: stejna matematika jako v SQL.
+$uptime_from_days = function (array $days): ?float {
+    $total = array_sum(array_column($days, 'total'));
+    if ($total <= 0) {
+        return null;
+    }
+    return round(array_sum(array_column($days, 'up')) / $total * 100, 3);
+};
+
+check('bez dat je dostupnost null, ne 100 %', $uptime_from_days([]), null);
+check('same nuly = null, ne delení nulou', $uptime_from_days([['total' => 0, 'up' => 0]]), null);
+check(
+    'soucet pres dny odpovida podilu kontrol',
+    $uptime_from_days([['total' => 1440, 'up' => 1440], ['total' => 1440, 'up' => 1430]]),
+    99.653
+);
+check(
+    'cely den vypadku snizi mesic spravne',
+    $uptime_from_days(array_merge(
+        array_fill(0, 29, ['total' => 1440, 'up' => 1440]),
+        [['total' => 1440, 'up' => 0]]
+    )),
+    96.667
+);
+
+// --- Upozorneni na zhorsenou odezvu --------------------------------------
+//
+// Prah je zamerne prisny: nad limitem musi byt KAZDA kontrola v okne, ne jen
+// prumer. Alert, ktery houka na jednu pomalou odpoved, se nauci kazdy
+// ignore it - and then miss the real one too.
+$lat_src = file_get_contents(__DIR__ . '/../functions.php');
+
+check_true(
+    'vyhodnoceni bere minimum, ne jen prumer',
+    str_contains($lat_src, '$degraded = $min > $threshold')
+);
+check_true(
+    'do okna jdou jen uspesne kontroly se zmerenou odezvou',
+    str_contains($lat_src, "status = 'up'") && str_contains($lat_src, 'response_time > 0')
+);
+
+// Model stejneho rozhodovani, jake dela SQL + PHP dohromady.
+$decide = function (array $samples, int $threshold, bool $alert_sent): string {
+    $samples = array_values(array_filter($samples, fn($v) => $v !== null && $v > 0));
+    if (count($samples) < 2) {
+        return 'ok';
+    }
+    $degraded = min($samples) > $threshold;
+    if ($degraded && !$alert_sent) return 'degraded';
+    if (!$degraded && $alert_sent) return 'recovered';
+    return 'ok';
+};
+
+check('trvale pomale = upozorneni', $decide([900, 950, 880], 500, false), 'degraded');
+check('jedna pomala odpoved neposila nic', $decide([80, 900, 75], 500, false), 'ok');
+check('jedno mereni na rozhodnuti nestaci', $decide([900], 500, false), 'ok');
+check('opakovane se nehlasi znovu', $decide([900, 950], 500, true), 'ok');
+check('navrat pod limit se ohlasi', $decide([90, 85], 500, true), 'recovered');
+check('bez odeslaneho alertu se navrat nehlasi', $decide([90, 85], 500, false), 'ok');
+// Prah presne na hranici: rovnost neni prekroceni.
+check('hodnota rovna prahu neni zpomaleni', $decide([500, 500], 500, false), 'ok');
+
+// cron's loop body is bk_cron_check_monitor() now: the latch, the fresh
+// reads of last_details, the response time it logs, the agent fallback and
+// the keyword of both attempts run on a real database in run_api_tests.php.
+$cron_src = file_get_contents(__DIR__ . '/../cron.php');
+
+// Who wrote a row (r024): node_api.php names its rows 'probe' itself and
+// takes no source from the request. cron's rows run in run_api_tests.php.
+$na_src = file_get_contents(__DIR__ . '/../node_api.php');
+check('node_api zapisuje řádek jako sondu, zdroj z požadavku nebere',
+    preg_match_all("/INSERT INTO monitor_logs \(monitor_id, status, response_time, error_message, checked_from, source\) VALUES \(\?, \?, \?, \?, \?, 'probe'\)/", $na_src), 1);
+
+// Both branches of check_http must RETURN the verdict.
+$fn_src = file_get_contents(__DIR__ . '/../functions.php');
+check('check_http vrací verdikt bk_http_verdict v cURL i náhradní větvi',
+    preg_match_all('/\$verdict = bk_http_verdict\([^;]*\$body_keyword\);\s*return array_merge\(\[\s*\'status\' => \$verdict\[\'status\'\],\s*\'response_time\' => \$duration,\s*\'error\' => \$verdict\[\'error\'\]/', $fn_src), 2);
+check_false('SMS neřeže chybovou zprávu po bajtech',
+    (bool)preg_match('/substr\(\$error_msg, 0,/', $fn_src));
+
+
+// --- Storage alerts: colour, page, and what a recovery does NOT do ---------
+// (CORE 6.4). `storage_recovered` is shared by `disk_temp_normal`, `fs_freed`
+// and by the OTHER disks of the same router, so an automatic resolve could
+// close the page of a disk that is still failing.
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_pagerduty_action', 'bk_alert_color_class', 'bk_pagerduty_dedup_key',
+]);
+if (function_exists('bk_pagerduty_action')) {
+    check('storage_failing pageuje', bk_pagerduty_action('storage_failing'), 'trigger');
+    check('storage_recovered nezavírá incident', bk_pagerduty_action('storage_recovered'), null);
+    check('storage_warning nepageuje', bk_pagerduty_action('storage_warning'), null);
+    check('výpadek WAN nezavře incident disku',
+        [bk_pagerduty_dedup_key(6, 'storage_failing'), bk_pagerduty_dedup_key(6, 'wan_restored')],
+        ['bk-monitor-6-storage', 'bk-monitor-6-wan']);
+    // Every trigger and the resolve that belongs to it (R148).
+    foreach ([['wan_lost', 'wan_restored'], ['lte_backup_lost', 'lte_backup_restored'], ['down', 'up'], ['agent_offline', 'up']] as [$pd_problem, $pd_recovery]) {
+        check("{$pd_recovery} zavře právě {$pd_problem}", bk_pagerduty_dedup_key(6, $pd_problem), bk_pagerduty_dedup_key(6, $pd_recovery));
+    }
+    check('obnovení WAN nezavře výpadek serveru', bk_pagerduty_dedup_key(6, 'wan_restored') === bk_pagerduty_dedup_key(6, 'down'), false);
+    check('obnovení LTE nezavře výpadek WAN', bk_pagerduty_dedup_key(6, 'lte_backup_restored') === bk_pagerduty_dedup_key(6, 'wan_lost'), false);
+    check('barvy tří stavů úložiště',
+        [bk_alert_color_class('storage_failing'), bk_alert_color_class('storage_warning'),
+            bk_alert_color_class('storage_recovered')],
+        ['bad', 'warn', 'good']);
+}
+
+// =======================================================================
+// 5. ROUTERS IN THE WEEKLY DIGEST (CORE 3.8)
+// The e-mail is what most owners ever read, so what it prints has to be
+// decided by data and not by the language it happens to be built in: the
+// split into "new" and "unchanged", the facts line and the sentences of
+// each item.
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_router_rec_thresholds', 'bk_rec_num', 'bk_rec_band_label', 'bk_rec_item', 'bk_rec_sort_items',
+    'bk_router_rec_split', 'bk_router_rec_render', 'bk_digest_router_new_split', 'bk_digest_router_facts_lines',
+    'bk_rec_days_with_data', 'bk_router_rec_window', 'bk_format_bytes_cz',
+]);
+
+if (function_exists('bk_digest_router_new_split')) {
+    $week = '2026-W39';
+    $dg_item = fn (string $key, string $sev): array => bk_rec_item('disk_temp_warm', $key, 'storage', $sev,
+        ['kind' => 'disk', 'disk_key' => $key], ['disk' => 'SSD (sda)', 'name' => 'sda', 'avg_c' => 67, 'max_c' => 69, 'limit_c' => 70]);
+
+    $split = bk_digest_router_new_split([$dg_item('a', 'warning')], [], $week);
+    check('položka bez historie jde do e-mailu celá', count($split['full']), 1);
+
+    $split = bk_digest_router_new_split([$dg_item('a', 'warning')],
+        ['a' => ['severity' => 'warning', 'first_digest_week' => '2026-W30']], $week);
+    check('stará položka je jen titulek v řádku beze změny', [count($split['full']), count($split['open'])], [0, 1]);
+
+    $split = bk_digest_router_new_split([$dg_item('a', 'critical')],
+        ['a' => ['severity' => 'critical', 'first_digest_week' => '2026-W30']], $week);
+    check('kritická položka je celá i po letech', count($split['full']), 1);
+
+    $split = bk_digest_router_new_split([$dg_item('a', 'warning')],
+        ['a' => ['severity' => 'info', 'first_digest_week' => '2026-W30']], $week);
+    check('položka, která se zhoršila, je zase celá', count($split['full']), 1);
+
+    $split = bk_digest_router_new_split([$dg_item('a', 'info')],
+        ['a' => ['severity' => 'warning', 'first_digest_week' => '2026-W30']], $week);
+    check('položka, která se zlepšila, celá není', count($split['open']), 1);
+
+    // A retry of the same week must render the same e-mail: the first build
+    // stamped first_digest_week with THIS week.
+    $split = bk_digest_router_new_split([$dg_item('a', 'warning')],
+        ['a' => ['severity' => 'warning', 'first_digest_week' => $week]], $week);
+    check('opakované sestavení ve stejném týdnu vypadá stejně', count($split['full']), 1);
+}
+
+if (function_exists('bk_router_rec_split')) {
+    $mute_item = bk_rec_item('disk_temp_warm', 'disk_temp_warm:d:x', 'storage', 'warning',
+        ['kind' => 'disk', 'disk_key' => 'x'], ['disk' => 'SSD (sda)', 'name' => 'sda']);
+    $muted = ['disk_temp_warm:d:x' => ['muted_at' => '2026-09-01 10:00:00', 'muted_severity' => 'warning',
+        'mute_reason' => 'vím o tom', 'first_seen' => '2026-08-01 10:00:00']];
+    $res = bk_router_rec_split([$mute_item], $muted);
+    check('ztlumená položka se do e-mailu nedostane', [count($res['items']), count($res['muted'])], [0, 1]);
+
+    $worse = $mute_item;
+    $worse['severity'] = 'critical';
+    $res = bk_router_rec_split([$worse], $muted);
+    check('ztlumená položka se vrátí, když se zhorší', count($res['items']), 1);
+    check_true('a přizná, že byla ztlumená', !empty($res['items'][0]['params']['was_muted']));
+    check('otevřeno od data z uloženého stavu', $res['items'][0]['openSince'], '2026-08-01 10:00:00');
+}
+
+if (function_exists('bk_router_rec_render')) {
+    $GLOBALS['BK_LANG'] = 'cs';
+    $GLOBALS['BK_STRINGS'] = require __DIR__ . '/../lang/cs.php';
+    $warm = bk_rec_item('disk_temp_warm', 'disk_temp_warm:d:x', 'storage', 'warning', ['kind' => 'disk'],
+        ['disk' => 'KINGSTON (sda)', 'name' => 'sda', 'avg_c' => 67.0, 'max_c' => 69.0, 'limit_c' => 70]);
+    $cs = bk_router_rec_render($warm);
+    check('titulek pravidla zná jméno disku', $cs['title'], 'Disk sda je trvale teplý');
+    check_true('naměřená věta nese průměr, maximum i limit',
+        str_contains($cs['measured'], '67') && str_contains($cs['measured'], '69') && str_contains($cs['measured'], '70'));
+    check_true('rada říká, kdy teprve přijde upozornění', str_contains($cs['action'], '70 °C'));
+    $en = bk_with_email_lang('en', fn () => bk_router_rec_render($warm));
+    check('stejná položka se vykreslí i anglicky', $en['title'], 'Disk sda runs warm all the time');
+    check('a jazyk se vrátí zpátky', $GLOBALS['BK_LANG'], 'cs');
+
+    // A rule whose text was never written must still say WHAT fired. The id
+    // is deliberately one no rule uses: every id of the rank list now has its
+    // texts (the Wi-Fi twelve landed last), so a real one would not reach the
+    // fallback any more.
+    $unknown = bk_rec_item('future_rule', 'future_rule:5g', 'wifi', 'warning', ['kind' => 'band'], []);
+    check('pravidlo bez textů se přizná svým id', bk_router_rec_render($unknown)['title'], 'future_rule');
+
+    $fs = bk_rec_item('fs_nearly_full', 'fs_nearly_full:m:abc', 'storage', 'critical', ['kind' => 'mount'],
+        ['mount' => '/srv', 'pct' => 98.5, 'free' => 1073741824.0, 'schnapps' => true]);
+    $fs_cs = bk_router_rec_render($fs);
+    check('plný oddíl se jmenuje přípojným bodem', $fs_cs['title'], 'Plný oddíl /srv');
+    check_true('a rada na Turrisu zmíní snapshoty', str_contains($fs_cs['action'], 'schnapps'));
+}
+
+if (function_exists('bk_digest_router_facts_lines')) {
+    $lines = bk_digest_router_facts_lines(['radios' => [[
+        'band' => '5GHz', 'channel' => 36, 'generation' => 6, 'width_mhz' => 80, 'encryption' => 'wpa2_wpa3',
+        'clients' => 4, 'clients_gen' => ['wifi6' => 2, 'wifi5' => 1, 'wifi4' => 1],
+        'noise_week' => -92.0, 'busy_week' => 3.5,
+    ]], 'disks' => [[
+        'name' => 'sda', 'model' => 'KINGSTON SUV500MS120G', 'transport' => 'sata', 'rotational' => false,
+        'size_bytes' => 120034123776, 'smart_state' => 'ok', 'smart_passed' => true, 'temperature_c' => 67,
+        'wear_pct' => 0.0, 'written_bytes' => 451021000000, 'runtime_bad_blocks' => 3, 'reallocated_sectors' => 0,
+    ]]]);
+    check('fakta popíšou rádio i disk', count($lines), 2);
+    check_true('řádek rádia nese pásmo, generaci, šířku, kanál a klienty',
+        str_contains($lines[0], '5 GHz · Wi-Fi 6 · 80 MHz · kanál 36')
+        && str_contains($lines[0], '4 klienti (Wi-Fi 6: 2, Wi-Fi 5: 1, Wi-Fi 4: 1)'));
+    check_true('a týdenní šum i vytížení', str_contains($lines[0], 'šum -92 dBm') && str_contains($lines[0], 'vytížení 3,5 %'));
+    check_true('řádek disku přizná stabilní vadné bloky místo poplachu',
+        str_contains($lines[1], 'vadné bloky za běhu: 3') && str_contains($lines[1], 'SMART v pořádku'));
+    check_false('nulové přemapované sektory se nevypisují', str_contains($lines[1], 'přemapované'));
+    // No SSID may ever appear in a router text (CORE 3.7 / 3.10).
+    check_false('fakta neobsahují SSID', str_contains(implode(' ', $lines), 'Domov'));
+
+    $sparse = bk_digest_router_facts_lines(['radios' => [[
+        'band' => '2.4GHz', 'channel' => null, 'generation' => null, 'width_mhz' => null, 'encryption' => null,
+        'clients' => null, 'clients_gen' => null, 'noise_week' => null, 'busy_week' => null,
+    ]], 'disks' => []]);
+    check('nezměřené údaje se vynechávají, ne nulují', $sparse[0], '2,4 GHz');
+    // The monthly heatmap's day labels: none of the keys existed, and the
+    // e-mail showed "digest_day_mon" in both languages.
+    $dg_days = ['digest_day_mon', 'digest_day_tue', 'digest_day_wed', 'digest_day_thu', 'digest_day_fri', 'digest_day_sat', 'digest_day_sun'];
+    check('dny v heatmapě česky a anglicky', [
+        bk_with_email_lang('cs', fn (): string => implode(' ', array_map('t', $dg_days))),
+        bk_with_email_lang('en', fn (): string => implode(' ', array_map('t', $dg_days))),
+    ], ['Po Út St Čt Pá So Ne', 'Mon Tue Wed Thu Fri Sat Sun']);
+    // Czech plural: 1 klient, 2-4 klienti, 0 and 5+ klientů.
+    $dg_clients = fn (int $n): string => bk_digest_router_facts_lines(['radios' => [[
+        'band' => '5GHz', 'channel' => null, 'generation' => null, 'width_mhz' => null, 'encryption' => null,
+        'clients' => $n, 'clients_gen' => null, 'noise_week' => null, 'busy_week' => null,
+    ]], 'disks' => []])[0];
+    check('počet klientů ve správném tvaru, i nula', array_map($dg_clients, [0, 1, 2, 4, 5]),
+        ['5 GHz · 0 klientů', '5 GHz · 1 klient', '5 GHz · 2 klienti', '5 GHz · 4 klienti', '5 GHz · 5 klientů']);
+}
+
+if (function_exists('bk_rec_days_with_data')) {
+    $window = bk_router_rec_window('2026-09-21');
+    check('týden končí dnem před zadaným', [$window['days'][0], end($window['days'])], ['2026-09-14', '2026-09-20']);
+    check('předchozí týden na něj navazuje', end($window['prev_days']), '2026-09-13');
+    $window['metrics']['cpu'] = [
+        '2026-09-14' => ['avg' => 5.0, 'samples' => 1440],
+        '2026-09-15' => ['avg' => 5.0, 'samples' => 300],
+        '2026-09-16' => ['avg' => 5.0, 'samples' => 1440],
+        '2026-09-13' => ['avg' => 5.0, 'samples' => 1440],
+    ];
+    check('den s málo vzorky se do týdne nepočítá a starší den taky ne', bk_rec_days_with_data($window), 2);
+}
+
+// --- cron: the router tables really are pruned ----------------------------
+// Nothing executes cron.php, so the only thing that can be checked here is
+// that the two retention functions are CALLED, and called inside the prune
+// try block - outside it a PDOException would take the whole cron run down
+// with it, and every later step (digests, rollups) would stop with it.
+$prune_block = (function () use ($cron_src): string {
+    $start = strpos($cron_src, '// Prune old logs');
+    $end = strpos($cron_src, 'Chyba při čištění starých logů', $start === false ? 0 : $start);
+    return $start !== false && $end !== false ? substr($cron_src, $start, $end - $start) : '';
+})();
+check_true('cron maže historii disků a stavy doporučení voláním bk_prune_router_health',
+    str_contains($prune_block, 'bk_prune_router_health($pdo)'));
+check_true('cron maže stará měření WAN voláním bk_prune_wan_data',
+    str_contains($prune_block, 'bk_prune_wan_data($pdo)'));
+check_true('cron řekne, kolik toho smazal',
+    str_contains($prune_block, 'Zdraví routeru: smazáno ') && str_contains($prune_block, 'Měření WAN: smazáno '));
+
+// --- The Routers section is WEEKLY only (CORE 3.8, X16) --------------------
+// `build_digest_data` needs thirty other functions, so the guard is read from
+// the source: the section asks what a WEEK of measurements says, and a
+// monthly e-mail carrying it would compare a week's items with a month's
+// heading. The mutation "call bk_digest_routers unconditionally" turns this
+// red and nothing else does.
+$fn_src = (string)file_get_contents(__DIR__ . '/../functions.php');
+$digest_routers_call = (function () use ($fn_src): string {
+    $at = strpos($fn_src, '$rt = bk_digest_routers(');
+    if ($at === false) {
+        return '';
+    }
+    $from = max(0, $at - 200);
+    return substr($fn_src, $from, $at - $from);
+})();
+check_true('sekce Routery se staví jen pro týdenní přehled',
+    str_contains($digest_routers_call, '$period === ' . "'weekly'"));
+check_true('měsíční přehled sekci Routery nestaví',
+    substr_count($fn_src, 'bk_digest_routers($pdo') === 1);
+
+// =======================================================================
+// Outgoing message log - the logging has to sit in ONE place
+// =======================================================================
+// bk_log_notification() used to be called at ONE of the nine send_email()
+// call sites, so only alerts left a trace and "did that invitation go out?"
+// had no answer. The logging moved inside send_email(); these checks guard
+// that it stays there, alone, and that every call site says WHICH kind of
+// message it is sending.
+$mail_src = (string)file_get_contents(__DIR__ . '/../functions.php');
+// Comments explain WHY the second log call is gone - and would otherwise make
+// the checks below believe it is still there.
+$without_comments = fn(string $code): string => (string)preg_replace('~^\s*(//|\*|/\*).*$~m', '', $code);
+
+$send_email_body = (function () use ($mail_src): string {
+    $start = strpos($mail_src, 'function send_email(');
+    $end = strpos($mail_src, 'function bk_deliver_email(', $start === false ? 0 : $start);
+    return $start !== false && $end !== false ? substr($mail_src, $start, $end - $start) : '';
+})();
+check_true('send_email() přijímá kontext zprávy jako pátý argument',
+    str_contains($send_email_body, 'array $context = []'));
+check_true('a sám zapíše jeden řádek do protokolu',
+    substr_count($send_email_body, 'bk_log_notification(') === 1);
+check_true('protokolu se předává předmět, nikdy tělo zprávy',
+    str_contains($send_email_body, '$subject') && !str_contains($send_email_body, 'bk_log_notification($html_body')
+    && !preg_match('/bk_log_notification\((?:[^;]*?)\$html_body/s', $send_email_body));
+
+$deliver_body = (function () use ($mail_src): string {
+    $start = strpos($mail_src, 'function bk_deliver_email(');
+    $end = strpos($mail_src, 'function send_sms(', $start === false ? 0 : $start);
+    return $start !== false && $end !== false ? substr($mail_src, $start, $end - $start) : '';
+})();
+check_true('doručovací funkce sama nic neprotokoluje (jinak by řádky byly dva)',
+    $deliver_body !== '' && !str_contains($without_comments($deliver_body), 'bk_log_notification('));
+
+// The e-mail branch of trigger_notifications(): send_email() logs the attempt,
+// so the explicit call that used to stand right after it would double every row.
+$alert_mail_branch = (function () use ($mail_src): string {
+    $start = strpos($mail_src, '$render_alert_email(bk_recipient_lang($rec));');
+    $end = strpos($mail_src, '// SMS notifications', $start === false ? 0 : $start);
+    return $start !== false && $end !== false ? substr($mail_src, $start, $end - $start) : '';
+})();
+check_true('větev alertu e-mailem neprotokoluje podruhé',
+    $alert_mail_branch !== '' && !str_contains($without_comments($alert_mail_branch), 'bk_log_notification('));
+check_true('a předává druh zprávy i monitor', str_contains($alert_mail_branch, "'kind' => 'alert'")
+    && str_contains($alert_mail_branch, "'monitor_id' =>"));
+
+// Every call site names its kind. Without this a new feature adds a tenth
+// send_email() and its messages land in the log as anonymous 'other'.
+$kind_gaps = [];
+$kind_calls = 0;
+$kinds_used = [];
+foreach (['functions.php', 'api.php', 'admin.php'] as $mail_file) {
+    $src = (string)file_get_contents(__DIR__ . '/../' . $mail_file);
+    preg_match_all('/(?<![a-z_])send_email\s*\(/', $src, $hits, PREG_OFFSET_CAPTURE);
+    foreach ($hits[0] as [$_, $offset]) {
+        $line_no = substr_count($src, "\n", 0, $offset) + 1;
+        $line = strtok(substr($src, (int)strrpos(substr($src, 0, $offset), "\n")), "\n");
+        if (str_contains((string)$line, 'function send_email(') || str_starts_with(ltrim((string)$line), '*')
+            || str_starts_with(ltrim((string)$line), '//')) {
+            continue;
+        }
+        $kind_calls++;
+        // The arguments may wrap over several lines - look at the call as a whole.
+        $call = substr($src, $offset, 400);
+        if (!str_contains($call, "'kind' =>")) {
+            $kind_gaps[] = $mail_file . ':' . $line_no;
+        }
+        if (preg_match("/'kind' => '([a-z_]+)'/", $call, $km)) {
+            $kinds_used[$km[1]] = true;
+        }
+    }
+}
+// Nine call sites when the log was built, ten since the daily reminder,
+// eleven since the admin notice (the self-check). The number is hard-coded on
+// purpose: a new send_email() has to be noticed here, where someone decides
+// which kind it writes into the log.
+check_true('kontrola opravdu našla všech jedenáct volání', $kind_calls === 11);
+check('každé volání send_email() uvádí druh zprávy', $kind_gaps, []);
+
+if (function_exists('bk_notification_kinds')) {
+    $kinds = bk_notification_kinds();
+    check_true('seznam druhů zná výstrahu i denní připomínku',
+        in_array('alert', $kinds, true) && in_array('daily_reminder', $kinds, true));
+    // notification_health judges a channel by these and no others; written
+    // out so a kind moving in or out of it is a decision someone sees here.
+    check('stav kanálů čte jen zprávy o monitoringu', bk_notification_kinds(true),
+        ['alert', 'daily_reminder', 'digest', 'admin_notice', 'escalation']);
+    // Every kind that a call site really uses must be in the canonical list,
+    // otherwise the admin filter would offer a value nothing ever writes - or
+    // worse, hide one that does.
+    check('použité druhy jsou všechny v kanonickém seznamu',
+        array_values(array_diff(array_keys($kinds_used), $kinds)), []);
+}
+
+// Every logged attempt says what is known about it: sent, failed, unknown or
+// skipped. A call without it leaves delivery NULL, which reads back as a
+// guess from ok - the guess that logged a refused CallMeBot message as sent.
+// Tokens, not a regex: the calls span lines, carry comments and nest parens.
+$delivery_gaps = [];
+$delivery_calls = 0;
+foreach (['functions.php', 'api.php', 'admin.php', 'cron.php', 'agent_api.php'] as $log_file) {
+    $tokens = token_get_all((string)file_get_contents(__DIR__ . '/../' . $log_file));
+    $n = count($tokens);
+    for ($i = 0; $i < $n; $i++) {
+        if (!is_array($tokens[$i]) || $tokens[$i][0] !== T_STRING || $tokens[$i][1] !== 'bk_log_notification') {
+            continue;
+        }
+        $prev = $i - 1;
+        while ($prev >= 0 && is_array($tokens[$prev]) && $tokens[$prev][0] === T_WHITESPACE) {
+            $prev--;
+        }
+        if ($prev >= 0 && is_array($tokens[$prev]) && $tokens[$prev][0] === T_FUNCTION) {
+            continue;
+        }
+        $j = $i + 1;
+        while ($j < $n && is_array($tokens[$j]) && $tokens[$j][0] === T_WHITESPACE) {
+            $j++;
+        }
+        if (($tokens[$j] ?? null) !== '(') {
+            continue;
+        }
+        $delivery_calls++;
+        $depth = 0;
+        $named = false;
+        for (; $j < $n; $j++) {
+            $tok = $tokens[$j];
+            if ($tok === '(') {
+                $depth++;
+            } elseif ($tok === ')') {
+                if (--$depth === 0) {
+                    break;
+                }
+            } elseif ($depth === 1 && is_array($tok) && $tok[0] === T_STRING && $tok[1] === 'delivery') {
+                $k = $j + 1;
+                while ($k < $n && is_array($tokens[$k]) && $tokens[$k][0] === T_WHITESPACE) {
+                    $k++;
+                }
+                $named = $named || ($tokens[$k] ?? null) === ':';
+            }
+        }
+        if (!$named) {
+            $delivery_gaps[] = $log_file . ':' . $tokens[$i][2];
+        }
+    }
+}
+// Hard-coded like the send_email() count above: a new call has to be noticed
+// here, where somebody decides what its row may claim. 14, then 12: the
+// reminder's four shared-channel calls became one in bk_send_shared_channels(),
+// and the admin notice added its WhatsApp row. 13 since the escalation logs.
+check('kontrola našla všech 13 volání protokolu', $delivery_calls, 13);
+check('každé volání protokolu uvádí výsledek doručení (delivery:)', $delivery_gaps, []);
+
+// SMS: a refusal says why. Only the paths that stop before any request are
+// run here; nothing in this suite may reach a gateway.
+bk_test_load_functions(__DIR__ . '/../functions.php', ['send_sms']);
+bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defaults']);
+if (function_exists('send_sms') && function_exists('get_setting')) {
+    $sms_saved = $GLOBALS['system_settings'] ?? null;
+    $GLOBALS['system_settings'] = ['sms_gateway_type' => ''];
+    check('bez brány SMS neodejde', send_sms('+420777123456', 'x'), false);
+    check('a řekne proč', $GLOBALS['last_sms_error'] ?? null, 'No SMS gateway is configured.');
+    $GLOBALS['system_settings'] = ['sms_gateway_type' => 'twilio'];
+    check('nenastavené Twilio neodešle', send_sms('+420777123456', 'x'), false);
+    check_true('a jmenuje, co chybí', str_contains((string)($GLOBALS['last_sms_error'] ?? ''), 'twilio_sid'));
+    $GLOBALS['system_settings'] = ['sms_gateway_type' => 'smsbrana'];
+    check('nenastavená SMSbrána neodešle', send_sms('+420777123456', 'x'), false);
+    check_true('a jmenuje, co chybí', str_contains((string)($GLOBALS['last_sms_error'] ?? ''), 'smsbrana_user'));
+    $GLOBALS['system_settings'] = $sms_saved;
+}
+
+// =======================================================================
+// E-mail - what the row may claim
+//
+// ok = 1 covered both an SMTP 250 and a mail() that merely returned true.
+// Only the first is a confirmation; the second is "handed over, unknown".
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_smtp_failure_reason', 'bk_mail_missing_settings']);
+if (function_exists('bk_smtp_failure_reason')) {
+    check('důvod selhání SMTP bere ErrorInfo a kód serveru',
+        bk_smtp_failure_reason('SMTP Error: data not accepted.', 'x',
+            ['error' => 'DATA END command failed', 'detail' => 'Message rejected', 'smtp_code' => '550', 'smtp_code_ex' => '5.7.1'], 'a@b.cz'),
+        'SMTP Error: data not accepted. (server: 550 5.7.1 Message rejected)');
+    // '' ?? 'x' is '' - an empty ErrorInfo used to leave the reason empty.
+    check('prázdné ErrorInfo propadne na text výjimky',
+        bk_smtp_failure_reason('', 'SMTP connect() failed.', [], 'a@b.cz'), 'SMTP connect() failed.');
+    check('adresa příjemce se v důvodu nahradí',
+        bk_smtp_failure_reason('SMTP Error: The following recipients failed: Nekdo@Example.com: 550 No such user', '',
+            ['detail' => 'No such user'], 'nekdo@example.com'),
+        'SMTP Error: The following recipients failed: <recipient>: 550 No such user');
+    check('i adresa odesílatele (přihlašovací jméno SMTP)',
+        bk_smtp_failure_reason('SMTP Error: The following From address failed: Status@Example.com : 553 not allowed', '',
+            [], 'nekdo@example.com', 'status@example.com'),
+        'SMTP Error: The following From address failed: <sender> : 553 not allowed');
+    check('bez jakéhokoli textu zůstane srozumitelná věta',
+        bk_smtp_failure_reason('', '', [], ''), 'SMTP send failed without a message.');
+    check('chybějící nastavení SMTP se vyjmenují',
+        bk_mail_missing_settings('', 'odesilatel@example.com', ' ', true), ['smtp_host', 'smtp_pass']);
+    check('i chybějící knihovna', bk_mail_missing_settings('h', 'u', 'p', false), ['lib/PHPMailer.php']);
+}
+
+// The mail() fallback runs only in a child PHP whose sendmail is `cat`, so no
+// message can leave this machine; the address is .invalid on top of that.
+$mail_child = function (string $sendmail): array {
+    $code = 'require ' . var_export(__DIR__ . '/assert_helpers.php', true) . ';'
+        . 'bk_test_load_functions(' . var_export(__DIR__ . '/../functions.php', true)
+        . ', ["bk_deliver_email", "bk_mail_missing_settings", "bk_smtp_failure_reason"]);'
+        . 'bk_test_load_functions(' . var_export(__DIR__ . '/../db.php', true) . ', ["get_setting", "bk_settings_defaults"]);'
+        . '$GLOBALS["system_settings"] = ["smtp_host" => "", "smtp_user" => "", "smtp_pass" => "", "site_title" => "T"];'
+        . '$ok = bk_deliver_email("nikdo@example.invalid", "Předmět", "<p>tělo</p>");'
+        . 'echo json_encode([ini_get("sendmail_path"), $ok, $GLOBALS["last_mail_method"], $GLOBALS["last_mail_delivery"],'
+        . ' $GLOBALS["last_mail_error"], $GLOBALS["last_mail_reply"]]);';
+    $out = [];
+    // Quoted: in an ini value an unquoted ';' starts a comment.
+    exec(escapeshellarg(PHP_BINARY) . ' -d ' . escapeshellarg('sendmail_path="' . $sendmail . '"')
+        . ' -r ' . escapeshellarg($code) . ' 2>/dev/null', $out);
+    $got = json_decode((string)end($out), true);
+    return is_array($got) ? $got : [];
+};
+$mc = $mail_child('cat >/dev/null');
+check('podřízené PHP opravdu posílá do cat', $mc[0] ?? null, 'cat >/dev/null');
+check('mail(), který vrátil true: předáno, nepotvrzeno', [$mc[1] ?? null, $mc[2] ?? null, $mc[3] ?? null], [true, 'fallback', 'unknown']);
+check_true('a řádek řekne proč a co chybí',
+    str_contains((string)($mc[4] ?? ''), 'nothing confirmed delivery')
+    && str_contains((string)($mc[4] ?? ''), 'smtp_host, smtp_user, smtp_pass'));
+check('odpověď serveru tu žádná není', array_key_exists(5, $mc) ? $mc[5] : 'CHYBÍ', null);
+$mc = $mail_child('cat >/dev/null; false');
+check('podřízené PHP opravdu posílá do selhávajícího cat', $mc[0] ?? null, 'cat >/dev/null; false');
+check('mail(), který vrátil false: neodesláno', [$mc[1] ?? null, $mc[3] ?? null], [false, 'failed']);
+check_true('s důvodem', trim((string)($mc[4] ?? '')) !== '');
+
+// =======================================================================
+// WhatsApp (CallMeBot) - what counts as sent
+//
+// Any HTTP 2xx used to be "sent", with the body thrown away. CallMeBot answers
+// its refusals with 2xx too (a used-up quota, a paused account, a wrong key),
+// so those were logged as sent while nothing arrived.
+// =======================================================================
+// The stub transport, defined before the sender is loaded: nothing in this
+// suite can reach CallMeBot. Every URL is kept, so a test can see whether a
+// request was made at all.
+// Fails closed: if the real transport is already loaded (a runner that
+// required functions.php first), the tests below would send real requests,
+// so the suite stops instead of quietly using it. The definition stays inside
+// the else: an unconditional one is bound at compile time, before this check.
+if (function_exists('bk_callmebot_request')) {
+    fwrite(STDERR, "bk_callmebot_request() is already defined, so the WhatsApp tests would reach"
+        . " CallMeBot. Stopping.\n");
+    exit(1);
+} else {
+    function bk_callmebot_request(string $url): array {
+        $GLOBALS['bk_test_callmebot_urls'][] = $url;
+        return $GLOBALS['bk_test_callmebot_answer']
+            ?? ['code' => 0, 'body' => '', 'errno' => 7, 'error' => 'stub: no answer set', 'sent' => false];
+    }
+}
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_send_whatsapp', 'bk_callmebot_verdict', 'bk_callmebot_scrub', 'bk_log_notification',
+]);
+check_true('CallMeBot se volá jen přes testovací náhradu',
+    (new ReflectionFunction('bk_callmebot_request'))->getFileName() === __FILE__);
+
+if (function_exists('bk_callmebot_verdict')) {
+    $wa_phone = '+420 777 123 456';
+    $wa_key = '1234567';
+    // The alert text itself says ERROR: a verdict read from the whole body
+    // would call this refusal a success or this success a refusal.
+    $wa_text = "🟢 Monitor Router & NAS je opět v pořádku. Čas: 27.09.2026 09:25:07. Důvod: disk ERROR cleared <sda>";
+    $wa_echo = fn (string $status): string => '<p>Message to: +420777123456<br>Text to send: '
+        . htmlspecialchars($wa_text, ENT_QUOTES) . '<br><br><b>' . $status . '</b></p>';
+    $wa_v = fn (int $code, string $body, int $errno = 0, string $error = '', bool $sent = true): array
+        => bk_callmebot_verdict($code, $body, $errno, $error, $sent, $wa_phone, $wa_key, $wa_text);
+    $wa_all = [];
+
+    $v = $wa_all[] = $wa_v(200, $wa_echo('Message queued. You will receive it in a few seconds. You have 13 Messages left'));
+    check('200 s „Message queued" je odesláno', $v['delivery'], 'sent');
+    check('a nemá důvod k selhání', $v['reason'], null);
+    check_true('odpověď poskytovatele zůstane, i se zbývajícím počtem',
+        str_contains((string)$v['reply'], 'Message queued') && str_contains((string)$v['reply'], '13 Messages left'));
+    check_false('text zprávy (s ERROR) o verdiktu nerozhodl', str_contains((string)$v['reply'], 'ERROR'));
+
+    $v = $wa_all[] = $wa_v(200, $wa_echo('APIKey is invalid. Please check the key.'));
+    check('200 se špatným klíčem je neodesláno', $v['delivery'], 'failed');
+    check_true('a důvod říká odmítnuto, ne „nerozpoznáno"',
+        str_contains((string)$v['reason'], 'refused') && !str_contains((string)$v['reason'], 'unrecognised'));
+    $v = $wa_all[] = $wa_v(200, $wa_echo('Your Account is Paused due to technical issues. Please send the word "resume" to the bot.'));
+    check('200 s pozastaveným účtem je neodesláno', $v['delivery'], 'failed');
+    check_true('a důvod říká proč', str_contains((string)$v['reason'], 'Paused'));
+    $v = $wa_all[] = $wa_v(200, $wa_echo('Message queued. ERROR: something went wrong'));
+    check('„queued" s chybou v téže odpovědi není potvrzení', $v['delivery'], 'failed');
+    $v = $wa_all[] = $wa_v(200, '');
+    check('200 s prázdným tělem je neodesláno', [$v['delivery'], str_contains((string)$v['reason'], 'empty reply')], ['failed', true]);
+    $v = $wa_all[] = $wa_v(200, $wa_echo('Thank you for using CallMeBot'));
+    check('200 bez značky přijetí je neodesláno', [$v['delivery'], str_contains((string)$v['reason'], 'unrecognised reply')], ['failed', true]);
+    $v = $wa_all[] = $wa_v(200, 'Message queued');
+    check('odpověď bez ozvěny zprávy se čte celá', $v['delivery'], 'sent');
+
+    // The community table (ioBroker whatsapp-cmb): every one of these is a 2xx
+    // that production counted as sent.
+    foreach ([201 => 'Wrong parameters', 202 => 'Number banned', 203 => 'API key incorrect',
+              204 => 'Too many messages', 205 => 'Unknown error', 207 => 'Service down',
+              208 => 'Account paused', 209 => 'Quota exceeded'] as $wa_code => $wa_why) {
+        $v = $wa_all[] = $wa_v($wa_code, $wa_code === 204 ? '' : $wa_echo('Your Account is...'));
+        check("CallMeBot {$wa_code} je neodesláno", $v['delivery'], 'failed');
+        check_true("a {$wa_code} řekne proč", str_contains((string)$v['reason'], $wa_why));
+    }
+    $v = $wa_all[] = $wa_v(206, $wa_echo('?'));
+    check('kód mimo tabulku je neodesláno', [$v['delivery'], str_contains((string)$v['reason'], 'unrecognised')], ['failed', true]);
+    $v = $wa_all[] = $wa_v(210, $wa_echo('Message queued to be sent later'));
+    check('210 (odloženo) je nepotvrzené, ne odeslané', $v['delivery'], 'unknown');
+    $v = $wa_all[] = $wa_v(200, $wa_echo('Message queued to be sent later'));
+    check('táž slova se 200 jsou taky nepotvrzená', $v['delivery'], 'unknown');
+    $v = $wa_all[] = $wa_v(503, '<html><head><title>503 Service Unavailable</title></head><body><h1>Service Unavailable</h1><p>nginx</p></body></html>');
+    check('503 je neodesláno', $v['delivery'], 'failed');
+    check_true('důvod nese kód i slova serveru bez HTML',
+        str_contains((string)$v['reason'], '503') && str_contains((string)$v['reply'], 'Service Unavailable')
+        && !str_contains((string)$v['reply'], '<'));
+    $v = $wa_all[] = $wa_v(301, '<a href="https://www.callmebot.com/">Moved</a>');
+    check('přesměrování není doručení', $v['delivery'], 'failed');
+
+    // Transport errors: before the request left, CallMeBot never saw it; after,
+    // nobody can say.
+    $v = $wa_all[] = $wa_v(0, '', 6, 'Could not resolve host: api.callmebot.com', false);
+    check('nedosažitelný CallMeBot je neodesláno', [$v['delivery'], str_contains((string)$v['reason'], 'Could not resolve host')], ['failed', true]);
+    $v = $wa_all[] = $wa_v(0, '', 28, 'Operation timed out after 5001 milliseconds with 0 bytes received', true);
+    check('vypršení po odeslání požadavku je nepotvrzené', $v['delivery'], 'unknown');
+
+    // An echo that differs from what was sent cannot be told apart from the
+    // tail, so nothing in it may decide - and nothing of it may be stored.
+    $v = $wa_all[] = $wa_v(200, '<p>Message to: +420777123456<br>Text to send: Monitor Router je opet v poradku ERROR<br>Message queued</p>');
+    check('neoddělitelná ozvěna je nepotvrzená, ne hádaná', [$v['delivery'], $v['reply']], ['unknown', null]);
+
+    // The status sentence printed before the echo, nothing after it: not the
+    // known shape, so never sent - but not a bare "empty reply" either, and
+    // CallMeBot's words are kept for whoever has to read the row.
+    $v = $wa_all[] = $wa_v(200, '<p>Message queued. You will receive it in a few seconds.</p>' . $wa_echo(''));
+    check('„queued" před ozvěnou je nepotvrzené, ne odeslané ani neodeslané', $v['delivery'], 'unknown');
+    check_true('a odpověď i důvod nesou slova CallMeBotu',
+        str_contains((string)$v['reply'], 'Message queued') && str_contains((string)$v['reason'], 'before the echoed message'));
+    $v = $wa_all[] = $wa_v(200, '<p>Your Account is Paused.</p>' . $wa_echo(''));
+    check('odmítnutí před ozvěnou je neodesláno', $v['delivery'], 'failed');
+    check_true('s textem před ozvěnou místo „empty reply"',
+        str_contains((string)$v['reason'], 'no text after the echoed message') && str_contains((string)$v['reply'], 'Paused'));
+    $v = $wa_all[] = $wa_v(200, $wa_echo(''));
+    check('holá ozvěna bez stavu je prázdná odpověď',
+        [$v['delivery'], str_contains((string)$v['reason'], 'empty reply'), $v['reply']], ['failed', true, null]);
+
+    // Nothing stored may carry the phone, the key or the message itself.
+    $wa_leaks = [];
+    $wa_slice = mb_substr($wa_text, 20, 12, 'UTF-8');
+    foreach ($wa_all as $i => $v) {
+        foreach ([(string)$v['reason'], (string)$v['reply']] as $wa_stored) {
+            foreach (['777123456', '777 123 456', $wa_key, $wa_slice, 'Router & NAS', '<sda>'] as $wa_secret) {
+                if (str_contains($wa_stored, $wa_secret)) {
+                    $wa_leaks[] = "#{$i} obsahuje {$wa_secret}";
+                }
+            }
+        }
+    }
+    check('odpověď ani důvod nenesou telefon, klíč ani text zprávy', $wa_leaks, []);
+    $v = $wa_v(200, 'Message queued. ID 123456789012, phone +420 777 999 888');
+    check_true('dlouhé řady číslic se neukládají',
+        !preg_match('/\d{7}/', (string)$v['reply']) && !str_contains((string)$v['reply'], '777 999 888'));
+}
+
+if (function_exists('bk_send_whatsapp')) {
+    $GLOBALS['bk_test_callmebot_urls'] = [];
+    $wa_r = bk_send_whatsapp('+420 777 123 456', 'Ahoj', '');
+    check('bez klíče je neodesláno', $wa_r['delivery'], 'failed');
+    $wa_r = bk_send_whatsapp('', 'Ahoj', '1234567');
+    check('bez telefonu je neodesláno', $wa_r['delivery'], 'failed');
+    check('a v obou případech nikam nic neodešlo', count($GLOBALS['bk_test_callmebot_urls']), 0);
+
+    $GLOBALS['bk_test_callmebot_answer'] = ['code' => 200, 'body' => 'Message queued', 'errno' => 0, 'error' => '', 'sent' => true];
+    $wa_r = bk_send_whatsapp('777 123 456', 'Ahoj & čau', '1234567');
+    check('potvrzené přijetí je odesláno', $wa_r['delivery'], 'sent');
+    $wa_url = $GLOBALS['bk_test_callmebot_urls'][0] ?? '';
+    check_true('devítimístné číslo dostane +420 a jde na CallMeBot přes https',
+        str_starts_with($wa_url, 'https://api.callmebot.com/whatsapp.php?phone=420777123456&'));
+    check_true('text a klíč jsou v adrese zakódované',
+        str_contains($wa_url, 'text=' . urlencode('Ahoj & čau')) && str_contains($wa_url, 'apikey=1234567'));
+    $GLOBALS['bk_test_callmebot_answer'] = null;
+}
+
+// bk_log_notification() against a real (SQLite) table: the new columns, the
+// whitelist and the length cap.
+if (function_exists('bk_log_notification') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+    $ln_pdo = new PDO('sqlite::memory:');
+    $ln_pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $ln_pdo->exec("CREATE TABLE notification_log (id INTEGER PRIMARY KEY, monitor_id INTEGER, status TEXT,
+        channel TEXT, recipient TEXT, ok INTEGER, error_message TEXT, kind TEXT, subject TEXT, method TEXT,
+        delivery TEXT, provider_reply TEXT)");
+    bk_log_notification($ln_pdo, 3, 'down', 'whatsapp', '+420777123456', true, null, 'alert',
+        delivery: 'sent', reply: str_repeat('Message queued ', 20));
+    bk_log_notification($ln_pdo, 3, 'down', 'whatsapp', '+420777123456', true, null, 'alert', delivery: 'delivered');
+    bk_log_notification($ln_pdo, 3, 'down', 'discord', null, false, 'HTTP 404', 'alert');
+    $ln_rows = $ln_pdo->query("SELECT delivery, provider_reply, ok FROM notification_log ORDER BY id")->fetchAll(PDO::FETCH_ASSOC);
+    check('protokol uloží, co poskytovatel potvrdil', $ln_rows[0]['delivery'] ?? null, 'sent');
+    check('odpověď oříznutá na 190 znaků', mb_strlen((string)($ln_rows[0]['provider_reply'] ?? ''), 'UTF-8'), 190);
+    check_true('hodnota mimo čtyři povolené se uloží jako NULL, ne jako potvrzení',
+        array_key_exists('delivery', $ln_rows[1] ?? []) && $ln_rows[1]['delivery'] === null);
+    check('volání bez výsledku doručení nechá NULL', [$ln_rows[2]['delivery'], $ln_rows[2]['provider_reply']], [null, null]);
+} else {
+    check_true('SQLite ovladač pro test protokolu je k dispozici', false);
+}
+
+// =======================================================================
+// Which channel stopped reaching whom - the /app warning
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_notification_problems', 'bk_mask_recipient']);
+if (function_exists('bk_notification_problems')) {
+    $np_row = fn (string $ch, ?string $to, string $d, string $at, ?string $reply = null, ?string $reason = null, bool $rec = true): array
+        => ['channel' => $ch, 'recipient' => $to, 'delivery' => $d, 'recorded' => $rec, 'reply' => $reply, 'reason' => $reason, 'at' => $at];
+    // The owner's week: WhatsApp confirmed until the quota hit zero, then
+    // refused; the e-mail went through mail() and nobody confirmed any of it.
+    $np = bk_notification_problems([
+        $np_row('whatsapp', '+420777123456', 'sent', '2026-09-25 08:00:00', 'Message queued. You have 1 Messages left'),
+        $np_row('email', 'owner@example.com', 'unknown', '2026-09-25 08:00:01', null, "Handed to the hosting's mail()"),
+        $np_row('whatsapp', '+420777123456', 'sent', '2026-09-26 08:00:00', 'Message queued. You have 0 Messages left'),
+        $np_row('whatsapp', '+420777123456', 'failed', '2026-09-27 06:15:07', null, 'CallMeBot 209: Quota exceeded or banned'),
+        $np_row('email', 'owner@example.com', 'unknown', '2026-09-27 09:25:07', null, "Handed to the hosting's mail()"),
+        $np_row('whatsapp', '+420777123456', 'failed', '2026-09-27 09:25:07', null, 'CallMeBot 209: Quota exceeded or banned'),
+        $np_row('discord', null, 'failed', '2026-09-26 10:00:00', null, 'HTTP 404'),
+        $np_row('discord', null, 'sent', '2026-09-27 10:00:00'),
+    ]);
+    $np_by = array_column($np, null, 'channel');
+    check('WhatsApp, který odmítá: neodesláno', $np_by['whatsapp']['state'] ?? null, 'failed');
+    check('od prvního odmítnutí po posledním potvrzení', [$np_by['whatsapp']['since'] ?? null, $np_by['whatsapp']['count'] ?? null],
+        ['2026-09-27 06:15:07', 2]);
+    check('s posledním důvodem a posledním potvrzeným odesláním',
+        [$np_by['whatsapp']['lastReason'] ?? null, $np_by['whatsapp']['lastSentAt'] ?? null],
+        ['CallMeBot 209: Quota exceeded or banned', '2026-09-26 08:00:00']);
+    check('e-mail přes mail(): nepotvrzeno, celý týden', [$np_by['email']['state'] ?? null, $np_by['email']['count'] ?? null],
+        ['unknown', 2]);
+    check_true('a nic z toho nikdo nepotvrdil',
+        array_key_exists('lastSentAt', $np_by['email'] ?? []) && $np_by['email']['lastSentAt'] === null);
+    check('kanál, který po selhání zase doručil, problém nemá', isset($np_by['discord']), false);
+    check('nejčerstvější problém je první', $np[0]['lastAt'] ?? null, '2026-09-27 09:25:07');
+
+    $np = bk_notification_problems([
+        $np_row('whatsapp', '+420777123456', 'sent', '2026-09-27 08:00:00', 'Message queued. You have 0 Messages left'),
+    ]);
+    check('přijato s „0 messages left" je varování: další zpráva už nepůjde',
+        [$np[0]['state'] ?? null, str_starts_with((string)($np[0]['lastReason'] ?? ''), 'CallMeBot quota at 0')], ['unknown', true]);
+    check('10 zbývajících zpráv problém není', bk_notification_problems([
+        $np_row('whatsapp', '+420777123456', 'sent', '2026-09-27 08:00:00', 'Message queued. You have 10 Messages left'),
+    ]), []);
+    $np = bk_notification_problems([$np_row('whatsapp', '+420777123456', 'unknown', '2026-09-27 08:00:00', null, null, false)]);
+    check('odvozený (starší) řádek se tak označí', $np[0]['legacy'] ?? null, true);
+    check('dva příjemci na jednom kanálu jsou dva problémy', count(bk_notification_problems([
+        $np_row('email', 'a@example.com', 'failed', '2026-09-27 08:00:00'),
+        $np_row('email', 'b@example.com', 'failed', '2026-09-27 08:00:00'),
+        $np_row('email', 'c@example.com', 'sent', '2026-09-27 08:00:00'),
+    ])), 2);
+
+    $np_users = [
+        ['username' => 'spravce', 'email' => 'Owner@Example.com', 'phone' => '777 123 456'],
+        ['username' => 'druhy', 'email' => 'druhy@example.com', 'phone' => null],
+    ];
+    check('telefon: jen poslední tři číslice a jméno účtu podle posledních devíti',
+        bk_mask_recipient('+420777123456', $np_users), ['masked' => '•••456', 'username' => 'spravce']);
+    check('e-mail: první znak a doména, účet podle adresy bez ohledu na velikost',
+        bk_mask_recipient('owner@example.com', $np_users), ['masked' => 'o…@example.com', 'username' => 'spravce']);
+    check('neznámý příjemce zůstane bez jména', bk_mask_recipient('-100123456789', $np_users),
+        ['masked' => '•••789', 'username' => null]);
+    check('webhook bez příjemce', bk_mask_recipient(null, $np_users), ['masked' => null, 'username' => null]);
+    check('akce PagerDuty není číslo, zůstane čitelná', bk_mask_recipient('trigger', $np_users),
+        ['masked' => 'trigger', 'username' => null]);
+    check('kanál Telegramu taky', bk_mask_recipient('@provoz', $np_users), ['masked' => '@provoz', 'username' => null]);
+}
+
+// =======================================================================
+// Daily reminder - the whole path from the database to the message
+//
+// The rule that counts ("what is broken") is tested in run_tests.php without
+// a database. Here the parts are put together: does anything actually leave,
+// how often, and what stays behind in the outgoing message log when nothing
+// does. The database is an in-memory SQLite - the queries are plain enough to
+// run on both, and the alternative would be no coverage of this path at all
+// until someone ran the integration suite with MySQL.
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_send_daily_reminder', 'bk_daily_reminder_collect', 'bk_daily_reminder_select',
+    'bk_daily_reminder_recipients', 'bk_daily_reminder_scoped', 'bk_alert_audience', 'bk_subscription_effective',
+    'bk_daily_reminder_due', 'bk_daily_reminder_text', 'bk_telegram_md',
+    'bk_render_daily_reminder', 'render_email_wrapper', 'bk_log_notification', 'bk_send_shared_channels',
+    'bk_recipient_lang', 'bk_render_per_lang',
+    'bk_heartbeat_evaluate', 'bk_alert_color_class', 'bk_format_duration_secs',
+]);
+bk_test_load_functions(__DIR__ . '/../db.php', ['get_setting', 'bk_settings_defaults', 'bk_monitor_details']);
+
+// The mail stub: nothing leaves the machine, and every attempt is kept so the
+// tests can ask what the reminder said. send_email() writes the log row
+// itself in production - here that row is not the subject of the test.
+// Fails closed like the CallMeBot stub: with the real one loaded, the
+// reminder and admin-notice tests would send real mail.
+if (function_exists('send_email')) {
+    fwrite(STDERR, "send_email() is already defined, so the reminder and admin-notice tests would send real mail."
+        . " Stopping.\n");
+    exit(1);
+} else {
+    function send_email($to, $subject, $html_body, array $extra_headers = [], array $context = []) {
+        $GLOBALS['bk_test_mails'][] = ['to' => $to, 'subject' => $subject, 'body' => $html_body, 'context' => $context];
+        // An address with "selze" is refused, the way an SMTP server refuses one.
+        $ok = !str_contains((string)$to, 'selze');
+        $GLOBALS['last_mail_error'] = $ok ? '' : 'SMTP Error: recipient refused';
+        return $ok;
+    }
+}
+check_true('e-mail se posílá jen přes testovací náhradu', (new ReflectionFunction('send_email'))->getFileName() === __FILE__);
+
+// The digest: how many administrators got it. "Sent" used to mean "at least
+// one mail went", and the button said the digest reached all of them.
+bk_test_load_functions(__DIR__ . '/../functions.php', ['bk_digest_deliver', 'bk_digest_result_message']);
+if (function_exists('bk_digest_deliver')) {
+    $GLOBALS['bk_test_mails'] = [];
+    $dg = bk_digest_deliver([['email' => 'a@example.com', 'email_lang' => 'cs'],
+        ['email' => 'selze@example.com', 'email_lang' => 'cs'], ['email' => 'b@example.com', 'email_lang' => 'en']],
+        fn (string $lang): array => ["Digest $lang", '<p>x</p>']);
+    check('digest: kolik odešlo, z kolika a první důvod', $dg,
+        ['sent' => 2, 'total' => 3, 'error' => 'SMTP Error: recipient refused']);
+    check('každý administrátor ve svém jazyce', array_column($GLOBALS['bk_test_mails'], 'subject'),
+        ['Digest cs', 'Digest cs', 'Digest en']);
+    check('hláška: nedostali všichni, kolik a proč', bk_digest_result_message('weekly', $dg, 'smtp'),
+        ['ok' => false, 'message' => 'Týdenní digest nedostali všichni administrátoři: odesláno 2, selhalo 1.'
+            . ' Důvod: SMTP Error: recipient refused']);
+    check('všem: úspěch s počtem', bk_digest_result_message('monthly', ['sent' => 3, 'total' => 3, 'error' => ''], 'smtp'),
+        ['ok' => true, 'message' => 'Měsíční digest byl odeslán všem administrátorům (3).']);
+    check_true('přes mail(): řekne, že doručení nikdo nepotvrdil', str_contains(
+        bk_digest_result_message('weekly', ['sent' => 1, 'total' => 1, 'error' => ''], 'fallback')['message'], 'mail()'));
+    check('nikomu: selhání', bk_digest_result_message('weekly', ['sent' => 0, 'total' => 2, 'error' => 'x'], 'smtp')['ok'], false);
+    $GLOBALS['bk_test_mails'] = [];
+}
+
+$dr_pdo = null;
+if (function_exists('bk_send_daily_reminder') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
+    $dr_pdo = new PDO('sqlite::memory:');
+    $dr_pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $dr_pdo->exec("CREATE TABLE monitors (id INTEGER PRIMARY KEY, name TEXT, type TEXT, status TEXT,
+        last_checked TEXT, last_status_change TEXT, last_details TEXT, maintenance INTEGER DEFAULT 0,
+        archived_at TEXT, email_notifications INTEGER DEFAULT 1, sms_notifications INTEGER DEFAULT 0,
+        heartbeat_interval INTEGER, heartbeat_grace INTEGER, last_heartbeat TEXT, heartbeat_last_result TEXT,
+        heartbeat_last_message TEXT)");
+    $dr_pdo->exec("CREATE TABLE monitor_logs (id INTEGER PRIMARY KEY, monitor_id INTEGER, status TEXT, error_message TEXT, source TEXT)");
+    $dr_pdo->exec("CREATE TABLE incidents (id INTEGER PRIMARY KEY, title TEXT, impact TEXT, status TEXT,
+        created_at TEXT, acknowledged_at TEXT, monitor_id INTEGER)");
+    // Every column bk_log_notification() writes: it swallows a failed INSERT,
+    // so a missing one would leave these tests with no rows to read.
+    $dr_pdo->exec("CREATE TABLE notification_log (id INTEGER PRIMARY KEY, monitor_id INTEGER, status TEXT,
+        channel TEXT, recipient TEXT, ok INTEGER, error_message TEXT, kind TEXT, subject TEXT, method TEXT,
+        delivery TEXT, provider_reply TEXT)");
+    // The channel columns of all three tables, as in schema.sql: the reminder
+    // reads the alert's recipient rule, and that rule reads every channel.
+    $dr_pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT, email_lang TEXT, role TEXT,
+        phone TEXT, whatsapp_apikey TEXT, sms_notifications INTEGER DEFAULT 0, whatsapp_notifications INTEGER DEFAULT 0)");
+    $dr_pdo->exec("CREATE TABLE user_subscriptions (user_id INTEGER, monitor_id INTEGER, email_notifications INTEGER,
+        sms_notifications INTEGER DEFAULT 0, whatsapp_notifications INTEGER DEFAULT 0)");
+    $dr_pdo->exec("CREATE TABLE monitor_users (user_id INTEGER, monitor_id INTEGER)");
+    $dr_pdo->exec("INSERT INTO users (id, email, email_lang, role) VALUES (1, 'admin@example.com', 'cs', 'admin')");
+}
+
+if ($dr_pdo instanceof PDO) {
+    // The real clock, for the same reason as in run_tests.php:
+    // bk_get_collection_issues() reads time() itself, so a frozen "now" would
+    // make these fixtures age against it during the day.
+    $dr_now = time();
+    $dr_at = fn (int $secs_ago): string => date('Y-m-d H:i:s', $dr_now - $secs_ago);
+    // No webhook is configured, so nothing can reach the network from here;
+    // the reminder has only the e-mail channel to use.
+    $GLOBALS['system_settings'] = [
+        'agent_offline_timeout' => '50',
+        'last_cron_run' => $dr_at(120),
+        'email_lang' => 'cs',
+        'site_title' => 'Blood Kings Status',
+    ];
+    $dr_reset = function () use ($dr_pdo): void {
+        $dr_pdo->exec('DELETE FROM monitors');
+        $dr_pdo->exec('DELETE FROM monitor_logs');
+        $dr_pdo->exec('DELETE FROM incidents');
+        $dr_pdo->exec('DELETE FROM notification_log');
+        $GLOBALS['bk_test_mails'] = [];
+    };
+    $dr_add = function (array $row) use ($dr_pdo): void {
+        $row = array_merge([
+            'id' => 1, 'name' => 'Web', 'type' => 'web', 'status' => 'up', 'last_checked' => null,
+            'last_status_change' => null, 'last_details' => null, 'maintenance' => 0, 'archived_at' => null,
+            'heartbeat_interval' => null, 'heartbeat_grace' => null, 'last_heartbeat' => null,
+            'heartbeat_last_result' => null, 'heartbeat_last_message' => null,
+        ], $row);
+        $stmt = $dr_pdo->prepare("INSERT INTO monitors (id, name, type, status, last_checked, last_status_change,
+            last_details, maintenance, archived_at, heartbeat_interval, heartbeat_grace, last_heartbeat,
+            heartbeat_last_result, heartbeat_last_message) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+        $stmt->execute(array_values($row));
+    };
+
+    // --- 1. A healthy system says nothing ---------------------------------
+    // A daily "all good" would teach the reader to filter the sender, and the
+    // first real reminder would be filtered with it.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'up', 'last_checked' => $dr_at(60), 'last_status_change' => $dr_at(86400)]);
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('zdravý systém: nic se neposílá', [$dr_res['sent'], $dr_res['problems']], [false, 0]);
+    check('a žádný e-mail neodešel', count($GLOBALS['bk_test_mails']), 0);
+
+    // ... but the decision is not silent: without a row nobody could tell
+    // "there was nothing to report" from "the reminder is broken".
+    $dr_rows = $dr_pdo->query("SELECT kind, channel, status, ok, recipient, subject FROM notification_log")->fetchAll(PDO::FETCH_ASSOC);
+    check('rozhodnutí neposílat je v protokolu', count($dr_rows), 1);
+    check('jako přeskočená denní připomínka',
+        [$dr_rows[0]['kind'] ?? null, $dr_rows[0]['status'] ?? null, $dr_rows[0]['channel'] ?? null],
+        ['daily_reminder', 'skipped', 'none']);
+    // ok = 1: nothing failed. A zero would light up the "something did not go
+    // out" banner every healthy day, and then nobody reads it on the day it matters.
+    check('a není to neúspěch', (int)($dr_rows[0]['ok'] ?? -1), 1);
+    check('bez příjemce (nikomu se neposílalo)', $dr_rows[0]['recipient'], null);
+    check_true('důvod je u toho napsaný', trim((string)($dr_rows[0]['subject'] ?? '')) !== '');
+
+    // --- 2. A broken system sends, and says what is wrong -----------------
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(4 * 86400)]);
+    $dr_add(['id' => 2, 'name' => 'Router', 'type' => 'vps', 'status' => 'up', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400),
+        'last_details' => json_encode(['agent_last_seen' => $dr_now - 7200])]);
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message) VALUES (1, 'down', 'HTTP 502 Bad Gateway')");
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('rozbitý systém posílá', [$dr_res['sent'], $dr_res['emails'], $dr_res['problems']], [true, 1, 2]);
+    $dr_mail = $GLOBALS['bk_test_mails'][0] ?? ['to' => null, 'subject' => '', 'body' => '', 'context' => []];
+    check('administrátorovi', $dr_mail['to'], 'admin@example.com');
+    check('jako denní připomínka', $dr_mail['context']['kind'] ?? null, 'daily_reminder');
+    check_true('předmět říká, co to je', str_contains((string)$dr_mail['subject'], 'Denní připomínka'));
+    check_true('zpráva jmenuje rozbitý monitor a uložený důvod',
+        str_contains($dr_mail['body'], 'Web') && str_contains($dr_mail['body'], 'HTTP 502 Bad Gateway'));
+    check_true('a říká, jak dlouho to trvá', str_contains($dr_mail['body'], 'trvá 4 d'));
+    // The two sections stay apart: the silent agent is the fault nothing else
+    // makes visible, and among the outages it would be buried again.
+    check_true('tichý sběr má vlastní sekci', str_contains($dr_mail['body'], 'Tichý sběr dat')
+        && str_contains($dr_mail['body'], 'Výpadky a varování'));
+    check_true('a mlčící agent je v ní jmenovaný', str_contains($dr_mail['body'], 'Router'));
+    // The collection stamp closes the message so a dead collector cannot hide
+    // behind a report that happens to be short.
+    check_true('zpráva končí otiskem posledního běhu sběru',
+        str_contains($dr_mail['body'], 'Poslední dokončený běh sběru'));
+
+    // A remote probe only logs its result (node_api.php), so its 'up' can be
+    // the newest row of a monitor cron found down. The reason is still the
+    // one of the check that found the outage.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(3600)]);
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message) VALUES (1, 'down', 'HTTP 503'), (1, 'up', NULL)");
+    check('důvod výpadku je z kontroly, která ho našla, ne z novějšího OK sondy',
+        array_column(bk_daily_reminder_collect($dr_pdo, $dr_now)['outages'], 'reason', 'name'), ['Web' => 'HTTP 503']);
+
+    // Since r024 a probe's row says so (source 'probe'): its own newer 'down'
+    // does not give the outage its words either. A row without a source is
+    // from before r024 and still counts, as it always did.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(3600)]);
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, source) VALUES
+                   (1, 'down', 'HTTP 503', 'cron'), (1, 'down', 'Timeout after 8000ms', 'probe')");
+    check('ani novější výpadek sondy nedá výpadku důvod, jen kontrola cronu',
+        array_column(bk_daily_reminder_collect($dr_pdo, $dr_now)['outages'], 'reason', 'name'), ['Web' => 'HTTP 503']);
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, source) VALUES (1, 'down', 'HTTP 502', NULL)");
+    check('řádek bez zdroje (před r024) se počítá dál',
+        array_column(bk_daily_reminder_collect($dr_pdo, $dr_now)['outages'], 'reason', 'name'), ['Web' => 'HTTP 502']);
+
+    // The e2e case behind the fix: "Záloha NAS" was in the silent section
+    // twice - once from the heartbeat rule, once from the stalled checks -
+    // and the summary counted one monitor as two problems.
+    $dr_reset();
+    $dr_add(['id' => 3, 'name' => 'Záloha NAS', 'type' => 'heartbeat', 'status' => 'down',
+        'last_checked' => $dr_at(300 * 60), 'last_status_change' => $dr_at(18000),
+        'heartbeat_interval' => 3600, 'heartbeat_grace' => 300, 'last_heartbeat' => $dr_at(18000)]);
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('monitor nalezený dvěma pravidly je jeden problém', $dr_res['problems'], 1);
+    $dr_dup_body = $GLOBALS['bk_test_mails'][0]['body'] ?? '';
+    check('a ve zprávě je jmenovaný jednou', substr_count($dr_dup_body, 'Záloha NAS'), 1);
+    check_true('druhý nález je pod ním, ne v dalším řádku sekce',
+        str_contains($dr_dup_body, 'Navíc:') && str_contains($dr_dup_body, 'Kontroly dostupnosti'));
+
+    // --- 3. A cron every minute must not send twice -----------------------
+    // This is what the whole guard is for: without the stamp the reminder
+    // would arrive nine hundred times a day and be filtered by the evening.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(2 * 86400)]);
+    $dr_stamp = '';
+    $dr_runs = 0;
+    $dr_today = [(int)date('n'), (int)date('j'), (int)date('Y')];
+    foreach ([7, 8, 9, 13, 23] as $dr_hour) {
+        $dr_ts = mktime($dr_hour, 0, 0, $dr_today[0], $dr_today[1], $dr_today[2]);
+        // Exactly what cron.php does: ask the guard, send, write the date.
+        if (bk_daily_reminder_due($dr_stamp, 8, $dr_ts)) {
+            bk_send_daily_reminder($dr_pdo, $dr_ts);
+            $dr_stamp = date('Y-m-d', $dr_ts);
+            $dr_runs++;
+        }
+    }
+    check('pět běhů cronu za den = jedno odeslání', $dr_runs, 1);
+    check('a právě jeden e-mail', count($GLOBALS['bk_test_mails']), 1);
+    check('první odešlo v nastavenou hodinu, ne dřív', $dr_stamp, date('Y-m-d'));
+
+    // The next day it speaks up again - the outage is still running.
+    $dr_tomorrow = mktime(8, 0, 0, $dr_today[0], $dr_today[1] + 1, $dr_today[2]);
+    if (bk_daily_reminder_due($dr_stamp, 8, $dr_tomorrow)) {
+        bk_send_daily_reminder($dr_pdo, $dr_tomorrow);
+    }
+    check('druhý den se ozve znovu', count($GLOBALS['bk_test_mails']), 2);
+
+    // --- 4. Exclusions on the real path -----------------------------------
+    // The same rules as in the pure test, but this time read out of the
+    // database: a query that forgot the condition would pass there and fail here.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Údržba', 'status' => 'down', 'maintenance' => 1, 'last_checked' => $dr_at(60)]);
+    $dr_add(['id' => 2, 'name' => 'Archiv', 'status' => 'down', 'archived_at' => $dr_at(86400), 'last_checked' => $dr_at(60)]);
+    $dr_pdo->exec("INSERT INTO incidents (id, title, impact, status, created_at, acknowledged_at, monitor_id)
+                   VALUES (1, 'Převzatý', 'major', 'identified', '2026-09-20 08:00:00', '2026-09-20 08:05:00', NULL)");
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('údržba, archiv ani převzatý incident zprávu nevyvolají',
+        [$dr_res['problems'], count($GLOBALS['bk_test_mails'])], [0, 0]);
+
+    // An unacknowledged incident does - nobody has taken it over.
+    $dr_pdo->exec("INSERT INTO incidents (id, title, impact, status, created_at, acknowledged_at, monitor_id)
+                   VALUES (2, 'Nikdo nepřevzal', 'major', 'investigating', '2026-09-20 08:00:00', NULL, NULL)");
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('nepřevzatý incident zprávu vyvolá', $dr_res['problems'], 1);
+    check_true('a je v ní jmenovaný',
+        str_contains($GLOBALS['bk_test_mails'][0]['body'] ?? '', 'Nikdo nepřevzal'));
+
+    // --- 5. WhatsApp: a refusal is a refusal ------------------------------
+    // The reminder's WhatsApp went through the same 2xx-is-sent check as the
+    // alerts, so a paused CallMeBot account looked like a delivered reminder.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(2 * 86400)]);
+    $dr_pdo->exec("UPDATE users SET phone = '777123456', whatsapp_apikey = '1234567', whatsapp_notifications = 1 WHERE id = 1");
+    $GLOBALS['bk_test_callmebot_answer'] = ['code' => 208, 'body' => 'Message to: +420777123456 Text to send: x Your Account is Paused',
+        'errno' => 0, 'error' => '', 'sent' => true];
+    $dr_wa_row = function () use ($dr_pdo): array {
+        $row = $dr_pdo->query("SELECT ok, delivery, error_message, provider_reply, recipient FROM notification_log
+                               WHERE channel = 'whatsapp' ORDER BY id DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC);
+        return $row ?: [];
+    };
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    $dr_wa = $dr_wa_row();
+    check('pozastavený CallMeBot: řádek říká neodesláno', [(int)($dr_wa['ok'] ?? -1), $dr_wa['delivery'] ?? null], [0, 'failed']);
+    check_true('s důvodem od CallMeBotu', str_contains((string)($dr_wa['error_message'] ?? ''), 'Account paused'));
+    check('a WhatsApp se nepočítá mezi kanály, které prošly', $dr_res['channels'], 0);
+
+    $GLOBALS['bk_test_callmebot_answer'] = ['code' => 200, 'body' => 'Message queued. You have 3 Messages left',
+        'errno' => 0, 'error' => '', 'sent' => true];
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    $dr_wa = $dr_wa_row();
+    check('potvrzené přijetí: odesláno', [(int)($dr_wa['ok'] ?? -1), $dr_wa['delivery'] ?? null], [1, 'sent']);
+    check('i se slovy CallMeBotu', $dr_wa['provider_reply'] ?? null, 'Message queued. You have 3 Messages left');
+    check('a počítá se', $dr_res['channels'], 1);
+
+    // Switched on, but no key: no row at all used to be written, so the
+    // channel that never worked was also the one nothing said anything about.
+    $dr_pdo->exec("UPDATE users SET whatsapp_apikey = NULL WHERE id = 1");
+    $GLOBALS['bk_test_callmebot_urls'] = [];
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    $dr_wa = $dr_wa_row();
+    check('zapnutý WhatsApp bez klíče: řádek říká neodesláno a proč',
+        [(int)($dr_wa['ok'] ?? -1), $dr_wa['delivery'] ?? null, str_contains((string)($dr_wa['error_message'] ?? ''), 'No CallMeBot key')],
+        [0, 'failed', true]);
+    check('a nikam nic neodešlo', count($GLOBALS['bk_test_callmebot_urls']), 0);
+    $dr_pdo->exec("UPDATE users SET phone = NULL, whatsapp_apikey = NULL, whatsapp_notifications = 0 WHERE id = 1");
+    $GLOBALS['bk_test_callmebot_answer'] = null;
+
+    // --- 6. Public subscribers hear only about the public page --------------
+    // A router, a VPS and an agent service are private unless the owner made
+    // them public, and their outages went to every anonymous subscriber by
+    // name. The monitor is passed without type and is_public on purpose: the
+    // decision must come from the public page's own list, not from whatever
+    // row the caller read.
+    bk_test_load_functions(__DIR__ . '/../functions.php', [
+        'bk_public_sub_notify', 'bk_public_monitor_ids', 'bk_monitor_is_public',
+        'bk_link_origin', 'bk_site_origin', 'bk_trusted_link_host',
+    ]);
+    if (!defined('BK_PRIVATE_BY_DEFAULT_TYPES')
+        && preg_match('/\nconst BK_PRIVATE_BY_DEFAULT_TYPES = [^;]+;/', (string)file_get_contents(__DIR__ . '/../functions.php'), $ps_const)) {
+        eval(trim($ps_const[0]));
+    }
+    $dr_reset();
+    $dr_pdo->exec("ALTER TABLE monitors ADD COLUMN is_public INTEGER");
+    $dr_pdo->exec("CREATE TABLE public_subscribers (id INTEGER PRIMARY KEY, email TEXT, lang TEXT,
+        unsubscribe_token TEXT, confirmed_at TEXT)");
+    $dr_pdo->exec("INSERT INTO public_subscribers VALUES (1, 'odberatel@example.com', 'cs', 'tok', '2026-10-01 10:00:00')");
+    $dr_add(['id' => 1, 'name' => 'Web', 'type' => 'web']);
+    $dr_add(['id' => 2, 'name' => 'Domácí router', 'type' => 'openwrt']);
+    $dr_add(['id' => 3, 'name' => 'Skrytý web', 'type' => 'web']);
+    $dr_add(['id' => 4, 'name' => 'Router na stránce', 'type' => 'openwrt']);
+    $dr_pdo->exec("UPDATE monitors SET is_public = 0 WHERE id = 3");
+    $dr_pdo->exec("UPDATE monitors SET is_public = 1 WHERE id = 4");
+    bk_public_monitor_ids($dr_pdo, true);
+    $ps_sent = [];
+    foreach ([1, 2, 3, 4] as $ps_id) {
+        $GLOBALS['bk_test_mails'] = [];
+        bk_public_sub_notify($dr_pdo, ['id' => $ps_id, 'name' => 'Monitor ' . $ps_id], 'down');
+        $ps_sent[$ps_id] = count($GLOBALS['bk_test_mails']);
+    }
+    check('veřejní odběratelé: jen web a router, které veřejná stránka ukazuje',
+        $ps_sent, [1 => 1, 2 => 0, 3 => 0, 4 => 1]);
+    // Read fresh for every message: the owner hides the web while a long cron
+    // run is still going.
+    $dr_pdo->exec("UPDATE monitors SET is_public = 0 WHERE id = 1");
+    $GLOBALS['bk_test_mails'] = [];
+    bk_public_sub_notify($dr_pdo, ['id' => 1, 'name' => 'Monitor 1'], 'up');
+    check('web skrytý během běhu cronu: odběratelům už nic', count($GLOBALS['bk_test_mails']), 0);
+    // A database without the column (before the migration) follows the type.
+    // Any other error is no answer: the web is hidden, and a guess by type
+    // would mail its name anyway.
+    $ps_legacy = new PDO('sqlite::memory:');
+    $ps_legacy->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $ps_legacy->exec("CREATE TABLE monitors (id INTEGER PRIMARY KEY, type TEXT)");
+    $ps_legacy->exec("INSERT INTO monitors VALUES (1, 'web'), (2, 'openwrt')");
+    check('databáze bez sloupce is_public: podle typu', bk_public_monitor_ids($ps_legacy, true), [1]);
+    $ps_flaky = new class ('sqlite::memory:') extends PDO {
+        public function query(string $query, ?int $fetchMode = null, mixed ...$fetchModeArgs): PDOStatement|false {
+            if (str_contains($query, 'is_public') && !str_contains($query, 'NULL AS is_public')) {
+                throw new PDOException('SQLSTATE[HY000]: General error: 3024 Query execution was interrupted');
+            }
+            return parent::query($query, $fetchMode, ...$fetchModeArgs);
+        }
+    };
+    $ps_flaky->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $ps_flaky->exec("CREATE TABLE monitors (id INTEGER PRIMARY KEY, type TEXT, is_public INTEGER)");
+    $ps_flaky->exec("INSERT INTO monitors VALUES (1, 'web', 0)");
+    $ps_flaky->exec("CREATE TABLE public_subscribers (id INTEGER PRIMARY KEY, email TEXT, lang TEXT,
+        unsubscribe_token TEXT, confirmed_at TEXT)");
+    $ps_flaky->exec("INSERT INTO public_subscribers VALUES (1, 'odberatel@example.com', 'cs', 'tok', '2026-10-01 10:00:00')");
+    $GLOBALS['bk_test_mails'] = [];
+    bk_public_sub_notify($ps_flaky, ['id' => 1, 'name' => 'Skrytý web'], 'down');
+    check('chyba databáze: odběratelům nic, žádný odhad podle typu', count($GLOBALS['bk_test_mails']), 0);
+    bk_public_monitor_ids($dr_pdo, true);
+
+    // --- 6b. Every absolute link starts at bk_link_origin() -----------------
+    // site_url first, else only a Host the server trusts. The reset link was
+    // built from the raw Host header: anyone may ask for a reset, so a forged
+    // Host mailed the victim a valid token on the attacker's address (R335).
+    bk_test_load_functions(__DIR__ . '/../functions.php', [
+        'bk_password_reset_request', 'bk_issue_password_reset_token', 'bk_audit_log',
+        'bk_client_ip', 'bk_client_user_agent', 'bk_ip_in_cidr',
+    ]);
+    $lo_server = $_SERVER;
+    $lo_settings = $GLOBALS['system_settings'];
+    $_SERVER['HTTP_HOST'] = 'evil.example';
+    $_SERVER['SERVER_NAME'] = 'status.example.cz';
+    unset($_SERVER['HTTPS'], $_SERVER['HTTP_X_FORWARDED_PROTO']);
+    $GLOBALS['system_settings']['site_url'] = '';
+    check('bez site_url: cizí Host ne, SERVER_NAME ano', bk_link_origin(), 'http://status.example.cz');
+    $_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
+    check('proxy, která ukončí TLS, dá https', bk_link_origin(), 'https://status.example.cz');
+    $GLOBALS['system_settings']['site_url'] = 'https://Bloodkings.example/status';
+    check('site_url má přednost a bere se jen jeho origin', bk_link_origin(), 'https://bloodkings.example');
+    $GLOBALS['system_settings']['site_url'] = '';
+    $lo_pdo = new PDO('sqlite::memory:');
+    $lo_pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $lo_pdo->exec("CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT, email TEXT,
+        password_reset_token_hash TEXT, password_reset_expires TEXT)");
+    $lo_pdo->exec("INSERT INTO users (id, username, email) VALUES (1, 'obet', 'obet@example.com')");
+    $GLOBALS['bk_test_mails'] = [];
+    check_true('obnova hesla pro existující účet odejde', bk_password_reset_request($lo_pdo, 'obet@example.com', 'Status'));
+    $lo_body = (string)($GLOBALS['bk_test_mails'][0]['body'] ?? '');
+    check_true('odkaz pro obnovu hesla vede na SERVER_NAME, ne na podvržený Host',
+        str_contains($lo_body, 'https://status.example.cz/app/set-password?token=') && !str_contains($lo_body, 'evil.example'));
+    $_SERVER = $lo_server;
+    $GLOBALS['system_settings'] = $lo_settings;
+
+    // --- 7. Each recipient reads only their own part -------------------------
+    // The reminder was rendered once and went to every recipient: a user who
+    // may see only "Web" read the server next to it, its error text and its
+    // incident. Jana still subscribes to the server, but her access to it is
+    // gone, so it is not hers any more.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400)]);
+    $dr_add(['id' => 2, 'name' => 'Tajný server', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400)]);
+    $dr_pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message) VALUES (2, 'down', 'connect to db.internal:5432 refused')");
+    $dr_pdo->exec("INSERT INTO incidents (id, title, impact, status, created_at, acknowledged_at, monitor_id)
+                   VALUES (3, 'Únik na serveru', 'major', 'investigating', '2026-09-20 08:00:00', NULL, 2)");
+    $dr_pdo->exec("INSERT INTO users (id, email, email_lang, role, phone, whatsapp_apikey, whatsapp_notifications)
+                   VALUES (2, 'jana@example.com', 'cs', 'user', '777123456', '1234567', 1)");
+    $dr_pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications) VALUES (2, 1, 1), (2, 2, 1)");
+    $dr_pdo->exec("INSERT INTO monitor_users (user_id, monitor_id) VALUES (2, 1)");
+    $GLOBALS['bk_test_callmebot_urls'] = [];
+    $GLOBALS['bk_test_callmebot_answer'] = ['code' => 200, 'body' => 'Message queued. You have 3 Messages left',
+        'errno' => 0, 'error' => '', 'sent' => true];
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    $GLOBALS['bk_test_callmebot_answer'] = null;
+    $dr_by = array_column($GLOBALS['bk_test_mails'], 'body', 'to');
+    $dr_to = array_keys($dr_by);
+    sort($dr_to);
+    check('administrátor i Jana dostanou zprávu', [$dr_res['emails'], $dr_to], [2, ['admin@example.com', 'jana@example.com']]);
+    $dr_admin = $dr_by['admin@example.com'] ?? '';
+    check_true('administrátor čte obojí i s incidentem',
+        str_contains($dr_admin, 'Tajný server') && str_contains($dr_admin, 'Web') && str_contains($dr_admin, 'Únik na serveru'));
+    $dr_jana = $dr_by['jana@example.com'] ?? '';
+    check_true('Jana čte svůj Web', str_contains($dr_jana, 'Web'));
+    check_true('ale ne cizí server, jeho chybu ani jeho incident', !str_contains($dr_jana, 'Tajný server')
+        && !str_contains($dr_jana, 'db.internal') && !str_contains($dr_jana, 'Únik na serveru'));
+    // Her WhatsApp carries the same part (the administrator has none set up).
+    $dr_wa_text = urldecode(implode(' ', $GLOBALS['bk_test_callmebot_urls'] ?? []));
+    check_true('ani na WhatsAppu: jedna zpráva, jen s jejím Webem', count($GLOBALS['bk_test_callmebot_urls'] ?? []) === 1
+        && str_contains($dr_wa_text, 'Web') && !str_contains($dr_wa_text, 'Tajný server') && !str_contains($dr_wa_text, 'Únik na serveru'));
+    $dr_pdo->exec("UPDATE users SET phone = NULL, whatsapp_apikey = NULL, whatsapp_notifications = 0 WHERE id = 2");
+
+    // Only a silent agent of hers, with agent_notify_admin_only on (the
+    // default): agent internals stay with the administrators.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400)]);
+    $dr_add(['id' => 3, 'name' => 'Router', 'type' => 'vps', 'status' => 'up', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400), 'last_details' => json_encode(['agent_last_seen' => $dr_now - 7200])]);
+    $dr_pdo->exec("DELETE FROM user_subscriptions");
+    $dr_pdo->exec("DELETE FROM monitor_users");
+    $dr_pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications) VALUES (2, 3, 1)");
+    $dr_pdo->exec("INSERT INTO monitor_users (user_id, monitor_id) VALUES (2, 3)");
+    $dr_res = bk_send_daily_reminder($dr_pdo, $dr_now);
+    check('jen tichý agent: Janě nic, administrátorovi ano', array_column($GLOBALS['bk_test_mails'], 'to'), ['admin@example.com']);
+    // Her outage and her silent router: the outage reaches her, the
+    // collection diagnostics stay with the administrators.
+    $GLOBALS['bk_test_mails'] = [];
+    $dr_pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications) VALUES (2, 1, 1)");
+    $dr_pdo->exec("INSERT INTO monitor_users (user_id, monitor_id) VALUES (2, 1)");
+    bk_send_daily_reminder($dr_pdo, $dr_now);
+    $dr_by = array_column($GLOBALS['bk_test_mails'], 'body', 'to');
+    check_true('výpadek i tichý agent: Jana čte Web, ale ne diagnostiku sběru',
+        str_contains($dr_by['jana@example.com'] ?? '', 'Web') && !str_contains($dr_by['jana@example.com'] ?? '', 'Router')
+        && !str_contains($dr_by['jana@example.com'] ?? '', 'Tichý sběr dat'));
+    check_true('administrátor ji čte', str_contains($dr_by['admin@example.com'] ?? '', 'Router'));
+
+    // The outage of her Web brings her the reminder, and in it she reads
+    // every monitor that would mail her - the open incident on her NAS too,
+    // although the NAS itself is fine. Not the one on a monitor she
+    // subscribes to with e-mail off.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web', 'status' => 'down', 'last_checked' => $dr_at(60),
+        'last_status_change' => $dr_at(86400)]);
+    $dr_add(['id' => 4, 'name' => 'NAS', 'last_checked' => $dr_at(60), 'last_status_change' => $dr_at(86400)]);
+    $dr_add(['id' => 5, 'name' => 'Tiskárna', 'last_checked' => $dr_at(60), 'last_status_change' => $dr_at(86400)]);
+    $dr_pdo->exec("INSERT INTO incidents (id, title, impact, status, created_at, acknowledged_at, monitor_id)
+                   VALUES (4, 'Pomalý NAS', 'minor', 'investigating', '2026-09-20 08:00:00', NULL, 4),
+                          (5, 'Tiskárna netiskne', 'minor', 'investigating', '2026-09-20 08:00:00', NULL, 5)");
+    $dr_pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications) VALUES (2, 4, 1), (2, 5, 0)");
+    $dr_pdo->exec("INSERT INTO monitor_users (user_id, monitor_id) VALUES (2, 4), (2, 5)");
+    bk_send_daily_reminder($dr_pdo, $dr_now);
+    $dr_jana = array_column($GLOBALS['bk_test_mails'], 'body', 'to')['jana@example.com'] ?? '';
+    check_true('Jana čte i incident svého NAS bez výpadku, ne ten s vypnutým e-mailem',
+        str_contains($dr_jana, 'Web') && str_contains($dr_jana, 'Pomalý NAS') && !str_contains($dr_jana, 'Tiskárna netiskne'));
+    // An incident alone alerts nobody, so it is the administrators' even
+    // with agent_notify_admin_only off.
+    $dr_reset();
+    $dr_add(['id' => 4, 'name' => 'NAS', 'last_checked' => $dr_at(60), 'last_status_change' => $dr_at(86400)]);
+    $dr_pdo->exec("INSERT INTO incidents (id, title, impact, status, created_at, acknowledged_at, monitor_id)
+                   VALUES (4, 'Pomalý NAS', 'minor', 'investigating', '2026-09-20 08:00:00', NULL, 4)");
+    $GLOBALS['system_settings']['agent_notify_admin_only'] = '0';
+    bk_send_daily_reminder($dr_pdo, $dr_now);
+    unset($GLOBALS['system_settings']['agent_notify_admin_only']);
+    check('jen incident jejího NAS: Janě nic, administrátorovi ano',
+        array_column($GLOBALS['bk_test_mails'], 'to'), ['admin@example.com']);
+    $dr_pdo->exec("DELETE FROM user_subscriptions");
+    $dr_pdo->exec("DELETE FROM monitor_users");
+    $dr_pdo->exec("DELETE FROM users WHERE id = 2");
+
+    // --- 8. Who hears about a monitor: the one recipient rule -------------
+    // Alerts, the reminder, the digest and the admin notices all read
+    // bk_alert_audience(). Each used to carry its own copy of the rule, and
+    // the private monitors that reached other users were those copies
+    // drifting apart. Jana subscribes and has access; Petr's access is gone;
+    // Eva has access but no subscription; Ota subscribes with his own NULLs
+    // and e-mail off; the second administrator has no address.
+    $dr_reset();
+    $dr_add(['id' => 1, 'name' => 'Web']);
+    $dr_add(['id' => 2, 'name' => 'Server']);
+    $dr_pdo->exec("UPDATE monitors SET email_notifications = 0, sms_notifications = 1 WHERE id = 2");
+    $dr_pdo->exec("UPDATE users SET whatsapp_notifications = 1 WHERE id = 1");
+    $dr_pdo->exec("INSERT INTO users (id, email, email_lang, role, sms_notifications, whatsapp_notifications) VALUES
+        (2, 'jana@example.com', 'en', 'user', 0, 0), (3, 'petr@example.com', NULL, 'user', 0, 0),
+        (4, 'eva@example.com', NULL, 'user', 0, 0), (5, 'ota@example.com', NULL, 'user', 1, 1),
+        (6, NULL, NULL, 'admin', 0, 0)");
+    $dr_pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications, sms_notifications,
+        whatsapp_notifications) VALUES (2, 1, 1, 0, 0), (3, 1, 1, 0, 0), (5, 1, 0, NULL, NULL), (5, 2, NULL, NULL, 0)");
+    $dr_pdo->exec("INSERT INTO monitor_users (user_id, monitor_id) VALUES (2, 1), (4, 1), (5, 1), (5, 2)");
+    $au_of = fn (array $ids, bool $admins_only = false): array
+        => array_column(bk_alert_audience($dr_pdo, $ids, $admins_only), 'monitors', 'id');
+    $au_ch = fn (int $email, int $sms, int $whatsapp): array => ['email' => $email, 'sms' => $sms, 'whatsapp' => $whatsapp];
+    check('kdo slyší o webu a serveru a kterými kanály', $au_of([1, 2]), [
+        // Without a row the monitor's switches and the profile's WhatsApp.
+        1 => [1 => $au_ch(1, 0, 1), 2 => $au_ch(0, 1, 1)],
+        2 => [1 => $au_ch(1, 0, 0)],
+        // A NULL in the row falls back to the monitor, then the profile.
+        5 => [1 => $au_ch(0, 0, 1), 2 => $au_ch(0, 1, 0)],
+        6 => [1 => $au_ch(1, 0, 0), 2 => $au_ch(0, 1, 0)],
+    ]);
+    check('bez monitoru jen administrátoři', $au_of([]), [1 => [], 6 => []]);
+    check('vnitřnosti agenta jen administrátorům', array_keys($au_of([1, 2], true)), [1, 6]);
+    check('o monitoru, který neexistuje, nikdo nic', $au_of([9]), [1 => [], 6 => []]);
+    // The reminder takes the outages from it: Jana for her Web, never for
+    // the server she cannot see; Ota has e-mail off on both; the
+    // administrator without an address gets no e-mail reminder.
+    $au_rem = fn (array $alert_ids): array
+        => array_column(bk_daily_reminder_recipients(bk_alert_audience($dr_pdo, [1, 2]), $alert_ids), 'scope', 'id');
+    check('připomínka o webu: administrátor a Jana', $au_rem([1]), [1 => null, 2 => [1]]);
+    check('připomínka o serveru: jen administrátor', $au_rem([2]), [1 => null]);
+    // Without the access table the administrators still hear, no user, and
+    // the log says why. The digest and the admin notices ask about no
+    // monitor and agent internals check no access: neither needs the table,
+    // so neither warns about it - their old queries read only users.
+    $dr_pdo->exec("ALTER TABLE monitor_users RENAME TO monitor_users_gone");
+    $au_log = (string)tempnam(sys_get_temp_dir(), 'bk_au');
+    $au_log_saved = ini_set('error_log', $au_log);
+    check('bez tabulky přístupů a bez monitoru administrátoři', array_keys($au_of([])), [1, 6]);
+    check('vnitřnosti agenta také', array_keys($au_of([1, 2], true)), [1, 6]);
+    check_false('a log o tabulce mlčí', str_contains((string)file_get_contents($au_log), 'monitor_users unavailable'));
+    check('bez tabulky přístupů jen administrátoři', array_keys($au_of([1, 2])), [1, 6]);
+    ini_set('error_log', (string)$au_log_saved);
+    check_true('a v logu je proč', str_contains((string)file_get_contents($au_log), 'monitor_users unavailable'));
+    @unlink($au_log);
+    $dr_pdo->exec("ALTER TABLE monitor_users_gone RENAME TO monitor_users");
+    $dr_pdo->exec("DELETE FROM user_subscriptions");
+    $dr_pdo->exec("DELETE FROM monitor_users");
+    $dr_pdo->exec("DELETE FROM users WHERE id > 1");
+    $dr_pdo->exec("UPDATE users SET whatsapp_notifications = 0 WHERE id = 1");
+} elseif (function_exists('bk_send_daily_reminder')) {
+    // Reported, never skipped in silence: a suite that quietly tests nothing
+    // is the same lie as a chart with invented values.
+    check_true('SQLite ovladač pro testy denní připomínky je k dispozici', false);
+}
+
+// =======================================================================
+// Self-check of the site's own public API (cron)
+//
+// On 27 Sep 2026 every PHP answer began with "Ah" for an hour, /app could not
+// read any of them, and the cron - watching everything else - did not notice
+// its own site. What counts as a working API, when to tell the administrators
+// and how the telling is logged. bk_self_check_run() itself needs MySQL and
+// is covered in run_api_tests.php.
+// =======================================================================
+// The webhook stub, the same rule as the CallMeBot one: fail closed.
+if (function_exists('send_webhook_post')) {
+    fwrite(STDERR, "send_webhook_post() is already defined, so the admin-notice tests would reach real webhooks."
+        . " Stopping.\n");
+    exit(1);
+} else {
+    function send_webhook_post($url, $payload_json): bool {
+        $GLOBALS['bk_test_webhooks'][] = ['url' => (string)$url, 'payload' => (string)$payload_json];
+        // A "timeout" URL: the whole message left and no answer came.
+        $timeout = str_contains((string)$url, 'timeout');
+        $ok = !$timeout && !str_contains((string)$url, 'telegram');
+        $GLOBALS['last_webhook_error'] = $ok ? null : ($timeout ? 'Operation timed out' : 'HTTP 400');
+        $GLOBALS['last_webhook_delivery'] = $ok ? 'sent' : ($timeout ? 'unknown' : 'failed');
+        return $ok;
+    }
+}
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_config_output_excerpt']);
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'bk_self_check_url', 'bk_site_origin', 'bk_self_check_quote', 'bk_self_check_verdict', 'bk_self_check_step',
+    'bk_self_check_message',
+    'bk_send_admin_notice', 'bk_send_shared_channels', 'send_pushover_alert', 'bk_alert_telegram_text',
+    'bk_alert_discord_description', 'bk_alert_sms_body', 'bk_webhook_logged_delivery',
+]);
+
+if (function_exists('bk_self_check_verdict')) {
+    check('adresa kontroly: původ site_url + /status/api.php, cesta se ignoruje',
+        [bk_self_check_url('https://Example.com/status/'), bk_self_check_url(''), bk_self_check_url('ftp://x')],
+        ['https://example.com/status/api.php?action=public_status', null, null]);
+
+    $sc_good = json_encode(['status' => 'healthy', 'uptimePercent' => 99.9, 'totalMonitors' => 3, 'downMonitors' => 0,
+        'lastUpdated' => null, 'nodes' => []]);
+    check('platný JSON se všemi klíči prochází', bk_self_check_verdict(200, (string)$sc_good, 0, ''), ['ok' => true, 'reason' => null]);
+    check('„Ah" před JSONem: kolik bajtů a jaké',
+        bk_self_check_verdict(200, 'Ah' . $sc_good, 0, ''), ['ok' => false, 'reason' => '2 bytes before the JSON: "Ah"']);
+    check('500 s chybou API ji ocituje',
+        bk_self_check_verdict(500, '{"error":"Nepodařilo se zjistit stav infrastruktury."}', 0, '')['reason'],
+        'HTTP 500: Nepodařilo se zjistit stav infrastruktury.');
+    $sc_v = bk_self_check_verdict(503, '<html><head><title>503 Service Unavailable</title></head><body>nginx secret-host-123456</body></html>', 0, '');
+    check_true('stránka chyby: kód a nanejvýš 16 bajtů textu', $sc_v['ok'] === false
+        && str_starts_with((string)$sc_v['reason'], 'HTTP 503: 503 Service Unav…') && !str_contains((string)$sc_v['reason'], 'secret-host'));
+    check('nedosažitelné', bk_self_check_verdict(0, '', 6, 'Could not resolve host: example.com')['reason'],
+        'Not reached: Could not resolve host: example.com');
+    check('prázdná odpověď', bk_self_check_verdict(200, '', 0, '')['reason'], 'Empty answer');
+    check('stránka místo JSONu (výzva proxy): její titulek', bk_self_check_verdict(200,
+        "<!DOCTYPE html><html><head><title>Just a moment...</title></head><body><script>x()</script></body></html>", 0, '')['reason'],
+        'Not JSON but an HTML page: "Just a •••"');
+    check('stránka bez titulku: text bez značek', bk_self_check_verdict(200, "<html><body><p>Ahoj</p>\n<p>svete</p></body></html>", 0, '')['reason'],
+        'Not JSON but an HTML page: "Ahoj svete"');
+    check('text, který není JSON, maskovaný jako výstup config.php',
+        bk_self_check_verdict(200, 'Tr0ub4dor&3! {', 0, '')['reason'], 'Not JSON, starts with "••• {"');
+    check('JSON bez klíčů, které čte /app',
+        bk_self_check_verdict(200, '{"status":"healthy","nodes":[]}', 0, '')['reason'],
+        'JSON without totalMonitors, downMonitors, uptimePercent, lastUpdated');
+    check('neznámý stav je nečekaný tvar', bk_self_check_verdict(200, str_replace('healthy', 'fine', (string)$sc_good), 0, '')['ok'], false);
+
+    // The latch. One failure is a blip; the second in a row is announced,
+    // once; a notice nobody took is retried after an hour, not every minute.
+    $sc_t = 1790000000;
+    $sc_bad = ['ok' => false, 'reason' => '2 bytes before the JSON: "Ah"'];
+    $sc_ok = ['ok' => true, 'reason' => null];
+    $sc1 = bk_self_check_step([], $sc_bad, $sc_t);
+    check('první selhání: zatím nikomu', [$sc1['notify'], $sc1['state']['failures']], [null, 1]);
+    $sc2 = bk_self_check_step($sc1['state'], $sc_bad, $sc_t + 60);
+    check('druhé za sebou: upozornit', [$sc2['notify'], $sc2['state']['failures'], $sc2['state']['since']],
+        ['failed', 2, date('c', $sc_t)]);
+    $sc_told = $sc2['state'] + [];
+    $sc_told['alerted'] = true;
+    $sc_told['alertAttemptAt'] = date('c', $sc_t + 60);
+    $sc_told['alertResult'] = 'sent';
+    $sc3 = bk_self_check_step($sc_told, $sc_bad, $sc_t + 120);
+    check('ohlášené selhání se neopakuje', [$sc3['notify'], $sc3['state']['failures'], $sc3['state']['alertResult']], [null, 3, 'sent']);
+    $sc_untold = $sc_told;
+    $sc_untold['alerted'] = false;
+    $sc_untold['alertResult'] = 'failed';
+    check('nepřevzaté upozornění se za 10 minut neopakuje', bk_self_check_step($sc_untold, $sc_bad, $sc_t + 660)['notify'], null);
+    check('ale za hodinu ano', bk_self_check_step($sc_untold, $sc_bad, $sc_t + 60 + 3600)['notify'], 'failed');
+    // An announced failure is over after two passes in a row, not one.
+    $sc4a = bk_self_check_step($sc3['state'], $sc_ok, $sc_t + 180);
+    check('první úspěch po ohlášeném selhání: zotavuje se, nikomu nic',
+        [$sc4a['notify'], $sc4a['state']['state'], $sc4a['state']['alerted'], $sc4a['state']['since']],
+        [null, 'recovering', true, date('c', $sc_t)]);
+    $sc4 = bk_self_check_step($sc4a['state'], $sc_ok, $sc_t + 240);
+    check('druhý za sebou: obnova se ohlásí, i s tím, co selhávalo',
+        [$sc4['notify'], $sc4['state']['state'], $sc4['state']['recoveredFrom']],
+        ['restored', 'ok', ['since' => date('c', $sc_t), 'reason' => $sc_bad['reason']]]);
+    $sc_relapse = bk_self_check_step($sc4a['state'], $sc_bad, $sc_t + 240);
+    check('návrat selhání při zotavování pokračuje v ohlášeném: bez nového upozornění, stejné od kdy',
+        [$sc_relapse['notify'], $sc_relapse['state']['alerted'], $sc_relapse['state']['since'], $sc_relapse['state']['alertResult']],
+        [null, true, date('c', $sc_t), 'sent']);
+    // The review's flapping API: fail, fail, ok for an hour at the cron's
+    // cadence gave 20 notices. Now one failure notice, and one recovery once
+    // it passes twice in a row.
+    $sc_flap = [];
+    $sc_notes = [];
+    for ($i = 0; $i < 30; $i++) {
+        $step = bk_self_check_step($sc_flap, $i % 3 === 2 ? $sc_ok : $sc_bad, $sc_t + $i * 60);
+        if ($step['notify'] === 'failed') {
+            $step['state']['alerted'] = true;
+            $step['state']['alertResult'] = 'sent';
+            $step['state']['alertAttemptAt'] = date('c', $sc_t + $i * 60);
+        }
+        $sc_notes[] = $step['notify'];
+        $sc_flap = $step['state'];
+    }
+    foreach ([$sc_ok, $sc_ok] as $i => $v) {
+        $step = bk_self_check_step($sc_flap, $v, $sc_t + (30 + $i) * 60);
+        $sc_notes[] = $step['notify'];
+        $sc_flap = $step['state'];
+    }
+    check('kolísající API: jedno selhání a jedna obnova', array_values(array_filter($sc_notes)), ['failed', 'restored']);
+    // The two short sequences step by step (f = failed check, o = passed),
+    // with every failure notice taken by a channel.
+    $sc_seq = function (string $seq) use ($sc_bad, $sc_ok, $sc_t): array {
+        $state = [];
+        $notes = [];
+        foreach (str_split($seq) as $i => $c) {
+            $step = bk_self_check_step($state, $c === 'o' ? $sc_ok : $sc_bad, $sc_t + $i * 60);
+            if ($step['notify'] === 'failed') {
+                $step['state']['alerted'] = true;
+                $step['state']['alertResult'] = 'sent';
+                $step['state']['alertAttemptAt'] = date('c', $sc_t + $i * 60);
+            }
+            $notes[] = $step['notify'];
+            $state = $step['state'];
+        }
+        return $notes;
+    };
+    check('selhání, selhání, úspěch, selhání, selhání, úspěch: jediné upozornění, žádná obnova',
+        $sc_seq('ffoffo'), [null, 'failed', null, null, null, null]);
+    check('selhání, selhání, úspěch, úspěch: upozornění a jedna obnova', $sc_seq('ffoo'), [null, 'failed', null, 'restored']);
+    check('obnova po neohlášeném blipu mlčí', bk_self_check_step($sc1['state'], $sc_ok, $sc_t + 60)['notify'], null);
+    check('po chybějící adrese začíná počítání znovu',
+        bk_self_check_step(['state' => 'unconfigured'], $sc_bad, $sc_t)['state']['failures'], 1);
+
+    // The message: the URL, how long, why - escaped in the HTML.
+    $sc_state = $sc2['state'] + ['url' => 'https://example.com/status/api.php?action=public_status'];
+    $sc_state['reason'] = 'Not JSON, starts with "<b>x"';
+    [$sc_subj, $sc_html, $sc_text] = bk_with_email_lang('cs', fn (): array => bk_self_check_message('failed', $sc_state));
+    check_true('zpráva o selhání: co, kolikrát, proč',
+        str_contains($sc_subj, 'Samokontrola webu') && str_contains($sc_text, '2× za sebou')
+        && str_contains($sc_text, 'https://example.com/status/api.php') && str_contains($sc_text, '<b>x'));
+    check_true('v HTML escapovaná', str_contains($sc_html, '&lt;b&gt;x') && !str_contains($sc_html, '<b>x'));
+    [$sc_subj_en] = bk_with_email_lang('en', fn (): array => bk_self_check_message('restored', $sc4['state'] + ['url' => 'u']));
+    check_true('obnova anglicky', str_contains($sc_subj_en, 'passes again'));
+}
+
+if (function_exists('bk_send_admin_notice') && $dr_pdo instanceof PDO) {
+    // Every channel an alert uses, each with its own honest row.
+    $dr_pdo->exec('DELETE FROM notification_log');
+    $dr_pdo->exec("UPDATE users SET phone = '777123456', whatsapp_apikey = '1234567', whatsapp_notifications = 1 WHERE id = 1");
+    $GLOBALS['bk_test_mails'] = [];
+    $GLOBALS['bk_test_webhooks'] = [];
+    $GLOBALS['bk_test_callmebot_answer'] = ['code' => 200, 'body' => 'Message queued', 'errno' => 0, 'error' => '', 'sent' => true];
+    $sc_settings = $GLOBALS['system_settings'];
+    $GLOBALS['system_settings'] += ['discord_webhook_url' => 'https://discord.invalid/api/webhooks/1/x',
+        'telegram_bot_token' => '123:abc', 'telegram_chat_id' => '-100200300'];
+    $sc_n = bk_send_admin_notice($dr_pdo, 'self_check_failed',
+        fn (): array => bk_self_check_message('failed', $sc_state), 1);
+    // The mail stub confirms nothing, so its e-mail counts as unconfirmed.
+    check('upozornění: e-mail, WhatsApp, Discord a Telegram, každý se svým výsledkem', $sc_n,
+        ['attempted' => 4, 'sent' => 2, 'unknown' => 1, 'failed' => 1]);
+    $sc_mail = $GLOBALS['bk_test_mails'][0] ?? ['to' => null, 'subject' => '', 'context' => []];
+    check('e-mail administrátorovi jako admin_notice se stavem',
+        [$sc_mail['to'], $sc_mail['context']['kind'] ?? null, $sc_mail['context']['status'] ?? null],
+        ['admin@example.com', 'admin_notice', 'self_check_failed']);
+    $sc_rows = $dr_pdo->query("SELECT channel, status, kind, ok, delivery, error_message FROM notification_log ORDER BY id")
+        ->fetchAll(PDO::FETCH_ASSOC);
+    check('řádky v protokolu: kanál, druh a výsledek',
+        array_map(fn (array $r): string => "{$r['channel']}/{$r['kind']}/{$r['status']}/{$r['delivery']}", $sc_rows),
+        ['whatsapp/admin_notice/self_check_failed/sent', 'discord/admin_notice/self_check_failed/sent',
+         'telegram/admin_notice/self_check_failed/failed']);
+    check('odmítnutí nese důvod', $sc_rows[2]['error_message'] ?? null, 'HTTP 400');
+    check_false('webhooky dostaly text, ne HTML', str_contains($GLOBALS['bk_test_webhooks'][0]['payload'] ?? '<', '<p'));
+    // "public_status" in the URL: an unpaired "_" makes Telegram refuse Markdown.
+    check_false('Telegram bez Markdownu', str_contains($GLOBALS['bk_test_webhooks'][1]['payload'] ?? 'parse_mode', 'parse_mode'));
+
+    // A webhook that timed out after the whole message left may have posted it:
+    // logged and counted as unconfirmed, as the escalations do, not failed (R349).
+    $dr_pdo->exec('DELETE FROM notification_log');
+    $GLOBALS['system_settings']['discord_webhook_url'] = 'https://discord.invalid/timeout';
+    $sc_n = bk_send_admin_notice($dr_pdo, 'self_check_failed', fn (): array => bk_self_check_message('failed', $sc_state), 1);
+    check('vypršený webhook je nepotvrzený, ne neodeslaný', [$sc_n['unknown'], $sc_n['failed'],
+        $dr_pdo->query("SELECT delivery FROM notification_log WHERE channel = 'discord'")->fetchColumn()], [2, 1, 'unknown']);
+
+    // Nobody to tell: nothing attempted, and the caller can say so.
+    $dr_pdo->exec("UPDATE users SET role = 'user' WHERE id = 1");
+    $GLOBALS['system_settings'] = $sc_settings;
+    check('bez administrátora a kanálů se nic nepokusí',
+        bk_send_admin_notice($dr_pdo, 'self_check_failed', fn (): array => bk_self_check_message('failed', $sc_state), 1),
+        ['attempted' => 0, 'sent' => 0, 'unknown' => 0, 'failed' => 0]);
+    $dr_pdo->exec("UPDATE users SET role = 'admin', phone = NULL, whatsapp_apikey = NULL, whatsapp_notifications = 0 WHERE id = 1");
+    $GLOBALS['bk_test_callmebot_answer'] = null;
+}
+
+// --- Telegram's Markdown ------------------------------------------------
+// The alerts and the reminder go to Telegram with parse_mode Markdown. An
+// unescaped "_" in a monitor's name or an error made Telegram refuse the
+// message (HTTP 400), while the test button, sent as plain text, passed.
+if (function_exists('bk_alert_telegram_text') && function_exists('bk_daily_reminder_text')) {
+    check('Markdown pro Telegram: _ * ` [ dostanou zpětné lomítko', bk_telegram_md('web_api *x* `y` [z]'),
+        'web\_api \*x\* \`y\` \[z]');
+    check('alert: tučné popisky zůstanou, název a chyba jsou escapované',
+        bk_alert_telegram_text('🔴', 'web_api', 'DOWN', '11.11.2026 10:00:00', 'HTTP 500 z /status/public_status'),
+        "🔴 *Blood Kings Alert*:\n*Monitor:* web\\_api\n*Status:* DOWN\n*Čas:* 11.11.2026 10:00:00\n*Detaily:* HTTP 500 z /status/public\\_status");
+    check_false('alert bez chyby nemá řádek Detaily', str_contains(bk_alert_telegram_text('🟢', 'a', 'UP', 't', ''), 'Detaily'));
+    $tg_report = ['outages' => [['name' => 'db_main', 'status' => 'down', 'duration_secs' => null]],
+        'silent' => [], 'incidents' => [], 'problem_count' => 1];
+    check('připomínka pro Telegram: vlastní tučné písmo a escapovaný název', bk_daily_reminder_text($tg_report, true),
+        "🔔 *Denní připomínka: pořád je něco rozbité*\n• db\\_main – DOWN");
+    check_true('ostatní kanály dostanou název beze změny', str_contains(bk_daily_reminder_text($tg_report), '• db_main – DOWN'));
+}
+// SMS and WhatsApp: every alert but a recovery says why.
+if (function_exists('bk_alert_sms_body')) {
+    check('SMS: certifikát řekne, za kolik dní vyprší',
+        bk_alert_sms_body('ssl_expiring', '🔒', 'web', 'SSL CERTIFIKÁT BRZY VYPRŠÍ', 't', "SSL certifikát pro 'web' vyprší za 9 dní!"),
+        "🔒 Monitor web je SSL CERTIFIKÁT BRZY VYPRŠÍ. Čas: t. Důvod: SSL certifikát pro 'web' vyprší za 9 dní!");
+    check_true('SMS: zpomalení řekne, jak pomalé',
+        str_ends_with(bk_alert_sms_body('latency_degraded', '⏱', 'web', 'ZPOMALENÍ', 't', 'Odezva je 850 ms'), 'Důvod: Odezva je 850 ms'));
+    check('SMS: obnova bez důvodu', bk_alert_sms_body('up', '🟢', 'web', 'ONLINE', 't', 'cokoli'), '🟢 Monitor web je ONLINE. Čas: t.');
+    check('SMS: výpadek nese chybu, zkrácenou po znacích',
+        bk_alert_sms_body('down', '🔴', 'web', 'DOWN', 't', str_repeat('ů', 120)),
+        '🔴 Monitor web je DOWN. Čas: t. Chyba: ' . str_repeat('ů', 99) . '…');
+    check('SMS: údržba s důvodem', bk_alert_sms_body('maintenance', '🔧', 'web', 'ÚDRŽBA', 't', 'aktualizace'),
+        '🔧 Monitor web byl přepnut do režimu plánované údržby. Důvod: aktualizace');
+}
+// Discord's embed is no HTML: "&" and "'" stay as they are.
+if (function_exists('bk_alert_discord_description')) {
+    check('Discord: název a chyba bez HTML entit',
+        bk_alert_discord_description("Kuba & Pepa's web", 'DOWN', '11.11.2026 10:00:00', 'HTTP 500 "<b>"'),
+        "**Monitor:** Kuba & Pepa's web\n**Status:** DOWN\n**Čas:** 11.11.2026 10:00:00\n**Detaily:** HTTP 500 \"<b>\"");
+}
+if (function_exists('bk_send_shared_channels') && $dr_pdo instanceof PDO) {
+    $tg_saved = $GLOBALS['system_settings'];
+    $GLOBALS['system_settings'] = ['telegram_bot_token' => '123:abc', 'telegram_chat_id' => '-100200300'] + $tg_saved;
+    $GLOBALS['bk_test_webhooks'] = [];
+    bk_send_shared_channels($dr_pdo, 'daily_reminder', 'daily_reminder', 'prostý text', 'x', 0, '*md* a\_b');
+    bk_send_shared_channels($dr_pdo, 'daily_reminder', 'daily_reminder', 'prostý text', 'x', 0, null);
+    $tg_sent = array_map(fn (array $w): array => (array)json_decode($w['payload'], true), $GLOBALS['bk_test_webhooks']);
+    check('Telegram: Markdown jen pro text psaný pro něj, jinak prostý text',
+        [$tg_sent[0]['text'] ?? null, $tg_sent[0]['parse_mode'] ?? null, $tg_sent[1]['text'] ?? null, $tg_sent[1]['parse_mode'] ?? null],
+        ['*md* a\_b', 'Markdown', 'prostý text', null]);
+    $GLOBALS['system_settings'] = $tg_saved;
+    $dr_pdo->exec('DELETE FROM notification_log');
+}
+
+// --- cron: the reminder really is wired in --------------------------------
+// Nothing executes cron.php here, so what can be checked is that the block
+// exists, that it asks the guard BEFORE sending, that it writes the date
+// stamp, and that it lives in a try of its own - inside the digest's try a
+// failing reminder would take the escalations down with it.
+$dr_block = (function () use ($cron_src): string {
+    $start = strpos($cron_src, '// --- Daily reminder');
+    $end = strpos($cron_src, '// --- Escalation of unacknowledged incidents', $start === false ? 0 : $start);
+    return $start !== false && $end !== false ? substr($cron_src, $start, $end - $start) : '';
+})();
+check_true('cron má blok denní připomínky za digesty', $dr_block !== '');
+check_true('ptá se nejdřív stráže, pak posílá',
+    $dr_block !== '' && strpos($dr_block, 'bk_daily_reminder_due(') < strpos($dr_block, 'bk_send_daily_reminder('));
+check_true('a respektuje vypínač', str_contains($dr_block, "get_setting('daily_reminder_enabled', '1')"));
+check_true('zapisuje razítko dne', str_contains($dr_block, 'last_daily_reminder_sent')
+    && str_contains($dr_block, "date('Y-m-d')"));
+// The stamp is written whichever way it ended. Only inside an `if ($sent)` it
+// would let a refused channel be retried every minute until midnight.
+check_false('razítko není podmíněné úspěchem odeslání',
+    str_contains($dr_block, "if (\$reminder['sent'])") && strpos($dr_block, 'last_daily_reminder_sent') > strpos($dr_block, "if (\$reminder['sent'])"));
+check_true('běží ve vlastním try/catch', str_contains($dr_block, '} catch (Throwable $e) {'));
+check_true('a selhání nezůstane potichu', str_contains($dr_block, 'Denní připomínka selhala'));
+
+// =======================================================================
+// TeamSpeak ServerQuery - every command reads its own answer
+//
+// check_teamspeak() read serverlist and serverinfo with one fgets each, so
+// their "error id=0" line stayed in the socket. Every later command then read
+// the previous command's answer: a wrong query password counted as a login,
+// the channel and client counts came from other replies, and the serverlist
+// fallback lost serverinfo altogether. The check opens its own socket, so the
+// fake ServerQuery runs as a child process on a free port.
+// =======================================================================
+bk_test_load_functions(__DIR__ . '/../db.php', ['bk_response_ms']);
+bk_test_load_functions(__DIR__ . '/../functions.php', [
+    'check_minecraft', 'check_minecraft_slp_attempt', 'check_minecraft_rcon', 'bk_rcon_execute',
+    'check_teamspeak', 'check_ts3_ports', 'bk_ts3_send_command', 'bk_ts3_parse_error_id',
+    'bk_ts3_parse_kv_line', 'bk_ts3_parse_list_response', 'bk_ts3_escape_decode', 'bk_ts3_escape_encode',
+]);
+if (function_exists('check_teamspeak')) {
+    // R21, R46: the cPanel exporter, run as PHP runs it, with a fake uapi on PATH.
+    $cpx_dir = sys_get_temp_dir() . '/bk_cpx_' . getmypid();
+    @mkdir($cpx_dir);
+    $cpx_run = function (?string $uapi_json) use ($cpx_dir): array {
+        $uapi = $cpx_dir . '/uapi';
+        file_put_contents($uapi, $uapi_json === null ? "#!/bin/sh\nexit 1\n" : "#!/bin/sh\ncat <<'EOF'\n{$uapi_json}\nEOF\n");
+        chmod($uapi, 0755);
+        $cmd = 'STATS_KEY=cpx-key PATH=' . escapeshellarg($cpx_dir . ':' . getenv('PATH')) . ' ' . escapeshellarg(PHP_BINARY)
+            . ' -r ' . escapeshellarg('$_GET["key"] = "cpx-key"; include ' . var_export(__DIR__ . '/../cpanel_stats.php', true) . ';');
+        return json_decode((string)shell_exec($cmd), true) ?: [];
+    };
+    $cpx = $cpx_run(json_encode(['result' => ['data' => [['name' => 'diskusage', 'count' => '12', 'max' => 'unlimited', 'units' => 'GB']]]]));
+    check('cPanel: neomezený disk nemá procento, ne 0', [array_key_exists('percent', $cpx['disk'] ?? []) ? $cpx['disk']['percent'] : 'chybí',
+        str_contains($cpx['disk']['formatted'] ?? '', 'Bez limitu'), array_key_exists('source', $cpx['disk'] ?? [])], [null, true, false]);
+    check_true('cPanel: záložní paměť je označená jako za celý server', ($cpx['memory'] ?? null) === null || ($cpx['memory']['source'] ?? null) === 'meminfo');
+    $cpx2 = $cpx_run(null);
+    check('cPanel: bez UAPI je disk za celý server a řekne to', [$cpx2['disk']['source'] ?? null, str_contains($cpx2['disk']['formatted'] ?? '', 'celý disk serveru')],
+        ['filesystem', true]);
+    @unlink($cpx_dir . '/uapi');
+    @rmdir($cpx_dir);
+
+    // R10: a count the server did not send stays unknown.
+    $mc_check = function (string $mode): array {
+        $proc = proc_open([PHP_BINARY, __DIR__ . '/fixtures/mc_slp_server.php', $mode], [1 => ['pipe', 'w']], $pipes);
+        $port = is_resource($proc) ? (int)fgets($pipes[1]) : 0;
+        $result = check_minecraft('127.0.0.1', $port, 2);
+        proc_terminate($proc);
+        return [$result['status'], $result['players_online'], $result['players_max']];
+    };
+    check('Minecraft: počty ze serveru', $mc_check('full'), ['up', 3, 32]);
+    check('Minecraft: skryté počty nejsou prázdný server', $mc_check('hidden'), ['up', null, null]);
+    check('Minecraft: nečitelná odpověď nevymyslí 0 / 0', $mc_check('garbage'), ['up', null, null]);
+    $mc_closed = stream_socket_server('tcp://127.0.0.1:0');
+    $mc_free = (int)substr(strrchr((string)stream_socket_get_name($mc_closed, false), ':'), 1);
+    fclose($mc_closed);
+    $mc_down = check_minecraft('127.0.0.1', $mc_free, 1);
+    check('Minecraft: vypnutý server nemá nula hráčů, ale žádné údaje', [$mc_down['status'], $mc_down['players_online'], $mc_down['players_max']], ['down', null, null]);
+
+    $ts3_proc = proc_open([PHP_BINARY, __DIR__ . '/fixtures/ts3_query_server.php'], [1 => ['pipe', 'w']], $ts3_pipes);
+    $ts3_port = is_resource($ts3_proc) ? (int)fgets($ts3_pipes[1]) : 0;
+    check_true('falešný ServerQuery naslouchá', $ts3_port > 0);
+    if ($ts3_port > 0) {
+        // Filetransfer port 1: nothing listens there, check_ts3_ports() is refused at once.
+        // 'cmds' is what the fake server received on that connection.
+        $ts3_run = function (string $host, ?string $user = null, ?string $pass = null, int $timeout = 2) use ($ts3_port, $ts3_pipes): array {
+            $r = check_teamspeak($host, $ts3_port, $timeout, $user, $pass, 1);
+            $read = [$ts3_pipes[1]];
+            $none = null;
+            $r['cmds'] = stream_select($read, $none, $none, 5) ? trim((string)fgets($ts3_pipes[1])) : null;
+            return $r;
+        };
+        $ts3_view = fn (array $r): array => [
+            'status' => $r['status'], 'error' => $r['error'], 'clients' => [$r['clients_online'] ?? null, $r['clients_max'] ?? null],
+            'name' => $r['name'] ?? null, 'authenticated' => $r['check_stages']['query']['authenticated'] ?? null,
+            'steps' => $r['check_stages']['query']['steps'] ?? null,
+            'login_error' => array_key_exists('login_error', $r['check_stages']['query'] ?? [])
+                ? $r['check_stages']['query']['login_error'] : 'absent',
+            'channels' => [$r['check_stages']['service']['channel_count'] ?? null, $r['check_stages']['service']['active_channel_count'] ?? null],
+            'query_clients' => $r['check_stages']['service']['query_client_count'] ?? null,
+            'server_groups' => $r['check_stages']['service']['server_group_count'] ?? null,
+            'voice' => $r['check_stages']['service']['voice_activity'] ?? null,
+            'cmds' => $r['cmds'],
+        ];
+
+        $ts3_anon = $ts3_view($ts3_run('127.0.0.1:9987'));
+        check('anonymně: stav a klienti ze serverinfo', [$ts3_anon['status'], $ts3_anon['error'], $ts3_anon['clients'], $ts3_anon['name']],
+            ['up', null, [3, 32], 'Example Server']);
+        check('anonymně: kanály a query klienti z vlastních odpovědí', [$ts3_anon['channels'], $ts3_anon['query_clients']], [[3, 2], 1]);
+        check('anonymně: bez přihlášení, skupiny ani hlas se nevymyslí',
+            [$ts3_anon['authenticated'], $ts3_anon['steps'], $ts3_anon['server_groups'], $ts3_anon['voice'], $ts3_anon['login_error']],
+            [false, ['serverinfo' => true, 'channellist' => true, 'clientlist' => true], null, null, 'absent']);
+
+        // The server answers error id=520; the check used to read serverinfo's leftover error id=0 instead.
+        $ts3_bad = $ts3_view($ts3_run('127.0.0.1:9987', 'serveradmin', 'wrong-password'));
+        check('špatné heslo není přihlášení',
+            [$ts3_bad['authenticated'], $ts3_bad['steps'], $ts3_bad['server_groups'], $ts3_bad['voice']],
+            [false, ['serverinfo' => true, 'login' => false, 'channellist' => true, 'clientlist' => true], null, null]);
+        check('a kanály i klienti zůstanou správně', [$ts3_bad['channels'], $ts3_bad['query_clients']], [[3, 2], 1]);
+        // Only this id says the name or password is wrong; the card words its note by it.
+        check('špatné heslo: kód odmítnutí je v check_stages', $ts3_bad['login_error'], 520);
+
+        $ts3_auth = $ts3_view($ts3_run('127.0.0.1:9987', 'serveradmin', 'example-password'));
+        check('přihlášeně: všechny kroky prošly', [$ts3_auth['authenticated'], $ts3_auth['steps']], [true, [
+            'serverinfo' => true, 'login' => true, 'channellist' => true, 'clientlist' => true, 'servergrouplist' => true, 'logout' => true,
+        ]]);
+        check('přihlášeně: kanály, skupiny a hlasová aktivita z vlastních odpovědí',
+            [$ts3_auth['channels'], $ts3_auth['query_clients'], $ts3_auth['server_groups'], $ts3_auth['voice']],
+            [[3, 2], 1, 3, ['talking' => 1, 'away' => 1, 'muted' => 2, 'recording' => 1]]);
+        check('přihlášeně: kód přihlášení 0', $ts3_auth['login_error'], 0);
+
+        // The monitored vserver 9988 is stopped (use answers 1033) and 9987
+        // runs on the same instance. The fallback used to take the first port
+        // in serverlist and report 9987's name and counts as this monitor's.
+        // A use error leaves the status up with its answer as the detail.
+        $ts3_stopped = $ts3_view($ts3_run('127.0.0.1:9988'));
+        check('zastavený virtuální server nemá cizí data',
+            [$ts3_stopped['status'], $ts3_stopped['name'], $ts3_stopped['clients'], $ts3_stopped['steps']],
+            ['up', null, [null, null], null]);
+        check_true('zastavený virtuální server: detail cituje odpověď na use', str_contains((string)$ts3_stopped['error'],
+            '(Odpověď serveru: error id=1033 msg=server\\sis\\snot\\srunning)'));
+        check('zastavený virtuální server: jiný server se nevybírá', $ts3_stopped['cmds'], 'use port=9988,quit');
+
+        // No vserver at all on 9999 (1024). A target without a voice port
+        // gets here too: the /app form stores the bare host, so 9987 is only
+        // assumed. Not a down then, and no other vserver is picked; serverlist
+        // only adds whether the port is listed.
+        $ts3_none = $ts3_view($ts3_run('127.0.0.1:9999'));
+        check('port bez virtuálního serveru: stav beze změny a bez cizích dat',
+            [$ts3_none['status'], $ts3_none['name'], $ts3_none['clients'], $ts3_none['steps']], ['up', null, [null, null], null]);
+        check('port bez virtuálního serveru: chyba to říká', $ts3_none['error'],
+            'TS3 ServerQuery odpovídá, ale virtuální server na hlasovém portu 9999 nejde vybrat'
+            . ' - serverlist na tomto portu žádný virtuální server neuvádí (Odpověď serveru: error id=1024 msg=invalid\\sserverID).');
+        check('port bez virtuálního serveru: jiný server se nevybírá', $ts3_none['cmds'], 'use port=9999,serverlist,quit');
+
+        // 9991 is listed offline, but use answers 1024: the detail quotes its state.
+        $ts3_listed = $ts3_view($ts3_run('127.0.0.1:9991'));
+        check('port v serverlistu, který use nevybere: stav beze změny a bez cizích dat',
+            [$ts3_listed['status'], $ts3_listed['name'], $ts3_listed['clients']], ['up', null, [null, null]]);
+        check('port v serverlistu, který use nevybere: chyba cituje stav ze serverlistu', $ts3_listed['error'],
+            'TS3 ServerQuery odpovídá, ale virtuální server na hlasovém portu 9991 nejde vybrat'
+            . ' - serverlist u něj hlásí stav „offline“ (Odpověď serveru: error id=1024 msg=invalid\\sserverID).');
+        check('port v serverlistu, který use nevybere: jiný server se nevybírá', $ts3_listed['cmds'], 'use port=9991,serverlist,quit');
+
+        // Any other use error: the status stays up with the answer as the
+        // detail, and nothing else is asked - neither serverlist nor
+        // serverinfo of an unselected server.
+        $ts3_denied = $ts3_view($ts3_run('127.0.0.1:9990'));
+        check('jiná chyba use: stav beze změny, detail cituje odpověď na use',
+            [$ts3_denied['status'], $ts3_denied['name'], str_contains((string)$ts3_denied['error'],
+                '(Odpověď serveru: error id=2568 msg=insufficient\\sclient\\spermissions failed_permid=4)')],
+            ['up', null, true]);
+        check('jiná chyba use: jiný server se nevybírá', $ts3_denied['cmds'], 'use port=9990,quit');
+
+        // channellist of 9989 is longer than bk_ts3_send_command's 64 KB cap,
+        // so its error line stays in the socket. clientlist used to read that
+        // rest as its own answer and count channels as clients.
+        $ts3_cut = $ts3_view($ts3_run('127.0.0.1:9989'));
+        check('useknutá odpověď: stav a serverinfo zůstanou', [$ts3_cut['status'], $ts3_cut['error'], $ts3_cut['name']], ['up', null, 'Large Server']);
+        check('useknutá odpověď: nedokončené kroky jsou null, počty se nevymyslí',
+            [$ts3_cut['steps'], $ts3_cut['channels'], $ts3_cut['query_clients']],
+            [['serverinfo' => true, 'channellist' => null, 'clientlist' => null], [null, null], null]);
+        // The check closes with that rest unread, so the socket may be reset
+        // before quit reaches the fake server; only what came before it counts.
+        check('useknutá odpověď: po ní se už nic neposílá', preg_replace('/,quit$/', '', (string)$ts3_cut['cmds']),
+            'use port=9989,serverinfo,channellist');
+
+        // The login answer never comes: the stream timeout ends the read
+        // without its error line. Not a rejected login, and nothing more is sent.
+        $ts3_slow = $ts3_view($ts3_run('127.0.0.1:9987', 'serveradmin', 'slow-password', 1));
+        check('přihlášení bez odpovědi: kroky null, kód neznámý',
+            [$ts3_slow['status'], $ts3_slow['authenticated'], $ts3_slow['steps'], $ts3_slow['login_error'], $ts3_slow['channels']],
+            ['up', false, ['serverinfo' => true, 'login' => null, 'channellist' => null, 'clientlist' => null], null, [null, null]]);
+        check('přihlášení bez odpovědi: po něm se už nic neposílá', $ts3_slow['cmds'],
+            'use port=9987,serverinfo,login client_login_name=serveradmin client_login_password=slow-password,quit');
+    }
+    if (is_resource($ts3_proc)) {
+        proc_terminate($ts3_proc);
+        proc_close($ts3_proc);
+    }
+
+    // A different service behind the port passes the greeting check, but no
+    // answer of it ends with "error id=". Reading use, serverlist and serverinfo
+    // to that line waited the full timeout three times on every cron run; the
+    // first answer without it now ends the check, with that answer as detail.
+    $ts3_fproc = proc_open([PHP_BINARY, __DIR__ . '/fixtures/ts3_query_server.php', 'foreign'], [1 => ['pipe', 'w']], $ts3_fpipes);
+    $ts3_fport = is_resource($ts3_fproc) ? (int)fgets($ts3_fpipes[1]) : 0;
+    check_true('cizí služba naslouchá', $ts3_fport > 0);
+    if ($ts3_fport > 0) {
+        $ts3_t0 = microtime(true);
+        $ts3_foreign = check_teamspeak('127.0.0.1:9987', $ts3_fport, 2, null, null, 1);
+        $ts3_elapsed = microtime(true) - $ts3_t0;
+        $ts3_read = [$ts3_fpipes[1]];
+        $ts3_none = null;
+        $ts3_seen = stream_select($ts3_read, $ts3_none, $ts3_none, 5) ? trim((string)fgets($ts3_fpipes[1])) : null;
+        // Only whether the detail quotes the answer: the tip after it names this machine's address.
+        check('cizí služba: stav beze změny, detail cituje její odpověď',
+            [$ts3_foreign['status'], str_contains((string)$ts3_foreign['error'],
+                'z Query portu (Odpověď serveru: 220 You will be disconnected after 15 minutes of inactivity.)')],
+            ['up', true]);
+        check('cizí služba: po use se už nic neposílá', $ts3_seen, 'use port=9987,quit');
+        check_true('cizí služba: kontrola nečeká na timeout', $ts3_elapsed < 1.5);
+    }
+    if (is_resource($ts3_fproc)) {
+        proc_terminate($ts3_fproc);
+        proc_close($ts3_fproc);
+    }
+}
+
+// --- testovací brány: běh bez kontrol musí skončit červeně -----------------
+// Why here: run_api_tests.php used to exit 0 when MySQL was unreachable, so a
+// wrong password looked exactly like 980 passing checks. A gate that can be
+// green without running is the one failure mode nobody notices, so the
+// behaviour itself is tested - in subprocesses, because an exit code is the
+// only thing a caller (CI) ever sees.
+$gate_run = function (array $env, string $script, array $args = []): array {
+    $cmd = escapeshellarg(PHP_BINARY);
+    foreach ($args as $a) {
+        $cmd .= ' ' . escapeshellarg($a);
+    }
+    $prefix = '';
+    foreach ($env as $k => $v) {
+        $prefix .= $k . '=' . escapeshellarg($v) . ' ';
+    }
+    $out = [];
+    $code = 0;
+    exec($prefix . $cmd . ' ' . escapeshellarg($script) . ' 2>&1', $out, $code);
+    return ['code' => $code, 'out' => implode("\n", $out)];
+};
+
+// bk_test_report() over an untouched counter: no check ran, so the run is red.
+$gate_empty = $gate_run([], __DIR__ . '/assert_helpers.php', [
+    '-r',
+    'require ' . var_export(__DIR__ . '/assert_helpers.php', true) . '; exit(bk_test_report("prázdná ukázka") > 0 ? 1 : 0);',
+]);
+check('sada, která neprovedla ani jednu kontrolu, končí nenulovým kódem', $gate_empty['code'], 1);
+check_true('a řekne, že neověřila nic', str_contains($gate_empty['out'], 'PRÁZDNÁ SADA'));
+check_true('a počty v souhrnu si nevymýšlí', str_contains($gate_empty['out'], '0 prošlo, 0 selhalo'));
+
+// The API suite without a reachable database. Port 1 has no listener, so the
+// connection is refused before the suite writes config.php or touches any schema.
+$gate_db = $gate_run(['BK_TEST_DB_HOST' => '127.0.0.1', 'BK_TEST_DB_PORT' => '1', 'BK_TEST_DB_NAME' => 'bk_gate_nikdy'],
+    __DIR__ . '/run_api_tests.php');
+check('API sada bez dostupné databáze končí nenulovým kódem', $gate_db['code'], 1);
+check_true('a přizná, že testy neproběhly', str_contains($gate_db['out'], 'NEPROBĚHLY'));
+
+// An empty database name is a typo in the environment, not a request for the default.
+$gate_name = $gate_run(['BK_TEST_DB_NAME' => ''], __DIR__ . '/run_api_tests.php');
+check('prázdné BK_TEST_DB_NAME API sadu zastaví', $gate_name['code'], 1);
+check_true('a vysvětlí proč', str_contains($gate_name['out'], 'BK_TEST_DB_NAME je prázdné'));
+
+// The same hole in the two linters that discover their own inputs: a copy of
+// the script into an empty tree finds nothing to read. No test hook in the
+// lint itself - the real path is the one worth proving.
+$gate_tmp = sys_get_temp_dir() . '/bk_gate_' . getmypid() . '/tests';
+@mkdir($gate_tmp, 0777, true);
+foreach (['run_query_lint.php', 'run_honesty_lint.php'] as $gate_lint) {
+    copy(__DIR__ . '/' . $gate_lint, $gate_tmp . '/' . $gate_lint);
+    $gate_res = $gate_run([], $gate_tmp . '/' . $gate_lint);
+    check("lint {$gate_lint} bez jediného souboru ke čtení končí červeně", $gate_res['code'], 1);
+    check_true("a {$gate_lint} řekne, že neověřil nic", str_contains($gate_res['out'], 'neověřil nic'));
+    @unlink($gate_tmp . '/' . $gate_lint);
+}
+
+// The gate runner (run_all.php) that CI, the deploy and `npm run test:php`
+// call. It finds the lints itself, so a new one cannot be left out of a list,
+// and it runs the API suite only when BK_TEST_DB_NAME names its database: that
+// suite drops the database it is given, and without a name it takes bk_test.
+// The plan is read with --list, never by running the gate from inside one of
+// its own suites. The environment is built here, so a BK_TEST_DB_* of the
+// caller cannot leak into the "not set" case.
+$gate_all = function (array $env, string $script, array $args = []): array {
+    $env = $env + array_filter(getenv(), fn($k) => !str_starts_with($k, 'BK_TEST_DB_'), ARRAY_FILTER_USE_KEY);
+    $proc = proc_open(array_merge([PHP_BINARY, $script], $args), [1 => ['pipe', 'w'], 2 => ['redirect', 1]], $pipes, null, $env);
+    $out = stream_get_contents($pipes[1]);
+    fclose($pipes[1]);
+    return ['code' => proc_close($proc), 'out' => (string)$out];
+};
+$gate_lints = array_values(array_filter(scandir(__DIR__) ?: [], fn($f) => (bool)preg_match('/^run_.+_lint\.php$/', $f)));
+$gate_plan = $gate_all([], __DIR__ . '/run_all.php', ['--list']);
+preg_match_all('/^spustí se: (run_.+_lint\.php)$/m', $gate_plan['out'], $gate_planned);
+check('run_all.php spustí každý run_*_lint.php ze složky testů', [$gate_plan['code'], count($gate_lints) >= 10, $gate_planned[1]], [0, true, $gate_lints]);
+check_true('a syntaxi, obě sady a mrtvý kód',
+    str_contains($gate_plan['out'], 'spustí se: php -l (') && str_contains($gate_plan['out'], "spustí se: run_tests.php\n")
+    && str_contains($gate_plan['out'], "spustí se: run_pipeline_tests.php\n") && str_contains($gate_plan['out'], "spustí se: find_dead_code.php --strict\n"));
+$gate_skip = 'přeskočí se: run_api_tests.php (není nastavené BK_TEST_DB_NAME, bez něj by sada smazala databázi bk_test)';
+check_true('bez BK_TEST_DB_NAME API sadu přeskočí a řekne to', str_contains($gate_plan['out'], $gate_skip));
+// A port alone (the local container's, say) names no database: the suite
+// would drop its default bk_test, which another run may be using.
+$gate_plan_port = $gate_all(['BK_TEST_DB_PORT' => '13306'], __DIR__ . '/run_all.php', ['--list']);
+check_true('jen s BK_TEST_DB_PORT API sadu přeskočí, výchozí bk_test nesmaže',
+    str_contains($gate_plan_port['out'], $gate_skip) && !str_contains($gate_plan_port['out'], 'spustí se: run_api_tests.php'));
+$gate_plan_db = $gate_all(['BK_TEST_DB_NAME' => 'bk_gate_nikdy'], __DIR__ . '/run_all.php', ['--list']);
+check_true('s BK_TEST_DB_NAME API sadu spustí', str_contains($gate_plan_db['out'], "spustí se: run_api_tests.php\n"));
+// Copied into an empty tree it finds no lint and no suite: red, not green.
+copy(__DIR__ . '/run_all.php', $gate_tmp . '/run_all.php');
+$gate_res = $gate_all([], $gate_tmp . '/run_all.php');
+check('run_all.php bez lintů a sad končí červeně', $gate_res['code'], 1);
+check_true('a řekne, že brána lintů neověřila nic', str_contains($gate_res['out'], 'neověřila nic')
+    && str_contains($gate_res['out'], 'SELHALO') && str_contains($gate_res['out'], 'Chybí '));
+@unlink($gate_tmp . '/run_all.php');
+@rmdir($gate_tmp);
+@rmdir(dirname($gate_tmp));
+
+// The honesty lint's zero response time, over a planted file. It caught only
+// the forms the old code used, while 0.0, an assignment to the key and an
+// INSERT with its VALUES on the next line each bring back the 0 ms outage
+// point - which the readers' > 0 filter would then hide from anyone looking.
+$hl_tmp = sys_get_temp_dir() . '/bk_hl_' . getmypid() . '/tests';
+@mkdir($hl_tmp, 0777, true);
+copy(__DIR__ . '/run_honesty_lint.php', $hl_tmp . '/run_honesty_lint.php');
+file_put_contents(dirname($hl_tmp) . '/planted.php', implode("\n", [
+    '<?php',
+    "\$a = ['response_time' => 0];",
+    "\$b = ['response_time' => 0.0, 'error' => 'x'];",
+    "\$b['response_time'] = 0;",
+    "\$c = ['response_time' => 0.00];",
+    "\$d = \$pdo->prepare(\"INSERT INTO monitor_logs (monitor_id, status, response_time, error_message)",
+    "    VALUES (?, 'maintenance', 0, ?)\");",
+    "\$e = \$pdo->prepare(\"INSERT INTO monitor_logs (monitor_id, status, response_time) VALUES (?, 'down', 0.0)\");",
+    // Not zeros, or not written: a measured value, comparisons, a placeholder.
+    "\$f = ['response_time' => 0.5];",
+    "\$g = \$b['response_time'] == 0 || \$b['response_time'] >= 0;",
+    "\$h = \$pdo->prepare(\"INSERT INTO monitor_logs (monitor_id, status, response_time)",
+    "    VALUES (?, 'up', ?)\");",
+]) . "\n");
+$hl_res = $gate_run([], $hl_tmp . '/run_honesty_lint.php');
+preg_match_all('/planted\.php:(\d+)/', $hl_res['out'], $hl_lines);
+$hl_found = array_map('intval', $hl_lines[1]);
+sort($hl_found);
+check('honesty lint najde nulovou odezvu i jako 0.0, přiřazení a INSERT s VALUES na dalším řádku',
+    [$hl_res['code'], $hl_found], [1, [2, 3, 4, 5, 6, 8]]);
+@unlink(dirname($hl_tmp) . '/planted.php');
+@unlink($hl_tmp . '/run_honesty_lint.php');
+@rmdir($hl_tmp);
+@rmdir(dirname($hl_tmp));
+
+$failed = bk_test_report('sběr, e-maily, notifikace');
+exit($failed > 0 ? 1 : 0);

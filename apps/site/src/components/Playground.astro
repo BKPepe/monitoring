@@ -1,0 +1,345 @@
+---
+// Playground.astro - one real request from our Cloudflare Worker.
+//
+// The worker's /api/test fetches the address once (redirects are reported,
+// not followed; private and local targets are refused) and measures only the
+// total time until the response arrived. So this panel shows exactly that:
+// the HTTP status, the round trip, when it ran and, for a 3xx, where the
+// Location header points. It used to stage a
+// DNS/TCP/TLS animation and an "IP address" field the worker never filled.
+import type { Lang } from '../i18n';
+
+interface Props {
+  lang: Lang;
+}
+const { lang } = Astro.props;
+
+const t =
+  lang === 'cs'
+    ? {
+        title: 'Pošlete jeden skutečný požadavek z našeho Cloudflare Workeru',
+        desc: 'Zadejte veřejnou adresu http(s). Worker ji jednou načte a vrátí stavový kód HTTP a celkovou dobu odezvy, kterou naměřil. Přesměrování ohlásí, ale nenásleduje; soukromé a lokální adresy odmítne.',
+        address: 'Adresa k otestování',
+        send: 'Odeslat požadavek',
+        sending: 'Odesílám…',
+        idle: 'Zatím nebyl odeslán žádný požadavek. Níže se nic nevyplní, dokud worker neodpoví.',
+        host: 'Cíl',
+        status: 'Stav HTTP',
+        roundTrip: 'Odezva',
+        checkedAt: 'Změřeno',
+        ok: 'Server odpověděl.',
+        failed: 'Server neodpověděl úspěšně:',
+        clientError: 'Server je dosažitelný a odpověděl chybou klienta HTTP',
+        redirect: 'Přesměrovává na',
+        refused: 'Worker požadavek odmítl:',
+        unreachable: 'Worker se z vašeho prohlížeče nepodařilo zastihnout, takže žádný výsledek není.',
+        note: 'Měří se jen celková doba do přijetí odpovědi z místa, kde worker právě běží. Rozpad na DNS, TCP a TLS worker změřit neumí, a tak ho neukazujeme.',
+      }
+    : {
+        title: 'Send one real request from our Cloudflare Worker',
+        desc: 'Enter a public http(s) address. The worker requests it once and returns the HTTP status and the total round trip it measured. Redirects are reported, not followed; private and local addresses are refused.',
+        address: 'Address to test',
+        send: 'Send request',
+        sending: 'Sending…',
+        idle: 'No request sent yet. Nothing below is filled in until the worker answers.',
+        host: 'Target',
+        status: 'HTTP status',
+        roundTrip: 'Round trip',
+        checkedAt: 'Measured at',
+        ok: 'The server answered.',
+        failed: 'The server did not answer successfully:',
+        clientError: 'The server is reachable and answered with client error HTTP',
+        redirect: 'Redirects to',
+        refused: 'The worker refused the request:',
+        unreachable: 'The worker could not be reached from your browser, so there is no result.',
+        note: 'Only the total time until the response arrived is measured, from wherever the worker runs at that moment. A worker cannot time DNS, TCP and TLS separately, so no such breakdown is shown.',
+      };
+const locale = lang === 'cs' ? 'cs-CZ' : 'en-GB';
+---
+
+<section
+  class="probe"
+  id="playground"
+  aria-labelledby="probe-title"
+  data-locale={locale}
+  data-send={t.send}
+  data-sending={t.sending}
+  data-ok={t.ok}
+  data-failed={t.failed}
+  data-client-error={t.clientError}
+  data-refused={t.refused}
+  data-unreachable={t.unreachable}
+>
+  <h3 id="probe-title">{t.title}</h3>
+  <p class="probe-desc">{t.desc}</p>
+
+  <form class="probe-form" id="probe-form">
+    <label class="visually-hidden" for="probe-url">{t.address}</label>
+    <div class="probe-field">
+      <span aria-hidden="true">https://</span>
+      <input
+        id="probe-url"
+        name="url"
+        type="text"
+        inputmode="url"
+        autocomplete="off"
+        autocapitalize="off"
+        spellcheck="false"
+        placeholder="example.com"
+        required
+      />
+    </div>
+    <button type="submit" class="btn btn-primary" id="probe-btn">{t.send}</button>
+  </form>
+
+  <div class="probe-out" aria-live="polite">
+    <p class="probe-line" id="probe-line" data-tone="none">{t.idle}</p>
+    <dl class="probe-grid">
+      <div>
+        <dt>{t.host}</dt>
+        <dd id="probe-host">—</dd>
+      </div>
+      <div>
+        <dt>{t.status}</dt>
+        <dd id="probe-status">—</dd>
+      </div>
+      <div>
+        <dt>{t.roundTrip}</dt>
+        <dd id="probe-rtt">—</dd>
+      </div>
+      <div>
+        <dt>{t.checkedAt}</dt>
+        <dd id="probe-time">—</dd>
+      </div>
+      <div class="probe-wide" id="probe-redirect-row" hidden>
+        <dt>{t.redirect}</dt>
+        <dd id="probe-redirect">—</dd>
+      </div>
+    </dl>
+  </div>
+
+  <p class="probe-note">{t.note}</p>
+</section>
+
+<script>
+  import { API_ORIGIN } from '../config';
+
+  interface TestAnswer {
+    host?: string;
+    success?: boolean;
+    status?: number;
+    statusText?: string;
+    latencyMs?: number;
+    redirectTo?: string | null;
+    error?: string;
+    timestamp?: string;
+  }
+
+  const root = document.getElementById('playground');
+  const form = document.getElementById('probe-form') as HTMLFormElement | null;
+  const input = document.getElementById('probe-url') as HTMLInputElement | null;
+  const button = document.getElementById('probe-btn') as HTMLButtonElement | null;
+  const words: DOMStringMap = root?.dataset ?? {};
+  const set = (id: string, text: string) => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = text;
+  };
+  const line = (text: string, tone: 'ok' | 'bad' | 'none') => {
+    const el = document.getElementById('probe-line');
+    if (!el) return;
+    el.textContent = text;
+    el.dataset.tone = tone;
+  };
+  const redirectRow = document.getElementById('probe-redirect-row');
+  const clear = () => {
+    ['probe-host', 'probe-status', 'probe-rtt', 'probe-time', 'probe-redirect'].forEach((id) => set(id, '—'));
+    if (redirectRow) redirectRow.hidden = true;
+  };
+
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!input || !button) return;
+    const raw = input.value.trim();
+    if (!raw) return;
+    const url = /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
+
+    button.disabled = true;
+    button.textContent = words.sending ?? '';
+    clear();
+    line(words.sending ?? '', 'none');
+
+    let res: Response | null = null;
+    let data: TestAnswer | null = null;
+    try {
+      res = await fetch(`${API_ORIGIN}/api/test?url=${encodeURIComponent(url)}`);
+      data = (await res.json()) as TestAnswer;
+    } catch {
+      data = null;
+    }
+
+    button.disabled = false;
+    button.textContent = words.send ?? '';
+
+    if (!res || !data) {
+      line(words.unreachable ?? '', 'bad');
+      return;
+    }
+    if (!res.ok) {
+      // 400 (refused target) or 429 (rate limit): the worker's own reason.
+      line(`${words.refused ?? ''} ${data.error ?? `HTTP ${res.status}`}`, 'bad');
+      return;
+    }
+
+    set('probe-host', data.host ?? '—');
+    set('probe-status', data.status ? `${data.status} ${data.statusText ?? ''}`.trim() : '—');
+    set('probe-rtt', typeof data.latencyMs === 'number' ? `${data.latencyMs} ms` : '—');
+    const at = data.timestamp ? new Date(data.timestamp) : null;
+    set(
+      'probe-time',
+      at && !Number.isNaN(at.getTime())
+        ? new Intl.DateTimeFormat(words.locale, { timeStyle: 'medium' }).format(at)
+        : '—'
+    );
+    // Only a 3xx carries a target; the row stays hidden otherwise rather than
+    // showing a dash that reads like "no redirect measured".
+    if (data.redirectTo) {
+      set('probe-redirect', data.redirectTo);
+      if (redirectRow) redirectRow.hidden = false;
+    }
+    const status = typeof data.status === 'number' ? data.status : 0;
+    if (data.success) line(words.ok ?? '', 'ok');
+    // A 404 or 403 proves the host is up and answering; calling it "did not
+    // answer successfully" in red read like an outage.
+    else if (status >= 400 && status < 500) line(`${words.clientError ?? ''} ${status}.`, 'none');
+    else line(`${words.failed ?? ''} ${data.error || data.statusText || (status ? `HTTP ${status}` : '')}`.trim(), 'bad');
+  });
+</script>
+
+<style>
+  .probe {
+    display: grid;
+    align-content: start;
+    gap: 1.1rem;
+    padding: clamp(1.25rem, 1rem + 1vw, 1.75rem);
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    min-width: 0;
+  }
+
+  .probe h3 {
+    font-size: 1.125rem;
+    font-weight: 600;
+  }
+
+  .probe-desc {
+    font-size: var(--text-sm);
+  }
+
+  .probe-form {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .probe-field {
+    flex: 1 1 14rem;
+    display: flex;
+    align-items: center;
+    min-height: 2.9rem;
+    padding-inline: 0.9rem;
+    background: var(--surface-0);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+  }
+
+  .probe-field:focus-within {
+    border-color: var(--brand-500);
+    box-shadow: 0 0 0 3px var(--brand-glow);
+  }
+
+  .probe-field span {
+    color: var(--text-low);
+    user-select: none;
+  }
+
+  .probe-field input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    outline: none;
+    color: var(--text-hi);
+    padding-block: 0.6rem;
+  }
+
+  .probe-form .btn {
+    min-height: 2.9rem;
+  }
+
+  .probe-out {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .probe-line {
+    font-size: var(--text-sm);
+    color: var(--text-low);
+    min-height: 1.6em;
+  }
+
+  .probe-line[data-tone='ok'] {
+    color: var(--up);
+    font-weight: 600;
+  }
+
+  .probe-line[data-tone='bad'] {
+    color: var(--down);
+    font-weight: 600;
+  }
+
+  .probe-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+
+  .probe-grid div {
+    display: grid;
+    gap: 0.3rem;
+    padding: 0.8rem 0.9rem;
+    background: var(--surface-1);
+    min-width: 0;
+  }
+
+  .probe-grid .probe-wide {
+    grid-column: 1 / -1;
+  }
+
+  .probe-grid dt {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-low);
+  }
+
+  .probe-grid dd {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--text-hi);
+    overflow-wrap: anywhere;
+  }
+
+  .probe-note {
+    font-size: var(--text-xs);
+    color: var(--text-low);
+  }
+</style>

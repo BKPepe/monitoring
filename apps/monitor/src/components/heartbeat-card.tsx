@@ -1,0 +1,220 @@
+import * as React from 'react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { HeartPulse, Copy, Check, RefreshCw, AlertTriangle } from 'lucide-react';
+import { useLanguage } from '@/context/language-context';
+import { ErrorState, LoadingState } from '@/components/ui/states';
+
+interface HeartbeatInfo {
+  monitorId: number;
+  name: string;
+  token: string;
+  url: string | null;
+  intervalSecs: number | null;
+  graceSecs: number | null;
+  lastSignalAt: string | null;
+  lastResult: string | null;
+  lastMessage: string | null;
+  state: string;
+  stateReason: string | null;
+  ageSecs: number | null;
+}
+
+/**
+ * Heartbeat monitor setup.
+ *
+ * Shows the address the job should report to and a ready-made command to put
+ * into cron. Without it the administrator would assemble the URL by hand from
+ * the token, which is exactly the kind of step where a typo happens and the
+ * monitor then silently reports an outage that never happened.
+ */
+export function HeartbeatCard({ monitorId }: { monitorId: number }) {
+  const { t } = useLanguage();
+  const [info, setInfo] = React.useState<HeartbeatInfo | null | undefined>(undefined);
+  const [copied, setCopied] = React.useState<string | null>(null);
+  const [regenerating, setRegenerating] = React.useState(false);
+  const [regenerateFailed, setRegenerateFailed] = React.useState(false);
+
+  React.useEffect(() => {
+    let active = true;
+    fetch(`/status/api.php?action=heartbeat_info&monitor_id=${monitorId}`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d) => active && setInfo(d))
+      .catch(() => active && setInfo(null));
+    return () => {
+      active = false;
+    };
+  }, [monitorId]);
+
+  const regenerate = () => {
+    setRegenerating(true);
+    setRegenerateFailed(false);
+    fetch(`/status/api.php?action=heartbeat_info&monitor_id=${monitorId}&regenerate=1`, {
+      method: 'POST',
+      credentials: 'include',
+    })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d) => setInfo(d))
+      // The address on screen still works then, so it stays.
+      .catch(() => setRegenerateFailed(true))
+      .finally(() => setRegenerating(false));
+  };
+
+  const copy = (value: string, key: string) => {
+    navigator.clipboard.writeText(value).then(
+      () => {
+        setCopied(key);
+        setTimeout(() => setCopied(null), 2000);
+      },
+      () => setCopied(null)
+    );
+  };
+
+  if (info === undefined) {
+    return (
+      <div data-slot="well" className="bg-inset rounded-xl border border-border p-5">
+        <LoadingState label={t('hb.loading', 'Načítám nastavení heartbeatu…')} />
+      </div>
+    );
+  }
+
+  if (!info) {
+    return (
+      <div data-slot="well" className="bg-inset rounded-xl border border-border p-5">
+        <p className="text-foreground text-sm font-semibold">
+          {t('hb.unavailable_title', 'Nastavení heartbeatu se nepodařilo načíst')}
+        </p>
+        <p className="text-muted-foreground mt-1 text-xs">
+          {t('hb.unavailable_desc', 'Adresu vidí jen přihlášený administrátor.')}
+        </p>
+      </div>
+    );
+  }
+
+  const minutes = (secs: number | null) => (secs != null ? Math.round(secs / 60) : null);
+  const intervalMins = minutes(info.intervalSecs);
+  const graceMins = minutes(info.graceSecs);
+
+  const curl = info.url ? `curl -fsS -m 10 "${info.url}"` : null;
+
+  const stateVariant = info.state === 'up' ? 'up' : info.state === 'down' ? 'down' : 'neutral';
+  const stateLabel =
+    info.state === 'up'
+      ? t('hb.state_up', 'Hlásí se včas')
+      : info.state === 'down'
+        ? t('hb.state_down', 'Neozvala se')
+        : t('hb.state_unknown', 'Zatím bez signálu');
+
+  return (
+    <div data-slot="well" className="bg-inset rounded-xl border border-border space-y-4 p-5">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
+        <HeartPulse className="text-muted-foreground size-5" aria-hidden="true" />
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">{t('hb.title', 'Heartbeat')}</h3>
+          <p className="text-muted-foreground text-xs">
+            {intervalMins != null
+              ? t(
+                  'hb.subtitle',
+                  { interval: intervalMins, grace: graceMins ?? 0 },
+                  `Očekáváno každých ${intervalMins} min (tolerance ${graceMins ?? 0} min)`
+                )
+              : t('hb.subtitle_no_interval', 'Interval není nastavený')}
+          </p>
+        </div>
+        <Badge variant={stateVariant} className="ml-auto">
+          {stateLabel}
+        </Badge>
+      </div>
+
+      {/* The state in plain words - "unknown" without an explanation looks like an
+          error, yet it only means the job has not run yet. */}
+      {info.stateReason && <p className="text-muted-foreground text-xs">{info.stateReason}</p>}
+
+      {info.lastResult === 'fail' && (
+        <div className="border-down/40 bg-down/10 flex gap-2 rounded-lg border p-3">
+          <AlertTriangle className="text-down mt-0.5 size-4 shrink-0" />
+          <div className="text-xs">
+            <p className="text-foreground font-semibold">{t('hb.reported_failure', 'Úloha ohlásila selhání')}</p>
+            {info.lastMessage && <p className="text-muted-foreground mt-0.5">{info.lastMessage}</p>}
+          </div>
+        </div>
+      )}
+
+      <div>
+        <p className="text-muted-foreground mb-1 text-xs font-medium">
+          {t('hb.url_label', 'Adresa, na kterou se úloha hlásí')}
+        </p>
+        {info.url ? (
+          <div className="flex items-center gap-2">
+            <code className="bg-muted min-w-0 flex-1 overflow-x-auto rounded-md px-2 py-1.5 font-mono text-2xs whitespace-nowrap">
+              {info.url}
+            </code>
+            <Button variant="outline" size="sm" onClick={() => copy(info.url as string, 'url')} className="shrink-0">
+              {copied === 'url' ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+            </Button>
+          </div>
+        ) : (
+          <p className="text-muted-foreground text-sm">—</p>
+        )}
+      </div>
+
+      {curl && (
+        <div>
+          <p className="text-muted-foreground mb-1 text-xs font-medium">
+            {t('hb.cron_label', 'Na konec úlohy (cron, skript zálohy)')}
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="bg-muted min-w-0 flex-1 overflow-x-auto rounded-md px-2 py-1.5 font-mono text-2xs whitespace-nowrap">
+              {curl}
+            </code>
+            <Button variant="outline" size="sm" onClick={() => copy(curl, 'curl')} className="shrink-0">
+              {copied === 'curl' ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+            </Button>
+          </div>
+          <p className="text-muted-foreground mt-1.5 text-2xs">
+            {t(
+              'hb.fail_hint',
+              'Když úloha selže, přidejte &status=fail&msg=popis - monitor pak spadne hned, ne až po vypršení intervalu.'
+            )}
+          </p>
+        </div>
+      )}
+
+      {regenerateFailed && (
+        <ErrorState
+          size="inline"
+          message={t('hb.regenerate_failed', 'Nový token se nepodařilo vytvořit. Platí dál adresa výše.')}
+        />
+      )}
+
+      <div className="flex items-center justify-between border-t border-border pt-3">
+        <p className="text-muted-foreground text-2xs">
+          {info.lastSignalAt
+            ? t('hb.last_signal', { at: info.lastSignalAt }, `Poslední signál: ${info.lastSignalAt}`)
+            : t('hb.never', 'Zatím nepřišel žádný signál.')}
+        </p>
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={regenerating}
+          onClick={() => {
+            if (
+              !window.confirm(
+                t(
+                  'hb.regenerate_confirm',
+                  'Vygenerovat nový token? Stará adresa přestane fungovat a je nutné ji přepsat všude, kde je zadaná.'
+                )
+              )
+            ) {
+              return;
+            }
+            regenerate();
+          }}
+          className="gap-1.5"
+        >
+          <RefreshCw className="size-3.5" /> {t('hb.regenerate', 'Nový token')}
+        </Button>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,1327 @@
+# Blood Kings Monitoring API
+
+> 🇬🇧 English version (this page) · 🇨🇿 [Česká verze](api.cs.md)
+
+Reference for the HTTP interface of `apps/status`. Written from the code, not
+from intent - for every endpoint, what counts is what `api.php` does, not what
+it ought to do. Where the two differ, it is marked **Careful**.
+
+- **Base:** `https://bloodkings.eu/status/`
+- **Format:** JSON (`Content-Type: application/json; charset=utf-8`); exceptions
+  are noted per endpoint (SVG, Prometheus text, HTML).
+- **Error message language:** Czech - they are addressed to the administrator,
+  not to an end user.
+
+---
+
+## The rule that holds across the whole API
+
+**What was not measured is `null`. Never zero, never a placeholder string.**
+
+This is not a style note, it is a contract. `"cpu": null` means "we do not have
+this value", not "the processor is idle". The client has to tell them apart - in
+our interface `null` renders as a dash.
+
+Likewise `"uptime": null` on a freshly created monitor is **not** 100 %. An
+average of zero measurements does not exist; computing it as 100 % manufactures
+a figure nobody measured.
+
+Linters in CI enforce this (`run_honesty_lint.php` and friends), so a regression
+of that kind does not slip through review - it fails the gate.
+
+---
+
+## Authentication
+
+The application has no API tokens for third parties. There are four modes:
+
+| Mode | How it is proven | Who uses it |
+|---|---|---|
+| **Public** | nothing | status page, watchdog |
+| **Logged in** | session cookie (`action=login`) | React SPA |
+| **Administrator** | session cookie + role `admin` | configuration management |
+| **Device key** | `agent_key` / `token` in the body or URL | agents, probes, heartbeat |
+
+Login:
+
+```http
+POST /status/api.php?action=login
+Content-Type: application/json
+
+{"username": "admin", "password": "…"}
+```
+
+The response sets a session cookie. Every further call has to send it
+(`credentials: 'include'` in `fetch`). Logout: `POST action=logout`. It ends the session the legacy admin page shares and writes a `logout` entry to the audit log.
+
+Session state: `GET /status/api.php?action=session`.
+
+An account with two-factor gets the same second step after the password and
+after an OAuth provider. `action=login` answers `requires2fa` and wants
+`totp_code` (the TOTP code or a recovery code) with the password again. Until
+a code is accepted the session holds only the pending account, never a
+sign-in, and `action=session` says `pending2fa: true`; `POST
+action=login_2fa` with `{"totp_code": "…"}` alone then finishes it. It
+answers like `action=login`: 401 for a wrong code (it counts towards the
+lockout) or when nothing waits, 429 while the account is locked.
+
+Actions that ask a signed-in account for its password count wrong ones toward
+the login's lockout: after five within 15 minutes, by account or address, they
+and the login answer 429 for 15 minutes.
+
+OAuth sign-in is a browser navigation, not a call: `GET
+/status/api.php?action=oauth_start&provider=github` (or `google`, `discord`,
+`gitlab`) sends the browser to the provider. A link to the signed-in account
+starts with `POST action=oauth_link_start` and `{"provider": "…", "password":
+"…"}`, which answers the `url` to send the browser to. A linked provider signs
+in without the password, so a session alone cannot add one. The provider
+answers at `admin.php`, the callback URL registered with it, which forwards to
+`action=oauth_callback`.
+That ends in /app: `/app/` when signed in, `/app/setup` when the account
+waits for its 2FA code, `/app/profile?oauth=linked` after a link. A round trip
+that did not finish goes to `/app/setup` (or `/app/profile` for a link) with
+`oauth_error` = `state` (an answer this session did not start), `unavailable`
+(no client ID), `denied` (cancelled at the provider), `provider` (the
+provider did not confirm the account), `not_linked` (no account has linked
+this identity) or `link_session` (the account that started the link is no
+longer the one signed in, so nothing was linked), and `provider`.
+`link_session` comes to the profile only while the session is still signed
+in; a session whose account was deleted meanwhile is no longer, and gets it
+on `/app/setup`. A sign-in or a sign-out drops a round trip the session had
+started, and its answer gets `state`. /app is the one next to the
+`/status` directory, so an install under a subdirectory stays in it. The old
+`admin.php?login_oauth=` link forwards to `oauth_start`; `?link_oauth=` and
+`oauth_start&link=1` lead to `/app/profile`, which asks for the password.
+
+### Who sees which monitor
+
+A monitor belongs to the accounts assigned to it, and one monitor can have
+several. An administrator sees and changes every monitor. A `user` account sees
+only its assigned monitors, read-only, together with its own profile and alert
+subscriptions for those monitors. A monitor the caller may not see answers 404,
+the same as one that does not exist, so ids cannot be probed. Rows marked
+**assigned monitor** follow this rule, and list actions return only the visible
+monitors.
+
+`scope=public` asks `public_status`, `monitors`, `daily_uptime`, `uptime_windows`, `regions`,
+`events` and `incidents` for the public status view. It covers the public set
+(below), is the same for everyone - a signed-in administrator included - and
+carries no targets, hostnames, processes or interface names. An anonymous
+caller always gets this view.
+
+### Which monitors are public
+
+The public status page is indexed by search engines, so it shows a curated
+set: websites and game services. Servers (`vps`), the home router (`openwrt`)
+and the services an agent watches (`agent_service`) stay off it unless the
+owner turns them on. The switch is `monitors.is_public`: `1`/`0` is the owner's
+choice, `NULL` (never chosen) follows the type, so every monitor created by the
+app, an import or an agent's first report gets the same default.
+
+Everything anonymous covers only this set: the public view of the actions
+above, the fleet `badge`, `rss.php` and the legacy `/status/` page. A monitor
+outside it answers like a missing one there - the `badge` with its
+`monitor_id` is 404 unless the caller is signed in and may see it - because
+the badge prints its name. Incidents tied to no monitor stay public.
+
+### What an anonymous visitor sees
+
+Public responses keep only an allowlist of `details` keys: aggregates such as
+`cpu`, `ram` and `hdd`, the agent version, and player or client counts. Anything
+else - IP addresses, interface names, processes, ports, discovered services -
+stays on the server, including keys added in the future. Failure reasons shrink to a fixed set
+of sentences - HTTP code, timeout, DNS, TLS, closed port - with no host, port,
+process or searched text, and incident updates lose the automatic check reason
+and the operator's name.
+
+---
+
+## Errors
+
+| Code | Meaning |
+|---|---|
+| 400 | A parameter is missing or invalid |
+| 401 | Not logged in |
+| 403 | Without the `admin` role on an admin action. An anonymous caller gets 403 there too, except from `users`, `audit_logs` and the fleet-wide `metrics_history`, which ask for a login first (401). `install_cron` answers 409 `installer_locked` instead, to anyone but an administrator once the install is finished |
+| 404 | The object does not exist (or must not be revealed - see heartbeat) |
+| 405 | Wrong HTTP method |
+| 500 | Server-side error |
+| 503 | Database or a downstream service is unavailable |
+
+Error body: `{"error": "Description in Czech"}`. Agent endpoints return
+`{"success": false, "message": "…"}` instead - a historical difference;
+unifying it would break deployed agents. Every `5xx` error of `api.php` is
+also written to the server log with its action, and an error answer that
+cannot be encoded as JSON (invalid UTF-8) is a `500` with an error instead of
+its own status with an empty body. Most success answers still call
+`json_encode()` themselves, and one of those that cannot be encoded still
+arrives as an empty `200`.
+
+**A failed read is never an empty success.** When the query behind a list or
+a summary fails, the answer is `500` with `{"error": "<code>", "message":
+"<Czech sentence>"}` - never `200` with `monitors: []`, `incidents: []` or
+`series: {}`, which every client read as "all online" or "no outages" exactly
+when nothing was known. `error` is a stable code to branch on
+(`monitors_unavailable`, `incidents_unavailable`, `events_unavailable`,
+`daily_uptime_unavailable`, `uptime_windows_unavailable`,
+`metric_series_unavailable`, `audit_logs_unavailable`, `overview_unavailable`,
+`findings_unavailable`, `sla_report_unavailable`, … - always `<action>_unavailable` for a read,
+`<action>_failed` for a write),
+`message` is the sentence to show. The exception text goes to the server log
+only; it can name tables and the database host.
+
+**Database unreachable:** every endpoint answers `503` with `Retry-After: 60`.
+`api.php`, `agent_api.php`, `node_api.php`, `heartbeat.php`, `health.php`,
+`cron.php` and `metrics.php` (and any request whose `Accept` asks for JSON but
+not HTML) get exactly `{"error": "database_unavailable"}`, agent endpoints
+included; browser pages get the branded error page with code 503. Neither says
+why - the database message used to be printed into the page, host, account and
+file names included; it now goes to the server's error log only.
+
+**Not installed yet:** the same endpoints answer `503` with
+`{"error": "needs_setup", "reason": "…", "setupUrl": "/app/setup"}` and a
+browser opening a page is redirected (302) to `/app/setup`; a request that
+wants neither JSON nor HTML gets a plain-text `503`. Machine endpoints are never
+redirected. `reason` is `config_missing` (no `config.php`), `config_sample`
+(`config.php` still holds the sample's placeholder password and it does not
+connect) or `schema_missing` (it connects, but `schema.sql` was never
+imported). A `config.php` with real credentials that cannot connect is an
+outage, not a first run: it stays `database_unavailable`. `db.php` no longer
+copies `config.sample.php` over a missing `config.php`.
+
+---
+
+## First run: the installer
+
+`/app/setup` walks these steps; the account step is the existing
+`action=setup`. They work without `config.php`, and all of them are refused
+once the install is finished (see the lock below).
+
+| Endpoint | Access | Description |
+|---|---|---|
+| `GET action=install_status` | public | `step`: `config` (write the database settings), `config_unreachable` (a real `config.php` that cannot connect, or a CI-deployed directory without a working one: fix it over FTP, the installer never writes it), `schema`, `account`, `installed`. Then `locked`, `config {exists, sample, writable}`, `database {connects, schema: missing\|partial\|ready, users, tables}`, `requirements {php, phpOk, extensions}` and `csrfToken`. When `installed` (for anyone but an administrator) or `config_unreachable` only `{step, locked: true}` |
+| `POST action=install_test_db` | public, CSRF, step `config` | Body `{host, port, database, user, password[, timezone]}`. Changes nothing. `{ok: true, database: {tables, schema, users}}`, or `{ok: false, error, message, driverCode}` with `error` = `access_denied`, `unknown_database`, `host_unreachable`, `unknown_host`, `connect_failed`. Invalid input: 400 `invalid_host`, `invalid_port`, `invalid_database`, `invalid_user`, `invalid_password` (control characters or the sample's placeholder), `invalid_timezone` |
+| `POST action=install_write_config` | public, CSRF, step `config` | The same body. Tests the connection again (422 with the codes above on failure), then writes `config.php` from `config.sample.php` (a temporary file and one rename, values `var_export()`ed): `{written: true, next}`. When PHP cannot write: `{written: false, next, fileName, directory, configText, passwordPlaceholder: "__DB_PASSWORD__", message}` - the text carries the placeholder, never the password; the app puts the password in only on the way to the clipboard |
+| `POST action=install_import_schema` | public, CSRF, step `schema`/`account` | Imports `schema.sql` statement by statement (already-exists errors of a re-run are skipped), gives a fresh install its own `cron_key` and only then stores `schema_version` (`schema.sql` writes no settings row; the next request runs the migrations and stores the current version): `{imported: true, statements, next}`. Already imported: `{imported: false, alreadyImported: true, next}`. Failure: 500 `schema_import_failed` with `statement` and `driverCode`, the MySQL text in the server log |
+| `GET action=install_cron` | while installing, then admin | The cron job for this directory: `{schedule: "* * * * *", command, crontabLine, script, phpBinary, phpBinaryFound}`. cPanel takes `schedule` and `command`, `crontab -e` takes `crontabLine`. The binary is the PHP CLI next to the PHP serving the site (`PHP_BINDIR`); `phpBinaryFound: false` = plain `php` |
+
+`next` is the step after this one. Then the app polls the public
+`action=collection_health` and shows "waiting for the first run" until
+`lastRunAt` is set - never green before.
+
+**The lock.** An open installer is a takeover path, so:
+
+- once the database connects and an account exists, every step answers
+  `409 installer_locked` (an account count that cannot be read counts as
+  existing). The lock answers before the CSRF check;
+- `config.php` is written only where none exists or where it still holds the
+  sample's placeholder password; any other answers `409 config_exists`. During
+  a database outage the real `config.php` therefore cannot be replaced;
+- nor is it ever written in a directory the CI deploy uploads to
+  (FTP-Deploy-Action leaves `.ftp-deploy-sync-state.json` there, a fresh
+  upload never has it): a `config.php` missing or back to the sample there is
+  `config_unreachable` too; `install_test_db` and `install_write_config`
+  answer `409 config_exists`, `install_import_schema` answers
+  `409 database_not_configured`;
+- writes are POST with the session's CSRF token (`X-CSRF-Token`), like every
+  other session write; the token comes from `action=install_status`;
+- the password never comes back in an answer, is never part of a URL (the
+  steps that take it are POST) and is never logged.
+
+---
+
+## Data collection health
+
+### `GET api.php?action=collection_health`
+
+**Public.** Answers a single question: is the cron still running?
+
+It exists because when data collection stops, the application does not break -
+it keeps showing the last known states and looks healthy. Of all the ways
+monitoring can fail, this is the worst, because it does not announce itself.
+
+```json
+{
+  "lastRunAt": "2026-08-10T19:42:11+02:00",
+  "ageSecs": 62,
+  "maxAgeSecs": 900,
+  "stale": false,
+  "lastDurationMs": 4180,
+  "monitorsChecked": 14,
+  "serverTime": "2026-08-10T19:43:13+02:00"
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `lastRunAt` | End of the last **completed** run; `null` = a cron writing this has never run |
+| `ageSecs` | Age in seconds; `null` when `lastRunAt` is `null` |
+| `maxAgeSecs` | Limit from the `collection_max_age_secs` setting (default 900) |
+| `stale` | `true` when the age is past the limit **or** the cron never ran |
+| `lastDurationMs` | Run duration; `null` = not measured |
+
+The endpoint is public on purpose - the watchdog runs elsewhere and has nothing
+to log in with. Nothing sensitive is exposed here.
+
+It is watched by a Cloudflare Worker (`apps/worker`) on a 5-minute cron. That
+runs outside cPanel, so it works even when the whole server is dead. Configuring
+the alert channel:
+
+```sh
+cd apps/worker && npx wrangler secret put WATCHDOG_DISCORD_WEBHOOK
+```
+
+Without it the watchdog keeps checking but only logs - and admits as much on
+`GET /api/watchdog`, where `alertChannelConfigured: false`.
+
+### Does that channel actually work?
+
+"Configured" and "working" are not the same thing. A deleted channel, a
+regenerated token or a typo in the URL look identical from the outside to a
+correctly configured webhook, so the watchdog can report
+`alertChannelConfigured: true` for months while having nowhere to send an alert.
+`GET /api/watchdog` therefore returns two more fields:
+
+| Field | Meaning |
+|---|---|
+| `alertChannelValid` | `true` = Discord confirms the webhook, `false` = invalid, `null` = could not be verified |
+| `alertChannelDetail` | The reason when `false` or `null`; otherwise `null` |
+
+Verification is a GET to the webhook address (Discord returns the webhook object
+there), so nothing is posted to the channel. The result is cached for an hour -
+otherwise hammering `/api/watchdog` would make the worker hammer Discord.
+
+### `POST /api/watchdog/test`
+
+The GET check spots a deleted webhook, but not whether a message actually
+arrives **in the channel** - missing permissions only show up on send. This
+endpoint walks the whole path of a real alert:
+
+```sh
+cd apps/worker && npx wrangler secret put WATCHDOG_TEST_TOKEN   # once
+curl -X POST -H "Authorization: Bearer $TOKEN" https://api.bloodkings.eu/api/watchdog/test
+```
+
+The response is `{"delivered": true, "detail": null}` (HTTP 200), or HTTP 502
+with the reason in `detail`. A message marked as a test arrives in the channel.
+
+Without `WATCHDOG_TEST_TOKEN` set, the endpoint answers 404 as if it did not
+exist - otherwise anyone could flood the channel. The token is compared in
+constant time so it cannot be guessed character by character.
+
+---
+
+## Heartbeat: the job reports itself
+
+The opposite direction from the rest of the monitoring. An active check can only
+see what it can reach over the network - a backup that starts at three in the
+morning and fails quietly is invisible to it. So the job reports itself.
+
+### `GET|POST heartbeat.php?token=…`
+
+**Token authentication.** The token is 48 hexadecimal characters from a CSPRNG
+and is the only thing the endpoint authorises.
+
+| Parameter | Required | Meaning |
+|---|---|---|
+| `token` | yes | May also be passed in the path: `heartbeat.php/TOKEN` |
+| `status` | no | `fail` = the job is reporting its own failure. Anything else (including a typo) is success |
+| `msg` | no | Description, max. 255 characters |
+
+```sh
+# at the end of the backup script
+curl -fsS -m 10 "https://bloodkings.eu/status/heartbeat.php?token=TOKEN"
+
+# when the job fails
+curl -fsS -m 10 "https://bloodkings.eu/status/heartbeat.php?token=TOKEN&status=fail&msg=tar%20exited%20with%202"
+```
+
+Response: `{"ok": true, "monitor": "Nightly backup", "result": "ok", "receivedAt": "…"}`
+
+An invalid token returns **404**, and so does a malformed one - token validity
+cannot be discovered by probing.
+
+The endpoint only records the signal. The state is evaluated by the cron on its
+next run, so there is a delay of up to one cycle (1-5 minutes) between a
+reported failure and a notification.
+
+### How the state is evaluated
+
+| State | When |
+|---|---|
+| `up` | The signal arrived within `interval + grace` and the job reports success |
+| `down` | The job did not report in time, **or** reported a failure |
+| `unknown` | It has never reported, or has no interval configured |
+
+The difference between `down` and `unknown` is essential: a monitor that never
+received a signal **is not down** - we know nothing about it. Alerting on an
+outage that did not happen is the same lie as a fabricated zero in a chart.
+
+A reported failure takes precedence over signal age. Otherwise a quietly failing
+backup would look healthy just because the cron is running.
+
+### `GET api.php?action=heartbeat_info&monitor_id=…`
+
+**Admin.** Returns the URL to configure in the job, the current state and the
+time of the last signal. `POST` with `regenerate=1` and the CSRF token produces a
+new token and records it in the audit log - the old URL stops working
+immediately. A `GET` with `regenerate=1` is refused with 405. Like every absolute
+address the server hands out (mail,
+RSS, agent install and update), the URL starts at the origin of `site_url`, or
+at a Host the server trusts while that setting is empty.
+
+The token is returned **only here**. It is not in the regular monitor listing:
+if it leaked, a stranger could send heartbeats on your behalf and the monitor
+would stay green long after the backup stopped running.
+
+---
+
+## Feeds and escalation
+
+### `GET rss.php[?page=slug]`
+
+**Public.** An RSS 2.0 feed of outages and their resolutions. Without a
+parameter it covers the public set (see "Which monitors are public"); with
+`page`, only those of that status page that are in the public set. Incidents
+tied to no monitor are on every feed.
+
+A hidden page returns **404** just like a nonexistent slug - RSS cannot be used
+to bypass the visibility a page has on the web.
+
+An incident opening and its resolution are **two separate items** with different
+`guid`s (`incident-12-opened`, `incident-12-resolved`). If the resolution were
+appended to the original item, a reader would never show it to a subscriber - a
+`guid` shown once is never listed again.
+
+The resolution item only exists when `resolved_at` is actually set. For an
+ongoing incident it is not computed from "now".
+
+The feed is linked from the status page head (`<link rel="alternate">`), so
+readers find it on their own. Its `<link>`, the channel's and each item's,
+is that status page: `/app/public`, with `?page=slug` for a page's feed.
+
+### Escalation of unacknowledged outages
+
+Not an endpoint but cron behaviour. An outage alert used to be sent once and
+that was that; if nobody saw it, the outage carried on.
+
+Settings (admin → Notifications):
+
+| Key | Meaning |
+|---|---|
+| `escalation_enabled` | `1` enables it; off by default |
+| `escalation_after_mins` | Time to acknowledge, default 15 |
+| `escalation_webhook_url` | The escalation channel - deliberately different from regular alerts |
+
+An incident escalates when it is **unresolved and unacknowledged**
+(`acknowledged_at` is empty) and the deadline has passed since it started. Each
+incident at most once - the `escalated_at` stamp prevents repeats on every cron
+run.
+
+Without a channel configured, the stamp is **not** written. If it were, the
+incident would look escalated and would never speak up again once a channel was
+added - a silent failure exactly where the backstop is supposed to work.
+
+The same holds when the channel refuses the message: only a 2xx answer writes
+the stamp. A refused or unreachable webhook leaves it unwritten, the next cron
+run tries again, and the rest of the incidents in that run wait for it. One
+case is stamped without a 2xx: the whole message left and no answer came back
+(a timeout), so the endpoint may have posted it and a retry could post it again
+every run; its row says `unknown`. It too ends the run: a stalled endpoint
+takes one incident per run, which is stamped unconfirmed and not sent again,
+and every other due incident waits for a later run. Every attempt is a row in
+the outgoing message log (kind `escalation`, channel `escalation_webhook`, the
+incident's title as subject), so a dead or silent webhook shows up in
+`notification_health` and cron prints a warning.
+
+### Daily reminder of what is still broken
+
+Not an endpoint but cron behaviour, next to the digest block. An alert goes out
+on a CHANGE of state, so a monitor that went down on a Wednesday said nothing
+for the rest of the week - which is how a four-day outage stayed invisible.
+
+Settings (admin → Notifications):
+
+| Key | Meaning |
+|---|---|
+| `daily_reminder_enabled` | `1` enables it; **on by default** |
+| `daily_reminder_hour` | The hour it may go out from, 0-23, default 8 |
+| `last_daily_reminder_sent` | The guard: the date of the last decision, written by cron |
+
+It goes out at most once a day, from the configured hour, and **only when
+something really is wrong**: monitors down or in warning (longest first, with
+the stored reason), a separate section for silent data (agents that stopped
+reporting, heartbeats past their grace, `bk_get_collection_issues`), open
+incidents nobody has acknowledged, and one line naming the last completed
+collection run - so a dead collector cannot hide behind a short report.
+Monitors in maintenance and archived ones are left out.
+
+When nothing is broken, **nothing is sent**: a daily "all good" teaches the
+reader to filter the sender, and the first real message is filtered with it.
+The decision is still written down - the outgoing message log gets a row with
+`kind=daily_reminder`, `channel=none` and `status=skipped`, so "no e-mail came"
+can be told apart from "the reminder is broken".
+
+The date stamp is written whichever way it ended, including that skip. This
+cron runs every minute on a router: without it the healthy case would write a
+row every minute, and a refused channel would be retried until midnight and
+bury its own failure under hundreds of rows.
+
+---
+
+## Endpoints that used to be missing
+
+The actions below were called from the UI but did not exist in `api.php`.
+Because an unknown action returned the default service overview with code 200,
+every such call looked like a success. **Today an unknown action returns 400**
+and a lint guards it (`run_api_action_lint.php`). The same lint fails on an
+action nothing in the app calls, unless it names why the action stays
+(`audit_logs`). Nothing in the repository called `assign_preset` or
+`dashboard_insights`, and both were removed; a preset is set through
+`save_monitor` (`preset_id`), and the insights come in `action=findings`.
+
+| Endpoint | Access | Description |
+|---|---|---|
+| `action=export_csv&monitor_id=&days=` | assigned monitor | Check history of a monitor as CSV, including the error message of each check |
+| `action=save_annotation` | admin | A note on a chart (`monitor_id`, `metric_key`, `timestamp`, `note`) |
+| `action=annotations&monitor_id=&metric=&hours=` | assigned monitor | Notes for rendering. An anonymous caller and a monitor the account is not assigned to get an empty list, not a 403 - a chart without notes is not an error |
+| `action=delete_annotation` | admin, POST | Deletes a note by `id`. A note is a claim, and a wrong claim next to a chart has to be retractable |
+| `action=forgot_password` | public, POST | Sends a password reset link. The response is identical for existing and nonexistent addresses |
+| `action=setup` | public, POST | Creates the first administrator. **Only into an empty users table**, otherwise 409. This is the only way the first account comes to exist: `schema.sql` creates none, so there is no default password |
+| `action=user_audit_log&limit=` | admin | The actual audit log (who logged in, who changed what) |
+
+> **Careful with the names:** `audit_logs` (with an "s") returns **check results**
+> of the cron, agents and probes, not user actions. The user log is `user_audit_log`. React
+> used to show the former under a heading promising logins, so the security and
+> configuration filters could never find anything.
+
+`action=session` now also returns `installed` (at least one user exists) and the
+real email of the logged-in user - it used to return a hardcoded
+`admin@bloodkings.eu` regardless of who was signed in. `oauthProviders` lists the
+keys of the OAuth providers that have a client ID set (`github`, `google`,
+`discord`, `gitlab`; `[]` = none), so the login page draws only buttons that
+work. The client ID itself is never sent. `pending2fa` is `true` while a
+sign-in waits for its 2FA code (`action=login_2fa`).
+
+---
+
+## Monitors
+
+### `GET api.php?action=monitors`
+
+**Assigned monitors, or the public view.** List of monitors with their last
+state, response time and agent metrics, without archived monitors unless `archived=1`
+asks for only those. A `user` account gets its assigned
+monitors and an administrator all of them. An anonymous caller, or any caller
+with `scope=public`, gets the public set (see "Which monitors are public") with
+`target`, `port`, `hostname` and `agentLastSeen` set to `null` and only the
+allowlisted `details` keys.
+
+An administrator's list also carries `isPublic` (the effective answer: the
+owner's choice, or the type's default when never chosen) and `logLinesEnabled`
+(whether a router may send its masked log lines, see `agent_api.php`), and
+`heartbeatIntervalSecs` / `heartbeatGraceSecs` (a heartbeat's interval and grace
+in seconds, `null` when not set) so the edit form saves back what is stored.
+
+Both views carry a top-level `collectionFresh` beside `monitors`: whether cron
+has finished a run within `collection_max_age_secs` (the rule `public_status`
+and the badge judge by). When it is `false` the states in the list are the last
+known ones, so the public page, a `?page=` selection included, says the status
+cannot be verified instead of "all systems online".
+
+The app view (not `scope=public`) also carries a top-level `sslAlertDays` beside
+`monitors`: the certificate limit cron alerts at (`ssl_alert_days`, at least 1),
+so the dashboard flags a certificate by the same rule as the alert.
+
+Response time comes from `monitor_logs`, the CPU/RAM/HDD values from
+`vps_metrics` - they are not columns of the `monitors` table. A missing value is
+`null`.
+
+`statusKey` is the state in the shared vocabulary (C-11, `bk_status_label()` and
+the SPA's `lib/status.ts`): `up`, `warning`, `down`, `maintenance`, `paused`,
+`unknown_new` (never reported - waiting for the first data, neutral) or
+`unknown_stale` (reported before and went quiet - a warning).
+
+`assetId` is the monitor's device (`assets.id`), `null` when it has none - never
+the monitor's own id, which is a different id space. An administrator's
+`unreachableTarget: true` marks a check against a private-network target whose
+device has a live agent (`vps`/`openwrt`) that `convert_to_agent_check` can hand
+it to.
+
+### `POST api.php?action=save_monitor`
+
+**Admin.** Creates (`id: 0`) or edits a monitor. The body is JSON.
+
+Types: `web`, `port`, `vps`, `openwrt`, `minecraft`, `teamspeak`, `discord`,
+`heartbeat`, `agent_service`. The type `cpanel` is retired: a web monitor with
+`cpanel_stats_url` reads the hosting's figures, and a one-time data fix made
+every stored `cpanel` monitor one. An older client that still sends
+`"type": "cpanel"` gets the same - `web` with its host as `target` and the
+address it sent as `cpanel_stats_url`; a `target` with no host is `400`.
+
+Selected parameters:
+
+| Parameter | Applies to | Note |
+|---|---|---|
+| `target` | everything except `vps`, `openwrt`, `heartbeat` | Required where it applies |
+| `body_keyword` | `web` | The response body must contain this string |
+| `cpanel_stats_url` | `web` | The hosting's `cpanel_stats.php` with its key; cron reads disk, memory and the rest from it next to the HTTP check |
+| `teamspeak_voice_port` | `teamspeak` | The voice port, 1-65535. The target is saved as `host:voice_port` (a port already in it is replaced); `port` stays the ServerQuery port. Left out or empty = the target as sent, and without a port in it the check assumes 9987. Out of range = `400` |
+| `heartbeat_interval` | `heartbeat` | **Seconds.** Required, minimum 60 |
+| `heartbeat_grace` | `heartbeat` | Seconds; `null` = checked exactly on the interval |
+| `latency_threshold_ms` | all | `null` = slowdown alerts disabled |
+| `preset_id` | all | `null` = the monitor keeps its own metric selection |
+| `enabled_metrics` | all | Array of keys; empty = recommended defaults |
+| `allowed_actions` | `openwrt` | Only with `remote_actions_enabled` |
+| `is_public` | all | On the public status page: `true`/`false` (or `1`/`0`); `null` hands the choice back to the type's default. Left out = unchanged. Anything else is `400 {"error": "invalid_switch", "invalidKeys": ["is_public"]}` |
+| `log_lines_enabled` | `openwrt` | Whether the router may send its masked log lines (default on). Left out = unchanged; not a boolean = `400 invalid_switch` |
+
+`asset_id` names an existing device; an id with no row in `assets` is `400`.
+`null` or a left-out `asset_id` gives a new monitor (`id: 0`) a device of its
+own, and detaches an edited monitor from its device. A device the edit leaves
+without monitors is removed, as with `delete_monitor`.
+
+Passwords (`sq_password`, `rcon_password`) are only overwritten when a new value
+is supplied - an empty field does not erase a stored password. The heartbeat
+token is **not regenerated** on edit: the job has it hardcoded in its curl
+command.
+
+### `POST api.php?action=delete_monitor`
+
+**Admin.** Body `{"id": 12}`. The monitor's device (its `assets` row) goes
+with it when no other monitor belongs to it; an archived one still does. A
+device lives as long as its monitors: the app never shows its name, so it has
+no controls to rename or delete one.
+
+### `POST api.php?action=archive_monitor` / `unarchive_monitor`
+
+**Administrator.** Body `{"id": N}`. Archiving is for a monitor that is gone for
+good, such as a replaced router. It keeps the monitor and its history but takes
+it out of everything live: lists and summaries leave it out, cron does not check
+it, no alert is sent, open incidents are closed, waiting remote actions fail, its
+agent's reports are refused with 403 and `heartbeat.php` answers 410. A detail by
+id stays readable and `action=monitors&archived=1` lists the archive. Any write
+to an archived monitor answers 409. Restoring sets the state to `unknown` until
+the next check or report. Both clear every cached answer (findings counts,
+insights, the public health score, regions, the SLA overview), so none keeps
+the old set of monitors until it expires. Both are written to the audit log.
+
+### `GET api.php?action=agent_install_info&monitor_id=`
+
+**Administrator.** What installing one monitor's agent needs: `agentKey`, the
+`apiUrl` of this server and the download addresses in `files`. The key is a
+credential, so every read is written to the audit log. An archived monitor
+answers 409.
+
+---
+
+---
+
+## Metrics and history
+
+| Endpoint | Access | Description |
+|---|---|---|
+| `action=metric_series&monitor_id=&metric=&period=&lang=` | assigned monitor | One metric over time. A metric flagged `step` (`wan_errors`, `wan_drops`, `wan_ring_drops`, `wan_link_flaps`, `conntrack_drops`, and the hourly WAN port counters `wan_rx_overrun`, `wan_rx_discard`, `wan_crc_errors`, `wan_mac_rx_errors`, `wan_refill_errors`, `wan_oversize`) already holds the increment between two reports: a raw point is that minute's step and the 90-day view is the day's TOTAL (`avg_val * samples`), never the average of it. A cumulative `counter` series is drawn as increments: a reset (reboot) and an increment across a gap longer than 2.5 reporting intervals leave no point - a break, never a spike. `distinctValues` counts the series' different values, so a page can tell a constant metric from a curve. `lang=en` gives the English metric name in `label` (default Czech); a counter's label ends in `(increase)` / `(přírůstek)` |
+| `action=metric_series_batch&monitor_id=&period=&lang=` | assigned monitor | Every chart of a device in one call. The `hdd` and `ram` series additionally carry `daysToFull` (days until full) wherever growth is actually measured - a missing key means no forecast, never a zero. Periods up to `30d` only: `90d`, `180d` and `1y` answer `400 {"error": "period_unsupported"}` - they used to return the last 24 hours under the long label. Counters (`fw_*`, `dns_*`, `tcp_retrans`, ...) come as increments like in `metric_series`, with `(přírůstek)` in the label and `counter: true` - they used to be lifetime totals. Every series carries `previousAvg`: the mean over the same-length window one period earlier (the window `metric_series&previous=1` draws; for a counter, the mean of its increments), so a tile can show its trend without a second request. `null` with fewer than 3 samples there - never a trend built on one or two readings; `30d` usually has none, because raw samples are pruned after 30 days. Labels follow `lang` like in `metric_series` |
+| `action=metric_detail&monitor_id=&metric=&lang=` | assigned monitor | Context for the metric detail page; `metric.label` and the `related` labels follow `lang` like in `metric_series` |
+| `action=metric_correlations&monitor_id=&metric=&period=&lang=` (optionally `&all=1` for every compared metric, not just the strongest 8) | assigned monitor | How the device's other metrics moved together with this one (Pearson). Only metrics stored in `vps_metrics` take part: they share one measurement row, so samples pair exactly instead of being averaged into common buckets, which would smooth both series and inflate the coefficient. `r` is `null`, never `0`, when undefined - a series that never changed (`reason: constant`) or too few overlapping pairs (`few_samples`). Every row carries its `family` (load 1/5/15, the RAM columns, ...; the answer carries the subject's): the subject's own family is never compared, and without `all=1` each other family lists only its strongest member. `total` counts every comparison. The subject's `label` and every row's follow `lang` like in `metric_series` |
+| `action=metric_heatmap&monitor_id=&metric=&days=&lang=` | assigned monitor | Hour-by-day grid (one cell = one hour's average, for counters the hourly increment). Capped at 30 days - raw samples are pruned after that, so a longer window would silently answer with a shorter one. An hour with no sample is `null`, never `0`. `firstSampleDay` is the first day with a sample (`null` = none in the window) - the page starts its grid there instead of drawing empty rows as silence; the grid itself stays dense over `requestedDays`. `label` follows `lang` like in `metric_series` |
+| `action=link_traffic&monitor_id=&days=` | assigned monitor | A router's traffic by link role: primary (`wan_l3_device`) vs. LTE backup (`lte_device`) for today / 7 / 30 days from the daily per-interface totals, plus the primary-link outages (`wan_down_periods`, `wan_down_seconds`, `wan_down_now`) paired from `wan_lost`/`wan_restored` events - whether traffic really went over the backup during them is what the backup device's byte counts say, not these periods (an open period runs until now; an outage that began before the window and has not ended is looked up separately and counted from the start of the window, or a router that has been on the backup for weeks would report "never"). Roles come only from what the agent reports - without `wan_l3_device` (agent < 0.1.3) the primary side is `null`, never a guess from the name |
+| `action=process_history&monitor_id=&kind=&at=&radius=` | assigned monitor | Which processes were running around a point in time |
+| `action=router_recommendations&monitor_id=` | assigned monitor | What the weekly router engine finds on this router right now, read-only (the GET never writes a state row). See "Router health" below |
+| `action=storage_history&monitor_id=&days=` | assigned monitor | Per-disk daily history (temperature, error counters, host writes, wear). `days` is clamped to 1-400; a day nobody measured is `null`, never `0`. See "Router health" below |
+| `action=wan_bottleneck&monitor_id=` | assigned monitor | What limits the internet line of a router, per direction, from its last speed tests. See "Router health" below |
+| `action=speedtest_history&monitor_id=&limit=` | assigned monitor | The router's speed tests (newest first, `limit` 1-200) and 7 / 30 / 365-day averages, split by the line that carried each test. See "Router health" below |
+| `action=metrics_history&monitor_id=&period=` | assigned monitor | Agent metric history |
+| `action=daily_uptime&days=` | public status / assigned | Daily availability in time (see "Availability is measured in time" below): today live, finished days from `uptime_daily`. A day an agent was silent is `down` and its `detail` says for how long. Each day carries its coverage (C-7): `status` is `up`, `warning`, `down`, `maintenance`, `partial` (nothing worse, but under 90 % of the day's time measured) or `nodata` (nothing measured) - never `paused`. `warning` counts as available: `uptimePct` is (up + warning) / measured, with `degradedMin` beside it; `downMin`, `maintenanceMin`, `measuredSecs` and `expectedSecs` (the time the monitor existed that day, today until now) and `coveragePct` (`null` for a day rebuilt from check counts, whose time nobody knows). `day` is the date as `Y-m-d`. A finished day's `avgMs` and check counts come from `uptime_daily` too, which outlives the 30-day log retention, so `days=90` keeps the response curve and the check sentence of days 31-90; the raw logs are read only for today and for days the rollup has not reached yet |
+| `action=uptime_windows` | public status / assigned | Per-monitor availability for 24 h / 7 d / 30 d / 90 d in time; `d1` is the last 24 hours, the others are calendar days with today included. An unmeasured window is `null`, never 100. Each row carries `since`, the first day with data in the 90-day window, and the answer carries `windowStart` (`d7`, `d30`, `d90`: each window's first day); both are server-local `Y-m-d`, so "90 days" over six weeks of history can say where its data starts |
+| `action=check_stages&monitor_id=` | assigned monitor | Check breakdown (DNS/TCP/TLS/HTTP, ServerQuery) |
+| `action=regions&days=` | public status / assigned | Availability by measurement location (`checked_from`). Each location carries `country`, the ISO 3166-1 alpha-2 code read from its label (a pre-fix Cloudflare label is corrected first), `null` when the label names none - the public page draws its own flag from it, never a guessed one; the public projection keeps `location`, `country` and `successRate` |
+| `action=health` | public status / assigned | Health score 0-100 of the network (`network`, with its named `deductions`) and, in the app view, of each monitor the viewer may see (`assets`: `monitorId` and the whole per-monitor score with `components` and `deductions`), see "Health score" below. The public view answers with the network-level score of the public set only, without the hardware components and without a score per monitor |
+| `action=public_status` | public status / assigned | Summary for the public page: `status` is the overall verdict (see "One overall verdict"), with `totalMonitors`, `downMonitors`, `warningMonitors`, `unknownMonitors`, `unmeasuredMonitors`, `maintenanceMonitors` and the average availability. `lastUpdated` is the newest real check, `null` when nothing was measured. `nodes` are the agent and host monitors only (`online`, `warning`, `offline`, `maintenance`, `unknown`); `latencyMs` is a node's newest response time measured since its last status change (the check that made the change included; a node with no recorded change is not bounded), and only while it is `online` or `warning`; otherwise, or when nothing was measured since the change, `null`. Inside the app a `user` account gets totals over its assigned monitors |
+| `action=badge[&monitor_id=][&type=uptime][&lang=en]` | public | Embeddable SVG badge (60 s cache): live state, or 30-day availability with `type=uptime`; without `monitor_id` it prints the overall verdict of the public set. An unknown monitor, or one off the public page for a caller who may not see it, is 404 |
+| `action=websites_overview` | assigned monitor | Sites with certificates and availability in the window (`sla7` / `sla30` / `sla365` in time, calendar days with today included; `null` = nothing measured). `sslAlertDays` is the limit cron alerts at (`ssl_alert_days`). A web monitor also carries `httpStatusCode`, the HTTP code cron's latest check recorded (a remote probe's row records none; read fresh, not from the cache; `null` = that check recorded none), and `httpCheckedAt` |
+| `action=monitor_insights&monitor_id=` | assigned monitor | Derived observations for one monitor; `status` is the monitor's state in the shared vocabulary (`key`, `label`, `tone`, `icon`), and the summary sentence is worded per state - maintenance, paused or waiting for data is no longer "currently down". `statusSentence` is the same summary without its top concern and without the all-clear (the state and a pressure line only): the asset page lists the findings right under it. `health` is the monitor's health score with its breakdown (see "Health score" below; `null` = it could not be computed, a `score` of `null` = not enough data). A TeamSpeak monitor's summary quotes `health.score`; the old `healthScore` is TeamSpeak's own area score and stays only for older clients |
+| `action=findings&monitor_id=&limit=&offset=&lang=` (or `&summary=1`) | assigned monitor | One findings feed (C-12): the attention reasons (outage, warning, a silent agent, a private target, a certificate, a metric over its limit, an agent update), the knowledge tips, the insights and the router recommendations in one list. A tip that repeats an attention reason of the same monitor (a CPU/RAM/disk tip next to its metric, the certificate tip) is left out. Each finding: `key`, `source` (`status`, `certificate`, `check`, `metric`, `tip`, `agent`, `insight`, `router`), `kind`, `severity` (`critical`, `warning`, `info`), `monitorId` / `monitorName` / `monitorType`, `title`, `detail`, `action`, `since`, and for a router recommendation the full item in `rec`. A status finding's `detail` is the message of the newest check that found the monitor in its current state since it entered it (`last_status_change`, 120 s earlier for the row that set it; null when there is none), not of a newer row in another state, of an earlier spell of the same state or of a remote probe's row (`monitor_logs.source = 'probe'`). Sorted critical first. Paged by `limit` (1-500, default 50) and `offset`; `total`, `counts` per severity, `devices` (per device: `worst` and counts, over the whole list), `monitorsChecked`, `muted` (router items the owner muted), `canMute`. `monitor_id` = one device. A source that failed is named in `sourceErrors` - the list is then incomplete, not clean. An item there carries `source`, `monitorId` and `error`, one of `attention_unavailable`, `tips_unavailable`, `insights_unavailable` and `router_recommendations_unavailable`. `summary=1` answers only `total`, `counts`, `devicesWithFindings`, `monitorsChecked`, `sourceErrors` and `generatedAt`, for a bell or a badge that polls; the fleet's counts are kept for a minute per viewer (`cachedAt` when they came from there) and cleared by a mute or an archive. The full list is always fresh |
+| `action=ui_config` | public | Appearance settings for the frontend (logo, names) |
+| `action=alerts_read_state` | logged in | Read-alert watermark (`readUpToId`) |
+| `action=convert_to_agent_check` | admin | Turns an agent-watched process into a monitor of its own |
+
+**A note on long-range data:** raw logs are purged after 30 days. A yearly SLA is
+therefore computed from the `uptime_daily` rollup, not from logs. Responses
+always state which period a value really covers - they never pass a thirty-day
+window off as a year: `uptime_windows` and `sla_report` say where the window
+starts (`windowStart`) and where its data starts (`since`).
+
+### One overall verdict
+
+`public_status` (`status`), the fleet `badge`, the headline of the legacy
+`/status/` page and, through the API, the public page and the marketing site
+print one verdict over the same set of monitors (`bk_overall_verdict()`):
+
+| Verdict | When |
+|---|---|
+| `down` | any monitor is down |
+| `degraded` | any is `warning`, or in a state nobody knows although it was checked before |
+| `unknown` | no monitor, only monitors never checked yet, or collection has not run within `collection_max_age_secs` (default 15 minutes) - the stored states are then nobody's current measurement |
+| `maintenance` | any is in maintenance |
+| `healthy` | everything else: all up, freshly checked |
+
+It used to be "healthy unless something is down", so a degraded monitor, an
+unknown one and a stopped collector all read as all-clear. A monitor that has
+not had its first check yet ("waiting for first data") is counted in
+`unmeasuredMonitors` but does not degrade the verdict.
+
+### Availability is measured in time
+
+Availability used to be "up rows / all rows". A silent agent gets one `down`
+row from cron and then nothing, so a three-day blackout was one row among
+thousands and still read ~99.99 %. Every availability number (`uptime_windows`,
+`daily_uptime`, `websites_overview`, `sla_report`, `public_status`, the badge
+and the e-mail digest) is now computed in time:
+
+- each check row stands for the time until the next row, at most 2.5 check
+  intervals (the interval is read off the monitor's own rows, 60-1800 s);
+- time no row covers is an **outage** for an agent (`vps`, `openwrt`) that has
+  reported before - silence is the outage - and **unmeasured** for an active
+  check, where it means cron did not run;
+- `maintenance` and unmeasured time (also the `unknown` rows of an
+  agent-side service whose agent went quiet) stay outside the fraction;
+  `warning` counts as available - the service answered, only slowly - and
+  its time is reported apart (`degradedMin`, `secs_warning`);
+- a window without a single measured second is `null`, never 100.
+
+Finished days come from `uptime_daily`, which cron rolls up in time every ten
+minutes (`secs_up`, `secs_down`, `secs_warning`, `secs_silent`,
+`secs_maintenance`, `secs_unmeasured`); today is computed live. A day from
+before the time rollup (its logs already pruned) knows only its check counts
+and is read as a whole measured day split by them.
+
+### Health score
+
+`action=health` (the network and each monitor), `monitor_insights.health`
+(one monitor) and the legacy `monitor.php` ring score health 0-100 by one
+documented formula (`bk_health_score()`, `formulaVersion` 1), from measured
+values only. Each component scores 0-100 points by its own curve, or is `null`
+when nothing measured it. The score is the weighted mean over the measured
+components: an unmeasured one drops out and the weights renormalise, it never
+counts as full marks. Too little data - availability unmeasured, or fewer than
+3 measured components (availability and two more) - is `score: null` (the app
+prints "—"), never an invented number.
+
+| Component (`key`) | Weight | Points |
+|---|---|---|
+| `availability` | 30 | The last 7 days' availability in time (today included); every 0.1 % below 100 % costs 2 points (99.9 % = 98, 99 % = 80, 95 % or less = 0) |
+| `latency` | 10 | The last hour's mean response (at least 2 readings). An agent (`vps`, `openwrt`) measures its WAN latency: 100 up to 30 ms, 0 from 300 ms. A check from the hosting: 100 up to 300 ms, 0 from 3 s. WAN packet loss is not measured by agent 0.1.10, so it is not part of the formula; it joins under a new `formulaVersion` once an agent reports it |
+| `alerts` | 15 | Open problems of the monitor: 100 minus 50 per critical and 20 per warning, at least 0. They are the attention reasons of the findings feed (down, degraded, agent silent, certificate, unreachable target), an open incident of a monitor that is not down (one warning, however many incidents), and in the app view the router's own debounced verdicts: primary WAN without internet, local DNS resolver failing and firewall off (critical), LTE backup down, WAN link below its usual rate and a full connection table (warning). `null` until the monitor has reported |
+| `freshness` | 10 | Age of the newest report against the expected cadence (60 s for the OpenWrt agent, 300 s for the VPS/Windows/Docker agent and a check, the heartbeat's own interval): 100 up to 3 cadences, 50 up to 10, then 0 |
+| `cpu_ram` | 15 | The worse of CPU and RAM usage against the monitor's limits (the documented defaults 90/95 % when none is set): 100 up to 20 points under the limit, 0 at the limit |
+| `disk` | 10 | Disk usage the same way (default limit 90 %); a disk whose SMART verdict failed is 0 |
+| `temperature` | 10 | The worse of the CPU (100 up to 65 °C - where the knowledge tip warns - 0 from 90 °C) and the disk closest to its class limit L (60 °C spinning, 70 °C SSD, 80 °C NVMe, as the disk alert uses): 100 up to L - 10, 0 at L |
+
+The hardware readings (`cpu_ram`, `disk`, `temperature`) and the router's
+verdicts of a report older than 10 cadences are left out: they describe the
+machine as it was, and the stale report already costs its `freshness`.
+Every monitor is scored from its own measurements: a website that shares a
+machine with an agent does not borrow the agent's CPU/RAM (the asset page's
+tips do), because the server has its own score.
+
+`grade` is `good` from 90, `fair` from 70, `poor` below (`null` without a
+score). Each component carries `points`, `weight`, `label` (in the request's
+language), `value` and `unit` (what was measured) and `deduction` (what it took
+off the score). `measuredWeight` and `measuredComponents` say how much of the
+formula was measured. A paused monitor has no score and carries `paused: true`.
+
+`deductions` names what cost the points, biggest first: `component`, `kind`
+(a stable key, e.g. `cpu_temp_high`, `availability_low`, `stale`,
+`status_down`, `incident_open`, `wan_lost`), `label` (the words in the request's
+language with the value and where the curve starts to take points, e.g. "CPU
+temperature 71 °C, above 65 °C"), `points` (what it cost the final score, one
+decimal), `value`, `limit` and `unit`. A component that takes the worse of two
+readings names only the one that decided it, and the alerts share their
+component's loss in proportion to their cost, so three criticals never cost
+more than the component weighs. The deductions add up to 100 minus the
+unrounded score; one under 0.1 point is left out.
+
+The network's score is the plain mean of the scores of its monitors (each
+monitor counts once, paused monitors are not part of the network:
+`assetsScored` of `assetsTotal`). It is `null` when no monitor has a score or
+when fewer than half of them have one - the number would then describe the
+minority that was measured. Each network component is the mean points of the
+monitors that measured it (`assets`), and the network's `deductions` are the
+five biggest of the fleet, each with `monitorId` and `monitorName` and worth its
+monitor's deduction divided by `assetsScored`.
+
+The app view (`assets`) returns every monitor the viewer may see with the
+whole per-monitor object. The public view (`scope=public` or no login) returns
+only `network`, `formulaVersion` and `generatedAt`: the network-level score of
+the public set, without the hardware components and without the router's
+verdicts, and no score per monitor - the public cards already show each
+service's availability and response, and a second per-monitor number that
+differs from the app's would only confuse. Its deductions name public monitors
+only, as the public cards do. Show it as the score of the public services, not
+as the health of the whole network. The public answer is kept for a minute and
+worded for each visitor's language on the way out.
+
+The weekly digest's "Infrastructure score" (`bk_infra_score()`) is a different
+number: a period summary compared with the previous period, not this health
+score.
+
+### Values for `period`
+
+| Value | Window | Source |
+|---|---|---|
+| `15m`, `1h`, `6h`, `12h`, `24h` | 15 minutes to a day | `vps_metrics` / `monitor_logs` |
+| `7d`, `30d` | week, month | the same |
+| `90d`, `180d`, `1y` | quarter to year | `metrics_daily` (daily average); `response_time` from `uptime_daily.avg_response_ms` |
+
+An unknown value falls back to a day. `response_time` at `90d` / `1y` used to
+fall back to that day too, so "1 year" drew the last 24 hours; it now reads
+the day's average answer from `uptime_daily`, whose `dailyRange` carries no
+minimum or maximum (`null` - the rollup does not keep them). A history shorter
+than the window simply starts later: the first point is the first day with data. For long periods the response carries
+`resolution: "daily"` - a point is a daily average, not an individual
+measurement, and the client has to admit that, or the user would read a
+precision out of the chart that the data does not have.
+
+> Until 12 Aug 2026 the window was computed in hours and two periods came out
+> wrong: `15m` returned an hour and `6h` returned 24 hours. The label in the UI
+> claimed something other than the chart showed. It is now guarded by
+> `run_tests.php` (unit) and `run_api_tests.php` (against a real database).
+
+### `action=metric_detail`
+
+Context for the metric detail page - what the metric means, which thresholds the
+monitor has, which related metrics it reports at all and what happened around it:
+
+```json
+{
+  "monitor": {
+    "id": 6,
+    "name": "Turris",
+    "type": "openwrt",
+    "target": "10.0.0.1",
+    "port": null,
+    "checkedFrom": "Praha, CZ",
+    "assetId": 6
+  },
+  "metric": { "key": "cpu", "label": "CPU usage", "unit": "%", "counter": false, "step": false },
+  "thresholds": { "warning": 75, "critical": 90 },
+  "thresholdsDerived": { "warning": true, "critical": false },
+  "related": [{ "key": "ram", "label": "Memory usage", "unit": "%", "latest": 41.2 }],
+  "events": [{ "t": 1755000000000, "type": "status_change", "label": "Recovered" }]
+}
+```
+
+Statistics (current, average, peak) are **deliberately not sent** - the client
+computes them from the very points it draws, so after switching the period they
+cannot describe a different window than the chart. `thresholds.critical: null`
+means no threshold is set and no band is drawn; `related` only contains metrics
+the monitor actually reported in its latest measurement, so a link never leads
+into an empty chart. A counter's `latest` is its latest increment, as its chart
+draws it, not the total since boot; `null` when that increment is unknown.
+
+### `action=process_history`
+
+Answers the question a chart cannot: CPU hit 90 % at 19:40, but because of what?
+
+| Parameter | Meaning |
+|---|---|
+| `monitor_id` | Required |
+| `kind` | `cpu` (default) or `ram` - which ranking to read |
+| `at` | Centre of the window, unix seconds. Required |
+| `radius` | Half-width in minutes, default 10, max 180 |
+
+```json
+{
+  "samples": [{ "at": "2026-08-14 19:40:02", "name": "hostapd", "pid": 1234, "cpuPct": 87.5, "ramMb": 12.5 }],
+  "from": "2026-08-14 19:30:02",
+  "to": "2026-08-14 19:50:02",
+  "enabled": true,
+  "pruned": false
+}
+```
+
+An empty `samples` array has three different causes and the client must tell
+them apart: `enabled: false` means collection is switched off, `pruned: true`
+means the window was thinned down to peaks and none fell here, and otherwise
+there simply are no samples for that moment. Collapsing them into "no data"
+would let a disabled feature look like an idle machine.
+
+Retention is configurable (`process_history_days`, and optionally
+`process_history_peak_after_days` with `process_history_peak_pct`), because this
+is the fastest-growing table in the database: ten rows per monitor per minute.
+Measured: 1 728 000 rows occupy 253 MB and this lookup takes 0.089 ms, because
+the covering index narrows it to 60 rows. No page queries the table on load.
+
+---
+
+### Router health: storage, Wi-Fi profile and weekly recommendations
+
+Three read-only endpoints share one engine. It runs over the **seven complete
+days** before today and needs at least **four days with data** (360 samples a
+day) before a weekly rule is evaluated at all; a router with less answers
+`applicable: false` and says so instead of reporting "nothing found". A value
+that was not measured is `null` everywhere below and never a zero.
+
+`action=router_recommendations&monitor_id=` answers
+
+```json
+{
+  "monitorId": 6,
+  "applicable": true,
+  "reason": null,
+  "generatedAt": "2026-09-21T10:00:00+02:00",
+  "window": { "from": "2026-09-14", "to": "2026-09-20",
+              "previousFrom": "2026-09-07", "previousTo": "2026-09-13",
+              "daysWithData": 7 },
+  "canMute": true,
+  "missingPackages": ["smartmontools-drivedb"],
+  "items": [{
+    "id": "disk_temp_warm",
+    "key": "disk_temp_warm:d:1f0c…",
+    "area": "storage",
+    "severity": "warning",
+    "title": "The disk runs warm",
+    "measured": "on average 67 °C (at most 68 °C) over the last week",
+    "action": "Check the airflow …",
+    "subject": { "kind": "disk", "label": "sda" },
+    "openSince": "2026-09-01 04:12:00",
+    "muted": false
+  }],
+  "muted": []
+}
+```
+
+- `applicable: false` carries a `reason`: `not_router` (not an OpenWrt monitor),
+  `agent_old` (the rules read fields only agent 0.1.7 sends, and an old agent is
+  not a healthy router with nothing to report) or `silent` (nothing reported for
+  more than seven days).
+- `severity` is `critical` (act now), `warning` (act this month) or `info`
+  (worth knowing). The order of `items` is severity, then area, then the rule's
+  own rank - never the alphabet of the keys.
+- Every weekly rule has an **enter** and a **hold** threshold. A finding that is
+  already open stays open down to the hold value, so a metric sitting on the
+  line does not flap in and out of the Monday e-mail.
+- A rule that could not be evaluated is not reported as "fine": it is left out
+  of `items` and its stored row is not touched.
+- **Muting** is an admin decision and applies to everyone who can see the
+  router. A muted finding moves to `muted` with `mutedReason`, `mutedBy` and
+  `mutedAt`, and it is left out of the weekly e-mail. It comes back - marked
+  `wasMuted` - as soon as the same finding becomes **more severe** than it was
+  when it was muted. A mute whose rule no longer fires is still listed, with
+  null texts and `active: false`, so it can be taken back.
+- No SSID, MAC address, BSSID, disk serial or WWN ever appears in a text; disks
+  are named by their `/dev` name and identified by a server-side hash.
+
+`action=storage_history&monitor_id=&days=` answers `{monitorId, days, disks: []}`,
+one entry per disk with its identity (`key`, `label`, `model`, `size`) and a
+`days: []` list of `{day, tempMin, tempMean, tempMax, samples, reallocated,
+pending, offline, runtimeBadBlocks, unsafeShutdowns, powerCycles, hostWritten,
+hostWrittenPartial, wearPct}`. `samples` counts the fresh SMART readings of that
+day; `hostWrittenPartial: true` says the day's byte count is incomplete (the
+router rebooted or the counter wrapped) and the figure is a lower bound.
+
+`action=wan_bottleneck&monitor_id=` answers the verdict per direction
+(`verdict.dl`, `verdict.ul`), the tests it is based on, the WAN path and the
+plan:
+
+```json
+{ "class": "line_limited", "reason": "below_plan", "confidence": "high",
+  "basis": [41, 38, 35],
+  "numbers": { "s_mbps": 700.0, "s_max_mbps": 710.0, "agree": 3,
+               "span_days": 3, "servers": 2, "tests": 3 } }
+```
+
+- `class` is `none`, `link_limited`, `cpu_limited`, `line_limited` or
+  `inconclusive`; `reason` says which rule decided (`plan_reached`,
+  `sqm_shaper`, `wan_port`, `packet_path`, `test_client`, `below_plan`, …).
+- `line_limited` - the only verdict that blames somebody else's equipment -
+  needs three tests that agree, a span of at least two days, **two different
+  servers** within 15 % of each other, proof that one of those servers has ever
+  delivered the plan, and results outside the 1 G / 2.5 G goodput plateaus.
+  Whatever it cannot prove comes back as `inconclusive` with the reason
+  (`not_enough_tests`, `single_server`, `server_limited`,
+  `server_capacity_unproven`, `port_plateau`, `tests_disagree`).
+- Without a stored plan nothing is ever called "below plan": the answer is
+  `inconclusive / no_plan_known` and the card asks for the tariff. A test the
+  router did not start itself can only ever confirm a reached plan, never
+  declare the line slow.
+- `basis` lists the ids of the `speedtest_results` rows the verdict rests on, so
+  the card can show exactly what was measured.
+- A test that ran over the backup (`uplink` `backup` or `mixed`, measured or
+  inferred, see below) never yields a WAN verdict: it is
+  `inconclusive / ran_over_backup` and never counts towards the aggregate.
+
+`action=speedtest_history&monitor_id=` says which line carried each test. The
+Turris runs its nightly test unbound, so during a WAN outage it measures the
+LTE backup; that figure is real, it is just not the line speed.
+
+- Every measurement carries `uplink` (`wan`, `backup`, `mixed` or `null` =
+  unknown), `uplinkSource`, `proto` (`http`, `https` or `null`) and `iface`.
+- `uplinkSource: "counters"` = the agent (0.1.11+) measured it from per-device
+  byte counters during the test. `uplinkSource: "outage"` = a guess by the
+  server: the test started inside a WAN-down period (`wan_lost` /
+  `wan_restored`, paired as in `link_traffic`), so it is `backup`. The guess is
+  computed on every read and never stored, so it can never pass for a
+  measurement. Anything else stays `null`.
+- `averages.week|month|year` are the WAN averages: `backup` and `mixed` rows are
+  excluded, rows with an unknown uplink are included as before and counted in
+  `unknownSamples`. `backupAverages` holds the same windows for the LTE backup
+  (measured and inferred). `mixed` rows enter no average.
+- The agent report item may carry `uplink` (`wan` / `backup` / `mixed`),
+  `uplink_evidence` (`counters`) and `proto` (`http` / `https`); any other
+  value is stored as `null`. A stored uplink is never overwritten by a re-send
+  without one.
+
+---
+
+## Incidents and reports
+
+| Endpoint | Access | Description |
+|---|---|---|
+| `action=incidents` | public status / assigned | List of incidents. An outage starts when the monitor went down (`last_status_change`), not when the outage was last confirmed. The public view drops targets, operator names and check reasons, also from `updates` |
+| `action=create_incident` | admin | Manual creation. Optional `monitorId` ties the incident to a monitor: 404 unknown, 409 archived, 409 when that monitor already has an open incident |
+| `action=incident_action` | admin | `op`: acknowledge / resolve / postmortem. `resolve` answers `monitorStillDown: true` when the monitor is down even after the incident is closed |
+| `action=events&monitor_id=&limit=` | public status / assigned | Monitor events Additionally returns `statusChange`: the check that recorded the last status change (pinned to `monitors.last_status_change`, with the status it came from: that of the newest row before it; neither is ever a remote probe's row, see `node_api.php` below), or `null` - that row is often absent from the list itself, whose window is the newest checks plus the newest failures. Each event carries `statusKey` / `statusLabel` / `statusTone` from the shared status vocabulary (`up`, `warning`, `down`, `maintenance`, `paused`, `unknown_new`, `unknown_stale`); a maintenance or unknown row is no longer `"OK"`, and a row without a message gets the sentence of its own state. `source` names the row's writer (`cron`, `heartbeat`, `agent`, `probe`; `null` before schema r024). A probe's row stays in the list, but its `down` is a failed measurement, not an outage: `rawStatus`, `statusKey`, `statusLabel` and `statusTone` say what it measured (`down`), `isDown` is false, no `outageEnd` / `outageDurationSec`; it ends no outage and is no `isRecovery`, and the failures mixed in beyond the newest checks are never a probe's |
+| `action=sla_report&days=` | assigned monitor | SLA overview in time: `outageMinutes` and `totalOutageMinutes` (`null` when nothing was measured, never 0), `uptimePct` (`null` without a measured second), `outageMinutes` = real minutes of outage including an agent's silence, `silentMinutes` = the part of it an agent was silent, `unmeasuredMinutes` = time nobody measured (outside the percentage). `upChecks` / `downChecks` stay row counts; past 30 days (`days` 90 / 365) they come from `uptime_daily` plus today's logs, not from the month of logs that is left. The answer carries `days`, `windowStart` (the window's first day), `since` (the first day with data, also per row) and `percentileDays` (latency percentiles read raw logs, at most 30 days). Per row also `measuredMinutes`, `budgetMinutes` (the downtime the SLA goal allows over the measured time, to set `outageMinutes` against) and `incidentCount` (incidents opened in the window; `null` when they could not be read). `lastOutage` runs from the first `down` check after the last `up` or `maintenance` check to the next `up` or `maintenance` check, and a `warning` inside does not split it. A maintenance window bounds it the way it bounds `outageMinutes`: its `maintenance` checks end an outage and are not one, but a `down` check logged inside a window is an outage until the window's next check, as it is in availability, and goes into `mttrSec` too. The monitor's incident stays open over a window and closes at the next `up`. A remote probe's row (`monitor_logs.source = 'probe'`) does not count here: its `up` neither ends nor splits the outage and its `down` starts none, while `uptimePct`, `outageMinutes` and `upChecks` / `downChecks` still count it (availability); a row without a source counts as before. A monitor that left `down` without an `up` or `maintenance` check since has `end` and `durationSec` `null`, and `mttrSec` is the duration of a resolved one. Without either in the kept logs (30 days) `start` is the oldest kept `down` check, so an older outage is clipped to it and its `durationSec` and `mttrSec` come out too short. A failure is `500 {"error": "sla_report_unavailable"}` |
+| `action=audit_logs&limit=` | admin | Latest checks across monitors. Worded with the shared status vocabulary (`statusKey`, `statusLabel`, `statusTone`); `user` names who wrote the row: the cron, an agent, a probe or a heartbeat |
+
+---
+
+## Configuration and management
+
+| Endpoint | Access | Description |
+|---|---|---|
+| `action=get_settings` / `save_settings` | admin | Global settings. A key with a documented default (`bk_settings_defaults()` in db.php: the alert switches, timeouts, SLA goal, ...) reads as that default while it is unset or stored empty, never as `''`. A secret (`bk_settings_secret_keys()`: passwords, tokens, webhook URLs) reads as `••••••` and its last four characters, and that masked value sent back is not stored. The on/off switches (`agent_notifications_enabled`, `agent_notify_admin_only`, `daily_reminder_enabled`, `escalation_enabled`) take exactly `'1'` or `'0'`: any other value, above all `''`, makes the whole save a 400 that writes nothing and lists the keys in `invalidKeys` |
+| `action=test_notification` | admin | POST `{channel}` (email/discord/telegram/slack): sends one real test message with the saved settings, returns `{ok, message}` |
+| `action=notification_log&monitor_id=&kind=&channel=&ok=&delivery=&from=&to=&q=&before_id=&limit=&summary=1` | admin | What was sent, to whom, on which channel and whether it went. A row is written for a failure too - that is the interesting half. Since `send_email()` logs centrally, this is every kind of message, not only alerts: `kind` filters them (`alert`, `daily_reminder`, `digest`, `invitation`, …), `channel` the route, `ok=0` the failures alone, `q` is a substring of the recipient. `from`/`to` take a date or a date and time; a bare date in `to` means that whole day, and a value that cannot be parsed is a 400 rather than a silently wider answer. Paging is by cursor - pass the returned `nextCursor` as `before_id` - because rows keep arriving while somebody reads, and an offset page would repeat one row and skip another. `kinds` and `channels` in the answer list the values present in the WHOLE log, so a filter can never remove the option that would undo it. `ok` means only "not refused". What is known beyond that is `delivery`: `sent` = the provider confirmed it took the message (an SMTP 250 with its queue id, CallMeBot's "Message queued", a webhook 2xx; it does not confirm that the message reached the phone or mailbox), `failed` = refused or unreachable, `unknown` = nobody confirmed it (PHP `mail()` returned true, CallMeBot 210, a timeout after the request left), `skipped` = the daily reminder's quiet day. `error` carries the reason for `failed` and `unknown`, `providerReply` the provider's own words without the message, phone numbers or keys. Rows from before the result was recorded have `deliveryRecorded: false` and a derived `delivery`, never better than they proved: `ok=1` on WhatsApp or on e-mail without SMTP reads `unknown`. `delivery=failed,unknown` filters by a comma list of those four values; anything else is a 400. `summary=1` adds `last24h` and `last7d` (`total` attempts without the skipped rows, `sent`, `unknown`, `failed`, and the same per channel), likewise over the whole log and never narrowed by the filters: it feeds the "something did not go out" banner, and a banner a filter can talk out of a failure is worse than none. Every status change is stored as kind `alert`, recoveries included, so an `alert` row also carries `alertTone` (`good` = a recovery, `warn` = a warning, `bad` = an outage; the class the alert e-mail uses, derived from `status` when read, so older rows have it too; `null` for every other kind). The body of a message is never stored; rows are pruned after 180 days |
+| `action=site_health` | admin | Faults of the site itself that no data path reports, for the warning on the dashboard. `configOutput` is `null`, or what config.php printed while it loaded: `bytes`, `where` (`before_open_tag` = text or a BOM ahead of `<?php`, `after_close_tag` = text after the last `?>` beyond the one newline PHP swallows, `inside` = an echo or a displayed PHP notice) and `excerpt` (the first 16 bytes as printable ASCII, control bytes escaped, anything that looks like a password or a token masked). db.php holds such bytes back from every response, so the API keeps answering clean JSON while the file is wrong; `health.php` fails its `config.php output` check for as long as they are there. `selfCheck` is `null` before cron's first run, or cron's latest check of this site's own public API: every 4 minutes (every run while it fails or recovers) cron reads `action=public_status` over HTTP from the origin of the `site_url` setting plus `/status/api.php`, the way /app does, and wants a 200 with a JSON object carrying `status`, `totalMonitors`, `downMonitors`, `uptimePercent`, `lastUpdated` and `nodes`; output of config.php (`configOutput` above) fails the check too, since it no longer reaches the API. It holds `state` (`ok`, `failed`, `recovering` after the first pass that follows an announced failure, or `unconfigured` when `site_url` is empty), `url`, `checkedAt`, `failures` in a row, `since`, `reason` (for example `2 bytes before the JSON: "Ah"`), `lastOkAt`, `alertAttemptAt` and `alertResult` (`sent`, `unknown`, `failed`, `no_channel`, or `null` while the first failure waits for a second). The second failure in a row is announced once to every administrator by e-mail and WhatsApp and on the shared Discord, Slack, Telegram and Pushover channels (kind `admin_notice`, status `self_check_failed`, each attempt in the outgoing-message log with its own result); a notice no channel took is retried after an hour, and a recovery (`self_check_restored`) is announced only after an announced failure, once the check passes twice in a row. A persistent HTTP 403 usually means a proxy's bot protection blocks the hosting's own address |
+| `action=notification_health` | admin | Which channel has stopped reaching whom, for the warning on the dashboard and on the outgoing-message page. It reads the last 7 days of `alert`, `daily_reminder`, `digest`, `admin_notice` and `escalation` rows (not the skipped ones, at most the newest 5000; `truncated` says when the cut was hit). For every channel and recipient the latest attempt decides: `failed` or `unknown` is a problem, and so is a WhatsApp acceptance whose reply says "0 messages left" (the quota is spent). A later confirmed send clears it. `problems[]` holds `channel`, `recipient` masked (`•••` and the last three digits of a number, the first letter and the domain of an address; `null` for a webhook), the account's `username` when the address belongs to one, `state`, `sinceIso` (the first attempt after the last confirmed one), `lastAtIso`, `count`, `lastReason`, `lastSentAtIso` (`null` = nothing confirmed in the window) and `legacy` (derived from rows without a recorded provider reply). A database error is a 500, never an empty list |
+| `action=interface_traffic_daily&monitor_id=&days=` | assigned monitor | Traffic per day and interface, busiest first. A missing day means nothing was reported that day, not zero traffic. A day above the interface's link speed x 24 h (from `lan_ports`, else 10 Gbit/s) is a counter artefact: that value is `null` and `rejected` names it (`rx`, `tx`). The first reading of an interface is its baseline and bytes across a gap over midnight are booked to no day |
+| `action=process_top&monitor_id=&kind=&minutes=` | assigned monitor | Which processes used the machine over the whole window (the average over every minute of it, `sampledMinutes`, a minute outside the ten largest being zero; peak; sample count), grouped by name so a restarting service is not split per pid. `enabled: false` = process history is switched off in the settings |
+| `action=toggle_maintenance` | admin | POST `{monitor_ids[], maintenance, description?, maintenance_end?}`: switches maintenance on or off for one or more monitors. Off also clears the window, so the next maintenance does not expire the moment it starts |
+| `action=clear_monitor_history` | admin | POST `{monitor_id, confirm_name}`: erases the monitor's measurements, logs and daily aggregates and returns it to "unknown". Irreversible, so it asks for the exact monitor name back |
+| `action=redetect_location` | admin | Forces a fresh geolocation lookup for the server and stores it in `ip_loc_local` |
+| `action=router_recommendation_mute` | admin | POST `{monitor_id, key, muted, reason?}`: silences one router recommendation (or takes the mute back). The severity is re-evaluated on the server, never taken from the body, so a mute silences the finding as it is today and not a worse version of it. An unknown rule id is 400, an archived monitor is refused, and every change writes an `audit_log` row |
+| `action=wan_settings_save` | admin | POST `{monitor_id, plan_down_mbit?, plan_up_mbit?, plan_ok_pct?}`: the router's tariff. `null` or an empty string clears a value; a number outside 1-100000 (30-100 for the percentage) is a 400 and is never clamped, because a clamped plan is a plan the owner did not enter. An absent `probe_enabled` key leaves the stored consent alone |
+| `action=presets` / `save_preset` / `delete_preset` | public read, admin write | Metric profiles; `save_monitor` assigns one to a monitor (`preset_id`) |
+| `action=status_pages` / `save_status_page` / `delete_status_page` | list public, hidden pages and writes admin | Public status pages |
+| `action=status_page&slug=` | public, a hidden page admin | One status page by its slug, for the public page: `title`, `description`, `monitorIds` (empty = every public monitor) and `displayOptions` with every default filled in. A hidden page answers 404 to anyone but an administrator, the same as a page that does not exist, so slugs cannot be probed. A missing `slug` is 400; a failed read is `500 {"error": "status_page_unavailable"}`, never a 404 |
+| `action=dashboard_layout` | logged in | Tile order and visibility |
+| `action=users` | admin | User list, each account with its `monitorIds` |
+| `action=export_config` | admin | Configuration export without the secrets the settings page masks (see below) |
+| `action=generate_metrics_token` | admin | Token for the Prometheus exporter |
+| `action=upload_logo` | admin | Status page logo |
+| `action=send_digest&period=` | admin | Manual digest send |
+| `action=digest_preview&period=` | admin | The weekly (`period=weekly`) or monthly (`period=monthly`) digest as `text/html`, the very page the e-mail carries, in the viewing admin's e-mail language (else the global one). Nothing is sent and the trend snapshot the next real digest compares against is not touched. Any other `period`, a missing one included, is a 400 rather than a weekly digest. The app opens this preview; admin.php's own one shows the same page until the legacy UI goes |
+| `action=trigger_remote_action` | admin | Action on a router (allowed ones only) |
+| `action=discovered_services` / `import_discovered_service` | admin | Service Discovery |
+| `action=get_subscriptions` / `save_subscriptions` | logged in | Alert subscriptions, limited to the monitors the account can see; each value is what the alert really uses (an admin without a row follows the monitor's and the profile's switches). The save replaces all of the account's rows: a monitor left out of the list loses its row (an admin then follows those switches, a `user` gets no alerts about it). Each row may carry `shown`, the values the form loaded, and only the channels that differ from it change; without `shown` the stored values count as shown, with 0 for NULL or a missing row (what clients before `shown` displayed). An untouched channel keeps what was stored (an admin's stays NULL and follows those switches). An admin's changed channel equal to what those switches give is stored as NULL, so it keeps following them. A row that means the same as none is not kept |
+| `action=public_subscribe` / `public_subscribe_confirm` / `public_unsubscribe` | public | E-mail subscription for visitors without accounts: double opt-in (nothing is sent until the owner confirms), IP rate limit on sign-up, neutral responses (no enumeration), one-click unsubscribe link in every mail |
+| `action=public_subscribers` / `delete_public_subscriber` | admin | Subscriber overview and manual removal (GDPR requests) |
+| `action=save_user` / `delete_user` | admin | User management for the React app (create sends the invite e-mail, delete refuses the own account; `monitorIds` sets which monitors a `user` account sees - omitted keeps the assignment, `[]` clears it, unknown ids are dropped); before 2026-08 these existed only as admin.php form handlers and the React page's calls hit "unknown action" |
+| `action=my_profile` / `update_profile` | logged in | Own profile: contacts, notification channels, e-mail language, changing the e-mail or the password (both require the current password in `oldPassword`) |
+| `action=oauth_unlink` | logged in | Unlink the OAuth sign-in (requires the current password) |
+| `action=oauth_start` / `oauth_callback` | public | OAuth sign-in as a browser navigation that ends in /app (see Authentication) |
+| `action=oauth_link_start` | logged in | Starts a link of a provider to the account with its password; answers the address to send the browser to (see Authentication) |
+| `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | logged in | Two-factor enrollment: the secret stays in the session until a code confirms it; confirming returns ten one-time recovery codes (hashes only are stored, shown exactly once); a recovery code works in place of the TOTP code at login and is consumed; confirming, regenerating a set and disabling all require the password; `totp_setup` and `totp_confirm` answer 409 while 2FA is on, so replacing it means disabling it first |
+| `action=set_password` | public (one-time token) | Set a password from an invite or reset e-mail; the token is consumed on first success |
+
+`export_config` deliberately omits passwords, tokens, webhook URLs and agent
+keys - it exists to back up settings, not to clone access. Its settings are
+the keys of `bk_settings_keys()` minus `bk_settings_secret_keys()`, the values
+the settings page masks; runtime rows (caches, per-user layouts, node
+locations, `schema_version`) are not settings and stay out. The cron key
+stays out too, although the settings page shows it in full: it authorises
+`node_api.php`, `cron.php?key=` and agent registration (see below).
+
+The settings key list lives in exactly one place (`bk_settings_keys()` in
+`db.php`) and `run_settings_parity_lint.php` checks that the UI never asks for a
+key the server does not know. It used to exist three times and drifted, which
+silently erased WhatsApp settings: they could be saved but were never read back,
+so the form showed empty fields and the next save overwrote the real values.
+
+---
+
+## Device interfaces
+
+### `POST agent_api.php`
+
+Telemetry from agents (VPS, OpenWrt). Authorised by the `agent_key` field in the
+body. Requires POST and valid JSON, otherwise 405 / 400. Only `agent_key` is
+required: `cpu`, `ram` and `hdd` may be `null`, which agents send on their first
+run and after a reboot. The report of an archived monitor is refused with 403 and
+`archived: true`.
+
+The server accepts keys it does not know in advance - otherwise a new metric from
+an agent would vanish silently. Limits apply though: a typed server-side value
+always wins, credentials are never taken over, the name has to look like an
+identifier, an array is capped at 8 KB and at most 64 new keys are added at once.
+
+`action_result` arrives as a separate lightweight POST - the confirmation of a
+performed Remote Action. It carries no telemetry fields, so it is handled before
+their validation. Its `status` is `executed` or `failed`; anything else is
+stored as `failed`. Agents never put it in a full report, and the server does
+not read it there.
+
+**Registration** (`{"action": "register", "token": "…", "hostname": "…",
+"agent_type": "openwrt"|…}`; the bash and OpenWrt agents send it for
+`--register TOKEN URL`) creates the monitor with its own device (asset) and
+answers its `agent_key`. The
+token is `agent_registration_token` from Settings. **When that setting is empty,
+the cron key (`cron_key`) is accepted in its place** - so a fleet can register
+with the cron key alone, and giving someone the cron key lets them add
+monitors. That, `node_api.php` and `cron.php?key=` are why the configuration
+backup (`export_config`) leaves the cron key out. The installer gives every
+fresh install its own `cron_key`; with both empty, registration is refused
+(403). A wrong token is 403.
+
+**The answer is the way back to the agent, not only a receipt.**
+
+- With a Remote Action waiting (Remote Actions on for the monitor and the
+  action among its allowed ones) the answer carries `pending_action`:
+  `action_id`, `action`, `timestamp`, `nonce` and `signature`, the
+  HMAC-SHA256 of `action=…|ts=…|nonce=…` keyed with the monitor's
+  `agent_key`. The agent acts only on a valid signature. `service_name`
+  travels outside the signed string, because deployed agents sign exactly
+  those three fields. One action per answer, marked `sent` as it goes out,
+  so it is never signed and sent twice.
+- A report with `speedtests[]` (agent 0.1.7, at most 50 taken per report)
+  gets `speedtests_acked`: the timestamp of the newest stored item (a
+  re-sent one counts) older than every item whose store failed. The agent
+  deletes its result files only up to it and never on a bare 200; `null` =
+  none, so everything comes again (the unique key makes that a no-op). A
+  failed store is `speedtest_store_failed` in `last_details.ingest_issues`;
+  an item without a measurement time is `speedtest_rejected` and does not
+  hold the receipt back. An item whose rate and byte counter disagree
+  (`Mbit/s × 15 s × 125000` more than 10 % off the bytes, a unit or parser
+  bug) is stored and acked as `unit_mismatch`, in `ingest_issues` and in the
+  row's `diagnostics`, and `wan_bottleneck` never counts it. A `diagnostics`
+  object with no allowed key or over 2048 bytes is left off the row as
+  `speedtest_diagnostics_dropped`.
+
+**Agent 0.1.7 (OpenWrt) adds** `wifi_radios[]` (one object per wireless netdev,
+at most 16: band derived from the frequency, generation and width, client
+counts by capability and encryption, noise and channel busy), `storage_disks[]`
+(at most 8 physical disks with 16 partitions each, SMART state, temperature,
+error counters, wear, host-written bytes), `agent_tools` (seven strict booleans
+saying which optional programs the router really has), `wan_path` (packet
+steering, flow offloading, SQM, ring drops) and the WAN counters. Rules the
+server applies to all of them:
+
+- **Out of range becomes `null`, never a bound.** A busy figure of 101 % or a
+  temperature of 0 °C is not clamped to 100 or to a minimum: it is dropped,
+  because a clamped value reads like a measurement.
+- **An absent `storage_disks` keeps the last list.** Agent 0.1.6 does not send
+  the key and a 0.1.7 report that had to shrink may drop it; reading that as
+  "no disks" would erase a working disk list. A key that IS sent replaces it.
+- The WAN counters are stored as the **step** between two readings (every
+  report; once an hour for the ring and the six port counters of agent 0.1.13),
+  and the step is `null` across a reboot or a change of WAN device - never the
+  value since boot.
+- The report's `speedtest_active` flag is stored per minute
+  (`vps_metrics.speedtest_active`, schema 20260927r022): `1` when the flag was
+  set, a speed-test result travelled in the report or the run stepped aside for
+  the test, `0` when the agent said no test ran, `null` when it did not say.
+  Rows from before that schema stay `null` and are never backfilled.
+- **Privacy:** no MAC address, BSSID, neighbour SSID, disk serial or WWN leaves
+  the router; disk identity is a server-side hash of transport, port, model and
+  size.
+
+Alerts raised from these fields use three statuses - `storage_failing` (pages),
+`storage_warning` and `storage_recovered` (neither pages) - and all of them are
+subject to the `agent_notifications_enabled` switch; the event is written to the
+timeline either way. Disk temperature needs two consecutive fresh readings over
+the limit and clears 5 °C below it, a growing error counter is silent on first
+sight and repeats at most once a day, and a filesystem alert needs two reports
+over the limit and clears five points lower.
+
+**Agent 0.1.8 (OpenWrt) adds** `lan_ports` - the wired switch, port by port,
+sent with every report because a cable changes by the minute. Per port: `name`,
+`link`, `speed_mbit`, `duplex`, `max_mbit` (what the port supports),
+`partner_max_mbit` (what the other end advertises) and `clients`; next to them
+`bridge`, `conduits[]` (the DSA link to the CPU that every wired client shares)
+and `clients_total`. The server stores it in `last_details`, which is how it
+reaches the app in the `details` object of `action=monitors` - there is no
+endpoint of its own. Its rules:
+
+- **A port with no carrier has no rate.** `speed_mbit`, `duplex` and
+  `partner_max_mbit` are `null` whenever `link` is `false`, and a value that
+  cannot be read is `null` too - never 0 and never a plausible guess. A port
+  with `clients: 0` is different: that is a measurement, "nothing has spoken
+  behind this socket".
+- **`lan_ports: null` means the router could not look** (no ubus, no `bridge`,
+  a switch that is not DSA). A report that does not carry the section erases
+  the stored one instead of keeping it: unlike the disk list, a cable picture
+  from an earlier report would be a lie within a minute.
+- **Privacy:** only counts leave the router. No MAC address, no hostname and no
+  lease is sent or stored, and the section is never part of the public view.
+- It is **not** a time series and has no metric column. The count comes from
+  the bridge forwarding database, which forgets a device after a few quiet
+  minutes, so a chart of it would show devices unplugging themselves.
+- The only recommendation it feeds is `lan_wired_ceiling`, which still fires on
+  the port **capability**; the switch merely adds the household's own numbers -
+  how many wired devices share which conduit - and only when both were measured.
+
+**The router's last error lines (agent 0.1.8, OpenWrt)** travel next to
+`log_errors_24h`: `log_errors_recent` (at most 5 `{ts, prog, msg, count}`,
+newest first; `[]` = the log was read and holds no error line, `null` = no
+readable log or sending is switched off), `log_window_secs` (how many seconds
+the counted log buffer covers, for "errors in the last N h") and
+`log_lines_state` (`on`, `off_monitor`, `off_router`). Owner decision: the lines
+may leave the router masked, at most five, kept in `last_details` only - no
+history table - and switchable per monitor. The server masks them again
+(e-mail, MAC, IPv6, IPv4, local host names, hex ids of 12+ digits; printable
+ASCII, 200 characters), so an older agent cannot store a raw address. With the
+monitor's `log_lines_enabled` off it keeps none (`log_errors_recent: null`,
+`log_lines_state: "off_monitor"`), and every answer carries `"log_lines":true`
+or `"log_lines":false` - unspaced, the agent matches it literally and stops
+collecting from its next run.
+
+**Agent 0.1.9 (OpenWrt) adds** two top-level integers about the agent itself:
+
+- `agent_prev_cpu_ms` - CPU time (user + system, children included) of the
+  PREVIOUS run in milliseconds, a multiple of 10. Range 0-600000. It is a
+  stored metric (`vps_metrics.agent_prev_cpu_ms`, rolled up into
+  `metrics_daily`, a series of `action=metric_series`) and is copied into
+  `last_details`. `null` after a first run, a version change or a run that was
+  killed (0.1.9 then sends `agent_prev_total_ms: null` too), and for every
+  agent up to 0.1.8, which does not send the key. Pair the two only when both
+  are non-null.
+- `runs_skipped_killed` - runs the lock takeover stopped after 300 s since the
+  last accepted report. Range 0-100000, `last_details` only, next to
+  `runs_skipped_lock` and `runs_skipped_post`. A count above 0 adds a third
+  reason to the `reports_missing` collection issue. `null` from agents up to
+  0.1.8, never 0.
+
+Out of range, negative, fractional or not a number is `null`, never a bound.
+
+**Agent 0.1.13 (OpenWrt) adds** to the hourly `wan_path` object:
+
+- the WAN port's own counters from the same `ethtool -S` read, cumulative:
+  `rx_overrun`, `rx_discard`, `bad_crc_event`, `mac_receive_error`,
+  `refill_errors`, `oversize_received`. `null` = the driver does not print that
+  name; `0` is a measurement. The server stores each as an hourly **step**
+  (`wan_rx_overrun`, `wan_rx_discard`, `wan_crc_errors`, `wan_mac_rx_errors`,
+  `wan_refill_errors`, `wan_oversize`), gated like `wan_ring_drops`.
+- the SFP module's readings in kernel units, only when exactly one module hwmon
+  exists: `sfp_temp_mc`, `sfp_temp_max_mc`, `sfp_temp_crit_mc` (m°C, range
+  -60000 to 200000) and `sfp_rx_power_uw`, `sfp_rx_power_min_uw`,
+  `sfp_rx_power_lcrit_uw` (µW, 0-100000), plus `sfp_phy_hwmon` (strict bool:
+  `true` = a PHY inside the module has its own hwmon, i.e. a copper-class
+  module; `false` says nothing about fibre). `last_details` only, no series.
+  No serial number or EEPROM content is ever sent.
+
+### `GET|POST node_api.php?action=get_monitors|post_results`
+
+Interface for remote measurement nodes. Authorised by a shared `cron_key`,
+sent as `?key=` or in the `X-Node-Key` header (`hash_equals`, so without a
+timing side channel); with `cron_key` empty every call is 403.
+
+A node downloads the list of monitors to check and posts results back with its
+`location`, stored as the row's `checked_from`. That value is what fills
+`action=regions`.
+
+A posted result only adds a row to `monitor_logs`, with `source = 'probe'`
+(set by the server, never taken from the post). The monitor's status,
+`last_checked` and `last_details` stay with cron, which applies maintenance,
+`alert_confirm_failures`, notifications and the incident lifecycle; a result's
+`details` are ignored. A result whose `status` is not `up` or `down` is not stored (a probe measures only those: its `warning` would reach the public failure list, its `maintenance` or `unknown` would turn measured time into time nobody measured), and neither is
+one for a monitor in maintenance (`is_in_maintenance`, as cron applies it):
+cron logs the window as `maintenance` rows, and a probe's `down` in it (the
+planned work's 503) would be an outage in availability and `action=sla_report`
+that no alert or incident ever had. `response_time` is stored in whole
+milliseconds (`bk_response_ms`): a missing value or a failed check's 0 is NULL,
+and an `up` result's 0 (an answer under 1 ms) is 1 ms.
+
+Every row of `monitor_logs` records its writer in `source` (schema
+20261101r024): `cron` (its own checks, maintenance rows and a silent agent's
+`unknown` / `down`), `heartbeat` (cron's evaluation of a heartbeat monitor),
+`agent` (`agent_api.php`) or `probe` (a row posted here). A probe's row is a
+measurement: it counts in availability (`uptime_windows`, `daily_uptime`,
+`sla_report`'s `uptimePct` and `outageMinutes`, the badge), the history
+(`action=events`, latency series, the CSV export) and `action=regions`. It
+never confirms an outage, splits one or gives it its reason: it is not in the
+`alert_confirm_failures` streak or the latency alert's window, does not start,
+end or split `lastOutage` and `mttrSec` in `action=sla_report` or a change in
+the monitor timeline, is never `statusChange` or its `fromStatus` in
+`action=events`, and a failed probe check there is `isDown` false with no
+outage end. The digest's incident count, biggest incident and monthly incident heatmap leave it out too.
+So `outageMinutes` can hold a probe's failure that `lastOutage` does not.
+
+The reason given for a status - a status finding's `detail` in
+`action=findings`, the administration's outage diagnostics, the daily
+reminder, an open outage card in `action=incidents` - is the message of the
+newest row in the monitor's current state that a probe did not write. So is
+every "current" value read off the newest row: the response time in
+`action=monitors` and `metrics.php`, the HTTP code in
+`action=websites_overview` and the check stages behind the tips. A probe's
+failed check sends the time it waited (up to 8 s), which is no latency of the
+monitor.
+
+A row from before schema r024 has no `source` (NULL) and counts everywhere as
+it did, a probe's of that time included, until the 30-day logs prune it.
+
+> **Status:** measurements do not come from a single place. Besides the main
+> server, the Cloudflare Worker (`cloudflare-agent.js` in the agents
+> repository) posts here every five minutes from the Cloudflare location that
+> runs it, so "the service is dead" can be told apart from "our server cannot
+> see it". It is the one probe: the GitHub Actions probe (`monitor.yml`) was
+> removed on 30 Oct 2026, and the self-hosted PHP node (`node_client.php`) is
+> gone too - nothing ran it, and it carried copies of the checks of its own.
+> The GitHub probe's rows keep their locations until the logs are pruned
+> (30 days); written before schema r024, they have no `source`.
+
+---
+
+## Other endpoints
+
+| Endpoint | Format | Access | Description |
+|---|---|---|---|
+| `metrics.php?token=…` | Prometheus text 0.0.4 | token | Scraping by an external Prometheus; disabled when no token is set. The token may also be sent as an `Authorization: Bearer` header |
+| `badge.php?id=&type=` | 302 | public | Deprecated alias - redirects to `action=badge` (old README embeds keep working) |
+| `widget.php?id=` | 302 | public | Deprecated alias - redirects to `action=badge&type=uptime`, the 30-day availability its HTML card headlined. The card's iframe never showed on another site (`X-Frame-Options: SAMEORIGIN`); an `<img>` of the badge does |
+| `health.php` | JSON | admin or CLI | Database schema completeness check, and that config.php prints nothing. `Schema tables` and `Schema columns` name every table and column schema.sql creates that the database lacks (cron's daily self-test logs the same list); without a readable schema.sql both fail. `schema_version` fails while the stored version is not the one db.php expects: a migration step failed for real (the check names it, and db.php runs the list again 10 minutes after each failed run), migrations.php is missing, or an upload is half done |
+| `cron.php[?key=…]` | text | CLI or `cron_key` | Data collection; from the web only with the key |
+| `api.php?action=portal_status` | JSON | public | The game portal's servers: `teamspeak`, `minecraft` and `discord`, each with `status` (`up` / `down` / `warning` / `maintenance`; `unknown` while collection is stale; `null` when no public monitor covers the game), `online` (`up` or `warning`, a degraded server still answers), `checkedAt` and `name`, plus `clients_online` / `clients_max`, `players_online` / `players_max` / `version` or `online_count` / `total_count`. One monitor per game: the first by id of exactly that type on the public page. A count is given only while the server is online and is `null` when nobody measured it; `total_count` is always `null` (Discord's widget has no member total). `api.php` with no action answers the same with `Deprecation: @1793750400` (2026-11-04) and becomes a 400 like any unknown action once the portal calls `portal_status`. A failure is `500 {"error": "overview_unavailable"}` |
+
+---
+
+## Writes: POST + CSRF
+
+Since 2026-08 every state-changing action accepts **POST only** (GET gets 405)
+and every session-authenticated write must carry the session's CSRF token in
+the `X-CSRF-Token` header (multipart forms may send a `csrf_token` field
+instead). The token comes back from `action=login`, `action=login_2fa` and
+`action=session`; every sign-in leaves one in the session, an OAuth one too.
+Token-authenticated flows (`set_password`) and session-establishing ones
+(`login`, `login_2fa`, `setup`, `forgot_password`, `logout`) are exempt. Two
+actions write the session on a GET. `oauth_start` puts a fresh `state` and the
+provider in the session, replacing a round trip already started; like any
+link it can be opened from another site. The
+provider sends the browser back to `oauth_callback`, which signs in or links
+the provider to the account; the single-use `state` of the session's own
+`oauth_start` guards it instead of the token (see Authentication). CORS
+reflects only the site's own origin - a foreign origin gets no
+`Access-Control-Allow-Origin` at all.
+
+The session cookie is `HttpOnly` and `SameSite=Lax`, and `Secure` over HTTPS.
+db.php sets these before config.php can start the session, and
+`/status/.user.ini` sets them again at PHP startup, so they no longer depend on
+the deployed config.php carrying its own cookie block.
+
+## Versioning and stability
+
+The API has no version in its URL. The application and the SPA are deployed
+together, so the contract can change between commits.
+
+What can be treated as stable is what deployed devices use, and therefore cannot
+be changed without touching them:
+
+- `agent_api.php` - runs on other people's machines
+- `node_api.php` - the same
+- `heartbeat.php` - the URL is hardcoded in cron jobs
+- `metrics.php` - scraped by Prometheus
+
+The rest serves our own frontend and changes with it.

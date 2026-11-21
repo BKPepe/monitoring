@@ -1,0 +1,7 @@
+# Do uploads/ se zapisují jen obrázky (upload_logo v api.php), ale kdyby se
+# sem jakkoli dostal skript, nesmí se spustit - adresář je čistě statický.
+<FilesMatch "\.(php|phtml|php[0-9]|phar|cgi|pl|py|sh)$">
+    Require all denied
+</FilesMatch>
+RemoveHandler .php .phtml .phar
+RemoveType .php .phtml .phar

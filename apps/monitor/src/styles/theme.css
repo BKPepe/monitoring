@@ -1,0 +1,604 @@
+@import 'tailwindcss';
+
+/* Tailwind v4 čte třídy ze zdrojů automaticky, tmavý motiv řídí třída .dark
+   na <html> (ne media query) — uživatel si ho přepíná sám. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ==========================================================================
+   TOKENY
+   Paleta je záměrně shodná s landing page (apps/site/DESIGN.md, část 2), aby
+   stavové barvy znamenaly totéž na webu i v aplikaci. Jména proměnných
+   odpovídají konvenci shadcn/ui, takže do nich komponenty zapadnou bez úprav.
+   ========================================================================== */
+:root {
+  --background: #ffffff;
+  --foreground: #0b0d10;
+
+  --card: #f7f8fa;
+  --card-foreground: #0b0d10;
+
+  --popover: #ffffff;
+  --popover-foreground: #0b0d10;
+
+  /* brand-600 z DESIGN.md — pod bílým textem drží kontrast 4.9:1.
+     Světlejší #E5383B by dal jen 4.2:1 a spadl pod WCAG AA. */
+  --primary: #a30d18;
+  --primary-foreground: #ffffff;
+  /* Text links. --primary is a FILL colour: as 12 px text on the dark card it
+     was 3.7:1 (PA-9). The link token keeps >= 4.5:1 on every ground in both
+     themes (theme-contrast.test); in light it is the brand red itself. */
+  --link: #a30d18;
+
+  --secondary: #eef0f3;
+  --secondary-foreground: #0b0d10;
+
+  --muted: #eef0f3;
+  /* #6b7280 was 4.23:1 on the #eef0f3 wells (--inset, --secondary). */
+  --muted-foreground: #5f6673;
+
+  --accent: #eef0f3;
+  --accent-foreground: #0b0d10;
+
+  --destructive: #b91c1c;
+  --destructive-foreground: #ffffff;
+
+  --border: rgb(0 0 0 / 0.1);
+  --border-strong: rgb(0 0 0 / 0.18);
+  --input: rgb(0 0 0 / 0.12);
+  --ring: #c1121f;
+
+  /* Postranní panel má vlastní plochu — v tmavém motivu je o odstín jinde
+     než hlavní obsah, aby šla navigace opticky oddělit bez silné linky. */
+  --sidebar: #f7f8fa;
+  --sidebar-foreground: #0b0d10;
+  --sidebar-accent: #eef0f3;
+  --sidebar-border: rgb(0 0 0 / 0.08);
+
+  /* --- Stavy monitoru. Sdílená sémantika s apps/site i s dashboardem.
+     Kontrast změřený proti VŠEM podkladům, na kterých ty barvy leží, včetně
+     toho, co se snadno přehlédne: odznak a proužek kontroly si podklad
+     obarví nádechem téže barvy (bg-down/12, bg-up/15), což povrch přitáhne
+     k textu a stojí zhruba 1,4:1. Dvojice, která na kartě projde na 4,7:1,
+     tak uvnitř odznaku sedí na 4,0:1 - přesně tudy propadly „běží“,
+     „varování“ i „pozastaveno“. Podlahy: 4,5:1 jako text, 3:1 jako tečka
+     nebo pruh. Nejhorší podklad je --secondary s 15% nádechem, hodnoty ho
+     překonávají a odstín drží. */
+  --status-up: #166534;
+  --status-down: #991b1b;
+  --status-warning: #854d0e;
+  --status-info: #1d4ed8;
+  --status-paused: #4b5563;
+  /* Text na plné výplni --status-down (odznaky se sytým podkladem). Bílá na
+     ní má 8,3:1; na světlé červené v tmavém tématu by měla 2,5:1, proto je
+     to token a ne natvrdo napsaná bílá. */
+  --status-down-foreground: #ffffff;
+  /* Totéž pro plnou zelenou a žlutou výplň (tlačítka „uzavřít incident“,
+     „převzít“). Ve světlém tématu jsou obě tmavé a nesou bílý text (7,6:1 a
+     7,5:1); v tmavém jsou světlé a bílá by na nich měla 2,3:1 - proto token. */
+  --status-up-foreground: #ffffff;
+  --status-warning-foreground: #ffffff;
+
+  /* --- Barvy sérií v grafech ------------------------------------------
+     Pořadí je závazné: CPU vždy zelená, RAM modrá, síť tyrkysová, teplota
+     oranžová. Uživatel čte stejnou metriku stejnou barvou napříč celou
+     aplikací, jinak musí pokaždé znovu louskat legendu.
+     Which hue a metric gets is decided by one map: lib/metric-tone.ts.
+     Hodnoty tady jsou pro SVĚTLÝ podklad, tmavé varianty jsou v .dark - stejně
+     jako u --status-*. Dokud tenhle blok platil pro obě témata, byla čára
+     latence na bílé kartě v kontrastu ~1,2:1, tedy prakticky neviditelná. */
+  /* Six metric hues with a NetPulse-style look (rose, blue, cyan, orange,
+     violet, amber). CPU left green because a green CPU line sat 7.5 dE from
+     --status-up and read as "all fine"; rose keeps >= 11.8 from every status
+     colour. Validated with the dataviz validate_palette.js against
+     --card and --background in each mode (lightness band, chroma floor,
+     adjacent CVD >= 8, normal-vision >= 15, >= 3:1), and the pairs that share
+     a chart (network+memory, network+temperature) on their own. Never more
+     than two share one plot: all six cannot be told apart pairwise. */
+  --chart-cpu: #c2255c;
+  --chart-memory: #2a71fe;
+  --chart-network: #03919d;
+  --chart-temperature: #ab4501;
+  --chart-disk: #7544cd;
+  --chart-latency: #9c6900;
+  /* Chart chrome. The grid is a hairline one step off the surface; the glow
+     (px of blur behind a line) and the area wash (alpha at the top of the
+     gradient) are decoration only - they never carry meaning, and on a white
+     card a glow reads as blur, so light mode has none. */
+  --chart-grid: rgb(0 0 0 / 0.07);
+  --chart-glow: 0;
+  --chart-fill: 0.18;
+  /* Poznámky psané člověkem (svislé čáry v grafu). Purpurová sedí proto, že
+     musí být rozeznatelná od šedých naměřených událostí - ověřeno: CVD ΔE 12.5,
+     normální vidění 24.9, kontrast 4,7:1. Vůči sériím ji barva sama neuhlídá
+     (série pokrývají skoro celý kruh), proto anotace navíc nese značku. */
+  --chart-annotation: #c026d3;
+
+  /* Korelace: rozcestná (diverging) škála. Kladný a záporný vztah nejsou dobrý
+     a špatný, takže se sem záměrně nesmí dostat stavové zelená/červená -
+     modrá a oranžová nesou jen směr. Ověřeno: CVD ΔE 31, kontrast nad 3:1. */
+  --chart-corr-positive: #2a71fe;
+  --chart-corr-negative: #ab4501;
+
+  /* --- The router's port panel (router-ports/*): the jacks drawn as
+     hardware, the way NetPulse draws them - a recessed well, jack bodies with
+     a coloured edge, gold contacts, two LEDs and a cyan WAN. Hardware colours,
+     not verdicts: a verdict on a socket still speaks through --status-*, and
+     none of these is ever a warning. Text on them (--port-wan) keeps 4.5:1 on
+     the well; the edges and LEDs keep 3:1 as marks. */
+  --port-well: #ffffff;
+  --port-well-edge: rgb(0 0 0 / 0.08);
+  --port-body: #f4f6f8;
+  --port-hole: #80858d;
+  --port-edge: #5fbba3;
+  --port-edge-off: #d3d8de;
+  --port-pin: #df8526;
+  --port-pin-off: #c6cbd2;
+  --port-led-on: #0e9a6a;
+  --port-led-off: #d9dee4;
+  --port-led-glow: rgb(14 154 106 / 0.25);
+  --port-wan: #0a7896;
+  --port-wan-edge: #4fb0cf;
+  --port-wan-glow: rgb(79 176 207 / 0.22);
+
+  /* --- The NetPulse kit (components/ui/panel, pill, list-row, key-value,
+     health-ring and the shell). Two more grounds on top of the card:
+     --inset is a well cut into a card (the range switcher track, a KPI box, a
+     code line), --raised is a row lifted off it (a hovered or highlighted list
+     row). Both stay inside the status-contrast test, so a verdict word keeps
+     4.5:1 on them, tinted or not. The light theme is not the dark one
+     inverted: its card is the grey sheet on a white page, so the well goes
+     one step darker and the lifted row goes white. */
+  --inset: #eef0f3;
+  --raised: #ffffff;
+  /* A light edge along the top of a panel - the sheen the reference cards
+     have. On white paper a sheen would be invisible, so light mode makes the
+     top a touch whiter instead. Decoration only. */
+  --card-sheen: rgb(255 255 255 / 0.75);
+  --card-shadow: 0 1px 2px rgb(16 24 40 / 0.06);
+  --pop-shadow: 0 12px 32px -12px rgb(16 24 40 / 0.22);
+  /* The halo of a panel or a ring that is in a state (a router in warning):
+     alpha of the tone behind it. 0 in light, where a glow reads as a smudge;
+     the 1 px ring in the tone's colour stays and carries the edge alone. */
+  --tone-glow: 0;
+
+  --radius: 0.625rem;
+}
+
+.dark {
+  --background: #0a0c0f;
+  --foreground: #e5e7eb;
+
+  --card: #111418;
+  --card-foreground: #e5e7eb;
+
+  --popover: #14181d;
+  --popover-foreground: #e5e7eb;
+
+  --primary: #d62b30;
+  --primary-foreground: #ffffff;
+  --link: #ff6b6e;
+
+  --secondary: #1f2329;
+  --secondary-foreground: #e5e7eb;
+
+  --muted: #1f2329;
+  --muted-foreground: #8b93a1;
+
+  --accent: #1f2329;
+  --accent-foreground: #e5e7eb;
+
+  --destructive: #e5383b;
+  --destructive-foreground: #ffffff;
+
+  --border: rgb(255 255 255 / 0.08);
+  --border-strong: rgb(255 255 255 / 0.16);
+  --input: rgb(255 255 255 / 0.12);
+  --ring: #e5383b;
+
+  --sidebar: #0d1013;
+  --sidebar-foreground: #e5e7eb;
+  --sidebar-accent: #1a1e24;
+  --sidebar-border: rgb(255 255 255 / 0.06);
+
+  /* Na tmavém podkladu platí totéž pravidlo o nádechu: „výpadek“ měl uvnitř
+     vlastního odznaku 3,3:1 a „pozastaveno“ 2,8:1. Zbylé tři procházejí a
+     zůstávají. */
+  --status-up: #22c55e;
+  --status-down: #ff7f7c;
+  --status-warning: #facc15;
+  --status-info: #60a5fa;
+  --status-paused: #9ca3af;
+  /* Světlá červeň potřebuje tmavý text: bílá na ní má 2,5:1, tmavá 8,0:1. */
+  --status-down-foreground: #0a0c0f;
+  --status-up-foreground: #0a0c0f;
+  --status-warning-foreground: #0a0c0f;
+
+  /* The dark steps sit inside the dark lightness band (OKLCH L 0.48-0.67):
+     the previous -400/-500 steps were brighter than that and drowned the
+     annotations and bands. The glow gives back the brightness the band takes
+     away, without a mark getting louder than its neighbours. */
+  --chart-cpu: #e0457b;
+  --chart-memory: #286ef9;
+  --chart-network: #05a5b3;
+  --chart-temperature: #dd5c00;
+  --chart-disk: #9568f3;
+  --chart-latency: #b77b04;
+  --chart-annotation: #d946ef;
+  --chart-corr-positive: #286ef9;
+  --chart-corr-negative: #dd5c00;
+  --port-well: #0b0f14;
+  --port-well-edge: rgb(255 255 255 / 0.06);
+  --port-body: #0a0d12;
+  --port-hole: #030405;
+  --port-edge: #1b7f60;
+  --port-edge-off: #262d37;
+  --port-pin: #d8a21d;
+  --port-pin-off: #333a45;
+  --port-led-on: #2dd489;
+  --port-led-off: #222a33;
+  --port-led-glow: rgb(45 212 137 / 0.55);
+  --port-wan: #22c3dd;
+  --port-wan-edge: #1b9fb8;
+  --port-wan-glow: rgb(34 195 221 / 0.28);
+  --chart-grid: rgb(255 255 255 / 0.06);
+  --chart-glow: 8;
+  --chart-fill: 0.3;
+  /* Dark kit grounds sit between the card (#111418) and --secondary
+     (#1f2329): a well is one step down from a hover, and both keep every
+     status colour at AA (theme-contrast.test). */
+  --inset: #15191e;
+  --raised: #191d23;
+  --card-sheen: rgb(255 255 255 / 0.035);
+  --card-shadow: inset 0 1px 0 rgb(255 255 255 / 0.03), 0 12px 32px -20px rgb(0 0 0 / 0.9);
+  --pop-shadow: 0 16px 40px -12px rgb(0 0 0 / 0.75);
+  --tone-glow: 0.28;
+}
+
+/* Mapování tokenů do Tailwind utility tříd (bg-card, text-muted-foreground…). */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-link: var(--link);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-border: var(--sidebar-border);
+
+  --color-inset: var(--inset);
+  --color-raised: var(--raised);
+  --shadow-card: var(--card-shadow);
+  --shadow-pop: var(--pop-shadow);
+
+  --color-up: var(--status-up);
+  --color-down: var(--status-down);
+  --color-down-foreground: var(--status-down-foreground);
+  --color-up-foreground: var(--status-up-foreground);
+  --color-warning-foreground: var(--status-warning-foreground);
+  --color-warning: var(--status-warning);
+  --color-info: var(--status-info);
+  --color-paused: var(--status-paused);
+
+  --color-chart-cpu: var(--chart-cpu);
+  --color-chart-memory: var(--chart-memory);
+  --color-chart-network: var(--chart-network);
+  --color-chart-temperature: var(--chart-temperature);
+  --color-chart-disk: var(--chart-disk);
+  --color-chart-latency: var(--chart-latency);
+
+  --color-port-well: var(--port-well);
+  --color-port-well-edge: var(--port-well-edge);
+  --color-port-body: var(--port-body);
+  --color-port-hole: var(--port-hole);
+  --color-port-edge: var(--port-edge);
+  --color-port-edge-off: var(--port-edge-off);
+  --color-port-pin: var(--port-pin);
+  --color-port-pin-off: var(--port-pin-off);
+  --color-port-led-on: var(--port-led-on);
+  --color-port-led-off: var(--port-led-off);
+  --color-port-wan: var(--port-wan);
+  --color-port-wan-edge: var(--port-wan-edge);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+
+  /* Dva kroky pod text-xs. Aplikace je hustá a 11 a 10 px používá na stovkách
+     míst - dokud to byly text-2xs a text-3xs, nedaly se ladit z jednoho
+     místa a 9 px se vloudilo bez povšimnutí. Bez vlastní výšky řádku: chová se
+     jako dřívější arbitrary hodnota, tedy jen velikost písma. Nic menšího
+     tady záměrně není. */
+  --text-2xs: 0.6875rem;
+  --text-3xs: 0.625rem;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    overflow-x: hidden;
+    max-width: 100vw;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-sans);
+  }
+
+  /* Viditelný focus je požadavek WCAG 2.4.7 a v dashboardu se hodně
+     naviguje klávesnicí — tab přes tabulky monitorů musí být vidět. */
+  :focus-visible {
+    @apply outline-ring outline-2 outline-offset-2;
+  }
+
+  /* Mobilní Safari zvětší celou stránku, jakmile má zaostřený prvek písmo
+     menší než 16 px - a stránka pak zůstane odzoomovaná. Řeší se to písmem,
+     ne `maximum-scale` v meta viewportu: tím bychom uživateli zakázali
+     přiblížení úplně, což je horší vada než tahle. */
+  @media (max-width: 767px) {
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Stripes for a day that was measured only in part (C-7 DayStrip). The
+   stripe is currentColor, so a cell picks its hue with a status text class
+   and the hatched day keeps the colour of a full one - no second palette. */
+@utility hatch {
+  background-image: repeating-linear-gradient(135deg, currentColor 0 1.5px, transparent 1.5px 4px);
+}
+
+/* The halo behind a sparkline trace, in the trace's own colour
+   (currentColor). Sized by --chart-glow, which is 0 in the light theme and on
+   paper, so it only exists where the theme asks for it. Decoration only. */
+.chart-glow {
+  filter: drop-shadow(0 0 calc(var(--chart-glow) * 0.35px) currentColor);
+}
+
+/* --- Kit utilities -------------------------------------------------------
+   A measured figure: mono with tabular digits, so a refreshed value does not
+   shift sideways and 1 and 7 line up in a column (apps/site DESIGN.md). */
+@utility figure {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* The uppercase micro-label above a figure or a key-value row. One class
+   instead of five utilities, so a label cannot drift to 9 px on one page. */
+@utility micro-label {
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+/* The sheen along the top of a panel (see --card-sheen). */
+@utility panel-sheen {
+  background-image: linear-gradient(180deg, var(--card-sheen), transparent 7rem);
+}
+
+/* A panel or a ring in a state: `tone-warning tone-edge` draws a 1 px ring
+   in the status colour and, in the dark theme, a soft halo of it. The state
+   is always said in words inside (a pill, a sentence) - the edge only makes
+   the card findable in a grid. */
+@utility tone-up {
+  --tone: var(--status-up);
+}
+@utility tone-warning {
+  --tone: var(--status-warning);
+}
+@utility tone-down {
+  --tone: var(--status-down);
+}
+@utility tone-info {
+  --tone: var(--status-info);
+}
+@utility tone-edge {
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--tone, transparent) 60%, transparent),
+    0 0 28px -6px color-mix(in oklab, var(--tone, transparent) calc(var(--tone-glow) * 100%), transparent);
+}
+
+/* The phone tab bar sits over the page; the page leaves it room, including
+   the home indicator's safe area. */
+@utility pb-tabbar {
+  padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px));
+}
+@utility safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Router port panel: the halo behind the WAN jack, the glow of a lit LED and
+   the slow breath of an activity LED. Decoration on top of a state the text
+   already states; the breath exists only for people who have not asked for
+   reduced motion. */
+.port-wan-halo {
+  background: radial-gradient(closest-side, var(--port-wan-glow), transparent);
+}
+.port-led-glow {
+  box-shadow: 0 0 6px var(--port-led-glow);
+}
+@keyframes port-led-breath {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .port-led-breath {
+    animation: port-led-breath 2.4s ease-in-out infinite;
+  }
+}
+
+/* ==========================================================================
+   TISK a PDF REPORTY (@media print)
+   ========================================================================== */
+@media print {
+  /* Paper is white whatever the screen theme is, but the tokens follow the
+     screen: without this a dark-theme user's PDF printed the host line of
+     every report row near-white on white (1.2:1). Every token the dark block
+     redefines returns to its light value here; theme-contrast.test.ts keeps
+     this list in step with the dark block. */
+  .dark {
+    --background: #ffffff;
+    --foreground: #0b0d10;
+    --card: #f7f8fa;
+    --card-foreground: #0b0d10;
+    --popover: #ffffff;
+    --popover-foreground: #0b0d10;
+    --primary: #a30d18;
+    --primary-foreground: #ffffff;
+    --link: #a30d18;
+    --secondary: #eef0f3;
+    --secondary-foreground: #0b0d10;
+    --muted: #eef0f3;
+    --muted-foreground: #5f6673;
+    --accent: #eef0f3;
+    --accent-foreground: #0b0d10;
+    --destructive: #b91c1c;
+    --destructive-foreground: #ffffff;
+    --border: rgb(0 0 0 / 0.1);
+    --border-strong: rgb(0 0 0 / 0.18);
+    --input: rgb(0 0 0 / 0.12);
+    --ring: #c1121f;
+    --sidebar: #f7f8fa;
+    --sidebar-foreground: #0b0d10;
+    --sidebar-accent: #eef0f3;
+    --sidebar-border: rgb(0 0 0 / 0.08);
+    --status-up: #166534;
+    --status-down: #991b1b;
+    --status-warning: #854d0e;
+    --status-info: #1d4ed8;
+    --status-paused: #4b5563;
+    --status-down-foreground: #ffffff;
+    --status-up-foreground: #ffffff;
+    --status-warning-foreground: #ffffff;
+    --chart-cpu: #c2255c;
+    --chart-memory: #2a71fe;
+    --chart-network: #03919d;
+    --chart-temperature: #ab4501;
+    --chart-disk: #7544cd;
+    --chart-latency: #9c6900;
+    --chart-annotation: #c026d3;
+    --chart-corr-positive: #2a71fe;
+    --chart-corr-negative: #ab4501;
+    --chart-grid: rgb(0 0 0 / 0.07);
+    --chart-glow: 0;
+    --chart-fill: 0.18;
+    --port-well: #ffffff;
+    --port-well-edge: rgb(0 0 0 / 0.08);
+    --port-body: #f4f6f8;
+    --port-hole: #80858d;
+    --port-edge: #5fbba3;
+    --port-edge-off: #d3d8de;
+    --port-pin: #df8526;
+    --port-pin-off: #c6cbd2;
+    --port-led-on: #0e9a6a;
+    --port-led-off: #d9dee4;
+    --port-led-glow: rgb(14 154 106 / 0.25);
+    --port-wan: #0a7896;
+    --port-wan-edge: #4fb0cf;
+    --port-wan-glow: rgb(79 176 207 / 0.22);
+    --inset: #eef0f3;
+    --raised: #ffffff;
+    --card-sheen: rgb(255 255 255 / 0.75);
+    --card-shadow: 0 1px 2px rgb(16 24 40 / 0.06);
+    --pop-shadow: 0 12px 32px -12px rgb(16 24 40 / 0.22);
+    --tone-glow: 0;
+  }
+
+  /* Skrýt veškerou navigaci, header, search bar, dialogy, sidebar, footer a akční tlačítka bez obsahu */
+  aside,
+  header,
+  footer,
+  nav,
+  input,
+  [role='dialog'],
+  [role='combobox'],
+  .print\:hidden {
+    display: none !important;
+  }
+
+  /* Zrušit omezení výšky a scrollování pro tisk/PDF */
+  html,
+  body,
+  #root,
+  main,
+  div {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    position: static !important;
+    float: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #0b0d10 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Karta a pozadí pro tisk */
+  .border,
+  [class*='border-'] {
+    border-color: #e2e8f0 !important;
+  }
+
+  /* Zajistit zobrazení elementů označených print:block / print:flex */
+  .print\:block {
+    display: block !important;
+  }
+
+  .print\:flex {
+    display: flex !important;
+  }
+
+  .print\:grid {
+    display: grid !important;
+  }
+}

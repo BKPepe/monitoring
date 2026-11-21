@@ -1,0 +1,539 @@
+import * as React from 'react';
+import { Panel } from '@/components/ui/panel';
+import { Pill } from '@/components/ui/pill';
+import { PageHeader } from '@/components/layout/page-header';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Plus, Pencil, Trash2, ExternalLink, Eye, EyeOff, Globe, Code, Mail, PanelsTopLeft } from 'lucide-react';
+import { appApi, type ApiMonitor } from '@/api/app-api';
+import { useSession } from '@/api/use-session';
+import { useLanguage } from '@/context/language-context';
+import { LoadingState, ErrorState, EmptyState } from '@/components/ui/states';
+
+export interface DisplayOptions {
+  showRegions: boolean;
+  showEvents: boolean;
+  showIncidents: boolean;
+  showUptime: boolean;
+  detailLevel: 'full' | 'status';
+}
+
+const DEFAULT_DISPLAY: DisplayOptions = {
+  showRegions: true,
+  showEvents: true,
+  showIncidents: true,
+  showUptime: true,
+  detailLevel: 'full',
+};
+
+interface StatusPage {
+  id: number;
+  title: string;
+  slug: string;
+  description: string | null;
+  isPublic: boolean;
+  /** An empty array = the page shows all public monitors. */
+  monitorIds: number[];
+  displayOptions?: DisplayOptions;
+}
+
+/**
+ * Public status page management.
+ *
+ * There used to be a single hardcoded card linking to /status/ - the page
+ * was named "Status Pages", yet no second page could be created and nothing
+ * about its content chosen. Now several pages can exist, each with its own
+ * monitors, slug, and the option to hide it from the public.
+ */
+export function StatusPagesPage() {
+  const { t } = useLanguage();
+  const { session } = useSession();
+  // Managing status pages is an admin task; a signed-in user is not an admin.
+  const isAdmin = session?.user?.role === 'admin';
+
+  const [pages, setPages] = React.useState<StatusPage[] | null>(null);
+  const [monitors, setMonitors] = React.useState<ApiMonitor[]>([]);
+  const [editing, setEditing] = React.useState<StatusPage | 'new' | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [notice, setNotice] = React.useState<string | null>(null);
+
+  const [subscribers, setSubscribers] = React.useState<
+    { id: number; email: string; lang: string; confirmed: boolean; createdAt: string }[] | null
+  >(null);
+  // A failed list or a refused delete is said: the panel used to vanish on a
+  // failed load, and a delete that failed looked done until the list reloaded.
+  const [subsFailed, setSubsFailed] = React.useState(false);
+  const [subDeleteError, setSubDeleteError] = React.useState<string | null>(null);
+  const loadSubscribers = React.useCallback(() => {
+    fetch('/status/api.php?action=public_subscribers', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => {
+        setSubscribers(Array.isArray(d.subscribers) ? d.subscribers : []);
+        setSubsFailed(false);
+      })
+      .catch(() => setSubsFailed(true));
+  }, []);
+  const deleteSubscriber = async (id: number) => {
+    setSubDeleteError(null);
+    try {
+      const res = await fetch('/status/api.php?action=delete_public_subscriber', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    } catch (e) {
+      setSubDeleteError(
+        t('sp.subscriber_delete_failed', 'Odběratele se nepodařilo smazat.') +
+          (e instanceof Error && e.message ? ` (${e.message})` : '')
+      );
+    }
+    loadSubscribers();
+  };
+  React.useEffect(() => {
+    if (isAdmin) loadSubscribers();
+  }, [isAdmin, loadSubscribers]);
+
+  const load = React.useCallback(() => {
+    fetch('/status/api.php?action=status_pages', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d) => {
+        if (Array.isArray(d?.pages)) setPages(d.pages);
+        setError(null);
+      })
+      .catch(() => setError(t('sp.load_error', 'Status stránky se nepodařilo načíst.')));
+  }, [t]);
+
+  React.useEffect(() => {
+    load();
+    appApi
+      .getMonitors()
+      .then((rows) => setMonitors(Array.isArray(rows) ? rows : ((rows as any)?.monitors ?? [])))
+      .catch(() => {});
+  }, [load]);
+
+  const remove = async (page: StatusPage) => {
+    if (!window.confirm(t('sp.delete_confirm', { title: page.title }, `Smazat stránku „${page.title}"?`))) return;
+    try {
+      const res = await fetch('/status/api.php?action=delete_status_page', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: page.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      setNotice(t('sp.deleted', 'Stránka smazána.'));
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('sp.delete_error', 'Stránku se nepodařilo smazat.'));
+    }
+  };
+
+  // The link targets the new React page. Until the switchover /status/ led to
+  // legacy PHP, so one created a page here and the click-through led into the old
+  // aplikace.
+  const pageUrl = (slug: string) => `${window.location.origin}/app/public?page=${encodeURIComponent(slug)}`;
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title={t('sp.title', 'Status Stránky')}
+        subtitle={t('sp.subtitle', 'Vyberte, které služby uvidí veřejnost, a pod jakou adresou.')}
+        actions={
+          isAdmin && (
+            <Button size="sm" onClick={() => setEditing('new')} className="gap-1.5 font-semibold">
+              <Plus className="size-4" /> {t('sp.new', 'Nová stránka')}
+            </Button>
+          )
+        }
+      />
+
+      {error && <ErrorState size="inline" message={error} />}
+      {notice && <p className="text-up text-xs font-semibold">{notice}</p>}
+
+      {/* The main public page always exists - without this link there was no
+          click-through to it from the app until one created a custom page
+          (and even then only to that one). */}
+      <Panel
+        icon={Globe}
+        title={t('sp.main_page', 'Hlavní veřejná stránka')}
+        hint={t(
+          'sp.main_page_desc',
+          'Služby, které mají v nastavení monitoru zapnuté „Zobrazit na veřejné stavové stránce“ - to, co uvidí návštěvník.'
+        )}
+      >
+        <Button size="sm" variant="outline" asChild className="gap-1.5">
+          <a href="/app/public" target="_blank" rel="noreferrer">
+            /app/public <ExternalLink aria-hidden="true" />
+          </a>
+        </Button>
+      </Panel>
+
+      {/* The embeddable SVG badge - live status on a foreign site (forum, wiki, README).
+          The preview is the very same endpoint, so what is visible here is exactly
+          what a foreign page gets. */}
+      <Panel
+        icon={Code}
+        title={t('sp.badge_title', 'Vložitelný odznak stavu')}
+        hint={t('sp.badge_desc', 'SVG obrázek s aktuálním stavem — vložte jako <img> kamkoliv. Obnovuje se po minutě.')}
+        bodyClassName="space-y-2"
+      >
+        <img src="/status/api.php?action=badge" alt={t('sp.badge_alt', 'Odznak stavu')} className="h-5" />
+        <code className="bg-inset text-muted-foreground block overflow-x-auto rounded-md border border-border px-2.5 py-2 font-mono text-2xs whitespace-nowrap select-all">
+          {`<img src="${window.location.origin}/status/api.php?action=badge" alt="status">`}
+        </code>
+        <p className="text-muted-foreground text-2xs">
+          {t('sp.badge_monitor_hint', 'Odznak jedné služby: přidejte &monitor_id=ID, anglická verze: &lang=en.')}
+        </p>
+      </Panel>
+
+      {/* Public e-mail subscribers - the admin must be able to see and remove
+          addresses (manual removal requests, GDPR). */}
+      {isAdmin && (subscribers !== null || subsFailed) && (
+        <Panel
+          icon={Mail}
+          title={t('sp.subscribers_title', 'Veřejní odběratelé e-mailů')}
+          count={subscribers?.length}
+          hint={t(
+            'sp.subscribers_desc',
+            'Návštěvníci přihlášení k upozorněním na výpadky (double opt-in). Smazání = okamžité odhlášení.'
+          )}
+        >
+          {subsFailed && (
+            <ErrorState
+              message={t('sp.subscribers_load_failed', 'Seznam odběratelů se nepodařilo načíst.')}
+              onRetry={loadSubscribers}
+              className="mb-2"
+            />
+          )}
+          {subDeleteError && <ErrorState size="inline" message={subDeleteError} className="mb-2" />}
+          {subscribers === null ? null : subscribers.length === 0 ? (
+            <p className="text-muted-foreground text-xs">{t('sp.subscribers_none', 'Zatím žádní odběratelé.')}</p>
+          ) : (
+            <ul className="divide-border divide-y">
+              {subscribers.map((sub) => (
+                <li key={sub.id} className="flex flex-wrap items-center gap-2 py-2 text-xs">
+                  <span className="figure">{sub.email}</span>
+                  <Pill size="sm" tone={sub.confirmed ? 'up' : 'neutral'}>
+                    {sub.confirmed ? 'OK' : t('sp.subscribers_pending', 'čeká na potvrzení')}
+                  </Pill>
+                  <span className="text-muted-foreground">{sub.lang}</span>
+                  <button
+                    type="button"
+                    onClick={() => void deleteSubscriber(sub.id)}
+                    aria-label={t('sp.subscriber_delete', 'Smazat odběratele')}
+                    className="text-muted-foreground hover:text-down focus-visible:ring-ring ml-auto rounded-md p-1 transition-colors focus-visible:ring-2 focus-visible:outline-none"
+                  >
+                    <Trash2 aria-hidden="true" className="size-3.5" />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+      )}
+
+      {pages === null ? (
+        <LoadingState label={t('sp.loading', 'Načítám…')} />
+      ) : pages.length === 0 ? (
+        <EmptyState
+          boxed
+          icon={<PanelsTopLeft />}
+          title={t('sp.empty_title', 'Zatím žádná status stránka')}
+          hint={t(
+            'sp.empty_desc',
+            'Hlavní přehled na /app/public funguje i bez toho. Vlastní stránka se hodí, když chcete zveřejnit jen část služeb — třeba pro zákazníky.'
+          )}
+        />
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2">
+          {pages.map((p) => (
+            <Panel
+              key={p.id}
+              icon={PanelsTopLeft}
+              title={p.title}
+              chip={
+                <Pill size="sm" tone={p.isPublic ? 'up' : 'neutral'}>
+                  {p.isPublic ? (
+                    <>
+                      <Eye aria-hidden="true" className="size-3" /> {t('sp.public', 'Veřejná')}
+                    </>
+                  ) : (
+                    <>
+                      <EyeOff aria-hidden="true" className="size-3" /> {t('sp.hidden', 'Skrytá')}
+                    </>
+                  )}
+                </Pill>
+              }
+              hint={p.description || undefined}
+              action={
+                isAdmin && (
+                  <div className="flex shrink-0 gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setEditing(p)}
+                      aria-label={t('common.edit', 'Upravit')}
+                    >
+                      <Pencil />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => remove(p)}
+                      aria-label={t('common.delete', 'Smazat')}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                )
+              }
+              bodyClassName="space-y-2"
+            >
+              <p className="text-muted-foreground text-2xs">
+                {p.monitorIds.length === 0
+                  ? t('sp.all_monitors', 'Zobrazuje všechny veřejné monitory')
+                  : t(
+                      'sp.selected_monitors',
+                      { count: p.monitorIds.length },
+                      `Vybráno ${p.monitorIds.length} monitorů`
+                    )}
+              </p>
+
+              {/* The text says where the link goes: the React public page. */}
+              <a
+                href={pageUrl(p.slug)}
+                target="_blank"
+                rel="noreferrer"
+                className="text-link inline-flex max-w-full items-center gap-1 font-mono text-xs hover:underline"
+              >
+                <span className="truncate">/app/public?page={p.slug}</span>
+                <ExternalLink aria-hidden="true" className="size-3 shrink-0" />
+              </a>
+            </Panel>
+          ))}
+        </div>
+      )}
+
+      {editing && (
+        <PageDialog
+          page={editing === 'new' ? null : editing}
+          monitors={monitors}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            setNotice(t('sp.saved', 'Stránka uložena.'));
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function PageDialog({
+  page,
+  monitors,
+  onClose,
+  onSaved,
+}: {
+  page: StatusPage | null;
+  monitors: ApiMonitor[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { t } = useLanguage();
+  const [title, setTitle] = React.useState(page?.title ?? '');
+  const [slug, setSlug] = React.useState(page?.slug ?? '');
+  const [description, setDescription] = React.useState(page?.description ?? '');
+  const [isPublic, setIsPublic] = React.useState(page?.isPublic ?? true);
+  const [selected, setSelected] = React.useState<number[]>(page?.monitorIds ?? []);
+  const [display, setDisplay] = React.useState<DisplayOptions>(page?.displayOptions ?? DEFAULT_DISPLAY);
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const save = async () => {
+    if (!title.trim()) {
+      setError(t('sp.title_required', 'Zadejte název stránky.'));
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await fetch('/status/api.php?action=save_status_page', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: page?.id ?? 0,
+          title,
+          slug,
+          description,
+          isPublic,
+          monitorIds: selected,
+          displayOptions: display,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      onSaved();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t('sp.save_error', 'Stránku se nepodařilo uložit.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      {/* The form holds unsaved input - a stray click on the backdrop must not
+          throw it away. Escape and the close button still close it deliberately. */}
+      <DialogContent
+        className="flex max-h-[85dvh] flex-col"
+        onPointerDownOutside={(e) => e.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+      >
+        <DialogHeader className="border-b border-border">
+          <DialogTitle>
+            {page ? t('sp.edit_title', 'Upravit stránku') : t('sp.new_title', 'Nová status stránka')}
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-4 overflow-y-auto px-5 py-4">
+          {error && <ErrorState size="inline" message={error} />}
+
+          <label className="block">
+            <span className="text-muted-foreground mb-1 block text-xs font-medium">{t('sp.field_title', 'Název')}</span>
+            <Input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder={t('sp.title_placeholder', 'např. Herní servery')}
+            />
+          </label>
+
+          <label className="block">
+            <span className="text-muted-foreground mb-1 block text-xs font-medium">
+              {t('sp.field_slug', 'Adresa (slug)')}
+            </span>
+            <Input
+              value={slug}
+              onChange={(e) => setSlug(e.target.value)}
+              placeholder={t('sp.slug_placeholder', 'odvodí se z názvu')}
+            />
+            <span className="text-muted-foreground mt-1 block text-2xs">
+              {t('sp.slug_hint', 'Použije se v adrese /app/public?page=…. Bez vyplnění se vytvoří z názvu.')}
+            </span>
+          </label>
+
+          <label className="block">
+            <span className="text-muted-foreground mb-1 block text-xs font-medium">
+              {t('sp.field_description', 'Popis')}
+            </span>
+            <Input value={description ?? ''} onChange={(e) => setDescription(e.target.value)} />
+          </label>
+
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={isPublic}
+              onChange={(e) => setIsPublic(e.target.checked)}
+              className="size-4"
+            />
+            {t('sp.field_public', 'Veřejně přístupná')}
+          </label>
+
+          {/* What the page shows. The default is everything - options switch things
+            off, not on, so pages created before this option look unchanged. */}
+          <div>
+            <span className="text-muted-foreground mb-1 block text-xs font-medium">
+              {t('sp.field_display', 'Zobrazené sekce')}
+            </span>
+            <div className="space-y-1.5">
+              {(
+                [
+                  ['showRegions', t('sp.opt_regions', 'Místa měření')],
+                  ['showEvents', t('sp.opt_events', 'Poslední události')],
+                  ['showIncidents', t('sp.opt_incidents', 'Incidenty')],
+                  ['showUptime', t('sp.opt_uptime', 'Pásy dostupnosti (30 dní)')],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={display[key]}
+                    onChange={(e) => setDisplay((d) => ({ ...d, [key]: e.target.checked }))}
+                    className="size-4"
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <label className="mt-2 block">
+              <span className="text-muted-foreground mb-1 block text-xs font-medium">
+                {t('sp.opt_detail_level', 'Detail služeb')}
+              </span>
+              <select
+                value={display.detailLevel}
+                onChange={(e) => setDisplay((d) => ({ ...d, detailLevel: e.target.value as 'full' | 'status' }))}
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+              >
+                <option value="full">{t('sp.detail_full', 'Stav + rozbalovací detail a vytížení')}</option>
+                <option value="status">{t('sp.detail_status', 'Jen stav a dostupnost')}</option>
+              </select>
+            </label>
+          </div>
+
+          <div>
+            <span className="text-muted-foreground mb-1 block text-xs font-medium">
+              {t('sp.field_monitors', 'Zobrazené monitory')}
+            </span>
+            <p className="text-muted-foreground mb-1.5 text-2xs">
+              {t(
+                'sp.monitors_hint',
+                'Nevyberete-li nic, stránka ukáže všechny veřejné monitory. Neveřejný monitor stránka nezobrazí, zveřejnit ho jde v jeho nastavení.'
+              )}
+            </p>
+            <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+              {monitors.map((m) => {
+                // The page lists the public set only: a private monitor ticked
+                // here never appeared, and a page made of them read "all online"
+                // over nothing. One already on the page stays tickable off.
+                const isPrivate = m.isPublic === false;
+                const checked = selected.includes(m.id);
+                return (
+                  <label key={m.id} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={isPrivate && !checked}
+                      onChange={(e) =>
+                        setSelected((prev) => (e.target.checked ? [...prev, m.id] : prev.filter((id) => id !== m.id)))
+                      }
+                    />
+                    <span className="truncate">{m.name}</span>
+                    <span className="text-muted-foreground ml-auto shrink-0 text-2xs">
+                      {isPrivate ? `${t('sp.monitor_private', 'neveřejný')} · ${m.type}` : m.type}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={onClose}>
+            {t('common.cancel', 'Zrušit')}
+          </Button>
+          <Button size="sm" onClick={save} disabled={saving} className="font-semibold">
+            {saving ? t('common.saving', 'Ukládám…') : t('common.save', 'Uložit')}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

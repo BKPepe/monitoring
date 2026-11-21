@@ -1,0 +1,323 @@
+import * as React from 'react';
+import { Panel } from '@/components/ui/panel';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  ArrowDownWideNarrow,
+  ArrowUpNarrowWide,
+  ChevronLeft,
+  ChevronRight,
+  ShieldAlert,
+  RefreshCw,
+} from 'lucide-react';
+import { useLanguage } from '@/context/language-context';
+import { LoadingState, ErrorState } from '@/components/ui/states';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+
+interface AuditEntry {
+  id: number;
+  time: string;
+  action: string;
+  actor: string | null;
+  targetType: string | null;
+  targetId: number | null;
+  description: string | null;
+  ip: string | null;
+  userAgent: string | null;
+}
+
+const PAGE_SIZE = 25;
+
+/**
+ * Audit trail of user actions.
+ *
+ * The app used to show only cron check results as its "log" - every row
+ * said "System Agent (Cron)". The real record of who signed in and who
+ * changed what was being stored in its own table the whole time and was
+ * visible only in the old admin.
+ *
+ * The endpoint returns the newest 500 records; sorting, action-kind
+ * filtering and 25-per-page pagination run over them on the client - another
+ * DB query would just repeat the same answer in a different order.
+ */
+export function UserAuditLog() {
+  const { t } = useLanguage();
+  const [entries, setEntries] = React.useState<AuditEntry[] | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const [sortAsc, setSortAsc] = React.useState(false);
+  const [filter, setFilter] = React.useState<'all' | 'security' | 'changes' | 'destructive'>('all');
+  const [page, setPage] = React.useState(0);
+
+  // The load touches no state synchronously - everything happens in `then`.
+  // The refresh indicator is set by the button, because in an event handler
+  // that is fine; inside an effect it would be a cascading re-render.
+  const load = React.useCallback(() => {
+    return fetch('/status/api.php?action=user_audit_log&limit=500', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((d) => {
+        setEntries(Array.isArray(d?.entries) ? d.entries : []);
+        setError(null);
+      })
+      .catch((e: Error) => {
+        setEntries([]);
+        setError(
+          e.message === '403'
+            ? t('uaudit.forbidden', 'Protokol vidí jen administrátor.')
+            : t('uaudit.load_error', 'Protokol se nepodařilo načíst.')
+        );
+      });
+  }, [t]);
+
+  React.useEffect(() => {
+    load();
+  }, [load]);
+
+  // Labels are assembled by enumeration, not a dynamic key - a missing
+  // translation would otherwise surface only for an English user.
+  const actionLabels: Record<string, string> = {
+    login_success: t('uaudit.login_success', 'Přihlášení'),
+    login_failed: t('uaudit.login_failed', 'Neúspěšné přihlášení'),
+    logout: t('uaudit.logout', 'Odhlášení'),
+    monitor_created: t('uaudit.monitor_created', 'Monitor vytvořen'),
+    monitor_updated: t('uaudit.monitor_updated', 'Monitor upraven'),
+    monitor_deleted: t('uaudit.monitor_deleted', 'Monitor smazán'),
+    settings_updated: t('uaudit.settings_updated', 'Nastavení změněno'),
+    metrics_token_generated: t('uaudit.metrics_token_generated', 'Nový token pro Prometheus'),
+    incident_created: t('uaudit.incident_created', 'Incident založen'),
+    user_created: t('uaudit.user_created', 'Uživatel vytvořen'),
+    user_updated: t('uaudit.user_updated', 'Uživatel upraven'),
+    user_deleted: t('uaudit.user_deleted', 'Uživatel smazán'),
+    password_reset_requested: t('uaudit.password_reset', 'Žádost o obnovu hesla'),
+    password_changed: t('uaudit.password_changed', 'Heslo změněno'),
+    profile_updated: t('uaudit.profile_updated', 'Profil upraven'),
+    email_changed: t('uaudit.email_changed', 'E-mail změněn'),
+    oauth_unlinked: t('uaudit.oauth_unlinked', 'OAuth odpojen'),
+    totp_recovery_used: t('uaudit.totp_recovery_used', 'Přihlášení záložním kódem'),
+    totp_recovery_regenerated: t('uaudit.totp_recovery_regenerated', 'Nové záložní kódy'),
+    setup_completed: t('uaudit.setup_completed', 'Dokončena instalace'),
+    annotation_created: t('uaudit.annotation_created', 'Poznámka v grafu'),
+    monitor_archived: t('uaudit.monitor_archived', 'Monitor archivován'),
+    monitor_restored: t('uaudit.monitor_restored', 'Monitor obnoven z archivu'),
+    agent_key_viewed: t('uaudit.agent_key_viewed', 'Zobrazen klíč agenta'),
+    heartbeat_token_regenerated: t('uaudit.heartbeat_token_regenerated', 'Nový token heartbeatu'),
+    annotation_deleted: t('uaudit.annotation_deleted', 'Poznámka v grafu smazána'),
+    asset_deleted: t('uaudit.asset_deleted', 'Zařízení smazáno'),
+    asset_renamed: t('uaudit.asset_renamed', 'Zařízení přejmenováno'),
+    bulk_maintenance: t('uaudit.bulk_maintenance', 'Hromadná údržba'),
+    config_exported: t('uaudit.config_exported', 'Konfigurace exportována'),
+    digest_sent: t('uaudit.digest_sent', 'Digest odeslán'),
+    incident_ack: t('uaudit.incident_ack', 'Incident převzat'),
+    incident_deleted: t('uaudit.incident_deleted', 'Incident smazán'),
+    incident_note: t('uaudit.incident_note', 'Poznámka k incidentu'),
+    incident_postmortem: t('uaudit.incident_postmortem', 'Postmortem incidentu'),
+    incident_resolve: t('uaudit.incident_resolve', 'Incident uzavřen'),
+    incident_updated: t('uaudit.incident_updated', 'Incident upraven'),
+    location_redetected: t('uaudit.location_redetected', 'Lokace znovu zjištěna'),
+    maintenance_off: t('uaudit.maintenance_off', 'Údržba vypnuta'),
+    maintenance_on: t('uaudit.maintenance_on', 'Údržba zapnuta'),
+    monitor_history_cleared: t('uaudit.monitor_history_cleared', 'Historie monitoru vymazána'),
+    monitor_maintenance_toggled: t('uaudit.monitor_maintenance_toggled', 'Přepnuta údržba monitoru'),
+    monitor_notif_toggled: t('uaudit.monitor_notif_toggled', 'Přepnuty notifikace monitoru'),
+    oauth_linked: t('uaudit.oauth_linked', 'OAuth propojen'),
+    password_set_via_link: t('uaudit.password_set_via_link', 'Heslo nastaveno přes odkaz'),
+    preset_created: t('uaudit.preset_created', 'Preset vytvořen'),
+    preset_deleted: t('uaudit.preset_deleted', 'Preset smazán'),
+    preset_updated: t('uaudit.preset_updated', 'Preset upraven'),
+    public_subscriber_deleted: t('uaudit.public_subscriber_deleted', 'Veřejný odběratel smazán'),
+    remote_action_triggered: t('uaudit.remote_action_triggered', 'Vzdálená akce zařazena'),
+    router_rec_mute: t('uaudit.router_rec_mute', 'Doporučení ztlumeno'),
+    router_rec_unmute: t('uaudit.router_rec_unmute', 'Ztlumení doporučení zrušeno'),
+    setting_changed: t('uaudit.setting_changed', 'Změněno nastavení'),
+    status_page_created: t('uaudit.status_page_created', 'Status stránka vytvořena'),
+    status_page_deleted: t('uaudit.status_page_deleted', 'Status stránka smazána'),
+    status_page_updated: t('uaudit.status_page_updated', 'Status stránka upravena'),
+    subscriptions_updated: t('uaudit.subscriptions_updated', 'Odběry upraveny'),
+    test_email_sent: t('uaudit.test_email_sent', 'Testovací e-mail odeslán'),
+    test_notification: t('uaudit.test_notification', 'Testovací notifikace'),
+    totp_disabled: t('uaudit.totp_disabled', '2FA vypnuto'),
+    totp_enabled: t('uaudit.totp_enabled', '2FA zapnuto'),
+    wan_plan_saved: t('uaudit.wan_plan_saved', 'Uložen tarif WAN'),
+    wizard_completed: t('uaudit.wizard_completed', 'Průvodce dokončen'),
+    wizard_step_completed: t('uaudit.wizard_step_completed', 'Krok průvodce dokončen'),
+  };
+
+  const isSecurity = (action: string) => /login|logout|password|totp|token|oauth|denied|key/.test(action);
+  const isDestructive = (action: string) => /deleted|failed|denied/.test(action);
+
+  // Filter before pagination: page 2 of "security" should be the second
+  // twenty-five of security records, not the security records from the
+  // second twenty-five of everything.
+  const visible = React.useMemo(() => {
+    let list = entries ?? [];
+    if (filter === 'security') list = list.filter((e) => isSecurity(e.action));
+    else if (filter === 'changes') list = list.filter((e) => !isSecurity(e.action));
+    else if (filter === 'destructive') list = list.filter((e) => isDestructive(e.action));
+    // The API returns newest first; ascending = reverse a copy, not the original.
+    if (sortAsc) list = [...list].reverse();
+    return list;
+  }, [entries, filter, sortAsc]);
+
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageRows = visible.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
+
+  const setFilterAndReset = (f: typeof filter) => {
+    setFilter(f);
+    setPage(0);
+  };
+
+  return (
+    <Panel
+      icon={ShieldAlert}
+      title={t('uaudit.title', 'Auditní protokol uživatelů')}
+      hint={t('uaudit.subtitle', 'Kdo se přihlásil, kdo co změnil. Včetně neúspěšných pokusů.')}
+      action={
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            setRefreshing(true);
+            load().finally(() => setRefreshing(false));
+          }}
+          disabled={refreshing}
+          className="gap-1.5"
+        >
+          <RefreshCw className={refreshing ? 'size-3.5 animate-spin' : 'size-3.5'} />
+          {t('common.refresh', 'Obnovit')}
+        </Button>
+      }
+      bodyClassName="space-y-4"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={filter}
+          onChange={(e) => setFilterAndReset(e.target.value as typeof filter)}
+          className="bg-secondary/60 border-input hover:border-border-strong focus-visible:border-ring h-8 rounded-md border px-2 text-xs"
+          aria-label={t('uaudit.filter_aria', 'Filtr záznamů')}
+        >
+          <option value="all">{t('uaudit.filter_all', 'Vše')}</option>
+          <option value="security">{t('uaudit.filter_security', 'Přihlášení a zabezpečení')}</option>
+          <option value="changes">{t('uaudit.filter_changes', 'Změny konfigurace')}</option>
+          <option value="destructive">{t('uaudit.filter_destructive', 'Mazání a selhání')}</option>
+        </select>
+        <Button variant="outline" size="sm" onClick={() => setSortAsc((v) => !v)} className="gap-1.5">
+          {sortAsc ? <ArrowUpNarrowWide className="size-3.5" /> : <ArrowDownWideNarrow className="size-3.5" />}
+          {sortAsc ? t('uaudit.sort_oldest', 'Nejstarší první') : t('uaudit.sort_newest', 'Nejnovější první')}
+        </Button>
+        {entries !== null && (
+          <span className="text-muted-foreground ml-auto text-xs tabular-nums">
+            {t('uaudit.count', { n: visible.length }, `${visible.length} záznamů`)}
+          </span>
+        )}
+      </div>
+
+      {error && <ErrorState size="inline" message={error} />}
+
+      {entries === null ? (
+        <LoadingState label={t('uaudit.loading', 'Načítám…')} />
+      ) : visible.length === 0 && !error ? (
+        <p className="text-muted-foreground text-sm">
+          {entries.length === 0
+            ? t('uaudit.empty', 'Zatím žádné záznamy. Přibudou při prvním přihlášení nebo změně nastavení.')
+            : t('uaudit.empty_filter', 'Filtru neodpovídá žádný záznam.')}
+        </p>
+      ) : (
+        <>
+          {/* On a phone the six columns did not fit and this was the one table
+              in the app without a card fallback: the detail, the address and
+              the client were simply off-screen. Cards below md, the table
+              above it. */}
+          <ul className="flex flex-col gap-2 md:hidden">
+            {pageRows.map((e) => (
+              <li key={e.id} className="border-border rounded-md border p-3 text-xs">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <Badge variant={isDestructive(e.action) ? 'down' : isSecurity(e.action) ? 'neutral' : 'up'}>
+                    {actionLabels[e.action] ?? e.action}
+                  </Badge>
+                  <span className="text-muted-foreground font-mono tabular-nums">{e.time}</span>
+                </div>
+                <p className="mt-1 font-medium">{e.actor ?? '—'}</p>
+                {e.description && <p className="text-muted-foreground mt-0.5">{e.description}</p>}
+                <p className="text-muted-foreground mt-0.5 font-mono text-2xs break-all">
+                  {e.ip ?? '—'}
+                  {e.userAgent ? ` · ${e.userAgent}` : ''}
+                </p>
+              </li>
+            ))}
+          </ul>
+          <div className="hidden md:block">
+            <Table dense>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t('uaudit.col_time', 'Čas')}</TableHead>
+                  <TableHead>{t('uaudit.col_action', 'Akce')}</TableHead>
+                  <TableHead>{t('uaudit.col_actor', 'Kdo')}</TableHead>
+                  <TableHead>{t('uaudit.col_detail', 'Detail')}</TableHead>
+                  <TableHead>{t('uaudit.col_ip', 'IP')}</TableHead>
+                  <TableHead>{t('uaudit.col_agent', 'Klient')}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pageRows.map((e) => (
+                  <TableRow key={e.id}>
+                    <TableCell className="text-muted-foreground font-mono whitespace-nowrap tabular-nums">
+                      {e.time}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={isDestructive(e.action) ? 'down' : isSecurity(e.action) ? 'neutral' : 'up'}>
+                        {actionLabels[e.action] ?? e.action}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      {/* An empty name means unauthenticated - typically an attempt
+                          to sign in with a nonexistent account. A dash, not "system". */}
+                      {e.actor ?? '—'}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground max-w-[28rem] truncate" title={e.description ?? ''}>
+                      {e.description ?? '—'}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground font-mono whitespace-nowrap">{e.ip ?? '—'}</TableCell>
+                    {/* The full user agent is long; the table shows it truncated and
+                        text shows on hover. */}
+                    <TableCell className="text-muted-foreground max-w-[14rem] truncate" title={e.userAgent ?? ''}>
+                      {e.userAgent ?? '—'}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+
+          {pageCount > 1 && (
+            <div className="flex items-center justify-between gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={safePage === 0}
+                onClick={() => setPage(safePage - 1)}
+                className="gap-1"
+              >
+                <ChevronLeft className="size-3.5" />
+                {t('uaudit.prev', 'Předchozí')}
+              </Button>
+              <span className="text-muted-foreground text-xs tabular-nums">
+                {t('uaudit.page', { page: safePage + 1, pages: pageCount }, `Strana ${safePage + 1} / ${pageCount}`)}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={safePage >= pageCount - 1}
+                onClick={() => setPage(safePage + 1)}
+                className="gap-1"
+              >
+                {t('uaudit.next', 'Další')}
+                <ChevronRight className="size-3.5" />
+              </Button>
+            </div>
+          )}
+        </>
+      )}
+    </Panel>
+  );
+}

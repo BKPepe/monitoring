@@ -1,0 +1,209 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter } from 'react-router';
+import { LanguageProvider } from '@/context/language-context';
+import { IncidentsPage } from './incidents';
+
+const json = (body: unknown) => ({ ok: true, status: 200, json: () => Promise.resolve(body) }) as Response;
+
+/** One router down, and the incident the outage lifecycle opened for it. */
+const api = (url: string): Response => {
+  if (url.includes('action=session')) {
+    return json({ authenticated: true, user: { id: 1, username: 'admin', role: 'admin' }, csrfToken: 't' });
+  }
+  if (url.includes('action=incidents')) {
+    return json({
+      incidents: [
+        {
+          id: 900,
+          incidentId: 5,
+          monitor_id: 7,
+          monitor_name: 'Router - Praha',
+          target: 'Turris - domov',
+          type: 'OPENWRT',
+          status: 'open',
+          severity: 'down',
+          reason: 'Agent routeru neodpovídá',
+          started_at: '15.09.2026 08:41:06',
+          duration_secs: 7200,
+          acknowledgedBy: 'admin',
+        },
+      ],
+      manualIncidents: [
+        {
+          id: 5,
+          title: 'Výpadek: Router - Praha',
+          status: 'investigating',
+          monitorId: 7,
+          acknowledgedBy: 'admin',
+          createdAt: '15.09.2026 08:41:06',
+          durationSecs: 7200,
+          updates: [{ status: 'investigating', message: 'Incident převzal: admin', at: '15.09.2026 08:45:00' }],
+        },
+      ],
+    });
+  }
+  if (url.includes('action=monitors')) {
+    return json({ monitors: [{ id: 7, name: 'Router - Praha', type: 'openwrt', status: 'down' }] });
+  }
+  if (url.includes('action=public_status')) {
+    return json({ totalMonitors: 1, uptimePercent: null, avgLatencyMs: null, nodes: [] });
+  }
+  return json({});
+};
+
+/** The same outage after its incident was closed: the monitor is still down. */
+const apiClosedIncident = (url: string): Response => {
+  if (url.includes('action=incidents')) {
+    return json({
+      incidents: [
+        {
+          id: 900,
+          incidentId: null,
+          monitor_id: 7,
+          monitor_name: 'Router - Praha',
+          target: 'Turris - domov',
+          type: 'OPENWRT',
+          status: 'open',
+          severity: 'down',
+          reason: 'Agent routeru neodpovídá',
+          started_at: '15.09.2026 08:41:06',
+          duration_secs: 10800,
+          acknowledgedBy: null,
+        },
+      ],
+      manualIncidents: [
+        {
+          id: 5,
+          title: 'Výpadek: Router - Praha',
+          status: 'resolved',
+          monitorId: 7,
+          createdAt: '15.09.2026 08:41:06',
+          resolvedAt: '15.09.2026 10:02:00',
+          durationSecs: 3600,
+          updates: [{ status: 'resolved', message: '[admin] Incident uzavřen ručně.', at: '15.09.2026 10:02:00' }],
+        },
+      ],
+    });
+  }
+  return api(url);
+};
+
+describe('IncidentsPage', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it('shows an outage and its incident as one card, with the notes and actions on it', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => Promise.resolve(api(String(url))))
+    );
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <IncidentsPage />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    const notesButton = await screen.findByRole('button', { name: /poznámky a akce|notes & actions/i });
+    // R275: the duration arrives in seconds and reads "2 h", not "2 hodin".
+    expect(screen.getAllByText('2 h').length).toBeGreaterThan(0);
+    expect(screen.queryByText(/hodin/)).toBeNull();
+    // Counted once: the outage row and the incident it opened are one outage.
+    expect(screen.getByText(/^1 probíhající$|^1 ongoing$/i)).toBeTruthy();
+    // No second card titled after the incident.
+    expect(screen.queryByText('Výpadek: Router - Praha')).toBeNull();
+
+    fireEvent.click(notesButton);
+    const card = notesButton.closest('[data-slot="incident-card"]') as HTMLElement;
+    expect(within(card).getAllByText(/Incident převzal: admin/).length).toBeGreaterThan(0);
+    expect(within(card).getByPlaceholderText(/poznámka do timeline|note/i)).toBeTruthy();
+    expect(within(card).getByRole('button', { name: /uzavřít incident|resolve/i })).toBeTruthy();
+  });
+
+  it('offers a way back when the incident is closed but the monitor is still down', async () => {
+    const fetchMock = vi.fn((url: string, _init?: RequestInit) => Promise.resolve(apiClosedIncident(String(url))));
+    vi.stubGlobal('fetch', fetchMock);
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <IncidentsPage />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+
+    // The outage is real - the monitor is down - so the card stays, and says why
+    // it carries no incident instead of standing there with no actions at all.
+    const reopen = await screen.findByRole('button', { name: /otevřít incident|open an incident/i });
+    expect(
+      await screen.findByText('K výpadku není otevřený žádný incident, monitor je stále nedostupný.')
+    ).toBeTruthy();
+    // The closed record is in the history, marked so it cannot read as "all done".
+    expect(screen.getByText(/^(Monitor je stále nedostupný|The monitor is still down)$/)).toBeTruthy();
+
+    fireEvent.click(reopen);
+    const posted = fetchMock.mock.calls.find((c) => String(c[0]).includes('action=create_incident'));
+    expect(posted).toBeTruthy();
+    expect(JSON.parse(String(posted?.[1]?.body))).toMatchObject({ monitorId: 7, impact: 'major' });
+  });
+
+  describe('nový incident a zasažená služba', () => {
+    const report = async (scope: string | null) => {
+      const fetchMock = vi.fn((url: string) => Promise.resolve(api(String(url))));
+      vi.stubGlobal('fetch', fetchMock);
+      render(
+        <LanguageProvider>
+          <MemoryRouter>
+            <IncidentsPage />
+          </MemoryRouter>
+        </LanguageProvider>
+      );
+      fireEvent.click(await screen.findByRole('button', { name: /Nahlásit nový incident|Report a new incident/ }));
+      const form = document.querySelector('form') as HTMLFormElement;
+      await within(form).findByRole('option', { name: /Router - Praha/ });
+      fireEvent.change(form.querySelector('input[type="text"]') as HTMLInputElement, { target: { value: 'Porucha' } });
+      if (scope !== null)
+        fireEvent.change(form.querySelector('select') as HTMLSelectElement, { target: { value: scope } });
+      fireEvent.submit(form);
+      await waitFor(() =>
+        expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('action=create_incident'))).toBe(true)
+      );
+      const posted = fetchMock.mock.calls.find((c) => String(c[0]).includes('action=create_incident')) as unknown[];
+      return JSON.parse(String((posted[1] as RequestInit).body));
+    };
+
+    it('vybraný monitor jde jako monitorId', async () => {
+      expect(await report('7')).toMatchObject({ title: 'Porucha', monitorId: 7 });
+    });
+
+    it('globální incident žádný monitor nemá', async () => {
+      expect(await report(null)).not.toHaveProperty('monitorId');
+    });
+  });
+
+  it('dlaždice počítají z vypsaných seznamů: probíhá, nepřevzato, vyřešeno', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => Promise.resolve(apiClosedIncident(String(url))))
+    );
+    render(
+      <LanguageProvider>
+        <MemoryRouter>
+          <IncidentsPage />
+        </MemoryRouter>
+      </LanguageProvider>
+    );
+    await screen.findByRole('button', { name: /otevřít incident|open an incident/i });
+    // The tile's figure and its word sit together; the word says what is counted.
+    const tile = (word: string) =>
+      screen.getAllByText(word).find((el) => el.classList.contains('micro-label'))?.parentElement as HTMLElement;
+    // One outage still running, nobody took it, and one closed record in the history.
+    expect(tile('Probíhá').querySelector('.figure')?.textContent).toBe('1');
+    expect(tile('Nepřevzato').querySelector('.figure')?.textContent).toBe('1');
+    expect(tile('Vyřešeno').querySelector('.figure')?.textContent).toBe('1');
+  });
+});

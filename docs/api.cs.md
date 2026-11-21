@@ -1,0 +1,1301 @@
+# API Blood Kings Monitoring
+
+> 🇬🇧 [English version](api.md) · 🇨🇿 Česká verze (tato stránka)
+
+
+Referenční popis HTTP rozhraní aplikace `apps/status`. Sepsáno podle kódu, ne
+podle záměru - u každého endpointu platí to, co dělá `api.php`, ne to, co by
+dělat měl. Kde se obojí liší, je to označené jako **Pozor**.
+
+- **Základ:** `https://bloodkings.eu/status/`
+- **Formát:** JSON (`Content-Type: application/json; charset=utf-8`), výjimky
+  jsou uvedené u konkrétních endpointů (SVG, Prometheus text, HTML).
+- **Jazyk chybových hlášek:** čeština - jsou určené administrátorovi, ne
+  koncovému uživateli.
+
+---
+
+## Pravidlo, které platí pro celé API
+
+**Co se nezměřilo, je `null`. Nikdy nula, nikdy zástupný řetězec.**
+
+Toto není stylistická poznámka, ale kontrakt. Odpověď `"cpu": null` znamená
+„tuhle hodnotu nemáme", ne „procesor je nevytížený". Klient je musí rozlišit -
+v našem rozhraní se `null` vykresluje jako pomlčka.
+
+Stejně tak `"uptime": null` u čerstvě založeného monitoru **není** 100 %.
+Průměr z nula měření neexistuje; kdo ho dopočítá na 100 %, vyrobí si údaj,
+který nikdo neměřil.
+
+Dodržování hlídají linty v CI (`run_honesty_lint.php` a spol.), takže regrese
+tohohle typu neprojde revizí, ale spadne v bráně.
+
+---
+
+## Autentizace
+
+Aplikace nemá API tokeny pro třetí strany. Rozlišují se čtyři režimy:
+
+| Režim | Jak se prokazuje | Kdo ho používá |
+|---|---|---|
+| **Veřejné** | nijak | status stránka, hlídač |
+| **Přihlášený** | session cookie (`action=login`) | React SPA |
+| **Administrátor** | session cookie + role `admin` | správa konfigurace |
+| **Klíč zařízení** | `agent_key` / `token` v těle nebo URL | agenti, sondy, heartbeat |
+
+Přihlášení:
+
+```http
+POST /status/api.php?action=login
+Content-Type: application/json
+
+{"username": "admin", "password": "…"}
+```
+
+Odpověď nastaví session cookie. Všechna další volání ji musí posílat
+(`credentials: 'include'` ve `fetch`). Odhlášení: `POST action=logout`. Ukončí i relaci staré administrace a zapíše do auditu záznam `logout`.
+
+Stav relace: `GET /status/api.php?action=session`.
+
+Účet s dvoufázovým ověřením dostane stejný druhý krok po hesle i po OAuth
+poskytovateli. `action=login` odpoví `requires2fa` a chce `totp_code` (TOTP
+kód nebo záložní kód) spolu s heslem znovu. Dokud kód neprojde, session drží
+jen čekající účet, nikdy přihlášení, a `action=session` říká `pending2fa:
+true`; přihlášení pak dokončí `POST action=login_2fa` jen s `{"totp_code":
+"…"}`. Odpovídá jako `action=login`: 401 na špatný kód (počítá se do
+zámku) nebo když nic nečeká, 429, dokud je účet zamčený.
+
+Akce, které po přihlášeném účtu chtějí heslo, započítávají špatné pokusy do zámku
+přihlášení: po pěti za 15 minut, podle účtu nebo adresy, odpovídají ony i přihlášení
+15 minut kódem 429.
+
+Přihlášení přes OAuth je navigace prohlížeče, ne volání: `GET
+/status/api.php?action=oauth_start&provider=github` (nebo `google`,
+`discord`, `gitlab`) pošle prohlížeč k poskytovateli. Propojení s přihlášeným
+účtem začíná přes `POST action=oauth_link_start` s `{"provider": "…",
+"password": "…"}`, které vrátí `url`, kam prohlížeč poslat. Propojený poskytovatel
+přihlašuje bez hesla, takže samotná session ho přidat nemůže. Ten odpoví na
+`admin.php`, adresu zaregistrovanou u něj, a admin.php to přepošle na
+`action=oauth_callback`. To končí v /app: `/app/` po přihlášení, `/app/setup`,
+když účet čeká na kód 2FA, `/app/profile?oauth=linked` po propojení. Cesta,
+která nedoběhla, vede na `/app/setup` (u propojení na `/app/profile`)
+s `oauth_error` = `state` (odpověď, kterou tahle session nezačala),
+`unavailable` (chybí client ID), `denied` (zrušeno u poskytovatele),
+`provider` (poskytovatel účet nepotvrdil), `not_linked` (tuhle identitu
+nemá propojenou žádný účet) nebo `link_session` (účet, který propojení
+začal, už není ten přihlášený, takže se nic nepropojilo) a s `provider`.
+`link_session` vede na profil, jen dokud je session pořád přihlášená; když
+její účet mezitím někdo smazal, už přihlášená není a vede na `/app/setup`.
+Přihlášení i odhlášení zahodí cestu, kterou session předtím začala, a odpověď
+na ni dostane `state`. /app je ta vedle
+adresáře `/status`, takže instalace v podadresáři v něm zůstane. Starý odkaz
+`admin.php?login_oauth=` přeposílá na `oauth_start`; `?link_oauth=` a
+`oauth_start&link=1` vedou na `/app/profile`, který si heslo vyžádá.
+
+### Kdo vidí který monitor
+
+Monitor patří účtům, které jsou k němu přiřazené, a jeden monitor jich může mít
+víc. Administrátor vidí a mění všechny monitory. Účet s rolí `user` vidí jen
+přiřazené monitory, jen pro čtení, spolu s vlastním profilem a odběrem
+upozornění pro tyto monitory. Monitor, který volající vidět nesmí, odpoví 404
+stejně jako neexistující, takže id nejde osahávat. Řádky označené **přiřazený
+monitor** se řídí tímto pravidlem a seznamy vracejí jen viditelné monitory.
+
+`scope=public` si u `public_status`, `monitors`, `daily_uptime`, `uptime_windows`, `regions`,
+`events` a `incidents` řekne o pohled veřejné status stránky. Zahrnuje
+veřejnou sadu (níž), je stejný pro každého - i pro přihlášeného
+administrátora - a nenese cíle, hostname, procesy ani názvy rozhraní.
+Nepřihlášený volající dostane vždy tento pohled.
+
+### Které monitory jsou veřejné
+
+Veřejnou status stránku indexují vyhledávače, takže ukazuje vybranou sadu:
+weby a herní služby. Servery (`vps`), domácí router (`openwrt`) a služby
+hlídané agentem (`agent_service`) na ní nejsou, dokud je tam vlastník nedá.
+Přepínač je `monitors.is_public`: `1`/`0` je volba vlastníka, `NULL` (nikdy
+nezvoleno) se řídí typem, takže každý monitor založený aplikací, importem nebo
+prvním hlášením agenta dostane stejné výchozí nastavení.
+
+Všechno anonymní pokrývá jen tuto sadu: veřejný pohled akcí výš, odznak
+flotily (`badge`), `rss.php` a starou stránku `/status/`. Monitor mimo ni tam
+odpoví jako neexistující - `badge` s jeho `monitor_id` je 404, pokud volající
+není přihlášený a nesmí ho vidět - protože odznak tiskne jeho jméno. Incidenty
+nenavázané na žádný monitor zůstávají veřejné.
+
+### Co vidí nepřihlášený návštěvník
+
+Veřejné odpovědi nechají ze struktury `details` jen povolené klíče: agregáty
+jako `cpu`, `ram` a `hdd`, verzi agenta a počty hráčů či klientů. Všechno
+ostatní - IP adresy, názvy rozhraní, procesy, porty, nalezené služby - zůstává
+na serveru, i klíče přidané v budoucnu. Důvod selhání se zúží na pevnou sadu vět
+- HTTP kód, vypršený čas, DNS, TLS, zavřený port - bez hostitele, portu, procesu
+či hledaného textu a aktualizace incidentů přijdou o automatický důvod kontroly
+i jméno operátora.
+
+---
+
+## Chyby
+
+| Kód | Význam |
+|---|---|
+| 400 | Chybí nebo je neplatný parametr |
+| 401 | Nepřihlášen |
+| 403 | Bez role `admin` u akce pro administrátora. Nepřihlášený volající tam dostane také 403, kromě `users`, `audit_logs` a `metrics_history` za celou flotilu, které se nejdřív ptají na přihlášení (401). `install_cron` místo toho odpoví 409 `installer_locked`, a to po dokončené instalaci každému kromě administrátora |
+| 404 | Objekt neexistuje (nebo se to nemá prozradit - viz heartbeat) |
+| 405 | Špatná HTTP metoda |
+| 500 | Chyba na straně serveru |
+| 503 | Databáze nebo navazující služba nedostupná |
+
+Tělo chyby: `{"error": "Popis česky"}`. Endpointy agentů vracejí místo toho
+`{"success": false, "message": "…"}` - historický rozdíl, sjednocení by
+rozbilo nasazené agenty. Každá chyba `5xx` z `api.php` se zapíše i do logu
+serveru i s akcí, a chybová odpověď, kterou nejde zakódovat do JSON (neplatné
+UTF-8), je `500` s chybou místo svého stavu s prázdným tělem. Většina
+úspěšných odpovědí pořád volá `json_encode()` sama a ta z nich, kterou nejde
+zakódovat, pořád přijde jako prázdná `200`.
+
+**Selhané čtení nikdy není prázdný úspěch.** Když selže dotaz za seznamem
+nebo souhrnem, odpověď je `500` s `{"error": "<kód>", "message": "<věta
+česky>"}` - nikdy `200` s `monitors: []`, `incidents: []` nebo `series: {}`,
+které každý klient četl jako „vše online" nebo „bez výpadků" právě tehdy, když
+se nevědělo nic. `error` je stálý kód pro větvení (`monitors_unavailable`,
+`incidents_unavailable`, `events_unavailable`, `daily_uptime_unavailable`,
+`uptime_windows_unavailable`, `metric_series_unavailable`,
+`audit_logs_unavailable`, `overview_unavailable`, `findings_unavailable`,
+`sla_report_unavailable`, … - vždy
+`<akce>_unavailable` u čtení, `<akce>_failed` u zápisu), `message` je věta
+k zobrazení. Text výjimky jde jen do logu serveru; umí jmenovat tabulky
+i hostitele databáze.
+
+**Databáze nedostupná:** každý endpoint odpoví `503` s `Retry-After: 60`.
+`api.php`, `agent_api.php`, `node_api.php`, `heartbeat.php`, `health.php`,
+`cron.php` a `metrics.php` (a každý požadavek, jehož `Accept` chce JSON a ne
+HTML) dostanou přesně `{"error": "database_unavailable"}`, endpointy agentů
+taky; stránky pro prohlížeč dostanou značkovou chybovou stránku s kódem 503.
+Ani jedno neříká proč - hláška databáze se dřív tiskla do stránky i s hostem,
+účtem a jmény souborů; teď jde jen do chybového logu serveru.
+
+**Ještě nenainstalováno:** tytéž endpointy odpoví `503` s
+`{"error": "needs_setup", "reason": "…", "setupUrl": "/app/setup"}` a prohlížeč,
+který otevírá stránku, se přesměruje (302) na `/app/setup`; požadavek, který
+nechce JSON ani HTML, dostane `503` jako prostý text. Strojové endpointy se
+nikdy nepřesměrují. `reason` je `config_missing` (chybí `config.php`),
+`config_sample` (`config.php` má pořád zástupné heslo ze vzoru a nepřipojí se)
+nebo `schema_missing` (připojí se, ale `schema.sql` se nikdy neimportoval).
+`config.php` se skutečnými údaji, který se nepřipojí, je výpadek, ne první
+spuštění: zůstává `database_unavailable`. `db.php` už nekopíruje
+`config.sample.php` přes chybějící `config.php`.
+
+---
+
+## První spuštění: instalátor
+
+`/app/setup` prochází tyto kroky; krok s účtem je dosavadní `action=setup`.
+Fungují bez `config.php` a po dokončení instalace se všechny odmítnou (viz
+zámek níže).
+
+| Endpoint | Přístup | Popis |
+|---|---|---|
+| `GET action=install_status` | veřejné | `step`: `config` (zapsat údaje k databázi), `config_unreachable` (skutečný `config.php`, který se nepřipojí, nebo složka nasazovaná přes CI bez funkčního: opravit přes FTP, instalátor ho nikdy nezapíše), `schema`, `account`, `installed`. Dál `locked`, `config {exists, sample, writable}`, `database {connects, schema: missing\|partial\|ready, users, tables}`, `requirements {php, phpOk, extensions}` a `csrfToken`. Při `installed` (pro kohokoli kromě administrátora) a `config_unreachable` jen `{step, locked: true}` |
+| `POST action=install_test_db` | veřejné, CSRF, krok `config` | Tělo `{host, port, database, user, password[, timezone]}`. Nic nemění. `{ok: true, database: {tables, schema, users}}`, nebo `{ok: false, error, message, driverCode}` s `error` = `access_denied`, `unknown_database`, `host_unreachable`, `unknown_host`, `connect_failed`. Neplatný vstup: 400 `invalid_host`, `invalid_port`, `invalid_database`, `invalid_user`, `invalid_password` (řídicí znaky nebo zástupné heslo ze vzoru), `invalid_timezone` |
+| `POST action=install_write_config` | veřejné, CSRF, krok `config` | Stejné tělo. Znovu otestuje připojení (při chybě 422 s kódy výše), pak zapíše `config.php` z `config.sample.php` (dočasný soubor a jedno přejmenování, hodnoty přes `var_export()`): `{written: true, next}`. Když PHP zapisovat nemůže: `{written: false, next, fileName, directory, configText, passwordPlaceholder: "__DB_PASSWORD__", message}` - text nese zástupný znak, nikdy heslo; aplikace heslo doplní až cestou do schránky |
+| `POST action=install_import_schema` | veřejné, CSRF, krok `schema`/`account` | Naimportuje `schema.sql` příkaz po příkazu (chyby „už existuje" při opakovaném běhu přeskočí), čerstvé instalaci vygeneruje vlastní `cron_key` a teprve pak uloží `schema_version` (`schema.sql` žádné nastavení nezapisuje; další požadavek doběhne migrace a uloží aktuální verzi): `{imported: true, statements, next}`. Už naimportováno: `{imported: false, alreadyImported: true, next}`. Chyba: 500 `schema_import_failed` se `statement` a `driverCode`, text MySQL jen v logu serveru |
+| `GET action=install_cron` | během instalace, pak admin | Úloha cronu pro tuto složku: `{schedule: "* * * * *", command, crontabLine, script, phpBinary, phpBinaryFound}`. cPanel bere `schedule` a `command`, `crontab -e` bere `crontabLine`. Binárka je PHP CLI vedle PHP, které obsluhuje web (`PHP_BINDIR`); `phpBinaryFound: false` = holé `php` |
+
+`next` je krok po tomto. Pak aplikace ptá veřejné `action=collection_health`
+a ukazuje „čeká se na první běh", dokud nepřijde `lastRunAt` - nikdy zelenou
+předem.
+
+**Zámek.** Otevřený instalátor je cesta k převzetí, proto:
+
+- jakmile se databáze připojí a existuje účet, každý krok odpoví
+  `409 installer_locked` (počet účtů, který nejde přečíst, se počítá jako
+  existující). Zámek odpovídá dřív než kontrola CSRF;
+- `config.php` se zapíše jen tam, kde žádný není, nebo kde má pořád zástupné
+  heslo ze vzoru; jinak `409 config_exists`. Při výpadku databáze tak skutečný
+  `config.php` nahradit nejde;
+- a nikdy ve složce, kam nahrává nasazení z CI (FTP-Deploy-Action tam nechává
+  `.ftp-deploy-sync-state.json`, čerstvé nahrání ho nikdy nemá): chybějící
+  `config.php` nebo zase vzorový je tam taky `config_unreachable`;
+  `install_test_db` a `install_write_config` odpoví `409 config_exists`,
+  `install_import_schema` odpoví `409 database_not_configured`;
+- zápisy jsou POST s CSRF tokenem relace (`X-CSRF-Token`) jako každý jiný
+  zápis v relaci; token dává `action=install_status`;
+- heslo se nikdy nevrátí v odpovědi, nikdy není v URL (kroky, které ho berou,
+  jsou POST) a nikdy se neloguje.
+
+---
+
+## Stav sběru dat
+
+### `GET api.php?action=collection_health`
+
+**Veřejné.** Odpovídá na jedinou otázku: běží ještě cron?
+
+Existuje proto, že když sběr dat přestane běžet, aplikace se nerozbije - dál
+zobrazuje poslední známé stavy a vypadá zdravě. Ze všech způsobů, jak může
+monitoring selhat, je tenhle nejhorší, protože o sobě nedá vědět.
+
+```json
+{
+  "lastRunAt": "2026-08-10T19:42:11+02:00",
+  "ageSecs": 62,
+  "maxAgeSecs": 900,
+  "stale": false,
+  "lastDurationMs": 4180,
+  "monitorsChecked": 14,
+  "serverTime": "2026-08-10T19:43:13+02:00"
+}
+```
+
+| Pole | Význam |
+|---|---|
+| `lastRunAt` | Konec posledního **dokončeného** běhu; `null` = cron s tímto zápisem ještě neběžel |
+| `ageSecs` | Stáří v sekundách; `null`, když `lastRunAt` je `null` |
+| `maxAgeSecs` | Limit z nastavení `collection_max_age_secs` (výchozí 900) |
+| `stale` | `true`, když je stáří přes limit **nebo** cron nikdy neběžel |
+| `lastDurationMs` | Doba běhu; `null` = neměřeno |
+
+Endpoint je veřejný záměrně - hlídač běží jinde a nemá se čím přihlašovat.
+Nic citlivého se odsud nedozví.
+
+Hlídá to Cloudflare Worker (`apps/worker`) cronem každých 5 minut. Ten běží
+mimo cPanel, takže funguje i ve chvíli, kdy je celý server mrtvý. Nastavení
+kanálu pro alerty:
+
+```sh
+cd apps/worker && npx wrangler secret put WATCHDOG_DISCORD_WEBHOOK
+```
+
+Bez toho hlídač kontroluje dál, ale jen loguje - a přizná to na
+`GET /api/watchdog`, kde je `alertChannelConfigured: false`.
+
+### Funguje ten kanál doopravdy?
+
+„Nastavený" a „funkční" nejsou totéž. Smazaný kanál, přegenerovaný token nebo
+překlep v URL vypadají zvenčí úplně stejně jako správně nastavený webhook,
+takže hlídač může měsíce hlásit `alertChannelConfigured: true` a přitom nemít
+kam alert poslat. `GET /api/watchdog` proto vrací dvě další pole:
+
+| Pole | Význam |
+|---|---|
+| `alertChannelValid` | `true` = Discord webhook potvrzuje, `false` = neplatí, `null` = nedalo se ověřit |
+| `alertChannelDetail` | Důvod, když je `false` nebo `null`; jinak `null` |
+
+Ověřuje se dotazem GET na adresu webhooku (Discord na ni vrací objekt
+webhooku), takže do kanálu nic nechodí. Výsledek se hodinu cachuje - jinak by
+stačilo tlouct na `/api/watchdog` a worker by tím tloukl na Discord.
+
+### `POST /api/watchdog/test`
+
+Ověření přes GET pozná smazaný webhook, ale ne to, jestli zpráva opravdu
+dorazí **do kanálu** - chybějící oprávnění se pozná až při odeslání. Tenhle
+endpoint projde celou cestu skutečného alertu:
+
+```sh
+cd apps/worker && npx wrangler secret put WATCHDOG_TEST_TOKEN   # jednou
+curl -X POST -H "Authorization: Bearer $TOKEN" https://api.bloodkings.eu/api/watchdog/test
+```
+
+Odpověď je `{"delivered": true, "detail": null}` (HTTP 200), nebo HTTP 502
+s důvodem v `detail`. Do kanálu přijde zpráva označená jako zkouška.
+
+Bez nastaveného `WATCHDOG_TEST_TOKEN` endpoint odpovídá 404, jako by
+neexistoval - jinak by kdokoli mohl kanál zaplavit. Token se porovnává
+v konstantním čase, aby ho nešlo uhodnout znak po znaku.
+
+---
+
+## Heartbeat: úloha se hlásí sama
+
+Obrácený směr než zbytek monitoringu. Aktivní kontrola umí jen to, na co
+dosáhne ze sítě - záloha, která se spustí ve tři ráno a tiše selže, je pro ni
+neviditelná. Proto se hlásí úloha sama.
+
+### `GET|POST heartbeat.php?token=…`
+
+**Autentizace tokenem.** Token je 48 hexadecimálních znaků z CSPRNG a je
+jediné, co endpoint autorizuje.
+
+| Parametr | Povinný | Význam |
+|---|---|---|
+| `token` | ano | Lze předat i v cestě: `heartbeat.php/TOKEN` |
+| `status` | ne | `fail` = úloha ohlašuje vlastní selhání. Cokoli jiného (i překlep) je úspěch |
+| `msg` | ne | Popis, max. 255 znaků |
+
+```sh
+# na konec zálohovacího skriptu
+curl -fsS -m 10 "https://bloodkings.eu/status/heartbeat.php?token=TOKEN"
+
+# když úloha selže
+curl -fsS -m 10 "https://bloodkings.eu/status/heartbeat.php?token=TOKEN&status=fail&msg=tar%20skoncil%20kodem%202"
+```
+
+Odpověď: `{"ok": true, "monitor": "Noční záloha", "result": "ok", "receivedAt": "…"}`
+
+Neplatný token vrací **404**, stejně jako token špatného tvaru - platnost
+tokenu se odsud nedá zjistit zkoušením.
+
+Endpoint jen zapíše signál. Stav vyhodnotí cron při nejbližším běhu, takže
+mezi ohlášením selhání a notifikací je zpoždění do jednoho cyklu (1-5 minut).
+
+### Jak se vyhodnocuje stav
+
+| Stav | Kdy |
+|---|---|
+| `up` | Signál přišel do `interval + tolerance` a úloha hlásí úspěch |
+| `down` | Úloha se neozvala včas, **nebo** ohlásila selhání |
+| `unknown` | Ještě se neozvala ani jednou, nebo nemá nastavený interval |
+
+Rozdíl mezi `down` a `unknown` je zásadní: monitor, který nikdy nedostal
+signál, **není dole** - nevíme o něm nic. Alert na výpadek, který se nestal,
+je stejná lež jako vymyšlená nula v grafu.
+
+Ohlášené selhání má přednost před stářím signálu. Kdyby ne, tiše selhávající
+záloha by vypadala zdravě jen proto, že se cron spouští.
+
+### `GET api.php?action=heartbeat_info&monitor_id=…`
+
+**Admin.** Vrátí adresu k nastavení úlohy, aktuální stav a čas posledního
+signálu. `POST` s parametrem `regenerate=1` a CSRF tokenem vyrobí nový token a
+zapíše ho do auditu - stará adresa tím okamžitě přestane platit. `GET`
+s `regenerate=1` se odmítne kódem 405. Jako každá absolutní adresa, kterou server vydává (e-maily,
+RSS, instalace a aktualizace agentů), začíná adresa na originu `site_url`,
+a dokud je prázdné, na hostu, kterému server věří.
+
+Token se vrací **jen tudy**. V běžném seznamu monitorů není: kdyby unikl, cizí
+člověk může heartbeat posílat za vás a monitor bude svítit zeleně, i když
+záloha dávno neběží.
+
+---
+
+## Odběr a eskalace
+
+### `GET rss.php[?page=slug]`
+
+**Veřejné.** RSS 2.0 kanál s výpadky a jejich vyřešením. Bez parametru pokrývá
+veřejnou sadu (viz „Které monitory jsou veřejné"), s `page` jen ty monitory
+dané status stránky, které jsou ve veřejné sadě. Incidenty nenavázané na žádný
+monitor jsou v každém kanálu.
+
+Skrytá stránka vrací **404** stejně jako neexistující slug - přes RSS nelze
+obejít viditelnost, kterou má stránka na webu.
+
+Vznik a vyřešení incidentu jsou **dvě samostatné položky** s různým `guid`
+(`incident-12-opened`, `incident-12-resolved`). Kdyby se vyřešení jen připsalo
+k původní položce, čtečka by ho odběrateli nikdy neukázala - jednou zobrazené
+`guid` už znovu nevypisuje.
+
+Položka o vyřešení vzniká jen tehdy, když je `resolved_at` opravdu vyplněné.
+U probíhajícího incidentu se nedopočítává z „teď".
+
+Kanál je odkazovaný z hlavičky status stránky (`<link rel="alternate">`), takže
+ho čtečky najdou samy. Jeho `<link>`, kanálu i každé položky, je tahle status
+stránka: `/app/public`, u kanálu stránky s `?page=slug`.
+
+### Eskalace nepřevzatých výpadků
+
+Není to endpoint, ale chování cronu. Upozornění na výpadek dosud odešlo jednou
+a tím to skončilo; když ho nikdo neviděl, výpadek běžel dál.
+
+Nastavení (administrace → Notifikace):
+
+| Klíč | Význam |
+|---|---|
+| `escalation_enabled` | `1` zapíná; výchozí vypnuto |
+| `escalation_after_mins` | Lhůta na převzetí, výchozí 15 |
+| `escalation_webhook_url` | Kanál pro eskalaci - záměrně jiný než běžná upozornění |
+
+Eskaluje se incident, který **není vyřešený, nikdo ho nepřevzal** (`acknowledged_at`
+je prázdné) a od vzniku uplynula lhůta. Každý incident nejvýš jednou - razítko
+`escalated_at` brání opakování při každém běhu cronu.
+
+Bez vyplněného kanálu se razítko **nedává**. Kdyby se dalo, incident by se
+tvářil jako eskalovaný a po doplnění kanálu by se už neozval - tiché selhání
+přesně tam, kde má pojistka fungovat.
+
+Totéž platí, když kanál zprávu odmítne: razítko zapíše jen odpověď 2xx.
+Odmítnutý nebo nedosažitelný webhook ho nechá prázdné, další běh cronu to
+zkusí znovu a ostatní incidenty z toho běhu na něj počkají. Razítko bez 2xx
+dostane jen jeden případ: celá zpráva odešla a odpověď nepřišla (vypršel
+čas), takže ji webhook možná zveřejnil a opakování by ji mohlo posílat
+v každém běhu znovu; její řádek nese `unknown`. I ona běh ukončí: zaseknutý
+webhook spotřebuje za běh jeden incident, který dostane razítko bez potvrzení
+a znovu se nepošle, a všechny ostatní čekající incidenty počkají na další běh.
+Každý pokus je řádek v protokolu odchozích zpráv (druh `escalation`, kanál
+`escalation_webhook`, předmětem je název incidentu), takže mrtvý nebo
+mlčící webhook ukáže `notification_health` a cron vypíše varování.
+
+### Denní připomínka toho, co je pořád rozbité
+
+Není to endpoint, ale chování cronu hned za blokem digestů. Výstraha odchází
+jen při ZMĚNĚ stavu, takže monitor, který spadl ve středu, se po zbytek týdne
+neozval - právě tak zůstal čtyřdenní výpadek neviditelný.
+
+Nastavení (administrace → Notifikace):
+
+| Klíč | Význam |
+|---|---|
+| `daily_reminder_enabled` | `1` zapíná; **výchozí zapnuto** |
+| `daily_reminder_hour` | Od které hodiny smí odejít, 0-23, výchozí 8 |
+| `last_daily_reminder_sent` | Stráž: datum posledního rozhodnutí, zapisuje cron |
+
+Odchází nejvýš jednou denně, od nastavené hodiny, a **jen když je opravdu něco
+rozbité**: monitory ve výpadku nebo varování (od nejdelšího, s uloženým
+důvodem), zvlášť sekce tichého sběru dat (agenti, kteří přestali hlásit,
+heartbeaty po lhůtě, `bk_get_collection_issues`), nepřevzaté otevřené incidenty
+a jeden řádek s posledním dokončeným během sběru - aby se mrtvý sběrač nemohl
+schovat za krátkou zprávu. Monitory v údržbě a archivované se nepočítají.
+
+Když není nic rozbité, **neodejde nic**: denní „vše v pořádku" naučí čtenáře
+filtrovat odesílatele a s ním i první opravdovou zprávu. Rozhodnutí se přesto
+zapíše - do protokolu odchozích zpráv jde řádek s `kind=daily_reminder`,
+`channel=none` a `status=skipped`, takže „žádný e-mail nepřišel" jde odlišit od
+„připomínka je rozbitá".
+
+Razítko dne se zapisuje bez ohledu na to, jak to dopadlo, tedy i u přeskočení.
+Na routeru běží cron každou minutu: bez razítka by zdravý stav zapsal řádek
+každou minutu a odmítnutý kanál by se zkoušel do půlnoci a pohřbil své vlastní
+selhání pod stovkami řádků.
+
+---
+
+## Endpointy, které dřív chyběly
+
+Následující akce se z UI volaly, ale v `api.php` nebyly. Protože neznámá akce
+vracela výchozí přehled služeb s kódem 200, tvářilo se každé takové volání
+jako úspěch. **Dnes neznámá akce vrací 400** a hlídá to lint
+(`run_api_action_lint.php`). Týž lint selže na akci, kterou z aplikace nic
+nevolá, pokud neuvádí, proč zůstává (`audit_logs`). Z repozitáře nic
+nevolalo `assign_preset` ani `dashboard_insights` a obě akce jsou pryč; preset
+se nastavuje přes `save_monitor` (`preset_id`) a postřehy přicházejí
+v `action=findings`.
+
+| Endpoint | Přístup | Popis |
+|---|---|---|
+| `action=export_csv&monitor_id=&days=` | přiřazený monitor | Historie kontrol monitoru jako CSV včetně chybové hlášky každé kontroly |
+| `action=save_annotation` | admin | Poznámka ke grafu (`monitor_id`, `metric_key`, `timestamp`, `note`) |
+| `action=annotations&monitor_id=&metric=&hours=` | přiřazený monitor | Poznámky pro vykreslení. Anonym i monitor, ke kterému účet není přiřazený, dostanou prázdný seznam, ne 403 - graf bez poznámek není chyba |
+| `action=delete_annotation` | admin, POST | Smaže poznámku podle `id`. Poznámka je tvrzení a chybné tvrzení u grafu musí jít vzít zpět |
+| `action=forgot_password` | veřejné, POST | Odešle odkaz na obnovu hesla. Odpověď je stejná pro existující i neexistující e-mail |
+| `action=setup` | veřejné, POST | Založí prvního administrátora. **Jen do prázdné tabulky uživatelů**, jinak 409. Jiná cesta k prvnímu účtu není: `schema.sql` žádný nezakládá, takže neexistuje ani výchozí heslo |
+| `action=user_audit_log&limit=` | admin | Skutečný auditní protokol (kdo se přihlásil, kdo co změnil) |
+
+> **Pozor na názvy:** `audit_logs` (s „s") vrací **výsledky kontrol** cronu,
+> agentů a sond, ne uživatelské akce. Uživatelský protokol je `user_audit_log`. React dřív
+> zobrazoval ten první pod nadpisem slibujícím přihlášení, takže filtry na
+> bezpečnost a konfiguraci nemohly nikdy nic najít.
+
+`action=session` nově vrací `installed` (existuje aspoň jeden uživatel) a
+skutečný e-mail přihlášeného - dřív se vracelo natvrdo `admin@bloodkings.eu`
+bez ohledu na to, kdo je přihlášený. `oauthProviders` vyjmenuje klíče
+poskytovatelů OAuth, kteří mají nastavené client ID (`github`, `google`,
+`discord`, `gitlab`; `[]` = žádný), takže přihlašovací stránka kreslí jen
+funkční tlačítka. Samotné client ID se nikdy neposílá. `pending2fa` je
+`true`, dokud přihlášení čeká na kód 2FA (`action=login_2fa`).
+
+---
+
+## Monitory
+
+### `GET api.php?action=monitors`
+
+**Přiřazené monitory, nebo veřejný pohled.** Seznam monitorů s posledním stavem,
+odezvou a metrikami agenta, bez archivovaných, pokud si `archived=1` neřekne
+právě o ně. Účet `user` dostane přiřazené monitory, administrátor
+všechny. Nepřihlášený volající nebo kdokoli se `scope=public` dostane
+veřejnou sadu (viz „Které monitory jsou veřejné") s `target`, `port`,
+`hostname` a `agentLastSeen` nastavenými na `null` a jen s povolenými klíči
+`details`.
+
+Seznam pro administrátora nese navíc `isPublic` (platná odpověď: volba
+vlastníka, nebo výchozí hodnota typu, když nikdy nezvolil) a `logLinesEnabled`
+(jestli router smí posílat své maskované řádky logu, viz `agent_api.php`) a
+`heartbeatIntervalSecs` / `heartbeatGraceSecs` (interval a tolerance heartbeatu
+v sekundách, `null`, když nejsou nastavené), aby formulář úprav uložil zpět to,
+co je uložené.
+
+Oba pohledy nesou vedle `monitors` ještě `collectionFresh`: jestli cron dokončil
+běh v rámci `collection_max_age_secs` (pravidlo, podle kterého soudí
+`public_status` i odznak). Při `false` jsou stavy v seznamu jen poslední známé,
+takže veřejná stránka, i výběr `?page=`, místo „Všechny systémy jsou online“
+řekne, že stav nelze ověřit.
+
+Pohled aplikace (ne `scope=public`) nese vedle `monitors` ještě `sslAlertDays`:
+hranici certifikátu, u které cron upozorňuje (`ssl_alert_days`, nejméně 1), aby
+přehled označil certifikát podle stejného pravidla jako upozornění.
+
+Odezva pochází z `monitor_logs`, hodnoty CPU/RAM/HDD z `vps_metrics` - nejsou
+to sloupce tabulky `monitors`. Chybějící hodnota je `null`.
+
+`statusKey` je stav ve sdíleném slovníku (C-11, `bk_status_label()` a `lib/status.ts`
+v SPA): `up`, `warning`, `down`, `maintenance`, `paused`, `unknown_new` (nikdy
+nehlásil - čeká na první data, neutrální) nebo `unknown_stale` (hlásil a zmlkl -
+varování).
+
+`assetId` je zařízení monitoru (`assets.id`), `null`, když žádné nemá - nikdy
+vlastní id monitoru, které je z jiné řady. `unreachableTarget: true` pro
+administrátora označí kontrolu cíle v privátní síti, jejíž zařízení má živého
+agenta (`vps`/`openwrt`), kterému ji `convert_to_agent_check` může předat.
+
+### `POST api.php?action=save_monitor`
+
+**Admin.** Vytvoří (`id: 0`) nebo upraví monitor. Tělo je JSON.
+
+Typy: `web`, `port`, `vps`, `openwrt`, `minecraft`, `teamspeak`, `discord`,
+`heartbeat`, `agent_service`. Typ `cpanel` skončil: čísla hostingu čte webový
+monitor s `cpanel_stats_url` a jednorázová oprava dat na něj převedla každý
+uložený monitor `cpanel`. Starší klient, který typ `cpanel` posílá dál,
+dostane totéž - `web` s jeho hostitelem jako `target` a poslanou adresou jako
+`cpanel_stats_url`; `target` bez hostitele je `400`.
+
+Vybrané parametry:
+
+| Parametr | Platí pro | Poznámka |
+|---|---|---|
+| `target` | vše kromě `vps`, `openwrt`, `heartbeat` | Povinný tam, kde platí |
+| `body_keyword` | `web` | Tělo odpovědi musí obsahovat tento řetězec |
+| `cpanel_stats_url` | `web` | `cpanel_stats.php` hostingu i s klíčem; cron z něj vedle HTTP kontroly čte disk, paměť a další |
+| `teamspeak_voice_port` | `teamspeak` | Hlasový port, 1-65535. Cíl se uloží jako `host:hlasový_port` (port, který už v cíli je, se nahradí); `port` zůstává ServerQuery port. Vynechaný nebo prázdný = cíl, jak přišel, a bez portu v něm kontrola počítá s 9987. Mimo rozsah = `400` |
+| `heartbeat_interval` | `heartbeat` | **Sekundy.** Povinný, minimum 60 |
+| `heartbeat_grace` | `heartbeat` | Sekundy; `null` = hlídá se přesně na interval |
+| `latency_threshold_ms` | vše | `null` = upozornění na zpomalení vypnuté |
+| `preset_id` | vše | `null` = monitor si drží vlastní nastavení metrik |
+| `enabled_metrics` | vše | Pole klíčů; prázdné = doporučené výchozí |
+| `allowed_actions` | `openwrt` | Jen s `remote_actions_enabled` |
+| `is_public` | vše | Na veřejné status stránce: `true`/`false` (nebo `1`/`0`); `null` vrátí volbu výchozí hodnotě typu. Vynechaný = beze změny. Cokoli jiného je `400 {"error": "invalid_switch", "invalidKeys": ["is_public"]}` |
+| `log_lines_enabled` | `openwrt` | Jestli router smí posílat své maskované řádky logu (výchozí zapnuto). Vynechaný = beze změny; ne-boolean = `400 invalid_switch` |
+
+`asset_id` jmenuje existující zařízení; id, které v `assets` nemá řádek, je `400`.
+`null` nebo vynechané `asset_id` dá novému monitoru (`id: 0`) vlastní zařízení
+a upravovaný monitor od jeho zařízení odpojí. Zařízení, které úprava nechá bez
+monitorů, se smaže, stejně jako u `delete_monitor`.
+
+Hesla (`sq_password`, `rcon_password`) se přepíší jen při zadání nové hodnoty -
+prázdné pole uložené heslo nesmaže. Heartbeat token se při editaci
+**nepřegeneruje**: úloha ho má zadrátovaný ve svém curl příkazu.
+
+### `POST api.php?action=delete_monitor`
+
+**Admin.** Tělo `{"id": 12}`. Zařízení monitoru (jeho řádek v `assets`) zmizí
+s ním, když k němu už nepatří žádný jiný monitor; archivovaný se počítá. Zařízení
+žije, dokud má monitory: aplikace jeho jméno nikde neukazuje, a tak ho nemá čím
+přejmenovat ani smazat.
+
+### `POST api.php?action=archive_monitor` / `unarchive_monitor`
+
+**Administrátor.** Tělo `{"id": N}`. Archivace je pro monitor, který skončil
+nadobro, třeba nahrazený router. Monitor i jeho historie zůstanou, ale vypadne ze
+všeho živého: seznamy a souhrny ho vynechají, cron ho nekontroluje, žádné
+upozornění neodejde, otevřené incidenty se uzavřou, čekající vzdálené akce
+selžou, hlášení jeho agenta se odmítnou s 403 a `heartbeat.php` odpoví 410. Detail
+podle id zůstává čitelný a `action=monitors&archived=1` vypíše archiv. Každý zápis
+do archivovaného monitoru odpoví 409. Obnovení nastaví stav na `unknown` do příští
+kontroly nebo hlášení. Obojí smaže všechny odpovědi držené v cache (počty
+nálezů, postřehy, veřejné skóre zdraví, místa měření, přehled SLA), takže
+žádná nedrží starou sadu monitorů až do vypršení. Obojí se zapíše do auditu.
+
+### `GET api.php?action=agent_install_info&monitor_id=`
+
+**Administrátor.** Co potřebuje instalace agenta jednoho monitoru: `agentKey`,
+`apiUrl` tohoto serveru a adresy ke stažení ve `files`. Klíč je přihlašovací
+údaj, proto se každé čtení zapíše do auditu. Archivovaný monitor odpoví 409.
+
+---
+
+---
+
+## Metriky a historie
+
+| Endpoint | Přístup | Popis |
+|---|---|---|
+| `action=metric_series&monitor_id=&metric=&period=&lang=` | přiřazený monitor | Jedna metrika v čase. Metrika označená `step` (`wan_errors`, `wan_drops`, `wan_ring_drops`, `wan_link_flaps`, `conntrack_drops` a hodinové čítače portu WAN `wan_rx_overrun`, `wan_rx_discard`, `wan_crc_errors`, `wan_mac_rx_errors`, `wan_refill_errors`, `wan_oversize`) už nese přírůstek mezi dvěma hlášeními: syrový bod je krok té minuty a devadesátidenní pohled je SOUČET dne (`avg_val * samples`), nikdy jeho průměr. Kumulativní `counter` série se kreslí jako přírůstky: reset (restart) a přírůstek přes mezeru delší než 2,5 intervalu hlášení nezanechá bod - přerušení, nikdy špičku. `distinctValues` počítá různé hodnoty série, aby stránka poznala konstantní metriku od křivky. `lang=en` dá do `label` anglický název metriky (výchozí je čeština); popisek počítadla končí `(přírůstek)` / `(increase)` |
+| `action=metric_series_batch&monitor_id=&period=&lang=` | přiřazený monitor | Všechny grafy zařízení v jednom volání. Série pro `hdd` a `ram` navíc nese `daysToFull` (počet dní do zaplnění), a to jen tam, kde je růst opravdu naměřený - chybějící klíč znamená bez predikce, nikdy nulu. Jen období do `30d`: `90d`, `180d` a `1y` odpoví `400 {"error": "period_unsupported"}` - dřív vracela posledních 24 hodin pod dlouhým popiskem. Počítadla (`fw_*`, `dns_*`, `tcp_retrans`, ...) chodí jako přírůstky stejně jako v `metric_series`, s `(přírůstek)` v popisku a `counter: true` - dřív to byly celoživotní součty. Každá série nese `previousAvg`: průměr stejně dlouhého okna o jednu periodu dřív (okno, které kreslí `metric_series&previous=1`; u počítadla průměr jeho přírůstků), takže dlaždice ukáže trend bez druhého dotazu. `null`, když tam jsou méně než 3 vzorky - trend z jednoho dvou čtení se nevymýšlí; `30d` ho většinou nemá, protože syrová měření se po 30 dnech mažou. Popisky se řídí `lang` jako u `metric_series` |
+| `action=metric_detail&monitor_id=&metric=&lang=` | přiřazený monitor | Kontext stránky detailu metriky; `metric.label` a popisky v `related` se řídí `lang` jako u `metric_series` |
+| `action=metric_correlations&monitor_id=&metric=&period=&lang=` (volitelně `&all=1` pro všechny porovnávané metriky, ne jen nejsilnějších 8) | přiřazený monitor | Jak se ostatní metriky zařízení hýbaly spolu s touto (Pearson). Počítá se jen z metrik ve `vps_metrics`: sdílejí jeden řádek měření, takže se vzorky párují přesně místo průměrování do společných oken, které by obě řady vyhladilo a koeficient nadhodnotilo. `r` je `null`, nikdy `0`, když je nedefinovaný - neměnná řada (`reason: constant`) nebo málo překryvů (`few_samples`). Každý řádek nese svou `family` (load 1/5/15, sloupce RAM, ...; odpověď nese rodinu předmětu): s vlastní rodinou se předmět nesrovnává nikdy a bez `all=1` má každá jiná rodina v seznamu jen nejsilnějšího člena. `total` počítá všechna srovnání. Popisek předmětu i každého řádku se řídí `lang` jako u `metric_series` |
+| `action=metric_heatmap&monitor_id=&metric=&days=&lang=` | přiřazený monitor | Mřížka hodina × den (jedno pole = průměr hodiny, u počítadel přírůstek za hodinu). Strop je 30 dní - syrová měření se po nich mažou, takže delší okno by tiše odpovědělo kratším. Hodina bez měření je `null`, nikdy `0`. `firstSampleDay` je první den se vzorkem (`null` = v okně žádný) - stránka tam svou mřížku začne, místo aby prázdné řádky kreslila jako ticho; samotná mřížka zůstává hustá přes `requestedDays`. `label` se řídí `lang` jako u `metric_series` |
+| `action=link_traffic&monitor_id=&days=` | přiřazený monitor | Provoz routeru podle role linky: primární (`wan_l3_device`) vs. LTE záloha (`lte_device`) za dnes / 7 / 30 dní z denních součtů per rozhraní, plus období výpadku primární linky (`wan_down_periods`, `wan_down_seconds`, `wan_down_now`) spárovaná z událostí `wan_lost`/`wan_restored` - jestli v té době provoz opravdu šel po záloze, říkají bajty na záložním zařízení, ne tato období (otevřené období běží do teď; výpadek, který začal před oknem a dosud neskončil, se dohledá zvlášť a započítá od začátku okna, jinak by router běžící na záloze celé týdny hlásil „nikdy"). Role bere jen z toho, co agent hlásí - bez `wan_l3_device` (agent < 0.1.3) je primární strana `null`, ne odhad podle jména |
+| `action=process_history&monitor_id=&kind=&at=&radius=` | přiřazený monitor | Které procesy běžely kolem daného okamžiku |
+| `action=router_recommendations&monitor_id=` | přiřazený monitor | Co na tomhle routeru právě teď najde týdenní stroj doporučení, jen pro čtení (GET nikdy nezapíše řádek stavu). Viz „Zdraví routeru" níž |
+| `action=storage_history&monitor_id=&days=` | přiřazený monitor | Denní historie jednotlivých disků (teplota, čítače chyb, zápisy hostitele, opotřebení). `days` se ořízne na 1-400; den, který nikdo nezměřil, je `null`, nikdy `0`. Viz „Zdraví routeru" níž |
+| `action=wan_bottleneck&monitor_id=` | přiřazený monitor | Co omezuje internetovou linku routeru, zvlášť pro každý směr, z jeho posledních měření rychlosti. Viz „Zdraví routeru" níž |
+| `action=speedtest_history&monitor_id=&limit=` | přiřazený monitor | Měření rychlosti routeru (nejnovější první, `limit` 1-200) a průměry za 7 / 30 / 365 dní, rozdělené podle linky, po které test běžel. Viz „Zdraví routeru" níž |
+| `action=metrics_history&monitor_id=&period=` | přiřazený monitor | Historie metrik agenta |
+| `action=daily_uptime&days=` | veřejný stav / přiřazené | Denní dostupnost v čase (viz „Dostupnost se měří v čase" níž): dnešek živě, uzavřené dny z `uptime_daily`. Den, kdy agent mlčel, je `down` a jeho `detail` říká, jak dlouho. Každý den nese své pokrytí (C-7): `status` je `up`, `warning`, `down`, `maintenance`, `partial` (nic horšího, ale změřeno méně než 90 % času dne) nebo `nodata` (nic nezměřeno) - nikdy `paused`. `warning` se počítá jako dostupnost: `uptimePct` je (up + warning) / změřeno a vedle něj `degradedMin`; dále `downMin`, `maintenanceMin`, `measuredSecs` a `expectedSecs` (čas, po který monitor ten den existoval, dnes do teď) a `coveragePct` (`null` u dne dopočítaného z počtů kontrol, jehož čas nikdo nezná). `day` je datum jako `Y-m-d`. `avgMs` a počty kontrol uzavřeného dne jdou také z `uptime_daily`, která přežije 30denní mazání logů, takže `days=90` drží křivku odezvy i větu o kontrolách i u dnů 31-90; surové logy se čtou jen pro dnešek a dny, kam souhrn ještě nedošel |
+| `action=uptime_windows` | veřejný stav / přiřazené | Dostupnost monitorů za 24 h / 7 d / 30 d / 90 d v čase; `d1` je posledních 24 hodin, ostatní jsou kalendářní dny včetně dneška. Nezměřené okno je `null`, nikdy 100. Každý řádek nese `since`, první den s daty v 90denním okně, a odpověď nese `windowStart` (`d7`, `d30`, `d90`: první den každého okna); obojí je místní `Y-m-d` serveru, takže „90 dní" nad šesti týdny historie řekne, odkud jeho data jsou |
+| `action=check_stages&monitor_id=` | přiřazený monitor | Rozpad kontroly (DNS/TCP/TLS/HTTP, ServerQuery) |
+| `action=regions&days=` | veřejný stav / přiřazené | Dostupnost podle místa měření (`checked_from`). Každé místo nese `country`, kód ISO 3166-1 alpha-2 přečtený z popisku (starý popisek Cloudflaru se nejdřív opraví), `null`, když popisek zemi neuvádí - veřejná stránka podle něj kreslí vlastní vlajku, nikdy odhadnutou; veřejná projekce drží `location`, `country` a `successRate` |
+| `action=health` | veřejný stav / přiřazené | Skóre zdraví 0-100 sítě (`network` s pojmenovanými srážkami `deductions`) a v aplikaci i každého monitoru, který uživatel smí vidět (`assets`: `monitorId` a celé skóre monitoru se `components` a `deductions`), viz „Skóre zdraví“ níž. Veřejný pohled vrací jen skóre veřejné sady na úrovni sítě, bez hardwarových složek a bez skóre po monitorech |
+| `action=public_status` | veřejný stav / přiřazené | Souhrn pro veřejnou stránku: `status` je celkový verdikt (viz „Jeden celkový verdikt"), s `totalMonitors`, `downMonitors`, `warningMonitors`, `unknownMonitors`, `unmeasuredMonitors`, `maintenanceMonitors` a průměrnou dostupností. `lastUpdated` je nejnovější skutečná kontrola, `null`, když se nic neměřilo. `nodes` jsou jen monitory agentů a hostitelů (`online`, `warning`, `offline`, `maintenance`, `unknown`); `latencyMs` je nejnovější odezva uzlu naměřená od jeho poslední změny stavu (včetně kontroly, která změnu provedla; uzel bez zaznamenané změny omezený není), a jen dokud je `online` nebo `warning`; jinak, nebo když od změny nic naměřeno nebylo, `null`. V aplikaci dostane účet `user` součty jen za přiřazené monitory |
+| `action=badge[&monitor_id=][&type=uptime][&lang=en]` | veřejné | Vložitelný SVG odznak (cache 60 s): živý stav, s `type=uptime` 30denní dostupnost; bez `monitor_id` tiskne celkový verdikt veřejné sady. Neznámý monitor, nebo monitor mimo veřejnou stránku pro volajícího, který ho nesmí vidět, je 404 |
+| `action=websites_overview` | přiřazený monitor | Weby s certifikáty a dostupností v okně (`sla7` / `sla30` / `sla365` v čase, kalendářní dny včetně dneška; `null` = nic nenaměřeno). `sslAlertDays` je hranice, u které cron upozorňuje (`ssl_alert_days`). Webový monitor navíc nese `httpStatusCode`, kód HTTP, který zaznamenala poslední kontrola cronu (řádek vzdálené sondy žádný nemá; čte se čerstvě, ne z cache; `null` = ta kontrola žádný nezaznamenala), a `httpCheckedAt` |
+| `action=monitor_insights&monitor_id=` | přiřazený monitor | Odvozená pozorování k jednomu monitoru; `status` je stav monitoru ve sdíleném slovníku (`key`, `label`, `tone`, `icon`) a věta shrnutí je formulovaná podle stavu - údržba, pozastavení ani čekání na data už nejsou „aktuálně nedostupný“. `statusSentence` je totéž shrnutí bez hlavní starosti a bez „vše v pořádku“ (jen stav a věta o zátěži): stránka zařízení vypisuje zjištění hned pod ním. `health` je skóre zdraví monitoru s rozpadem (viz „Skóre zdraví“ níž; `null` = nešlo spočítat, `score` `null` = málo dat). Věta shrnutí TeamSpeaku cituje `health.score`; staré `healthScore` je vlastní skóre oblastí TeamSpeaku a zůstává jen kvůli starším klientům |
+| `action=findings&monitor_id=&limit=&offset=&lang=` (nebo `&summary=1`) | přiřazený monitor | Jeden seznam zjištění (C-12): důvody k pozornosti (výpadek, varování, mlčící agent, privátní cíl, certifikát, metrika nad limitem, nový agent), tipy, postřehy a doporučení pro router v jednom seznamu. Tip, který opakuje důvod k pozornosti téhož monitoru (tip o CPU/RAM/disku vedle jeho metriky, tip o certifikátu), se vynechá. Každé zjištění: `key`, `source` (`status`, `certificate`, `check`, `metric`, `tip`, `agent`, `insight`, `router`), `kind`, `severity` (`critical`, `warning`, `info`), `monitorId` / `monitorName` / `monitorType`, `title`, `detail`, `action`, `since` a u doporučení pro router celá položka v `rec`. U zjištění o stavu je `detail` zpráva nejnovější kontroly, která monitor v jeho současném stavu našla od chvíle, kdy do něj vstoupil (`last_status_change`, o 120 s dřív kvůli řádku, který stav nastavil; null, když taková není), ne novějšího řádku s jiným stavem, dřívějšího období téhož stavu ani řádku vzdálené sondy (`monitor_logs.source = 'probe'`). Seřazené od kritických. Stránkované přes `limit` (1-500, výchozí 50) a `offset`; `total`, `counts` podle závažnosti, `devices` (po zařízeních: `worst` a počty, přes celý seznam), `monitorsChecked`, `muted` (položky routeru, které vlastník ztlumil), `canMute`. `monitor_id` = jedno zařízení. Zdroj, který selhal, jmenuje `sourceErrors` - seznam pak není úplný, ne čistý. Položka v něm nese `source`, `monitorId` a `error`, jeden z kódů `attention_unavailable`, `tips_unavailable`, `insights_unavailable` a `router_recommendations_unavailable`. `summary=1` vrátí jen `total`, `counts`, `devicesWithFindings`, `monitorsChecked`, `sourceErrors` a `generatedAt`, pro zvonek nebo odznak, který se ptá opakovaně; počty celé flotily se drží minutu pro každý rozsah uživatele (`cachedAt`, když přišly odtud) a smaže je ztlumení nebo archivace. Plný seznam je vždy čerstvý |
+| `action=ui_config` | veřejné | Nastavení vzhledu pro frontend (logo, názvy) |
+| `action=alerts_read_state` | přihlášený | Meze přečtených upozornění (`readUpToId`) |
+| `action=convert_to_agent_check` | admin | Převede proces hlídaný agentem na samostatný monitor |
+
+**Poznámka k dlouhodobým datům:** syrové logy se po 30 dnech mažou. Roční SLA
+se proto počítá z denní agregace `uptime_daily`, ne z logů. Odpovědi vždy
+uvádějí, za jaké období hodnota skutečně je - nikdy nevydávají třicetidenní
+okno za rok: `uptime_windows` a `sla_report` říkají, kde okno začíná
+(`windowStart`) a kde začínají jeho data (`since`).
+
+### Jeden celkový verdikt
+
+`public_status` (`status`), odznak flotily (`badge`), nadpis staré stránky
+`/status/` a přes API i veřejná stránka a marketingový web tisknou jeden
+verdikt nad stejnou sadou monitorů (`bk_overall_verdict()`):
+
+| Verdikt | Kdy |
+|---|---|
+| `down` | některý monitor je nedostupný |
+| `degraded` | některý je `warning`, nebo ve stavu, který nikdo nezná, přestože už dřív kontrolou prošel |
+| `unknown` | žádný monitor, jen monitory, které ještě kontrolou neprošly, nebo sběr neběžel v rámci `collection_max_age_secs` (výchozí 15 minut) - uložené stavy pak nejsou ničím aktuálním měřením |
+| `maintenance` | některý je v údržbě |
+| `healthy` | všechno ostatní: vše běží a je čerstvě zkontrolované |
+
+Dřív to bylo „healthy, pokud nic není dole", takže zhoršený monitor, neznámý
+monitor i zastavený sběr se četly jako „vše v pořádku". Monitor, který ještě
+nemá první kontrolu („čeká na první data"), se počítá do `unmeasuredMonitors`,
+ale verdikt nezhorší.
+
+### Dostupnost se měří v čase
+
+Dostupnost bývala „řádky up / všechny řádky". Mlčící agent dostane od cronu
+jeden řádek `down` a pak nic, takže třídenní výpadek byl jeden řádek z tisíců
+a pořád ukazoval ~99,99 %. Každé číslo dostupnosti (`uptime_windows`,
+`daily_uptime`, `websites_overview`, `sla_report`, `public_status`, odznak
+i e-mailový přehled) se teď počítá v čase:
+
+- každý řádek kontroly platí do dalšího řádku, nejvýš 2,5 intervalu kontroly
+  (interval se čte z vlastních řádků monitoru, 60-1800 s);
+- čas, který žádný řádek nekryje, je u agenta (`vps`, `openwrt`), který už
+  dřív hlásil, **výpadek** - mlčení je ten výpadek - a u aktivní kontroly
+  **neměřeno**, protože to znamená, že neběžel cron;
+- `maintenance` a neměřený čas (i řádky `unknown` služby na agentovi, jehož
+  agent zmlkl) stojí mimo zlomek; `warning` se počítá jako dostupnost -
+  služba odpověděla, jen pomalu - a jeho čas se vykazuje zvlášť
+  (`degradedMin`, `secs_warning`);
+- okno bez jediné naměřené sekundy je `null`, nikdy 100.
+
+Uzavřené dny jdou z `uptime_daily`, kterou cron každých deset minut
+přepočítá v čase (`secs_up`, `secs_down`, `secs_warning`, `secs_silent`,
+`secs_maintenance`, `secs_unmeasured`); dnešek se počítá živě. Den z doby
+před časovým souhrnem (jeho logy už jsou smazané) zná jen počty kontrol a čte
+se jako celý naměřený den rozdělený podle nich.
+
+### Skóre zdraví
+
+`action=health` (síť a každý monitor), `monitor_insights.health` (jeden
+monitor) a prstenec staré stránky `monitor.php` hodnotí zdraví 0-100 jedním
+zdokumentovaným vzorcem (`bk_health_score()`, `formulaVersion` 1), jen
+z naměřených hodnot. Každá složka dostane 0-100 bodů podle vlastní křivky, nebo
+je `null`, když ji nic nezměřilo. Skóre je vážený průměr změřených složek:
+neměřená vypadne a váhy se přepočtou, nikdy se nepočítá jako plný počet. Málo
+dat - neměřená dostupnost, nebo méně než 3 změřené složky (dostupnost a dvě
+další) - je `score: null` (aplikace ukáže „—“), nikdy vymyšlené číslo.
+
+| Složka (`key`) | Váha | Body |
+|---|---|---|
+| `availability` | 30 | Dostupnost za posledních 7 dní v čase (včetně dneška); každých 0,1 % pod 100 % ubere 2 body (99,9 % = 98, 99 % = 80, 95 % a méně = 0) |
+| `latency` | 10 | Průměrná odezva za poslední hodinu (aspoň 2 měření). Agent (`vps`, `openwrt`) měří latenci WAN: 100 do 30 ms, 0 od 300 ms. Kontrola z hostingu: 100 do 300 ms, 0 od 3 s. Ztrátu paketů na WAN agent 0.1.10 neměří, proto ve vzorci není; přibude s novou `formulaVersion`, až ji agent začne hlásit |
+| `alerts` | 15 | Otevřené problémy monitoru: 100 minus 50 za každý kritický a 20 za každé varování, nejméně 0. Jsou to důvody k pozornosti z kanálu zjištění (výpadek, zhoršení, mlčící agent, certifikát, nedosažitelný cíl), otevřený incident monitoru, který zrovna nepadá (jedno varování, ať je incidentů kolik chce), a v aplikaci i vlastní ustálené verdikty routeru: primární WAN bez internetu, nefunkční místní DNS resolver a vypnutý firewall (kritické), nefunkční LTE záloha, WAN linka pod obvyklou rychlostí a plná tabulka spojení (varování). `null`, dokud se monitor neozval |
+| `freshness` | 10 | Stáří posledního hlášení proti očekávanému intervalu (60 s u agenta OpenWrt, 300 s u agenta VPS/Windows/Docker i u kontroly, u heartbeatu jeho vlastní interval): 100 do 3 intervalů, 50 do 10, pak 0 |
+| `cpu_ram` | 15 | Horší z využití CPU a RAM proti limitům monitoru (bez nastavených limitů zdokumentované výchozí 90/95 %): 100 do 20 bodů pod limitem, 0 na limitu |
+| `disk` | 10 | Zaplnění disku stejně (výchozí limit 90 %); disk, jehož SMART selhal, je 0 |
+| `temperature` | 10 | Horší z CPU (100 do 65 °C - tam varuje znalostní tip -, 0 od 90 °C) a disku nejblíž limitu své třídy L (60 °C rotační, 70 °C SSD, 80 °C NVMe, stejně jako upozornění na disk): 100 do L - 10, 0 na L |
+
+Hardwarová čtení (`cpu_ram`, `disk`, `temperature`) a verdikty routeru
+z hlášení staršího než 10 intervalů vypadnou: popisují stroj, jaký byl, a staré
+hlášení už stojí body ve `freshness`.
+Každý monitor se hodnotí z vlastních měření: web na stejném stroji jako agent
+si od agenta nepůjčí CPU/RAM (tipy na stránce zařízení ano), protože server
+má vlastní skóre.
+
+`grade` je `good` od 90, `fair` od 70, `poor` pod tím (`null` bez skóre).
+Každá složka nese `points`, `weight`, `label` (v jazyce požadavku), `value` a
+`unit` (co se naměřilo) a `deduction` (kolik ubrala ze skóre). `measuredWeight`
+a `measuredComponents` říkají, kolik ze vzorce se změřilo. Pozastavený monitor
+skóre nemá a nese `paused: true`.
+
+`deductions` jmenuje, co body stálo, od největší srážky: `component`, `kind`
+(stálý klíč, např. `cpu_temp_high`, `availability_low`, `stale`, `status_down`,
+`incident_open`, `wan_lost`), `label` (slova v jazyce požadavku s hodnotou a
+místem, odkud křivka začne ubírat, např. „Teplota CPU 71 °C, nad 65 °C“),
+`points` (kolik stála z výsledného skóre, na jedno desetinné místo), `value`,
+`limit` a `unit`. Složka, která bere horší ze dvou čtení, jmenuje jen to, které
+rozhodlo, a upozornění si ztrátu své složky dělí podle své ceny, takže tři
+kritická nikdy nestojí víc, než složka váží. Srážky dávají dohromady 100 minus
+nezaokrouhlené skóre; srážka pod 0,1 bodu se vynechá.
+
+Skóre sítě je prostý průměr skóre jejích monitorů (každý monitor jednou,
+pozastavené monitory do sítě nepatří: `assetsScored` z `assetsTotal`). Je
+`null`, když skóre nemá žádný monitor, nebo když ho má méně než polovina -
+číslo by pak popisovalo změřenou menšinu. Každá složka sítě je průměr bodů
+monitorů, které ji změřily (`assets`), a `deductions` sítě je pět největších
+srážek celé flotily, každá s `monitorId` a `monitorName` a za srážku svého
+monitoru dělenou `assetsScored`.
+
+Aplikace (`assets`) vrací každý monitor, který uživatel smí vidět, s celým
+objektem monitoru. Veřejný pohled (`scope=public` nebo bez přihlášení) vrací
+jen `network`, `formulaVersion` a `generatedAt`: skóre veřejné sady na úrovni
+sítě, bez hardwarových složek a bez verdiktů routeru, a žádné skóre po
+monitorech - veřejné karty už ukazují dostupnost a odezvu každé služby a druhé
+číslo na monitor, jiné než v aplikaci, by jen mátlo. Jeho srážky jmenují jen
+veřejné monitory, stejně jako veřejné karty. Ukazujte ho jako skóre veřejných
+služeb, ne jako zdraví celé sítě. Veřejná odpověď se drží minutu a slova
+dostane až při odeslání, v jazyce návštěvníka.
+
+„Infrastructure score“ týdenního souhrnu (`bk_infra_score()`) je jiné číslo:
+souhrn období porovnaný s předchozím obdobím, ne toto skóre zdraví.
+
+### Období v `period`
+
+| Hodnota | Okno | Zdroj |
+|---|---|---|
+| `15m`, `1h`, `6h`, `12h`, `24h` | 15 min až den | `vps_metrics` / `monitor_logs` |
+| `7d`, `30d` | týden, měsíc | totéž |
+| `90d`, `180d`, `1y` | čtvrtletí až rok | `metrics_daily` (denní průměr); `response_time` z `uptime_daily.avg_response_ms` |
+
+Neznámá hodnota spadne na den. `response_time` na `90d` / `1y` na ten den
+dřív spadlo taky, takže „1 rok" kreslil posledních 24 hodin; teď čte průměrnou
+odezvu dne z `uptime_daily`, jehož `dailyRange` nenese minimum ani maximum
+(`null` - souhrn je neukládá). Historie kratší než okno prostě začne později:
+první bod je první den s daty. U dlouhých období odpověď nese
+`resolution: "daily"` - bod je průměr dne, ne jednotlivé měření, a klient to
+musí přiznat, jinak by uživatel z grafu četl přesnost, kterou data nemají.
+
+> Do 12. 8. 2026 se okno počítalo v hodinách a dvě období vycházela špatně:
+> `15m` vracelo hodinu a `6h` vracelo 24 hodin. Popisek v UI tedy tvrdil něco
+> jiného, než graf ukazoval. Hlídá to teď `run_tests.php` (jednotkově) i
+> `run_api_tests.php` (nad skutečnou databází).
+
+### `action=metric_detail`
+
+Kontext pro stránku detailu metriky - co metrika znamená, jaké má monitor
+prahy, které příbuzné metriky vůbec hlásí a co se v okolí dělo:
+
+```json
+{
+  "monitor": {
+    "id": 6,
+    "name": "Turris",
+    "type": "openwrt",
+    "target": "10.0.0.1",
+    "port": null,
+    "checkedFrom": "Praha, CZ",
+    "assetId": 6
+  },
+  "metric": { "key": "cpu", "label": "Využití CPU", "unit": "%", "counter": false, "step": false },
+  "thresholds": { "warning": 75, "critical": 90 },
+  "thresholdsDerived": { "warning": true, "critical": false },
+  "related": [{ "key": "ram", "label": "Využití paměti", "unit": "%", "latest": 41.2 }],
+  "events": [{ "t": 1755000000000, "type": "status_change", "label": "Obnoveno" }]
+}
+```
+
+Statistiky (aktuální, průměr, špička) se **záměrně neposílají** - klient je
+počítá z týchž bodů, které kreslí, takže po přepnutí období nemůžou popisovat
+jiné okno než graf. `thresholds.critical: null` znamená, že práh nastavený
+není a pásmo se v grafu nekreslí; `related` obsahuje jen metriky, které
+monitor v posledním měření skutečně hlásil, aby proklik nevedl do prázdna.
+U čítače je `latest` jeho poslední přírůstek, jak ho kreslí graf, ne součet od
+startu; `null`, když přírůstek není známý.
+
+### `action=process_history`
+
+Odpovídá na otázku, kterou graf nezodpoví: v 19:40 vyskočilo CPU na 90 %, ale
+čím?
+
+| Parametr | Význam |
+|---|---|
+| `monitor_id` | Povinný |
+| `kind` | `cpu` (výchozí) nebo `ram` - který žebříček číst |
+| `at` | Střed okna v unixových sekundách. Povinný |
+| `radius` | Poloměr v minutách, výchozí 10, maximum 180 |
+
+```json
+{
+  "samples": [{ "at": "2026-08-14 19:40:02", "name": "hostapd", "pid": 1234, "cpuPct": 87.5, "ramMb": 12.5 }],
+  "from": "2026-08-14 19:30:02",
+  "to": "2026-08-14 19:50:02",
+  "enabled": true,
+  "pruned": false
+}
+```
+
+Prázdné pole `samples` má tři různé příčiny a klient je musí rozlišit:
+`enabled: false` znamená vypnutý sběr, `pruned: true` znamená prořezané okno,
+do kterého žádná špička nespadla, a jinak pro tu chvíli prostě vzorky nejsou.
+Slít to do „žádná data" by způsobilo, že vypnutá funkce vypadá jako klidný
+stroj.
+
+Retence je nastavitelná (`process_history_days`, volitelně
+`process_history_peak_after_days` s `process_history_peak_pct`), protože tahle
+tabulka roste ze všech nejrychleji: deset řádků na monitor a minutu. Změřeno:
+1 728 000 řádků zabírá 253 MB a tenhle dotaz trvá 0,089 ms, protože ho krycí
+index zúží na 60 řádků. Žádná stránka do té tabulky při načtení nesahá.
+
+---
+
+### Zdraví routeru: úložiště, profil Wi-Fi a týdenní doporučení
+
+Tři endpointy jen pro čtení sdílejí jeden stroj. Počítá přes **sedm celých dní**
+před dneškem a týdenní pravidlo vyhodnotí, až když jsou k dispozici aspoň
+**čtyři dny s daty** (360 vzorků na den); router s kratší historií dostane
+`applicable: false` a řekne proč, místo aby hlásil „nic jsme nenašli".
+Nezměřená hodnota je všude níž `null`, nikdy nula.
+
+`action=router_recommendations&monitor_id=` odpovídá
+
+```json
+{
+  "monitorId": 6,
+  "applicable": true,
+  "reason": null,
+  "generatedAt": "2026-09-21T10:00:00+02:00",
+  "window": { "from": "2026-09-14", "to": "2026-09-20",
+              "previousFrom": "2026-09-07", "previousTo": "2026-09-13",
+              "daysWithData": 7 },
+  "canMute": true,
+  "missingPackages": ["smartmontools-drivedb"],
+  "items": [{
+    "id": "disk_temp_warm",
+    "key": "disk_temp_warm:d:1f0c…",
+    "area": "storage",
+    "severity": "warning",
+    "title": "Disk běží teplý",
+    "measured": "za poslední týden průměrně 67 °C (nejvýše 68 °C)",
+    "action": "Zkontrolujte proudění vzduchu …",
+    "subject": { "kind": "disk", "label": "sda" },
+    "openSince": "2026-09-01 04:12:00",
+    "muted": false
+  }],
+  "muted": []
+}
+```
+
+- `applicable: false` nese `reason`: `not_router` (není to monitor OpenWrtu),
+  `agent_old` (pravidla čtou pole, která posílá teprve agent 0.1.7, a starý
+  agent není zdravý router, který nemá co hlásit) nebo `silent` (víc než sedm
+  dní bez hlášení).
+- `severity` je `critical` (jednat hned), `warning` (jednat tento měsíc) nebo
+  `info` (dobré vědět). Pořadí `items` je závažnost, pak oblast, pak vlastní
+  pořadí pravidla – nikdy abeceda klíčů.
+- Každé týdenní pravidlo má hranici pro **spuštění** a hranici pro **držení**.
+  Nález, který už je otevřený, zůstane otevřený až k hranici držení, takže
+  metrika na hraně neblikne každé pondělí v e-mailu.
+- Pravidlo, které nešlo vyhodnotit, se nehlásí jako „v pořádku": v `items`
+  není a jeho uložený řádek se nezmění.
+- **Ztlumení** je rozhodnutí administrátora a platí pro všechny, kdo na router
+  vidí. Ztlumený nález se přesune do `muted` s `mutedReason`, `mutedBy` a
+  `mutedAt` a do týdenního e-mailu nejde. Vrátí se – označený `wasMuted` –
+  jakmile je stejný nález **závažnější**, než byl v okamžiku ztlumení.
+  Ztlumení pravidla, které už neplatí, se pořád vypisuje, s prázdnými texty a
+  `active: false`, aby šlo vzít zpět.
+- V žádném textu se neobjeví SSID, MAC adresa, BSSID, sériové číslo disku ani
+  WWN; disky se pojmenovávají svým `/dev` jménem a rozlišují serverovým otiskem.
+
+`action=storage_history&monitor_id=&days=` odpovídá `{monitorId, days, disks: []}`,
+jedna položka na disk s jeho identitou (`key`, `label`, `model`, `size`) a se
+seznamem `days: []` po `{day, tempMin, tempMean, tempMax, samples, reallocated,
+pending, offline, runtimeBadBlocks, unsafeShutdowns, powerCycles, hostWritten,
+hostWrittenPartial, wearPct}`. `samples` počítá čerstvá čtení SMART toho dne;
+`hostWrittenPartial: true` říká, že denní počet bajtů je neúplný (router se
+restartoval nebo čítač přetekl) a hodnota je dolní odhad.
+
+`action=wan_bottleneck&monitor_id=` odpovídá verdiktem pro každý směr
+(`verdict.dl`, `verdict.ul`), testy, o které se opírá, cestou WAN a tarifem:
+
+```json
+{ "class": "line_limited", "reason": "below_plan", "confidence": "high",
+  "basis": [41, 38, 35],
+  "numbers": { "s_mbps": 700.0, "s_max_mbps": 710.0, "agree": 3,
+               "span_days": 3, "servers": 2, "tests": 3 } }
+```
+
+- `class` je `none`, `link_limited`, `cpu_limited`, `line_limited` nebo
+  `inconclusive`; `reason` říká, které pravidlo rozhodlo (`plan_reached`,
+  `sqm_shaper`, `wan_port`, `packet_path`, `test_client`, `below_plan`, …).
+- `line_limited` – jediný verdikt, který obviní cizí techniku – potřebuje tři
+  shodné testy, rozpětí aspoň dvou dnů, **dva různé servery** do 15 % od sebe,
+  důkaz, že aspoň jeden z nich někdy tarif opravdu dodal, a výsledky mimo
+  náhorní plošiny gigabitového a 2,5gigabitového portu. Co nedokáže, vrací jako
+  `inconclusive` s důvodem (`not_enough_tests`, `single_server`,
+  `server_limited`, `server_capacity_unproven`, `port_plateau`,
+  `tests_disagree`).
+- Bez uloženého tarifu se nic nikdy nenazve „pod tarifem": odpovědí je
+  `inconclusive / no_plan_known` a karta si o tarif řekne. Test, který router
+  nespustil sám, umí jen potvrdit dosažený tarif, nikdy prohlásit linku za
+  pomalou.
+- `basis` vypisuje id řádků `speedtest_results`, o které se verdikt opírá, aby
+  karta mohla ukázat přesně to, co se měřilo.
+- Test, který běžel po záloze (`uplink` `backup` nebo `mixed`, změřené nebo
+  odvozené, viz níž), nikdy nedá verdikt o WAN: je
+  `inconclusive / ran_over_backup` a do souhrnu se nepočítá.
+
+`action=speedtest_history&monitor_id=` říká, po které lince každý test běžel.
+Turris spouští noční test bez vazby na rozhraní, takže během výpadku WAN změří
+LTE zálohu; to číslo je skutečné, jen to není rychlost linky.
+
+- Každé měření nese `uplink` (`wan`, `backup`, `mixed` nebo `null` = nevíme),
+  `uplinkSource`, `proto` (`http`, `https` nebo `null`) a `iface`.
+- `uplinkSource: "counters"` = agent (0.1.11+) to změřil z bajtových čítačů
+  zařízení během testu. `uplinkSource: "outage"` = odhad serveru: test začal
+  v období výpadku WAN (`wan_lost` / `wan_restored`, spárované jako
+  v `link_traffic`), takže je `backup`. Odhad se počítá při každém čtení a nikdy
+  se neukládá, takže se nemůže vydávat za měření. Cokoli jiného zůstává `null`.
+- `averages.week|month|year` jsou průměry WAN: řádky `backup` a `mixed` se
+  vynechávají, řádky s neznámou linkou se počítají jako dosud a jejich počet je
+  v `unknownSamples`. `backupAverages` nese tatáž okna pro LTE zálohu (změřenou
+  i odvozenou). Řádky `mixed` nejsou v žádném průměru.
+- Položka hlášení agenta smí nést `uplink` (`wan` / `backup` / `mixed`),
+  `uplink_evidence` (`counters`) a `proto` (`http` / `https`); jakákoli jiná
+  hodnota se uloží jako `null`. Uložená linka se opakovaným odesláním bez ní
+  nikdy nepřepíše.
+
+---
+
+## Incidenty a reporty
+
+| Endpoint | Přístup | Popis |
+|---|---|---|
+| `action=incidents` | veřejný stav / přiřazené | Seznam incidentů. Začátek výpadku je okamžik, kdy monitor spadl (`last_status_change`), ne poslední potvrzení výpadku. Veřejný pohled vynechá cíle, jména operátorů a důvody kontrol, i v `updates` |
+| `action=create_incident` | admin | Ruční založení. Volitelné `monitorId` naváže incident na monitor: 404 neznámý, 409 archivovaný, 409 když už monitor otevřený incident má |
+| `action=incident_action` | admin | `op`: acknowledge / resolve / postmortem. `resolve` vrátí `monitorStillDown: true`, když je monitor i po uzavření incidentu dál nedostupný |
+| `action=events&monitor_id=&limit=` | veřejný stav / přiřazené | Události monitoru Navíc vrací `statusChange`: kontrolu, která zaznamenala poslední změnu stavu (přišpendlenou na `monitors.last_status_change`, se stavem, ze kterého se přešlo: stavem nejnovějšího řádku před ní; ani jeden z nich nikdy není řádek vzdálené sondy, viz `node_api.php` níž), nebo `null` - v samotném seznamu ten řádek často není, protože okno drží nejnovější kontroly plus nejnovější výpadky. Každá událost nese `statusKey` / `statusLabel` / `statusTone` ze sdíleného slovníku stavů (`up`, `warning`, `down`, `maintenance`, `paused`, `unknown_new`, `unknown_stale`); údržba ani neznámý stav už nejsou `"OK"` a řádek bez zprávy dostane větu svého stavu. `source` říká, kdo řádek zapsal (`cron`, `heartbeat`, `agent`, `probe`; `null` před schématem r024). Řádek sondy v seznamu zůstává, ale jeho `down` je neúspěšné měření, ne výpadek: `rawStatus`, `statusKey`, `statusLabel` a `statusTone` říkají, co naměřil (`down`), `isDown` je false, bez `outageEnd` / `outageDurationSec`; výpadek neukončí, není `isRecovery` a výpadky přimíchané za nejnovějšími kontrolami nikdy nejsou sondy |
+| `action=sla_report&days=` | přiřazený monitor | SLA přehled v čase: `outageMinutes` a `totalOutageMinutes` (`null`, když se nic nezměřilo, nikdy 0), `uptimePct` (`null` bez jediné naměřené sekundy), `outageMinutes` = skutečné minuty výpadku včetně mlčení agenta, `silentMinutes` = kolik z nich agent mlčel, `unmeasuredMinutes` = čas, který nikdo neměřil (mimo procento). `upChecks` / `downChecks` zůstávají počty řádků; za 30 dní (`days` 90 / 365) jdou z `uptime_daily` plus dnešních logů, ne z měsíce logů, který zbyl. Odpověď nese `days`, `windowStart` (první den okna), `since` (první den s daty, i u každého řádku) a `percentileDays` (percentily latence čtou syrové logy, nejvýš 30 dní). U řádku navíc `measuredMinutes`, `budgetMinutes` (výpadek, který cíl SLA dovolí za změřený čas, proti `outageMinutes`) a `incidentCount` (incidenty otevřené v okně; `null`, když se nepodařilo je přečíst). `lastOutage` běží od první kontroly `down` po poslední kontrole `up` nebo `maintenance` do další kontroly `up` nebo `maintenance` a `warning` uvnitř ho nerozdělí. Okno údržby ho ohraničí stejně jako `outageMinutes`: jeho kontroly `maintenance` výpadek ukončí a samy výpadkem nejsou, ale kontrola `down` zapsaná uvnitř okna je výpadek až do další kontroly okna, stejně jako v dostupnosti, a jde i do `mttrSec`. Incident monitoru zůstává přes okno otevřený a zavře se až dalším `up`. Řádek vzdálené sondy (`monitor_logs.source = 'probe'`) se tu nepočítá: jeho `up` výpadek neukončí ani nerozdělí a jeho `down` žádný nezačne, zatímco `uptimePct`, `outageMinutes` a `upChecks` / `downChecks` ho počítají dál (dostupnost); řádek bez zdroje se počítá jako dřív. Monitor, který z `down` odešel bez další kontroly `up` nebo `maintenance`, má `end` i `durationSec` `null` a `mttrSec` je délka vyřešeného výpadku. Bez kontroly `up` nebo `maintenance` v uchovaných lozích (30 dní) je `start` nejstarší uchovaná kontrola `down`, takže starší výpadek je na ni oříznutý a jeho `durationSec` i `mttrSec` vycházejí kratší. Selhání je `500 {"error": "sla_report_unavailable"}` |
+| `action=audit_logs&limit=` | admin | Poslední kontroly napříč monitory. Formulované sdíleným slovníkem stavů (`statusKey`, `statusLabel`, `statusTone`); `user` říká, kdo řádek zapsal: cron, agent, sonda nebo heartbeat |
+
+---
+
+## Konfigurace a správa
+
+| Endpoint | Přístup | Popis |
+|---|---|---|
+| `action=get_settings` / `save_settings` | admin | Globální nastavení. Klíč s dokumentovanou výchozí hodnotou (`bk_settings_defaults()` v db.php: přepínače upozornění, lhůty, cíl SLA, ...) se čte jako ta výchozí hodnota, dokud není uložený nebo je uložený prázdný, nikdy jako `''`. Tajemství (`bk_settings_secret_keys()`: hesla, tokeny, adresy webhooků) se čte jako `••••••` a jeho poslední čtyři znaky a takto maskovaná hodnota poslaná zpět se neuloží. Přepínače (`agent_notifications_enabled`, `agent_notify_admin_only`, `daily_reminder_enabled`, `escalation_enabled`) berou přesně `'1'` nebo `'0'`: jiná hodnota, hlavně `''`, udělá z celého uložení 400, které nic nezapíše a vypíše klíče v `invalidKeys` |
+| `action=test_notification` | admin | POST `{channel}` (email/discord/telegram/slack): pošle jednu skutečnou testovací zprávu s uloženým nastavením, vrací `{ok, message}` |
+| `action=notification_log&monitor_id=&kind=&channel=&ok=&delivery=&from=&to=&q=&before_id=&limit=&summary=1` | admin | Co se odeslalo, komu, kterým kanálem a jestli to prošlo. Řádek vzniká i u neúspěchu - to je ta zajímavější půlka. Od chvíle, kdy protokoluje přímo `send_email()`, jsou tu všechny druhy zpráv, ne jen výstrahy: `kind` je filtruje (`alert`, `daily_reminder`, `digest`, `invitation`, …), `channel` vybírá cestu, `ok=0` jen neúspěchy, `q` je část adresy příjemce. `from`/`to` berou datum i datum s časem; holé datum v `to` znamená celý ten den a hodnota, která se nedá přečíst, je 400, ne tiše širší odpověď. Stránkuje se kurzorem - vrácený `nextCursor` se pošle jako `before_id` - protože během čtení přibývají řádky a stránkování přes offset by jeden řádek zopakovalo a jiný přeskočilo. `kinds` a `channels` v odpovědi vypisují hodnoty z CELÉHO protokolu, takže filtr nikdy nevezme možnost, která by ho zrušila. `ok` znamená jen „neodmítnuto“. Co se ví víc, říká `delivery`: `sent` = poskytovatel potvrdil, že zprávu převzal (SMTP 250 s číslem ve frontě, „Message queued“ od CallMeBotu, 2xx webhooku; doručení do telefonu či schránky to nepotvrzuje), `failed` = odmítnuto nebo nedosažitelné, `unknown` = nikdo nic nepotvrdil (PHP `mail()` vrátilo true, CallMeBot 210, vypršení po odeslání požadavku), `skipped` = tichý den denní připomínky. `error` nese důvod u `failed` i `unknown`, `providerReply` vlastní slova poskytovatele bez textu zprávy, telefonních čísel a klíčů. Řádky starší než záznam výsledku mají `deliveryRecorded: false` a odvozené `delivery`, nikdy lepší, než co tehdy prokázaly: `ok=1` u WhatsAppu nebo u e-mailu bez SMTP se čte jako `unknown`. `delivery=failed,unknown` filtruje čárkami oddělený seznam těch čtyř hodnot; cokoli jiného je 400. `summary=1` přidá `last24h` a `last7d` (`total` pokusů bez přeskočených řádků, `sent`, `unknown`, `failed` a totéž po kanálech), rovněž přes celý protokol a nikdy zúžené filtry: živí pruh „něco neodešlo" a pruh, kterému filtr dokáže výpadek rozmluvit, je horší než žádný. Každá změna stavu se ukládá jako druh `alert`, obnovení nevyjímaje, proto řádek `alert` nese i `alertTone` (`good` = obnovení, `warn` = varování, `bad` = výpadek; stejná třída jako u e-mailové výstrahy, odvozená ze `status` při čtení, takže ji mají i starší řádky; u ostatních druhů `null`). Obsah zprávy se neukládá nikdy, řádky se mažou po 180 dnech |
+| `action=site_health` | admin | Chyby webu samotného, které žádná datová cesta nehlásí - pro varování na přehledu. `configOutput` je `null`, nebo co config.php vypsal při načtení: `bytes`, `where` (`before_open_tag` = text nebo BOM před `<?php`, `after_close_tag` = text za posledním `?>` nad rámec jednoho konce řádku, který PHP spolkne, `inside` = echo nebo zobrazené hlášení PHP) a `excerpt` (prvních 16 bajtů jako tisknutelné ASCII, řídicí bajty escapované, co vypadá jako heslo nebo token, zamaskované). db.php takové bajty ze všech odpovědí vynechává, takže API dál vrací čistý JSON, i když je soubor špatně; `health.php` po celou tu dobu neprojde kontrolou `config.php output`. `selfCheck` je `null` před prvním během cronu, jinak poslední kontrola vlastního veřejného API webu: každé 4 minuty (dokud selhává nebo se zotavuje, v každém běhu) cron přečte přes HTTP `action=public_status` z původu nastavení `site_url` plus `/status/api.php`, stejně jako /app, a chce 200 s JSON objektem s klíči `status`, `totalMonitors`, `downMonitors`, `uptimePercent`, `lastUpdated` a `nodes`; kontrolou neprojde ani výstup config.php (`configOutput` výše), protože do API už neproleze. Nese `state` (`ok`, `failed`, `recovering` po prvním úspěchu, který následuje po ohlášeném selhání, nebo `unconfigured`, když `site_url` chybí), `url`, `checkedAt`, `failures` za sebou, `since`, `reason` (například `2 bytes before the JSON: "Ah"`), `lastOkAt`, `alertAttemptAt` a `alertResult` (`sent`, `unknown`, `failed`, `no_channel`, nebo `null`, dokud první selhání čeká na druhé). Druhé selhání za sebou se jednou ohlásí všem administrátorům e-mailem a WhatsAppem a do sdílených kanálů Discord, Slack, Telegram a Pushover (druh `admin_notice`, stav `self_check_failed`, každý pokus v protokolu odchozích zpráv s vlastním výsledkem); upozornění, které žádný kanál nepřevzal, se zkusí znovu za hodinu, a obnova (`self_check_restored`) se ohlásí jen po ohlášeném selhání, až kontrola projde dvakrát za sebou. Trvalé HTTP 403 obvykle znamená, že ochrana proti botům na proxy blokuje vlastní adresu hostingu |
+| `action=notification_health` | admin | Kterým kanálem a komu přestaly zprávy docházet - pro varování na přehledu a na stránce odchozích zpráv. Čte posledních 7 dní řádků `alert`, `daily_reminder`, `digest`, `admin_notice` a `escalation` (bez přeskočených, nanejvýš nejnovějších 5000; `truncated` řekne, že se narazilo na strop). Pro každý kanál a příjemce rozhoduje poslední pokus: `failed` nebo `unknown` je problém, a stejně tak přijetí WhatsAppem, v jehož odpovědi stojí „0 messages left“ (kvóta je vyčerpaná). Pozdější potvrzené odeslání ho ruší. `problems[]` nese `channel`, zamaskovaného `recipient` (`•••` a poslední tři číslice čísla, první písmeno a doménu adresy; u webhooku `null`), `username` účtu, pokud adresa nějakému patří, `state`, `sinceIso` (první pokus po posledním potvrzeném), `lastAtIso`, `count`, `lastReason`, `lastSentAtIso` (`null` = v okně nic potvrzeno) a `legacy` (odvozeno z řádků bez uložené odpovědi poskytovatele). Chyba databáze je 500, nikdy prázdný seznam |
+| `action=interface_traffic_daily&monitor_id=&days=` | přiřazený monitor | Provoz po dnech a rozhraních, seřazený od nejvytíženějšího. Chybějící den = ten den se nehlásilo, ne nulový provoz. Den nad rychlostí linky rozhraní × 24 h (z `lan_ports`, jinak 10 Gbit/s) je artefakt počítadla: ta hodnota je `null` a `rejected` ji jmenuje (`rx`, `tx`). První čtení rozhraní je jeho základ a bajty přes mezeru přes půlnoc se nepřipíšou žádnému dni |
+| `action=process_top&monitor_id=&kind=&minutes=` | přiřazený monitor | Které procesy braly výkon za celé období (průměr přes všechny minuty období, `sampledMinutes`, kde minuta mimo deset největších je nula; špička; počet vzorků), seskupené podle jména - restartovaná služba se nerozdrobí na řádek na pid. `enabled: false` = historie procesů je v nastavení vypnutá |
+| `action=toggle_maintenance` | admin | POST `{monitor_ids[], maintenance, description?, maintenance_end?}`: zapne nebo vypne údržbu pro jeden i více monitorů. Vypnutí maže i okno, aby další údržba nevypršela hned po zapnutí |
+| `action=clear_monitor_history` | admin | POST `{monitor_id, confirm_name}`: smaže měření, logy i denní agregace monitoru a vrátí ho do stavu „neznámý“. Nevratné, proto chce zpátky přesný název monitoru |
+| `action=redetect_location` | admin | Vynutí nový dotaz na geolokaci serveru a uloží ji do `ip_loc_local` |
+| `action=router_recommendation_mute` | admin | POST `{monitor_id, key, muted, reason?}`: ztlumí jedno doporučení routeru (nebo ztlumení vezme zpět). Závažnost se vyhodnotí na serveru, nikdy se nebere z těla požadavku – ztlumení tak umlčí nález v dnešní podobě, ne jeho horší verzi. Neznámé id pravidla je 400, archivovaný monitor se odmítne a každá změna zapíše řádek do `audit_log` |
+| `action=wan_settings_save` | admin | POST `{monitor_id, plan_down_mbit?, plan_up_mbit?, plan_ok_pct?}`: tarif routeru. `null` nebo prázdný řetězec hodnotu smaže; číslo mimo 1-100000 (30-100 u procent) je 400 a nikdy se neořízne, protože oříznutý tarif je tarif, který majitel nezadal. Chybějící klíč `probe_enabled` nechá uložený souhlas být |
+| `action=presets` / `save_preset` / `delete_preset` | veřejné čtení, admin zápis | Profily metrik; monitoru ho přiřadí `save_monitor` (`preset_id`) |
+| `action=status_pages` / `save_status_page` / `delete_status_page` | seznam veřejný, skryté stránky a zápis admin | Veřejné status stránky |
+| `action=status_page&slug=` | veřejná, skrytá stránka admin | Jedna status stránka podle slugu pro veřejnou stránku: `title`, `description`, `monitorIds` (prázdné = všechny veřejné monitory) a `displayOptions` s doplněnými výchozími hodnotami. Skrytá stránka vrací každému kromě administrátora 404, stejně jako stránka, která neexistuje, takže slugy nejde zkoušet. Chybějící `slug` je 400; selhané čtení je `500 {"error": "status_page_unavailable"}`, nikdy 404 |
+| `action=dashboard_layout` | přihlášený | Pořadí a viditelnost dlaždic |
+| `action=users` | admin | Seznam uživatelů, každý účet se svými `monitorIds` |
+| `action=export_config` | admin | Export konfigurace bez tajemství, která stránka nastavení maskuje (viz níže) |
+| `action=generate_metrics_token` | admin | Token pro Prometheus exporter |
+| `action=upload_logo` | admin | Logo status stránky |
+| `action=send_digest&period=` | admin | Ruční odeslání souhrnu |
+| `action=digest_preview&period=` | admin | Týdenní (`period=weekly`) nebo měsíční (`period=monthly`) souhrn jako `text/html`, přesně ta stránka, kterou nese e-mail, v e-mailovém jazyce prohlížejícího admina (jinak v globálním). Nic se neodešle a snímek, se kterým příští ostrý souhrn srovnává trendy, zůstane, jak byl. Jiné `period`, i chybějící, je 400, ne týdenní souhrn. Aplikace otevírá tento náhled; ten vlastní v admin.php ukazuje tutéž stránku, dokud stará administrace nezmizí |
+| `action=trigger_remote_action` | admin | Akce na routeru (jen povolené) |
+| `action=discovered_services` / `import_discovered_service` | admin | Service Discovery |
+| `action=get_subscriptions` / `save_subscriptions` | přihlášený | Odběr upozornění, jen pro monitory, které účet vidí; hodnoty jsou ty, podle kterých upozornění opravdu chodí (admin bez řádku se řídí přepínači monitoru a profilu). Uložení nahradí všechny řádky účtu: monitor, který v seznamu chybí, o svůj řádek přijde (admin se pak řídí těmi přepínači, `user` o něm upozornění nedostává). Každý řádek může nést `shown`, hodnoty, které formulář načetl, a změní se jen kanály, které se od nich liší; bez `shown` se za zobrazené berou uložené hodnoty, s 0 za NULL i za chybějící řádek (tak je ukazovali klienti před `shown`). Nedotčený kanál si drží uloženou hodnotu (adminovi zůstane NULL a řídí se těmi přepínači). Změněný kanál admina, který se rovná tomu, co dají ty přepínače, se uloží jako NULL, takže se jimi řídí dál. Řádek, který znamená totéž co žádný, se neuchová |
+| `action=public_subscribe` / `public_subscribe_confirm` / `public_unsubscribe` | veřejné | E-mailový odběr pro návštěvníky bez účtu: double opt-in (nic se neposílá, dokud majitel nepotvrdí), IP rate limit na přihlášení, neutrální odpovědi (žádná enumerace), odhlášení jedním klikem v každém e-mailu |
+| `action=public_subscribers` / `delete_public_subscriber` | admin | Přehled odběratelů a ruční odstranění (GDPR žádosti) |
+| `action=save_user` / `delete_user` | admin | Správa uživatelů pro React (vytvoření posílá pozvánkový e-mail, smazání odmítne vlastní účet; `monitorIds` určuje, které monitory účet `user` vidí - vynechané pole přiřazení zachová, `[]` ho zruší, neexistující id se zahodí); do 2026-08 existovaly jen jako formulářové handlery v admin.php a volání z Reactu končila na „neznámé akci" |
+| `action=my_profile` / `update_profile` | přihlášený | Vlastní profil: kontakty, kanály notifikací, jazyk e-mailů, změna e-mailu nebo hesla (obojí vyžaduje stávající heslo v `oldPassword`) |
+| `action=oauth_unlink` | přihlášený | Odpojení OAuth přihlašování (vyžaduje stávající heslo) |
+| `action=oauth_start` / `oauth_callback` | veřejné | Přihlášení přes OAuth jako navigace prohlížeče, která končí v /app (viz Autentizace) |
+| `action=oauth_link_start` | přihlášený | Zahájí propojení poskytovatele s účtem heslem; vrátí adresu, kam prohlížeč poslat (viz Autentizace) |
+| `action=totp_setup` / `totp_confirm` / `totp_disable` / `totp_recovery_regenerate` | přihlášený | Zapnutí dvoufázového ověření: tajemství žije v session, dokud ho kód nepotvrdí; potvrzení vrací deset jednorázových záložních kódů (ukládají se jen hashe, zobrazí se právě jednou); záložní kód funguje při přihlášení místo TOTP kódu a spotřebuje se; potvrzení, nová sada i vypnutí vyžadují heslo; `totp_setup` a `totp_confirm` při zapnutém 2FA odpoví 409, výměna tedy znamená nejdřív ho vypnout |
+| `action=set_password` | veřejné (jednorázový token) | Nastavení hesla z pozvánky nebo resetu; token se spotřebuje prvním úspěchem |
+
+`export_config` záměrně nevrací hesla, tokeny, adresy webhooků ani agent
+klíče - existuje na zálohu nastavení, ne na klonování přístupů. Nastavení
+v něm jsou klíče `bk_settings_keys()` bez `bk_settings_secret_keys()`, tedy
+bez hodnot, které stránka nastavení maskuje; provozní řádky (cache, rozložení
+jednotlivých uživatelů, místa uzlů, `schema_version`) nastavení nejsou a do
+zálohy nepatří. Ani klíč cronu v ní není, i když ho stránka nastavení ukazuje
+celý: autorizuje `node_api.php`, `cron.php?key=` a registraci agentů (viz níže).
+
+Seznam klíčů nastavení žije na jediném místě (`bk_settings_keys()` v `db.php`)
+a `run_settings_parity_lint.php` hlídá, že se UI neptá na klíč, o kterém server
+neví. Existoval třikrát a rozešel se, což tiše mazalo nastavení WhatsAppu: šlo
+uložit, ale nečetlo se zpátky, takže formulář zobrazil prázdná pole a další
+uložení skutečné hodnoty přepsalo.
+
+---
+
+## Rozhraní pro zařízení
+
+### `POST agent_api.php`
+
+Telemetrie z agentů (VPS, OpenWrt). Autorizace polem `agent_key` v těle.
+Vyžaduje POST a platný JSON, jinak 405 / 400. Povinný je jen `agent_key`:
+`cpu`, `ram` a `hdd` smí být `null`, což agenti posílají při prvním běhu a po
+restartu. Hlášení archivovaného monitoru se odmítne s 403 a `archived: true`.
+
+Server přijímá i klíče, o kterých předem neví - jinak by nová metrika z agenta
+tiše zmizela. Platí ale omezení: typovaná hodnota serveru vždy vyhrává,
+přihlašovací údaje se nepřebírají, název musí vypadat jako identifikátor,
+pole má strop 8 KB a najednou přibude nejvýš 64 nových klíčů.
+
+Odděleným lehkým POSTem chodí `action_result` - potvrzení provedené Remote
+Action. Nemá telemetrická pole, proto se zpracovává dřív než jejich validace.
+Jeho `status` je `executed` nebo `failed`, cokoli jiného se uloží jako
+`failed`. Agenti ho do plného hlášení nedávají a server ho tam nečte.
+
+**Registrace** (`{"action": "register", "token": "…", "hostname": "…",
+"agent_type": "openwrt"|…}`; agenti pro bash a OpenWrt ji posílají při
+`--register TOKEN URL`) založí monitor s vlastním zařízením (assetem) a vrátí
+jeho `agent_key`. Token je
+`agent_registration_token` z Nastavení. **Když je toto nastavení prázdné,
+přijme se místo něj klíč cronu (`cron_key`)** - flotila se tedy zaregistruje
+i jen s klíčem cronu a kdo má klíč cronu, může přidávat monitory. Kvůli tomu
+a kvůli `node_api.php` a `cron.php?key=` ho záloha konfigurace
+(`export_config`) vynechává. Instalátor dá každé čerstvé instalaci vlastní
+`cron_key`; když jsou prázdné oba, registrace se odmítne (403). Špatný token
+je 403.
+
+**Odpověď je cesta zpět k agentovi, ne jen potvrzení.**
+
+- Čeká-li na monitor Remote Action (Remote Actions zapnuté a akce mezi
+  povolenými), nese odpověď `pending_action`: `action_id`, `action`,
+  `timestamp`, `nonce` a `signature`, tedy HMAC-SHA256 řetězce
+  `action=…|ts=…|nonce=…` s klíčem `agent_key` monitoru. Agent jedná jen
+  podle platného podpisu. `service_name` jde mimo podepsaný řetězec, protože
+  nasazení agenti podepisují právě ta tři pole. Jedna akce na odpověď, při
+  odeslání označená `sent`, takže se nikdy nepodepíše a nepošle dvakrát.
+- Hlášení se `speedtests[]` (agent 0.1.7, z jednoho hlášení nejvýš 50)
+  dostane `speedtests_acked`: časovou značku nejnovější uložené položky
+  (i znovu poslané) starší než každá položka, jejíž uložení selhalo. Agent
+  smaže soubory s výsledky jen po ni a nikdy na holou 200; `null` = žádná,
+  takže přijde všechno znovu (unikátní klíč z toho dělá no-op). Selhané
+  uložení je `speedtest_store_failed` v `last_details.ingest_issues`;
+  položka bez času měření je `speedtest_rejected` a potvrzení nezdrží.
+  Položka, jejíž rychlost nesedí s počítadlem bajtů (`Mbit/s × 15 s ×
+  125000` se od bajtů liší o víc než 10 %, chyba jednotky nebo parseru), se
+  uloží a potvrdí jako `unit_mismatch`, v `ingest_issues` i v `diagnostics`
+  řádku, a `wan_bottleneck` ji nikdy nezapočítá. Objekt `diagnostics` bez
+  povoleného klíče nebo nad 2048 bajtů se k řádku neuloží a hlásí se jako
+  `speedtest_diagnostics_dropped`.
+
+**Agent 0.1.7 (OpenWrt) přidává** `wifi_radios[]` (jeden objekt na bezdrátové
+síťové zařízení, nejvýš 16: pásmo odvozené z frekvence, generace a šířka, počty
+klientů podle schopností a šifrování, šum a vytížení kanálu), `storage_disks[]`
+(nejvýš 8 fyzických disků po 16 oddílech, stav SMART, teplota, čítače chyb,
+opotřebení, zapsané bajty), `agent_tools` (sedm přísných booleanů, které říkají,
+které volitelné programy router opravdu má), `wan_path` (packet steering, flow
+offloading, SQM, zahozené rámce v kruhu) a čítače WAN. Pravidla, která na ně
+server uplatňuje:
+
+- **Hodnota mimo rozsah je `null`, nikdy okraj rozsahu.** Vytížení 101 % nebo
+  teplota 0 °C se neořízne na 100 ani na minimum: zahodí se, protože oříznutá
+  hodnota vypadá jako měření.
+- **Chybějící `storage_disks` nechá poslední seznam být.** Agent 0.1.6 klíč
+  neposílá a hlášení 0.1.7, které se muselo zmenšit, o něj může přijít; číst to
+  jako „žádné disky" by smazalo funkční seznam. Klíč, který poslaný JE, seznam
+  nahradí.
+- Čítače WAN se ukládají jako **krok** mezi dvěma čteními (v každém hlášení; u
+  fronty a šesti čítačů portu z agenta 0.1.13 jednou za hodinu) a krok je `null`
+  přes restart nebo při změně zařízení WAN – nikdy hodnota od startu.
+- Příznak hlášení `speedtest_active` se ukládá po minutách
+  (`vps_metrics.speedtest_active`, schéma 20260927r022): `1`, když byl příznak
+  nastavený, v hlášení cestoval výsledek testu rychlosti nebo běh kvůli testu
+  ustoupil, `0`, když agent řekl, že žádný test neběžel, `null`, když neřekl
+  nic. Řádky z doby před tímto schématem zůstanou `null` a nikdy se nedoplňují.
+- **Soukromí:** router neopustí žádná MAC adresa, BSSID, SSID sousedů, sériové
+  číslo disku ani WWN; identita disku je serverový otisk z přenosu, portu,
+  modelu a velikosti.
+
+Upozornění z těchto polí používají tři stavy – `storage_failing` (pageuje),
+`storage_warning` a `storage_recovered` (nepageují ani jeden) – a všechna
+podléhají přepínači `agent_notifications_enabled`; do časové osy se událost
+zapíše tak jako tak. Teplota disku potřebuje dvě čerstvá čtení nad limitem po
+sobě a končí 5 °C pod ním, rostoucí čítač chyb je při prvním pohledu tichý
+a opakuje se nejvýš jednou za den a upozornění na zaplněný souborový systém
+potřebuje dvě hlášení nad limitem a končí o pět bodů níž.
+
+**Agent 0.1.8 (OpenWrt) přidává** `lan_ports` – drátěný přepínač port po portu,
+posílaný s každým hlášením, protože kabel se mění každou minutou. Na port:
+`name`, `link`, `speed_mbit`, `duplex`, `max_mbit` (co port umí),
+`partner_max_mbit` (co nabízí protistrana) a `clients`; vedle toho `bridge`,
+`conduits[]` (vedení DSA k procesoru, které sdílejí všichni drátoví klienti)
+a `clients_total`. Server to ukládá do `last_details`, a tím to přichází do
+aplikace v objektu `details` u `action=monitors` – vlastní endpoint to nemá.
+Pravidla:
+
+- **Port bez linku nemá rychlost.** `speed_mbit`, `duplex` i `partner_max_mbit`
+  jsou `null`, kdykoli je `link` `false`, a nečitelná hodnota je `null` také –
+  nikdy 0 a nikdy věrohodný dohad. Port s `clients: 0` je něco jiného: to je
+  měření, „za touhle zásuvkou nikdo nepromluvil".
+- **`lan_ports: null` znamená, že se router nemohl podívat** (není ubus, není
+  `bridge`, přepínač není DSA). Hlášení, které sekci nenese, uloženou sekci
+  smaže, místo aby si ji nechalo: na rozdíl od seznamu disků by obrázek
+  zapojených kabelů ze staršího hlášení byl do minuty lež.
+- **Soukromí:** router opouštějí jen počty. Žádná MAC adresa, žádné jméno
+  stanice ani zápůjčka se neposílá ani neukládá a sekce nikdy není součástí
+  veřejného pohledu.
+- **Není** to časová řada a nemá sloupec v metrikách. Počet pochází z
+  přeposílací tabulky mostu, která na zařízení po pár tichých minutách zapomene,
+  takže graf by ukazoval, jak se zařízení sama odpojují.
+- Jediné doporučení, které z toho čerpá, je `lan_wired_ceiling`. To se pořád
+  spouští podle **schopnosti** portů; přepínač k němu jen přidává vlastní čísla
+  domácnosti – kolik drátových zařízení sdílí které vedení – a jen když se
+  obojí opravdu změřilo.
+
+**Poslední řádky chyb z logu routeru (agent 0.1.8, OpenWrt)** jezdí vedle
+`log_errors_24h`: `log_errors_recent` (nejvýš 5 `{ts, prog, msg, count}`,
+nejnovější první; `[]` = log se přečetl a žádný řádek chyby v něm není,
+`null` = žádný čitelný log, nebo je posílání vypnuté), `log_window_secs` (kolik
+sekund pokrývá počítaný buffer logu, pro „chyby za posledních N h") a
+`log_lines_state` (`on`, `off_monitor`, `off_router`). Rozhodnutí vlastníka:
+řádky smějí router opustit maskované, nejvýš pět, uložené jen v
+`last_details` - žádná tabulka historie - a vypínatelné u každého monitoru.
+Server je maskuje ještě jednou (e-mail, MAC, IPv6, IPv4, místní jména hostitelů,
+hex id od 12 znaků; tisknutelné ASCII, 200 znaků), takže ani starší agent
+neuloží syrovou adresu. S vypnutým `log_lines_enabled` monitoru si neuloží
+žádný (`log_errors_recent: null`, `log_lines_state: "off_monitor"`) a každá
+odpověď nese `"log_lines":true` nebo `"log_lines":false` - bez mezer, agent to
+porovnává doslova a od dalšího běhu přestane sbírat.
+
+**Agent 0.1.9 (OpenWrt) přidává** dvě celá čísla o sobě samém, na nejvyšší
+úrovni hlášení:
+
+- `agent_prev_cpu_ms` - čas CPU (user + system, i s potomky) PŘEDCHOZÍHO běhu
+  v milisekundách, násobek 10. Rozsah 0-600000. Je to ukládaná metrika
+  (`vps_metrics.agent_prev_cpu_ms`, agreguje se do `metrics_daily`, řada
+  `action=metric_series`) a kopíruje se i do `last_details`. `null` po prvním
+  běhu, po změně verze nebo po běhu, který byl ukončen (0.1.9 pak pošle i
+  `agent_prev_total_ms: null`), a u každého agenta do 0.1.8, který klíč
+  neposílá. Obě čísla párujte jen tehdy, když ani jedno není null.
+- `runs_skipped_killed` - běhy, které převzetí zámku po 300 s ukončilo, od
+  posledního přijatého hlášení. Rozsah 0-100000, jen v `last_details`, vedle
+  `runs_skipped_lock` a `runs_skipped_post`. Počet nad 0 přidá do výpadku sběru
+  `reports_missing` třetí důvod. Od agentů do 0.1.8 `null`, nikdy 0.
+
+Hodnota mimo rozsah, záporná, desetinná nebo nečíselná je `null`, nikdy mez.
+
+**Agent 0.1.13 (OpenWrt) přidává** do hodinového objektu `wan_path`:
+
+- vlastní čítače portu WAN ze stejného čtení `ethtool -S`, kumulativní:
+  `rx_overrun`, `rx_discard`, `bad_crc_event`, `mac_receive_error`,
+  `refill_errors`, `oversize_received`. `null` = ovladač takový název nevypisuje;
+  `0` je měření. Server každý ukládá jako hodinový **krok** (`wan_rx_overrun`,
+  `wan_rx_discard`, `wan_crc_errors`, `wan_mac_rx_errors`, `wan_refill_errors`,
+  `wan_oversize`), hlídaný stejně jako `wan_ring_drops`.
+- údaje modulu SFP v jednotkách jádra, jen když existuje právě jeden hwmon
+  modulu: `sfp_temp_mc`, `sfp_temp_max_mc`, `sfp_temp_crit_mc` (m°C, rozsah
+  -60000 až 200000) a `sfp_rx_power_uw`, `sfp_rx_power_min_uw`,
+  `sfp_rx_power_lcrit_uw` (µW, 0-100000), k tomu `sfp_phy_hwmon` (přísný bool:
+  `true` = PHY uvnitř modulu má vlastní hwmon, tedy metalický modul; `false`
+  o optice nic neříká). Jen v `last_details`, žádná řada. Sériové číslo ani
+  obsah EEPROM se nikdy neposílá.
+
+### `GET|POST node_api.php?action=get_monitors|post_results`
+
+Rozhraní pro vzdálené měřicí uzly. Autorizace sdíleným `cron_key`
+v `?key=` nebo v hlavičce `X-Node-Key` (`hash_equals`, tedy bez časového
+postranního kanálu); s prázdným `cron_key` je každé volání 403.
+
+Uzel si stáhne seznam monitorů ke kontrole a pošle zpátky výsledky se svou
+`location`, která se u řádku uloží jako `checked_from`. Právě tahle hodnota
+plní `action=regions`.
+
+Poslaný výsledek jen přidá řádek do `monitor_logs`, se `source = 'probe'`
+(nastaví ho server, z poslaných dat se nikdy nebere). Stav monitoru,
+`last_checked` a `last_details` zůstávají cronu, který uplatní údržbu,
+`alert_confirm_failures`, notifikace a životní cyklus incidentu; `details`
+výsledku se ignorují. Výsledek, jehož `status` není `up` ani `down`, se neuloží (sonda měří jen tyhle dva: její `warning` by se dostal do veřejného seznamu selhání, její `maintenance` nebo `unknown` by z naměřeného času udělal čas, který nikdo neměřil), a stejně tak výsledek
+pro monitor v údržbě (`is_in_maintenance`, jak ji uplatňuje cron): cron zapisuje
+okno jako řádky `maintenance` a `down` sondy v něm (503 plánované práce) by byl
+výpadkem v dostupnosti i v `action=sla_report`, ke kterému nikdy nebylo
+upozornění ani incident. `response_time` se ukládá v celých milisekundách
+(`bk_response_ms`): chybějící hodnota nebo 0 neúspěšné kontroly je NULL a 0
+u výsledku `up` (odpověď pod 1 ms) je 1 ms.
+
+Každý řádek `monitor_logs` nese svého zapisovatele v `source` (schéma
+20261101r024): `cron` (jeho vlastní kontroly, řádky údržby a `unknown` / `down`
+za mlčícího agenta), `heartbeat` (vyhodnocení heartbeat monitoru cronem),
+`agent` (`agent_api.php`) nebo `probe` (řádek poslaný sem). Řádek sondy je
+měření: počítá se do dostupnosti (`uptime_windows`, `daily_uptime`,
+`uptimePct` a `outageMinutes` v `sla_report`, odznak), do historie
+(`action=events`, řady latence, export CSV) i do `action=regions`. Výpadek ale
+nikdy nepotvrdí, nerozdělí ani mu nedá důvod: nepatří do řady pro
+`alert_confirm_failures` ani do okna upozornění na pomalou odezvu, nezačne,
+neukončí ani nerozdělí `lastOutage` a `mttrSec` v `action=sla_report` ani změnu
+v časové ose monitoru, v `action=events` nikdy není `statusChange` ani jeho
+`fromStatus` a neúspěšná kontrola sondy tam má `isDown` false a žádný konec
+výpadku. Počet incidentů, největší incident i měsíční mapa incidentů v přehledu ji také vynechají.
+`outageMinutes` tak může obsahovat selhání sondy, které `lastOutage` nemá.
+
+Důvod uvedený u stavu - `detail` zjištění o stavu v `action=findings`,
+diagnostika výpadků v administraci, denní připomínka, karta probíhajícího
+výpadku v `action=incidents` - je zpráva nejnovějšího řádku v současném stavu
+monitoru, který nezapsala sonda. Stejně tak každá „aktuální“ hodnota
+z nejnovějšího řádku: odezva v `action=monitors` a `metrics.php`, kód HTTP
+v `action=websites_overview` a fáze kontroly za tipy. Neúspěšná kontrola sondy
+posílá dobu, kterou čekala (až 8 s), a to žádná odezva monitoru není.
+
+Řádek z doby před schématem r024 `source` nemá (NULL) a počítá se všude jako
+dřív, i řádek sondy z té doby, dokud ho 30denní logy nesmažou.
+
+> **Stav:** měření nepocházejí z jednoho místa. Kromě hlavního serveru sem
+> každých pět minut posílá výsledky Cloudflare Worker (`cloudflare-agent.js`
+> v repozitáři agentů) z lokality Cloudflaru, kde zrovna běží, takže „služba je
+> mrtvá" od „náš server na ni nevidí" odlišit lze. Je to jediná sonda: sonda
+> GitHub Actions (`monitor.yml`) skončila 30. 10. 2026 a samostatný PHP uzel
+> (`node_client.php`) je pryč také - nikdo ho nespouštěl a nesl si vlastní
+> kopie kontrol. Řádky sondy GitHub si místo nechají, dokud logy nevyprší
+> (30 dní); jsou z doby před schématem r024, takže `source` nemají.
+
+---
+
+## Ostatní endpointy
+
+| Endpoint | Formát | Přístup | Popis |
+|---|---|---|---|
+| `metrics.php?token=…` | Prometheus text 0.0.4 | token | Scrapování externím Prometheem; bez nastaveného tokenu je vypnutý. Token lze poslat i hlavičkou `Authorization: Bearer` |
+| `badge.php?id=&type=` | 302 | veřejné | Zastaralý alias - přesměruje na `action=badge` (staré README embedy fungují dál) |
+| `widget.php?id=` | 302 | veřejné | Zastaralý alias - přesměruje na `action=badge&type=uptime`, tedy na dostupnost za 30 dní, kterou jeho HTML karta nesla jako hlavní číslo. Iframe karty se na cizím webu nikdy neukázal (`X-Frame-Options: SAMEORIGIN`); `<img>` odznaku ano |
+| `health.php` | JSON | admin nebo CLI | Kontrola úplnosti schématu databáze a toho, že config.php nic nevypisuje. `Schema tables` a `Schema columns` jmenují každou tabulku a sloupec ze schema.sql, které databázi chybí (denní samotest cronu zapíše do logu týž seznam); bez čitelného schema.sql neprojde ani jedna. `schema_version` neprojde, dokud uložená verze není ta, kterou čeká db.php: krok migrace skutečně selhal (kontrola ho jmenuje a db.php seznam spustí znovu 10 minut po každém neúspěšném běhu), chybí migrations.php, nebo je nahrání v půlce |
+| `cron.php[?key=…]` | text | CLI nebo `cron_key` | Sběr dat; z webu jen s klíčem |
+| `api.php?action=portal_status` | JSON | veřejné | Servery herního portálu: `teamspeak`, `minecraft` a `discord`, každý se `status` (`up` / `down` / `warning` / `maintenance`; `unknown`, když sběr dat stojí; `null`, když hru nepokrývá žádný veřejný monitor), `online` (`up` nebo `warning`, zhoršený server pořád odpovídá), `checkedAt` a `name`, k tomu `clients_online` / `clients_max`, `players_online` / `players_max` / `version` nebo `online_count` / `total_count`. Jeden monitor na hru: první podle id přesně toho typu na veřejné stránce. Počet přijde jen u serveru online a je `null`, když ho nikdo nezměřil; `total_count` je vždy `null` (widget Discordu celkový počet členů nemá). `api.php` bez akce odpovídá stejně s hlavičkou `Deprecation: @1793750400` (4. 11. 2026) a skončí chybou 400 jako každá neznámá akce, až portál bude volat `portal_status`. Selhání je `500 {"error": "overview_unavailable"}` |
+
+---
+
+## Zápisy: POST + CSRF
+
+Od 2026-08 každá stav měnící akce přijímá **jen POST** (GET dostane 405)
+a každý session-autentizovaný zápis musí nést CSRF token session v hlavičce
+`X-CSRF-Token` (multipart formuláře mohou poslat pole `csrf_token`). Token
+vrací `action=login`, `action=login_2fa` a `action=session`; každé
+přihlášení ho v session nechá, i přes OAuth. Tokenem autentizované toky
+(`set_password`) a akce session teprve zakládající (`login`, `login_2fa`,
+`setup`, `forgot_password`, `logout`) jsou vyjmuté. Dvě akce zapisují do
+session na GET. `oauth_start` do ní dá nový `state` a poskytovatele a nahradí
+tak cestu už rozběhnutou; jako každý odkaz ho jde otevřít i z cizího webu.
+Poskytovatel vrátí prohlížeč na
+`oauth_callback`, který přihlásí nebo propojí poskytovatele s účtem; místo
+tokenu ho hlídá jednorázový `state` z vlastního `oauth_start` téže session
+(viz Autentizace). CORS odráží jen vlastní origin - cizí origin
+`Access-Control-Allow-Origin` nedostane vůbec.
+
+Cookie session má `HttpOnly` a `SameSite=Lax`, přes HTTPS i `Secure`. db.php je
+nastaví dřív, než config.php stihne session spustit, a `/status/.user.ini` je
+nastaví znovu při startu PHP, takže už nezávisí na tom, jestli nasazený
+config.php nese vlastní blok pro cookie.
+
+## Verzování a stabilita
+
+API nemá verzování v URL. Aplikace i SPA se nasazují společně, takže se
+kontrakt může měnit mezi commity.
+
+Za stabilní se dá považovat to, co používají nasazená zařízení a co se tedy
+nedá změnit bez zásahu na nich:
+
+- `agent_api.php` - běží na cizích strojích
+- `node_api.php` - totéž
+- `heartbeat.php` - URL je zadrátovaná v cronech
+- `metrics.php` - scrapuje Prometheus
+
+Zbytek slouží vlastnímu frontendu a mění se s ním.

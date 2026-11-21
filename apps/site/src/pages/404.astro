@@ -1,0 +1,45 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+// Cloudflare Pages serves this file with status 404 for every path that has no
+// page of its own (and cs/404.html under /cs/). Without a 404.html Pages falls
+// back to SPA mode and answers any typo, or an old link such as /install.sh,
+// with the home page and 200.
+---
+
+<Layout title="Page not found | Blood Kings Monitoring" description="This address does not exist on monitoring.bloodkings.eu." noindex>
+  <section class="not-found section">
+    <div class="container text-center">
+      <span class="badge badge-accent">404</span>
+      <h1>Page not found</h1>
+      <p class="section-subtitle">
+        This address does not exist or has moved. The agent scripts and their install commands are on the Download page.
+      </p>
+      <nav class="not-found-actions" aria-label="Where next">
+        <a href="/" class="btn btn-primary">Home page</a>
+        <a href="/download" class="btn btn-secondary">Download</a>
+        <a href="/docs" class="btn btn-secondary">Docs</a>
+      </nav>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .not-found {
+    min-height: 60vh;
+    display: flex;
+    align-items: center;
+  }
+
+  .not-found h1 {
+    margin-top: 1rem;
+  }
+
+  .not-found-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-top: 2rem;
+  }
+</style>

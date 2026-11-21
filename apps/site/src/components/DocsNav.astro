@@ -1,0 +1,165 @@
+---
+/**
+ * DocsNav.astro - the docs table of contents, rendered twice from one list:
+ * a sticky sidebar on wide screens and an "On this page" <details> at 992 px
+ * and below, where the sidebar used to vanish and leave phones with no way
+ * to jump between sections.
+ */
+interface Link {
+  href: string;
+  label: string;
+}
+
+interface Group {
+  title: string;
+  links: Link[];
+}
+
+interface Props {
+  groups: Group[];
+  label: string;
+}
+
+const { groups, label } = Astro.props;
+---
+
+<aside class="docs-sidebar">
+  <nav aria-label={label}>
+    {
+      groups.map((group, gi) => (
+        <div class="docs-sidebar-section">
+          <p class="sidebar-heading">{group.title}</p>
+          {group.links.map((link, li) => (
+            <a href={link.href} class:list={['sidebar-link', { active: gi === 0 && li === 0 }]}>
+              {link.label}
+            </a>
+          ))}
+        </div>
+      ))
+    }
+  </nav>
+</aside>
+
+<details class="docs-toc-mobile">
+  <summary>{label}</summary>
+  <nav aria-label={label}>
+    {
+      groups.map((group) => (
+        <div class="toc-group">
+          <p class="toc-title">{group.title}</p>
+          {group.links.map((link) => (
+            <a href={link.href}>{link.label}</a>
+          ))}
+        </div>
+      ))
+    }
+  </nav>
+</details>
+
+<script>
+  // Picking a section closes the menu, so the section is not hidden under it.
+  const toc = document.querySelector<HTMLDetailsElement>('.docs-toc-mobile');
+  toc?.querySelectorAll('a').forEach((link) => link.addEventListener('click', () => toc.removeAttribute('open')));
+</script>
+
+<style>
+  .docs-sidebar {
+    position: sticky;
+    top: calc(var(--header-height) + 2rem);
+    height: fit-content;
+  }
+
+  .docs-sidebar nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+
+  .docs-sidebar-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .sidebar-heading {
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-hi);
+    margin-bottom: 0.5rem;
+  }
+
+  .sidebar-link {
+    font-size: 0.9rem;
+    color: var(--text-mid);
+    padding: 0.25rem 0;
+    border-left: 2px solid transparent;
+    padding-left: 1rem;
+    margin-left: -2px;
+  }
+
+  .sidebar-link:hover {
+    color: var(--text-hi);
+  }
+
+  .sidebar-link.active {
+    color: var(--brand-500);
+    font-weight: 600;
+    border-color: var(--brand-500);
+  }
+
+  .docs-toc-mobile {
+    display: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface-1);
+  }
+
+  .docs-toc-mobile summary {
+    min-height: 2.75rem;
+    padding: 0.75rem 1rem;
+    font-weight: 600;
+    color: var(--text-hi);
+    cursor: pointer;
+  }
+
+  .docs-toc-mobile nav {
+    display: grid;
+    gap: 1rem;
+    padding: 0 1rem 1rem;
+  }
+
+  .toc-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .toc-title {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-mid);
+  }
+
+  .toc-group a {
+    color: var(--text-mid);
+    padding: 0.35rem 0;
+  }
+
+  .toc-group a:hover {
+    color: var(--text-hi);
+  }
+
+  @media (max-width: 992px) {
+    .docs-sidebar {
+      display: none;
+    }
+
+    .docs-toc-mobile {
+      display: block;
+    }
+  }
+</style>

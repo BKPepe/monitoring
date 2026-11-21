@@ -1,0 +1,47 @@
+name: Web health (security.txt, robots, 404s, Cloudflare)
+
+# The files served at the two hosts' roots, checked from outside once a week.
+# security.txt carries an Expires date (RFC 9116); it is renewed by every
+# deploy, and this run fails 30 days before a copy lapses, so a quiet month
+# without deploys cannot let it expire unnoticed. The fix is a manual run of
+# deploy-hosting.yml with parts = root (bloodkings.eu), or a re-run of
+# deploy.yml (monitoring.bloodkings.eu).
+# The Cloudflare step checks settings made in the dashboard, not in this
+# repository: it stays red until all four are in place, and each error line
+# names the one still missing.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Live root files on both hosts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          check-latest: true
+
+      # Every check runs, so one red run lists everything that is wrong.
+      - name: security.txt na obou hostech (Expires aspoň 30 dní dopředu)
+        if: ${{ !cancelled() }}
+        run: node root/deploy.mjs check-security
+
+      - name: bloodkings.eu - robots.txt, sitemap.xml, chybové stránky
+        if: ${{ !cancelled() }}
+        run: node root/deploy.mjs check-root
+
+      - name: monitoring.bloodkings.eu - chybějící stránka je 404
+        if: ${{ !cancelled() }}
+        run: node root/deploy.mjs check-site
+
+      - name: Cloudflare - bez x-turbo-charged-by, www přes proxy a 301, pages.dev 301
+        if: ${{ !cancelled() }}
+        run: node root/deploy.mjs check-cloudflare

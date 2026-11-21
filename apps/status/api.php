@@ -1,0 +1,7965 @@
+<?php
+/**
+ * Blood Kings - Public Status & SPA API
+ * 
+ * Serves the live status of game servers, websites, nodes and users from the MySQL database.
+ */
+
+header('Content-Type: application/json; charset=utf-8');
+
+// The request's own origin, for CORS only. A link this API hands out is
+// built on bk_link_origin(), never on the Host header.
+$request_scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+$host = $_SERVER['HTTP_HOST'] ?? 'bloodkings.eu';
+$default_origin = $request_scheme . '://' . $host;
+
+// CORS: ANY Origin used to be reflected here, with Allow-Credentials: true -
+// the confidentiality of every authenticated response then rested solely on
+// the cookie's SameSite=Lax attribute. Only the site's own origin is allowed
+// (the SPA and the legacy pages run on the same domain as the API); a foreign
+// origin gets no headers at all and the browser withholds the response from it.
+$origin = (string)($_SERVER['HTTP_ORIGIN'] ?? '');
+$bk_host_no_port = strtolower(explode(':', (string)$host)[0]);
+$bk_allowed_origins = [
+    $default_origin,
+    'https://' . $bk_host_no_port,
+    'http://' . $bk_host_no_port,
+];
+if ($origin === '' || in_array($origin, $bk_allowed_origins, true)) {
+    header('Access-Control-Allow-Origin: ' . ($origin !== '' ? $origin : $default_origin));
+    header('Access-Control-Allow-Credentials: true');
+}
+header('Vary: Origin');
+
+header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+header('Access-Control-Allow-Headers: Content-Type, X-CSRF-Token');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
+
+$action = $_GET['action'] ?? $_POST['action'] ?? '';
+
+/**
+ * The first-run installer (site W1-5) runs where the rest of the API cannot:
+ * without config.php, on placeholder credentials, or on an empty database.
+ * db.php then hands over `$pdo = null` (or a connection without a schema)
+ * instead of answering needs_setup, and installer.php decides - including
+ * the lock that refuses every step once the database connects and an account
+ * exists. It exits before functions.php, which needs a finished install. The
+ * installer keeps the session open and writes only its own CSRF token there.
+ */
+if ($action === 'install_status' || $action === 'install_test_db' || $action === 'install_write_config'
+    || $action === 'install_import_schema' || $action === 'install_cron') {
+    define('BK_INSTALL_REQUEST', true);
+}
+
+// db.php loads config.php itself, after it has set the session cookie flags.
+// Requiring config.php first let its session start before them, and the
+// admin cookie went out without HttpOnly and SameSite.
+require_once __DIR__ . '/db.php';
+if (defined('BK_INSTALL_REQUEST')) {
+    require_once __DIR__ . '/installer.php';
+    bk_install_dispatch((string)$action, $pdo ?? null, __DIR__);
+}
+require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/lang.php';
+
+/**
+ * Request text as the error log may show it: every byte outside printable
+ * ASCII (a newline, invalid UTF-8) written as \xNN, and the rest cut after
+ * $max bytes with "…". $action comes from the query string unchecked, and a
+ * newline in it wrote a log line of the caller's choosing.
+ */
+function bk_api_printable(mixed $text, int $max = 100): string {
+    $text = is_string($text) ? $text : get_debug_type($text);
+    $shown = (string)preg_replace_callback('/[^\x20-\x7E]/', fn (array $m): string => sprintf('\x%02X', ord($m[0])), substr($text, 0, $max));
+    return strlen($text) > $max ? $shown . '…' : $shown;
+}
+
+/**
+ * A read that failed: an error status and a code, never a success body.
+ *
+ * Many catch blocks here used to answer 200 with an empty list - `monitors: []`,
+ * `incidents: []`, `series: {}` - and every reader turned that into "all
+ * online", "no outages" or "nothing in the database" precisely when nothing
+ * was known. Now the status says it failed, `error` is a stable code the app
+ * can branch on, `message` is the sentence it shows (app-api.ts prefers it),
+ * and the exception text goes to the server log only: it can name tables,
+ * columns and the database host.
+ */
+function bk_api_fail(string $code, int $http = 500, ?Throwable $e = null, string $message = ''): never {
+    global $action;
+    if ($e !== null) {
+        error_log('[api.php action=' . bk_api_printable($action) . '] ' . $code . ': ' . $e->getMessage());
+    }
+    if (!headers_sent()) {
+        http_response_code($http);
+        header('Cache-Control: no-store');
+    }
+    $body = ['error' => $code];
+    if ($message !== '') {
+        $body['message'] = $message;
+    }
+    echo json_encode($body, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/**
+ * A JSON answer with $status, and the end of the request.
+ *
+ * The body is byte for byte what `http_response_code(N); echo
+ * json_encode($payload, JSON_UNESCAPED_UNICODE); exit;` sent, the pair this
+ * replaces in about 160 places, with two differences. A 5xx also goes to the
+ * server log with the action and its `error`, where some catch blocks logged
+ * nothing. And a payload json_encode() cannot encode (invalid UTF-8 in a
+ * stored value or in the request) answers 500 with an error, where `echo
+ * false` sent the error status with an empty body. The success answers
+ * that echo json_encode() themselves are unchanged: one that cannot be
+ * encoded is still an empty 200.
+ *
+ * Psalm reports the taint of every caller's payload at the one echo below,
+ * and the baseline waives that echo as `$body`, so a request value in a new
+ * answer does not fail it: the body is JSON, sent as application/json.
+ */
+function bk_api_json(array $payload, int $status = 200): never {
+    global $action;
+    $log_action = bk_api_printable($action);
+    $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
+    if ($body === false) {
+        error_log('[api.php action=' . $log_action . '] HTTP ' . $status . ' answer not encoded: ' . json_last_error_msg());
+        $status = 500;
+        $payload = ['error' => 'Odpověď serveru se nepodařilo sestavit.'];
+        $body = (string)json_encode($payload, JSON_UNESCAPED_UNICODE);
+    }
+    if ($status >= 500) {
+        $logged = $payload['error'] ?? null;
+        error_log('[api.php action=' . $log_action . '] HTTP ' . $status . ': '
+            . (is_string($logged) ? $logged : (string)json_encode($logged, JSON_UNESCAPED_UNICODE)));
+    }
+    http_response_code($status);
+    echo $body;
+    exit;
+}
+
+/**
+ * An error answer: `{"error": "<a sentence for people>"}` with $extra keys
+ * after it, $status, and the end of the request (bk_api_json()).
+ */
+function bk_api_error(int $status, string $message, array $extra = []): never {
+    bk_api_json(['error' => $message] + $extra, $status);
+}
+
+/**
+ * bk_password_attempt() for the API: true for the right password, and a locked
+ * account answers 429 here instead of the action's own "wrong password", which
+ * would read as if the password had been tried.
+ *
+ * @param array{id: int|string, username: string, password_hash: string} $user
+ */
+function bk_api_password_ok(PDO $pdo, array $user, string $password): bool {
+    $attempt = bk_password_attempt($pdo, $user, $password);
+    if ($attempt === 'locked') {
+        bk_api_error(429, 'Příliš mnoho neúspěšných pokusů o heslo. Zkuste to znovu za chvíli.');
+    }
+    return $attempt === 'ok';
+}
+
+/**
+ * Release the session lock for endpoints that only read from it.
+ *
+ * config.php calls session_start() on every request and PHP holds an exclusive
+ * lock on the session file until the script ends. The browser opens several
+ * API requests in parallel when a page loads, but they are served one after
+ * another - each waiting for the previous to finish.
+ *
+ * Measured on production before this: `daily_uptime` takes 0.23 s on its own,
+ * but 1.68 s when it runs alongside the other dashboard requests. The endpoint
+ * was never slow; it was waiting in a queue.
+ *
+ * $_SESSION stays readable after this call - only writes stop being persisted.
+ * That is why every action that logs in, logs out or otherwise changes the
+ * session has to be listed here, or its changes would be silently thrown away.
+ * Keeping that list correct is not left to memory - run_session_lock_lint.php
+ * re-derives it from the code and fails the build when the two disagree.
+ */
+$bk_session_writers = ['login', 'login_2fa', 'oauth_start', 'oauth_link_start', 'oauth_callback', 'logout', 'setup', 'totp_setup', 'totp_confirm'];
+if (!in_array($action, $bk_session_writers, true) && session_status() === PHP_SESSION_ACTIVE) {
+    session_write_close();
+}
+
+/**
+ * Write guard: every state-changing action must arrive as POST, and every
+ * session-authenticated write must carry the session's CSRF token
+ * (X-CSRF-Token header, csrf_token field for multipart forms).
+ *
+ * Until now the only cross-site protection was SameSite=Lax on the cookie -
+ * a single attribute between "safe" and "any website may call admin actions".
+ * And because a Lax cookie IS sent on top-level GET navigation, actions reading
+ * parameters from $_GET (send_digest) could be fired by a plain link.
+ */
+$bk_post_only_actions = [
+    // session-authenticated writes (these also require CSRF)
+    'save_monitor', 'delete_monitor', 'archive_monitor', 'unarchive_monitor', 'import_discovered_service', 'upload_logo',
+    'trigger_remote_action', 'convert_to_agent_check', 'save_settings', 'test_notification', 'toggle_maintenance',
+    'clear_monitor_history', 'redetect_location',
+    'generate_metrics_token', 'incident_action', 'create_incident',
+    'save_preset', 'delete_preset',
+    'update_profile', 'oauth_link_start', 'oauth_unlink', 'totp_setup', 'totp_confirm', 'totp_disable', 'totp_recovery_regenerate',
+    'save_status_page', 'delete_status_page', 'send_digest', 'save_subscriptions',
+    'save_annotation', 'delete_annotation', 'save_user', 'delete_user',
+    'router_recommendation_mute', 'wan_settings_save',
+    'delete_public_subscriber',
+    // these establish the session / authenticate by other means than the cookie - POST yes, CSRF no
+    'login', 'login_2fa', 'logout', 'setup', 'forgot_password', 'set_password',
+    'public_subscribe', 'public_subscribe_confirm', 'public_unsubscribe',
+];
+$bk_csrf_exempt = ['login', 'login_2fa', 'logout', 'setup', 'forgot_password', 'set_password',
+    'public_subscribe', 'public_subscribe_confirm', 'public_unsubscribe'];
+// alerts_read_state, dashboard_layout and heartbeat_info are GET read + POST
+// write in one action.
+$bk_csrf_on_post = array_merge(
+    array_values(array_diff($bk_post_only_actions, $bk_csrf_exempt)),
+    ['alerts_read_state', 'dashboard_layout', 'heartbeat_info']
+);
+
+if (in_array($action, $bk_post_only_actions, true) && $_SERVER['REQUEST_METHOD'] !== 'POST') {
+    bk_api_error(405, 'Vyžadován POST.');
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array($action, $bk_csrf_on_post, true)) {
+    $bk_csrf_in = (string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? ($_POST['csrf_token'] ?? ''));
+    if ($bk_csrf_in === '' || empty($_SESSION['csrf_token']) || !hash_equals((string)$_SESSION['csrf_token'], $bk_csrf_in)) {
+        bk_api_error(403, 'Chybí nebo nesouhlasí CSRF token. Obnovte stránku a zkuste akci znovu.');
+    }
+}
+
+// 1. Session state check (login from admin.php / PHP session)
+if ($action === 'session') {
+    $is_logged_in = !empty($_SESSION['admin_logged_in']);
+    $user = null;
+    if ($is_logged_in) {
+        // The e-mail used to be hardcoded as 'admin@bloodkings.eu' regardless
+        // of who was logged in. Anyone else saw a stranger's address as their own.
+        $u_email = null;
+        $u_totp = null;
+        try {
+            $stmt_me = $pdo->prepare("SELECT email, totp_enabled FROM users WHERE id = ? LIMIT 1");
+            $stmt_me->execute([(int)($_SESSION['admin_id'] ?? 0)]);
+            $me_row = $stmt_me->fetch();
+            if ($me_row) {
+                $u_email = ($me_row['email'] ?? '') !== '' ? $me_row['email'] : null;
+                $u_totp = !empty($me_row['totp_enabled']);
+            }
+        } catch (PDOException $e) {
+            error_log('[api] session: e-mail uživatele se nepodařilo načíst: ' . $e->getMessage());
+        }
+
+        $user = [
+            'id' => $_SESSION['admin_id'] ?? 1,
+            'username' => $_SESSION['admin_username'] ?? 'admin',
+            // NULL = address unknown; inventing one is worse than not showing it.
+            'email' => $u_email,
+            'role' => $_SESSION['admin_role'] ?? 'admin',
+            // NULL = could not determine; false would claim "disabled".
+            'totpEnabled' => $u_totp,
+        ];
+    }
+
+    // The app reads `installed` to decide between offering first-account
+    // creation and the login form. It was never sent before, so React stayed
+    // on its default `true` and the setup wizard was unreachable.
+    $has_users = null;
+    try {
+        $has_users = ((int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn()) > 0;
+    } catch (PDOException $e) {
+        // Without the users table nothing can be said. `null` means "we do not
+        // know" - the app handles that better than an invented `false`, which
+        // would offer account creation on top of an unnamed database state.
+        error_log('[api] session: stav instalace se nepodařilo zjistit: ' . $e->getMessage());
+    }
+
+    // Only the providers with a client ID get a button on the login page
+    // (W2-12): a GitHub button on an install without GitHub OAuth led to an
+    // error page. Keys only - the client ID itself never leaves the server.
+    // Same test as admin.php's login form.
+    $oauth_providers = [];
+    foreach (array_keys(bk_oauth_providers()) as $op_key) {
+        if (trim((string)get_setting('oauth_' . $op_key . '_client_id')) !== '') {
+            $oauth_providers[] = $op_key;
+        }
+    }
+
+    echo json_encode([
+        'authenticated' => $is_logged_in,
+        'user' => $user,
+        'installed' => $has_users,
+        'csrfToken' => $_SESSION['csrf_token'] ?? null,
+        'loginUrl' => '/app/setup',
+        'oauthProviders' => $oauth_providers,
+        // A sign-in that passed its first step (the password, or an OAuth
+        // provider) and waits for the 2FA code: the login page asks for the
+        // code alone and sends it to action=login_2fa.
+        'pending2fa' => !$is_logged_in && !empty($_SESSION['pending_2fa_user_id']),
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// 1b. Login (SPA) - mirrors admin.php's own POST login handler so both
+// front ends share the same session keys, rate limiting and 2FA flow.
+// This action never existed before: the SPA's login call silently hit the
+// "unknown action" fallback below (HTTP 200, unrelated payload), so every
+// login attempt looked successful client-side while no session was ever
+// created.
+if ($action === 'login') {
+    $login_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $username = trim($login_input['username'] ?? '');
+    $password = (string)($login_input['password'] ?? '');
+    $totp_code = trim($login_input['totp_code'] ?? '');
+
+    $lockout_secs = bk_login_lockout_seconds($pdo, $username);
+    if ($lockout_secs > 0) {
+        bk_api_json(['success' => false, 'message' => 'Too many failed attempts. Try again in ' . ceil($lockout_secs / 60) . ' min.'], 429);
+    }
+
+    $stmt = $pdo->prepare("SELECT * FROM users WHERE username = ? LIMIT 1");
+    $stmt->execute([$username]);
+    $user = $stmt->fetch();
+
+    if (!$user || !password_verify($password, $user['password_hash'])) {
+        bk_audit_log($pdo, 'login_failed', 'Invalid username/password: ' . $username, null, null, null, $username);
+        bk_api_json(['success' => false, 'message' => 'Invalid username or password.'], 401);
+    }
+
+    $login_recovery_left = null;
+    if (!empty($user['totp_enabled']) && $totp_code !== '') {
+        // The code came with the password, both steps in one request. A
+        // one-time recovery code works in place of the TOTP code.
+        $login_second = bk_login_second_factor($pdo, $user, $totp_code);
+        if (!$login_second['ok']) {
+            bk_audit_log($pdo, 'login_failed', 'Invalid 2FA code', null, null, $user['id'], $user['username']);
+            bk_api_json(['success' => false, 'message' => 'Invalid 2FA code.'], 401);
+        }
+        $login_recovery_left = $login_second['recovery_left'];
+        bk_login_start_session($pdo, $user, 'Password + 2FA');
+    } elseif (!bk_login_first_factor_passed($pdo, $user, 'Password')) {
+        // Password checked out, but the account has 2FA - the session only
+        // holds the pending user id, the same step admin.php's password and
+        // OAuth sign-ins stop at.
+        echo json_encode(['success' => true, 'requires2fa' => true]);
+        exit;
+    }
+
+    bk_api_signed_in($user, $login_recovery_left);
+}
+
+/**
+ * The answer of a completed sign-in (action=login, action=login_2fa): the
+ * account and the CSRF token of the session it now has.
+ * recoveryCodesRemaining is a number only when a recovery code signed it in,
+ * so the app can say how many one-time codes are left.
+ */
+function bk_api_signed_in(array $user, ?int $recovery_left): never {
+    bk_api_json([
+        'success' => true,
+        'authenticated' => true,
+        'user' => ['id' => (int)$user['id'], 'username' => $user['username'], 'email' => $user['email'] ?? '', 'role' => $user['role']],
+        'csrfToken' => bk_csrf_token(),
+        'recoveryCodesRemaining' => $recovery_left,
+    ]);
+}
+
+// 1b2. The 2FA code of a sign-in the session is waiting on. Its first step
+// was the password (action=login answered requires2fa, or admin.php's form) or
+// an OAuth provider (oauth_callback sent the browser to /app/setup). Until a
+// code is accepted the session holds only the account id, never a sign-in; a
+// recovery code works in place of the TOTP code, and a wrong one counts
+// towards the lockout like a wrong password.
+if ($action === 'login_2fa') {
+    $l2_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $l2_code = trim((string)($l2_input['totp_code'] ?? ''));
+    $l2_user = false;
+    if (!empty($_SESSION['pending_2fa_user_id'])) {
+        $stmt = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+        $stmt->execute([(int)$_SESSION['pending_2fa_user_id']]);
+        $l2_user = $stmt->fetch();
+    }
+    if (!$l2_user || empty($l2_user['totp_enabled'])) {
+        // Nothing waits, or the account is gone or no longer has 2FA: the
+        // sign-in starts again from its first step.
+        unset($_SESSION['pending_2fa_user_id'], $_SESSION['pending_2fa_via']);
+        bk_api_json(['success' => false, 'message' => 'No sign-in is waiting for a code. Sign in again.'], 401);
+    }
+    $lockout_secs = bk_login_lockout_seconds($pdo, $l2_user['username']);
+    if ($lockout_secs > 0) {
+        bk_api_json(['success' => false, 'message' => 'Too many failed attempts. Try again in ' . ceil($lockout_secs / 60) . ' min.'], 429);
+    }
+    $l2_second = bk_login_second_factor($pdo, $l2_user, $l2_code);
+    if (!$l2_second['ok']) {
+        bk_audit_log($pdo, 'login_failed', 'Invalid 2FA code', null, null, $l2_user['id'], $l2_user['username']);
+        bk_api_json(['success' => false, 'message' => 'Invalid 2FA code.'], 401);
+    }
+    // The audit names the first step: a session pending from before that
+    // was recorded could only have come through the password.
+    bk_login_start_session($pdo, $l2_user, ($_SESSION['pending_2fa_via'] ?? 'Password') . ' + 2FA');
+    bk_api_signed_in($l2_user, $l2_second['recovery_left']);
+}
+
+// 1b3. OAuth sign-in and account linking, a browser navigation in both steps.
+//
+// oauth_start (?provider=github|google|discord|gitlab) sends the browser to the
+// provider with a fresh state. A link to the signed-in account starts at
+// oauth_link_start instead, which asks for the password and answers the address
+// to send the browser to. The provider answers at admin.php, the callback URL every
+// provider has registered, which forwards here to oauth_callback. Both end in
+// /app: the dashboard, the profile after a link, or the login page, which asks
+// for the 2FA code of a pending sign-in or names what went wrong
+// (bk_oauth_problem_url). Nothing here answers JSON.
+//
+// The identity is only ever the provider's immutable account id
+// (oauth_provider + oauth_id), never the e-mail. Sign-in used to match the
+// e-mail GitHub returned, and an admin can quietly change any user's e-mail,
+// so changing a stranger's address and signing in with one's own OAuth
+// account would have taken that account over. oauth_id is written only here,
+// after a link the account's owner started with the password while signed in
+// and is still signed in to finish (bk_oauth_finish).
+if ($action === 'oauth_start') {
+    $os_provider = (string)($_GET['provider'] ?? '');
+    if (!empty($_GET['link'])) {
+        // An old link or bookmark: the password is asked for on the profile,
+        // after signing in if the session has ended.
+        header('Location: ' . (empty($_SESSION['admin_logged_in'])
+            ? bk_setup_url() . '?' . http_build_query(['next' => '/profile'])
+            : bk_app_url('/profile')));
+        exit;
+    }
+    $os_url = bk_oauth_authorize_url($os_provider, null);
+    header('Location: ' . ($os_url ?? bk_oauth_problem_url('unavailable', $os_provider, false)));
+    exit;
+}
+
+// A linked provider signs in without the password, so a link outlives the
+// session that made it: a stolen session could otherwise add its own provider
+// account and keep coming back. Unlinking asks for the password for the same reason.
+if ($action === 'oauth_link_start') {
+    bk_require_login();
+    $ol_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $ol_provider = (string)($ol_input['provider'] ?? '');
+    $ol_uid = (int)$_SESSION['admin_id'];
+    try {
+        $stmt_ol = $pdo->prepare("SELECT id, username, password_hash FROM users WHERE id = ? LIMIT 1");
+        $stmt_ol->execute([$ol_uid]);
+        $ol_me = $stmt_ol->fetch();
+    } catch (Throwable $e) {
+        bk_api_fail('oauth_link_start', 500, $e, 'Propojení se nepodařilo zahájit.');
+    }
+    if ($ol_me === false || !bk_api_password_ok($pdo, $ol_me, (string)($ol_input['password'] ?? ''))) {
+        bk_api_error(400, 'Nesprávné heslo - účet se nepropojí.');
+    }
+    bk_api_json(['url' => bk_oauth_authorize_url($ol_provider, $ol_uid) ?? bk_oauth_problem_url('unavailable', $ol_provider, true)]);
+}
+
+if ($action === 'oauth_callback') {
+    $oc_link = isset($_SESSION['oauth_link_user_id']) ? (int)$_SESSION['oauth_link_user_id'] : null;
+    $oc_expected = (string)($_SESSION['oauth_state'] ?? '');
+    $oc_provider = (string)($_SESSION['oauth_provider'] ?? '');
+    $oc_state = is_string($_GET['state'] ?? null) ? $_GET['state'] : '';
+    $oc_code = is_string($_GET['code'] ?? null) ? $_GET['code'] : '';
+    // A state this session did not issue is a forged or replayed answer (or a
+    // stale tab). It leaves the session's own state alone, so the round trip
+    // the session did start can still finish.
+    if ($oc_expected === '' || !hash_equals($oc_expected, $oc_state)
+        || !isset(bk_oauth_providers()[$oc_provider])) {
+        header('Location: ' . bk_oauth_problem_url('state', $oc_provider, $oc_link !== null));
+        exit;
+    }
+    unset($_SESSION['oauth_state'], $_SESSION['oauth_provider'], $_SESSION['oauth_link_user_id']);
+    if ($oc_code === '') {
+        // The provider answered with an error instead of a code: the person
+        // cancelled at the provider (access_denied), or it refused the request.
+        // Anyone holding a state can write that error, so the log gets it as
+        // printable ASCII: a newline in it would start a line of their own.
+        $oc_error = is_string($_GET['error'] ?? null) ? $_GET['error'] : '';
+        error_log('[oauth] ' . $oc_provider . ' answered without a code: ' . bk_api_printable($oc_error));
+        header('Location: ' . bk_oauth_problem_url($oc_error === 'access_denied' ? 'denied' : 'provider', $oc_provider, $oc_link !== null));
+        exit;
+    }
+    $oc_identity = bk_oauth_fetch_identity($oc_provider, $oc_code, bk_oauth_redirect_uri());
+    if (!$oc_identity['ok']) {
+        error_log('[oauth] ' . $oc_provider . ': ' . $oc_identity['error']);
+        header('Location: ' . bk_oauth_problem_url('provider', $oc_provider, $oc_link !== null));
+        exit;
+    }
+    header('Location: ' . bk_oauth_finish($pdo, $oc_provider, (string)$oc_identity['id'], $oc_link));
+    exit;
+}
+
+// 1c. Logout (SPA)
+if ($action === 'logout') {
+    // Recorded like the legacy admin page's sign-out, while the session still names the account.
+    if (!empty($_SESSION['admin_logged_in'])) {
+        bk_audit_log($pdo, 'logout');
+    }
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $params['path'], $params['domain'], $params['secure'], $params['httponly']);
+    }
+    session_destroy();
+    echo json_encode(['success' => true]);
+    exit;
+}
+
+// 2. List of all monitors from the database
+if ($action === 'monitors') {
+    $viewer = bk_viewer();
+    // Two views of one list. scope=public - and every anonymous caller - gets
+    // the public status of every monitor: the same for everyone, with no host
+    // internals. The app view needs a login and shows a user only the monitors
+    // assigned to them, but those whole; an admin sees every monitor.
+    $public_view = ($_GET['scope'] ?? '') === 'public' || !$viewer['logged_in'];
+    $is_admin = $viewer['is_admin'] && !$public_view;
+    // The archive is its own list: the live list leaves archived monitors out and
+    // archived=1 shows only them - to the app, never to the public view.
+    $mon_archived = !$public_view && ($_GET['archived'] ?? '') === '1';
+    $mon_archive_sql = $mon_archived ? 'm.archived_at IS NOT NULL' : 'm.archived_at IS NULL';
+    $monitors = [];
+    $details_by_id = [];
+
+    // The base list. response_time/cpu_usage/ram_usage/hdd_usage are NOT
+    // columns of the monitors table (never were - confirmed live: "Unknown column
+    // 'response_time'") - they are the latest measured values from monitor_logs
+    // (availability checks; cron's, not a remote probe's, whose failed check
+    // sends the time it waited) and vps_metrics (agent reports), attached via
+    // subquery/join. This must NOT fail because of the extended fields below
+    // (exactly that happened in production: one query for 20+ columns at once,
+    // one schema mismatch = the whole monitor list gone, and the app with it).
+    try {
+        // The public view lists the public set only (W1-G3): servers, the
+        // home router and agent services stay off it unless the owner puts
+        // them on. Read inside the try: a failed read is a 500, not a list.
+        [$mon_scope_sql, $mon_scope_params] = bk_monitor_scope_sql($public_view ? bk_public_monitor_ids($pdo) : bk_visible_monitor_ids($pdo), 'm.id');
+        $stmt = $pdo->prepare("
+            SELECT m.id, m.name, m.type, m.target, m.port, m.status, m.category, m.asset_id,
+                   m.last_checked, m.last_status_change, m.last_details, m.last_heartbeat,
+                   m.maintenance, m.maintenance_description, m.maintenance_start, m.maintenance_end, m.archived_at,
+                   (SELECT l.response_time FROM monitor_logs l
+                    WHERE l.monitor_id = m.id AND l.response_time > 0
+                      AND (l.source IS NULL OR l.source <> 'probe')
+                    ORDER BY l.id DESC LIMIT 1) AS response_time,
+                   vm.cpu_usage, vm.ram_usage, vm.hdd_usage
+            FROM monitors m
+            LEFT JOIN vps_metrics vm
+                   ON vm.id = (SELECT vm2.id FROM vps_metrics vm2
+                               WHERE vm2.monitor_id = m.id
+                               ORDER BY vm2.id DESC LIMIT 1)
+            WHERE {$mon_scope_sql} AND {$mon_archive_sql}
+            ORDER BY m.id ASC
+        ");
+        $stmt->execute($mon_scope_params);
+        foreach ($stmt->fetchAll() as $r) {
+            $details = bk_monitor_details($r);
+            $details_by_id[(int)$r['id']] = $details;
+            if ($public_view) {
+                // An allowlist of what the public card renders. The denylist this
+                // replaced let every new agent key through - process lists,
+                // interface names, per-link traffic - to anyone.
+                $details_out = bk_public_monitor_details($details);
+            } else {
+                // The query is scoped, so the viewer may see this monitor, and a
+                // monitor belongs to its users whole. Only the administrator's
+                // collection diagnostics (hints naming config files) stay admin-only.
+                $details_out = $details;
+                if (!$is_admin) {
+                    unset($details_out['cpanel_stats_error']);
+                }
+            }
+            $last_change_ts = $r['last_status_change'] ? strtotime($r['last_status_change']) : null;
+            $monitors[(int)$r['id']] = [
+                'id' => (int)$r['id'],
+                'name' => $r['name'],
+                'type' => strtolower($r['type'] ?? 'web'),
+                // Targets name internal hosts and, for agent-side checks, the
+                // process itself. The public card never shows them.
+                'target' => $public_view ? null : $r['target'],
+                'port' => ($public_view || !$r['port']) ? null : (int)$r['port'],
+                'status' => strtolower($r['status'] ?? 'up'),
+                // The shared vocabulary (C-11): 'unknown' split into waiting for
+                // the first data and an agent gone quiet, which the SPA cannot
+                // tell apart from the status alone in the public view.
+                'statusKey' => bk_status_label((string)($r['status'] ?? 'up'), bk_monitor_has_reported($r, $details))['key'],
+                'category' => $r['category'] ?? 'Monitory',
+                // null when the monitor has no asset. The monitor's own id stood
+                // in here, and the edit form posted it back as asset_id - onto
+                // whichever device owns that asset id, or into a foreign-key 500.
+                'assetId' => $r['asset_id'] !== null ? (int)$r['asset_id'] : null,
+                'assetName' => $r['name'],
+                'archivedAt' => !empty($r['archived_at']) ? date('c', strtotime((string)$r['archived_at'])) : null,
+                'lastCheck' => $r['last_checked'] ? date('c', strtotime($r['last_checked'])) : null,
+                'lastStatusChange' => $r['last_status_change'] ? date('c', strtotime($r['last_status_change'])) : null,
+                // From the last check only. The stored one is from whichever check last
+                // measured it: a card read "Výpadek" and "Odezva 42 ms" side by side.
+                'responseMs' => ($r['response_time'] !== null && in_array(strtolower($r['status'] ?? ''), ['up', 'warning'], true)) ? (int)$r['response_time'] : null,
+                // And a silent agent's load is from whenever it last spoke.
+                'cpu' => ($r['cpu_usage'] !== null && bk_agent_is_silent($details) !== true) ? (float)$r['cpu_usage'] : null,
+                'ram' => ($r['ram_usage'] !== null && bk_agent_is_silent($details) !== true) ? (float)$r['ram_usage'] : null,
+                'hdd' => ($r['hdd_usage'] !== null && bk_agent_is_silent($details) !== true) ? (float)$r['hdd_usage'] : null,
+                // Time since the last status change. uptimeSeconds is only an
+                // uptime while the monitor is UP - it used to be 0 for a monitor
+                // that was down ("uptime 0 s", not "down for 3 h"), and 0 before
+                // the first check ran. Unknown -> null.
+                'uptimeSeconds' => ($last_change_ts && strtolower($r['status'] ?? '') === 'up') ? max(0, time() - $last_change_ts) : null,
+                'sinceStatusChangeSeconds' => $last_change_ts ? max(0, time() - $last_change_ts) : null,
+                // Whether an agent that has reported before has now been silent
+                // longer than agent_offline_timeout - the SPA has no other way
+                // to tell "active" from "was active once".
+                // agent_offline_timeout = 0 means the detection is off (cron says
+                // so too), so there is no verdict to give - null, not "silent".
+                'agentSilent' => bk_agent_is_silent($details),
+                // Announced maintenance is public by design - the legacy page
+                // prints the description and window in a public banner. Only
+                // while the flag is on; a stale description of a past window
+                // stays private.
+                'maintenance' => !empty($r['maintenance']),
+                'maintenanceDescription' => !empty($r['maintenance']) ? ($r['maintenance_description'] ?: null) : null,
+                // With the server's offset: a bare time was read in the
+                // visitor's own zone, so east of the server an announced window
+                // dropped off the page before it began.
+                'maintenanceStart' => (!empty($r['maintenance']) && $r['maintenance_start']) ? bk_iso_time((string)$r['maintenance_start']) : null,
+                'maintenanceEnd' => (!empty($r['maintenance']) && $r['maintenance_end']) ? bk_iso_time((string)$r['maintenance_end']) : null,
+                'agentLastSeen' => $public_view ? null : ($details['agent_last_seen'] ?? null),
+                'hostname' => $public_view ? null : ($details['hostname'] ?? $r['target']),
+                // What the agent reported, or null. It fell back to the type,
+                // so a page said "OS: teamspeak" or "OS: vps".
+                'os' => is_string($details['os'] ?? null) && trim($details['os']) !== '' ? trim($details['os']) : null,
+                'details' => $details_out,
+                // Outages of data COLLECTION (not of the service) - the frontend MUST
+                // show them, silently dropping data is forbidden (see bk_get_collection_issues).
+                // Admin only: operational diagnostics, not public service status.
+                'collectionIssues' => $is_admin ? bk_get_collection_issues($r, $details) : [],
+            ];
+        }
+    } catch (Throwable $e) {
+        // An empty list here read as "no monitors" on the public page and as
+        // "all online" on the dashboard.
+        bk_api_fail('monitors_unavailable', 500, $e, 'Seznam monitorů se nepodařilo načíst.');
+    }
+
+    // Configuration fields (may contain internals like the ServerQuery user,
+    // webhook URLs, ...) are returned to a logged-in administrator only. A separate
+    // query and separate try/catch - a missing/incompatible column here may cost
+    // the admin these extended fields, never the base list.
+    if ($is_admin && !empty($monitors)) {
+        // Assets with an agent that could take a check over - the same test
+        // convert_to_agent_check applies (a live vps/openwrt monitor).
+        $agent_asset_ids = [];
+        foreach ($monitors as $am) {
+            if ($am['assetId'] !== null && in_array($am['type'], ['vps', 'openwrt'], true) && empty($am['archivedAt'])) {
+                $agent_asset_ids[$am['assetId']] = true;
+            }
+        }
+        try {
+            $stmt2 = $pdo->query("
+                SELECT id, timeout, email_notifications, sms_notifications, notes, maintenance, maintenance_description,
+                       maintenance_start, maintenance_end, monitored_processes, cpu_threshold, ram_threshold, hdd_threshold, preset_id,
+                       latency_threshold_ms, latency_threshold_mins, heartbeat_interval, heartbeat_grace,
+                       body_keyword, cpanel_stats_url, sq_username, ts3_filetransfer_port, rcon_port,
+                       discord_webhook_url, slack_webhook_url, telegram_bot_token, telegram_chat_id,
+                       (sq_password IS NOT NULL AND sq_password <> '') AS sq_password_set,
+                       (rcon_password IS NOT NULL AND rcon_password <> '') AS rcon_password_set,
+                       enabled_metrics, remote_actions_enabled, allowed_actions
+                FROM monitors
+            ");
+            foreach ($stmt2->fetchAll() as $r) {
+                $mid = (int)$r['id'];
+                if (!isset($monitors[$mid])) continue;
+                $monitors[$mid]['timeout'] = (int)($r['timeout'] ?? 5);
+                $monitors[$mid]['emailNotifications'] = (bool)$r['email_notifications'];
+                $monitors[$mid]['smsNotifications'] = (bool)$r['sms_notifications'];
+                $monitors[$mid]['notes'] = $r['notes'];
+                $monitors[$mid]['maintenance'] = (bool)$r['maintenance'];
+                $monitors[$mid]['maintenanceDescription'] = $r['maintenance_description'];
+                // With the offset, as the public fields (the form takes the
+                // wall time from the front of it, monitor-form toLocalInput).
+                $monitors[$mid]['maintenanceStart'] = bk_iso_time($r['maintenance_start'] === null ? null : (string)$r['maintenance_start']);
+                $monitors[$mid]['maintenanceEnd'] = bk_iso_time($r['maintenance_end'] === null ? null : (string)$r['maintenance_end']);
+                $monitors[$mid]['monitoredProcesses'] = $r['monitored_processes'];
+                $monitors[$mid]['cpuThreshold'] = (int)($r['cpu_threshold'] ?? BK_DEFAULT_THRESHOLDS['cpu']);
+                $monitors[$mid]['ramThreshold'] = (int)($r['ram_threshold'] ?? BK_DEFAULT_THRESHOLDS['ram']);
+                $monitors[$mid]['hddThreshold'] = (int)($r['hdd_threshold'] ?? BK_DEFAULT_THRESHOLDS['hdd']);
+                // The limits that actually decide, preset first and null where
+                // nobody set one. The three fields above are the raw columns
+                // the edit form writes back, with a default filled in by ??,
+                // so they cannot answer "is this configured?" and they ignore
+                // a preset entirely - the frontend coloured a monitor whose
+                // preset says 70 against 90.
+                $eff = bk_monitor_thresholds($pdo, $r);
+                $monitors[$mid]['effectiveThresholds'] = [
+                    'cpu' => $eff['cpu'],
+                    'ram' => $eff['ram'],
+                    'hdd' => $eff['hdd'],
+                ];
+                $monitors[$mid]['presetId'] = $r['preset_id'] !== null ? (int)$r['preset_id'] : null;
+                // null = upozornovani na zpomaleni je vypnute
+                $monitors[$mid]['latencyThresholdMs'] = $r['latency_threshold_ms'] !== null ? (int)$r['latency_threshold_ms'] : null;
+                $monitors[$mid]['latencyThresholdMins'] = (int)($r['latency_threshold_mins'] ?? 5);
+                // The edit form saves both back. Without them it saved its own
+                // 60/5 minutes, and a daily job went down an hour after each run.
+                $monitors[$mid]['heartbeatIntervalSecs'] = $r['heartbeat_interval'] !== null ? (int)$r['heartbeat_interval'] : null;
+                $monitors[$mid]['heartbeatGraceSecs'] = $r['heartbeat_grace'] !== null ? (int)$r['heartbeat_grace'] : null;
+                $monitors[$mid]['bodyKeyword'] = $r['body_keyword'];
+                $monitors[$mid]['cpanelStatsUrl'] = $r['cpanel_stats_url'];
+                // The per-monitor channel overrides, so the form can show what is
+                // set and clear it. Admin extension only - they are secrets.
+                $monitors[$mid]['discordWebhookUrl'] = $r['discord_webhook_url'];
+                $monitors[$mid]['slackWebhookUrl'] = $r['slack_webhook_url'];
+                $monitors[$mid]['telegramBotToken'] = $r['telegram_bot_token'];
+                $monitors[$mid]['telegramChatId'] = $r['telegram_chat_id'];
+                $monitors[$mid]['sqUsername'] = $r['sq_username'];
+                $monitors[$mid]['sqPasswordSet'] = (bool)$r['sq_password_set'];
+                $monitors[$mid]['ts3FiletransferPort'] = $r['ts3_filetransfer_port'] ? (int)$r['ts3_filetransfer_port'] : null;
+                $monitors[$mid]['rconPort'] = $r['rcon_port'] ? (int)$r['rcon_port'] : null;
+                $monitors[$mid]['rconPasswordSet'] = (bool)$r['rcon_password_set'];
+                // The set in effect, the recommended one when nothing is stored: an
+                // empty list opened the form with every box unticked, and saving
+                // one tick stored a one-item list that hid every other section.
+                // The monitor's own set, so no preset: the form edits that one.
+                $mon_sections = ['type' => $monitors[$mid]['type'] ?? '', 'enabled_metrics' => $r['enabled_metrics']];
+                $monitors[$mid]['enabledMetrics'] = bk_get_enabled_metrics($mon_sections, $pdo) ?? [];
+                $monitors[$mid]['remoteActionsEnabled'] = (bool)$r['remote_actions_enabled'];
+                $monitors[$mid]['allowedActions'] = $r['allowed_actions'] ? explode(',', $r['allowed_actions']) : [];
+                // Agent update offer: compares the version from the last report
+                // with the agent file's version on the server. Only when both are known.
+                // Protection against "forever offline" monitors: an active check
+                // from the hosting against a private-network target never succeeds.
+                // When the asset has an agent, offer converting to an agent-side
+                // check instead of silently generating false outages.
+                // CAREFUL: $r is a row from the extended-fields query, which does
+                // NOT select asset_id/type/target - reading them from it was a silent
+                // "undefined array key" and the condition never held, so the
+                // unreachable-target warning never showed.
+                // The base fields are already assembled above in $monitors[$mid].
+                $base_row = $monitors[$mid];
+                if (
+                    ($base_row['assetId'] ?? null) !== null
+                    && isset($agent_asset_ids[$base_row['assetId']])
+                    && in_array(strtolower((string)($base_row['type'] ?? '')), ['web', 'port', 'minecraft', 'teamspeak', 'discord', 'dns'], true)
+                ) {
+                    if (bk_validate_import_target((string)($base_row['target'] ?? '')) !== null) {
+                        $monitors[$mid]['unreachableTarget'] = true;
+                    }
+                }
+
+                // This row's own details. The loop above leaves $details holding
+                // the LAST monitor's, and reading that here gave every monitor
+                // the agent version of whichever monitor had the highest id.
+                $row_details = $details_by_id[$mid] ?? [];
+                $agent_ver = $row_details['agent_version'] ?? null;
+                $agent_type_key = $row_details['agent_type'] ?? null;
+                if ($agent_ver && $agent_type_key && function_exists('bk_get_agent_latest_version')) {
+                    $latest_agent = bk_get_agent_latest_version($agent_type_key);
+                    if ($latest_agent !== null) {
+                        // The agent FILE's version on the server - the single source of truth.
+                        // The frontend used to compare against a hardcoded '3.13.8'
+                        // (which is the TeamSpeak server version, not the agent's) with
+                        // string '<', reporting "outdated" even for a freshly deployed agent.
+                        $monitors[$mid]['agentLatestVersion'] = $latest_agent;
+                        if (bk_version_is_older($agent_ver, $latest_agent)) {
+                            $monitors[$mid]['agentUpdateAvailable'] = $latest_agent;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable $t) {
+            error_log('[api.php action=monitors] Extended fields query failed: ' . $t->getMessage());
+        }
+        // Two switches of the monitor dialog, in a query of their own so a
+        // pending migration costs these two fields and nothing else.
+        // isPublic is the effective answer (the owner's choice, or the type's
+        // default when never chosen), so the switch shows what the public page does.
+        try {
+            foreach ($pdo->query("SELECT id, type, is_public, log_lines_enabled FROM monitors")->fetchAll() as $r) {
+                $mid = (int)$r['id'];
+                if (!isset($monitors[$mid])) continue;
+                $monitors[$mid]['isPublic'] = bk_monitor_is_public($r['is_public'], (string)$r['type']);
+                $monitors[$mid]['logLinesEnabled'] = (int)$r['log_lines_enabled'] === 1;
+            }
+        } catch (Throwable $t) {
+            error_log('[api.php action=monitors] public/log-lines switches not read: ' . $t->getMessage());
+        }
+    }
+
+    $mon_out = ['monitors' => array_values($monitors)];
+    // Whether cron has run lately (bk_collection_is_fresh, what public_status
+    // and the badge judge by). Without it the stored states are the last known
+    // ones, and the public page's verdict over this list would read a stopped
+    // collector as all online - a ?page= selection has no other way to know.
+    $mon_out['collectionFresh'] = bk_collection_is_fresh();
+    if (!$public_view) {
+        // The limit cron alerts at (ssl_alert_days), so the dashboard's attention
+        // list flags a certificate by the same rule as the alert and the findings
+        // feed (CR-5) - the dashboard calls no other endpoint that carries it.
+        // Left out of the public view: a setting is not public status.
+        $mon_out['sslAlertDays'] = max(1, (int)get_setting('ssl_alert_days', '14'));
+    }
+    echo json_encode($mon_out, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// 2b. Insert or update a monitor directly in the MySQL database
+if ($action === 'save_monitor') {
+    bk_require_admin();
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $id = isset($input['id']) ? (int)$input['id'] : 0;
+    bk_refuse_archived_write($pdo, $id);
+    $name = trim($input['name'] ?? '');
+    $type = trim($input['type'] ?? 'web');
+    if ($type === 'https' || $type === 'http') $type = 'web';
+    $target = trim($input['target'] ?? '');
+    // The type cpanel is retired (owner decision D7). A client that still
+    // sends it gets what the data fix cpanel-monitors-to-web made of every
+    // stored one: a web check of the host, with the address it sent, the
+    // exporter's cpanel_stats.php, as cpanel_stats_url. A target with no host
+    // to check is refused rather than guessed.
+    if ($type === 'cpanel') {
+        $cp_parts = parse_url($target);
+        if (!is_array($cp_parts) || empty($cp_parts['host'])) {
+            bk_api_error(400, 'Typ cpanel už neexistuje: založte monitor typu web s adresou webu a adresu cpanel_stats.php zadejte jako cpanel_stats_url.');
+        }
+        $input['cpanel_stats_url'] = $target;
+        $target = ($cp_parts['scheme'] ?? 'https') . '://' . $cp_parts['host'];
+        $type = 'web';
+    }
+    $port = !empty($input['port']) ? (int)$input['port'] : null;
+    $category = trim($input['category'] ?? ($type === 'web' ? 'Webové Portály & API' : ($type === 'teamspeak' || $type === 'minecraft' ? 'Komunikační & Herní Servery' : 'Síťová Infrastruktura & Routery')));
+
+    $asset_id = !empty($input['asset_id']) ? (int)$input['asset_id'] : null;
+    // An asset that does not exist is refused here: the foreign key made it a
+    // 500, and a database without that key would store a dangling id.
+    if ($asset_id !== null) {
+        $stmt_asset = $pdo->prepare("SELECT COUNT(*) FROM assets WHERE id = ?");
+        $stmt_asset->execute([$asset_id]);
+        if ((int)$stmt_asset->fetchColumn() === 0) {
+            bk_api_error(400, 'Zařízení (asset) ' . $asset_id . ' neexistuje.');
+        }
+    }
+    // A device of this name is made with the save below, not before the
+    // checks that can still refuse it: a refused save left it behind, empty.
+    $new_asset_name = trim($input['new_asset_name'] ?? '');
+
+    $timeout = !empty($input['timeout']) ? (int)$input['timeout'] : 5;
+    $email_notifications = isset($input['email_notifications']) ? ($input['email_notifications'] ? 1 : 0) : 1;
+    $sms_notifications = isset($input['sms_notifications']) ? ($input['sms_notifications'] ? 1 : 0) : 0;
+    $notes = !empty($input['notes']) ? trim($input['notes']) : null;
+    $maintenance = !empty($input['maintenance']) ? 1 : 0;
+    $maintenance_description = ($maintenance === 1 && !empty($input['maintenance_description'])) ? trim($input['maintenance_description']) : null;
+    $maintenance_start = ($maintenance === 1 && !empty($input['maintenance_start'])) ? $input['maintenance_start'] : ($maintenance === 1 ? date('Y-m-d H:i:s') : null);
+    $maintenance_end = ($maintenance === 1 && !empty($input['maintenance_end'])) ? $input['maintenance_end'] : null;
+    // A window that ends before it starts never applies: the monitor was
+    // saved "in maintenance" and went on being checked and alerted as usual.
+    if ($maintenance_end !== null) {
+        $mw_from = strtotime((string)$maintenance_start);
+        $mw_to = strtotime((string)$maintenance_end);
+        if ($mw_from === false || $mw_to === false) {
+            bk_api_error(400, 'Okno údržby má neplatné datum.');
+        }
+        if ($mw_to <= $mw_from) {
+            bk_api_error(400, 'Konec údržby musí být později než začátek.');
+        }
+    }
+
+    $monitored_processes = !empty($input['monitored_processes']) ? trim($input['monitored_processes']) : null;
+    // Preset i prahy zpomaleni: prazdna hodnota znamena "nenastaveno" (NULL),
+    // ne nulu. $preset_id se driv vubec neprirazoval, takze kazde ulozeni
+    // monitoru jeho preset tise smazalo.
+    $preset_id = isset($input['preset_id']) && $input['preset_id'] !== null && $input['preset_id'] !== ''
+        ? (int)$input['preset_id']
+        : null;
+    $latency_threshold_ms = isset($input['latency_threshold_ms']) && $input['latency_threshold_ms'] !== null && $input['latency_threshold_ms'] !== ''
+        ? max(1, (int)$input['latency_threshold_ms'])
+        : null;
+    $latency_threshold_mins = isset($input['latency_threshold_mins']) && $input['latency_threshold_mins'] !== ''
+        ? max(1, min(1440, (int)$input['latency_threshold_mins']))
+        : 5;
+    $cpu_threshold = !empty($input['cpu_threshold']) ? (int)$input['cpu_threshold'] : BK_DEFAULT_THRESHOLDS['cpu'];
+    $ram_threshold = !empty($input['ram_threshold']) ? (int)$input['ram_threshold'] : BK_DEFAULT_THRESHOLDS['ram'];
+    $hdd_threshold = !empty($input['hdd_threshold']) ? (int)$input['hdd_threshold'] : BK_DEFAULT_THRESHOLDS['hdd'];
+
+    $body_keyword = (!empty($input['body_keyword']) && $type === 'web') ? trim($input['body_keyword']) : null;
+
+    // Per-monitor notification channels. The notifier has honoured these
+    // columns for a long time - "this router shouts into the ops channel, the
+    // rest go to the general one" - but no form or endpoint ever wrote them,
+    // so they were dead settings. An empty string clears the override and the
+    // monitor falls back to the global channel.
+    $chan = function (string $key) use ($input): ?string {
+        if (!array_key_exists($key, $input)) {
+            return null;
+        }
+        $val = trim((string)$input[$key]);
+        return $val === '' ? null : $val;
+    };
+    $mon_discord = $chan('discord_webhook_url');
+    $mon_slack = $chan('slack_webhook_url');
+    $mon_tg_token = $chan('telegram_bot_token');
+    $mon_tg_chat = $chan('telegram_chat_id');
+    $cpanel_stats_url = (!empty($input['cpanel_stats_url']) && $type === 'web') ? trim($input['cpanel_stats_url']) : null;
+
+    $sq_username = (!empty($input['sq_username']) && $type === 'teamspeak') ? trim($input['sq_username']) : null;
+    $sq_password = (!empty($input['sq_password']) && $type === 'teamspeak') ? trim($input['sq_password']) : null;
+    $ts3_filetransfer_port = (!empty($input['ts3_filetransfer_port']) && $type === 'teamspeak') ? (int)$input['ts3_filetransfer_port'] : null;
+
+    $rcon_port = (!empty($input['rcon_port']) && $type === 'minecraft') ? (int)$input['rcon_port'] : null;
+    $rcon_password = (!empty($input['rcon_password']) && $type === 'minecraft') ? trim($input['rcon_password']) : null;
+
+    $remote_actions_enabled = ($type === 'openwrt' && !empty($input['remote_actions_enabled'])) ? 1 : 0;
+    $allowed_actions_input = isset($input['allowed_actions']) && is_array($input['allowed_actions']) ? $input['allowed_actions'] : [];
+    $allowed_actions = ($type === 'openwrt' && $remote_actions_enabled && !empty($allowed_actions_input))
+        ? implode(',', array_intersect($allowed_actions_input, ['restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp', 'restart_service', 'reconnect_pppoe']))
+        : null;
+
+    $enabled_metrics_input = isset($input['enabled_metrics']) && is_array($input['enabled_metrics']) ? $input['enabled_metrics'] : [];
+    $enabled_metrics = !empty($enabled_metrics_input) ? json_encode(array_values($enabled_metrics_input)) : null;
+
+    // Heartbeat: interval je povinny, protoze bez nej neni podle ceho poznat
+    // zpozdeni. Tolerance je volitelna (NULL = hlida se presne na interval).
+    $heartbeat_interval = ($type === 'heartbeat' && isset($input['heartbeat_interval']) && $input['heartbeat_interval'] !== '')
+        ? max(60, (int)$input['heartbeat_interval'])
+        : null;
+    $heartbeat_grace = ($type === 'heartbeat' && isset($input['heartbeat_grace']) && $input['heartbeat_grace'] !== '')
+        ? max(0, (int)$input['heartbeat_grace'])
+        : null;
+
+    if ($type === 'heartbeat' && $heartbeat_interval === null) {
+        bk_api_error(400, 'Heartbeat monitor potřebuje interval - jak často se má úloha ozvat.');
+    }
+
+    // Heartbeat nema co kontrolovat aktivne, takze cil nevyzadujeme - uloha se
+    // hlasi sama. Cil by u nej byl jen matouci prazdny formularovy radek.
+    if (empty($name) || (empty($target) && !in_array($type, ['vps', 'openwrt', 'heartbeat'], true))) {
+        bk_api_error(400, 'Název a cíl jsou povinné údaje.');
+    }
+
+    // TeamSpeak keeps its voice port in the target as host:voice_port (the
+    // port column is the ServerQuery port), the way admin.php stores it and
+    // check_teamspeak reads it. Sent, it replaces a port already in the
+    // target; left out or empty, the target is saved as sent and the check
+    // assumes 9987.
+    if ($type === 'teamspeak' && isset($input['teamspeak_voice_port']) && $input['teamspeak_voice_port'] !== '') {
+        $voice_port = filter_var($input['teamspeak_voice_port'], FILTER_VALIDATE_INT, ['options' => ['min_range' => 1, 'max_range' => 65535]]);
+        if ($voice_port === false) {
+            bk_api_error(400, 'Hlasový port musí být číslo od 1 do 65535.');
+        }
+        if (substr_count($target, ':') === 1) {
+            $target = explode(':', $target)[0];
+        }
+        $target .= ':' . $voice_port;
+    }
+
+    // Two switches of the dialog: on the public status page (W1-G3) and the
+    // router's masked log lines (W1-C3). A key the request leaves out keeps
+    // what is stored, so an older form cannot flip either of them by omission.
+    // is_public = null hands the choice back to the type's default.
+    $mon_switches = [];
+    foreach (['is_public' => true, 'log_lines_enabled' => false] as $sw_key => $sw_nullable) {
+        if (!array_key_exists($sw_key, $input)) {
+            continue;
+        }
+        $sw_val = $input[$sw_key];
+        if ($sw_val === null && $sw_nullable) {
+            $mon_switches[$sw_key] = null;
+        } elseif ($sw_val === true || $sw_val === 1 || $sw_val === '1') {
+            $mon_switches[$sw_key] = 1;
+        } elseif ($sw_val === false || $sw_val === 0 || $sw_val === '0') {
+            $mon_switches[$sw_key] = 0;
+        } else {
+            // "false" or "" would read as on through a truthiness test; a
+            // switch that decides what the public sees is refused instead.
+            bk_api_json([
+                'error' => 'invalid_switch',
+                'invalidKeys' => [$sw_key],
+                'message' => 'Přepínač musí být true/false (1/0).',
+            ], 400);
+        }
+    }
+    $mon_save_switches = function (int $monitor_id) use ($pdo, $mon_switches): void {
+        foreach ($mon_switches as $sw_key => $sw_val) {
+            $column = $sw_key === 'is_public' ? 'is_public' : 'log_lines_enabled';
+            $pdo->prepare("UPDATE monitors SET {$column} = ? WHERE id = ?")->execute([$sw_val, $monitor_id]);
+        }
+    };
+
+    try {
+        if ($id > 0) {
+            // A new device and the move to it are one write.
+            $pdo->beginTransaction();
+            if ($new_asset_name !== '') {
+                $asset_id = bk_asset_create($pdo, $new_asset_name);
+            }
+            // The device it leaves (detached, or moved to new_asset_name) goes
+            // when nothing else belongs to it, as with delete_monitor.
+            $stmt_prev_asset = $pdo->prepare("SELECT asset_id FROM monitors WHERE id = ?");
+            $stmt_prev_asset->execute([$id]);
+            $prev_asset_id = $stmt_prev_asset->fetchColumn();
+            // Passwords (ServerQuery, RCON) are overwritten only when the administrator
+            // typed a new value - an empty edit-form field must not erase a stored password.
+            $stmt = $pdo->prepare("
+                UPDATE monitors
+                SET name = ?, type = ?, target = ?, port = ?, category = ?, timeout = ?, email_notifications = ?, sms_notifications = ?, notes = ?, maintenance = ?, monitored_processes = ?, maintenance_description = ?, maintenance_start = ?, maintenance_end = ?, cpanel_stats_url = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ?, preset_id = ?, latency_threshold_ms = ?, latency_threshold_mins = ?, body_keyword = ?, sq_username = ?, sq_password = COALESCE(?, sq_password), ts3_filetransfer_port = ?, enabled_metrics = ?, rcon_port = ?, rcon_password = COALESCE(?, rcon_password), remote_actions_enabled = ?, allowed_actions = ?, asset_id = ?, heartbeat_interval = ?, heartbeat_grace = ?, discord_webhook_url = ?, slack_webhook_url = ?, telegram_bot_token = ?, telegram_chat_id = ?
+                WHERE id = ?
+            ");
+            // Token se pri editaci zamerne neprepisuje: uloha uz ho ma zadraty
+            // v curl prikazu na svem stroji a zmena by ji tise odstrihla.
+            $stmt->execute([$name, $type, $target, $port, $category, $timeout, $email_notifications, $sms_notifications, $notes, $maintenance, $monitored_processes, $maintenance_description, $maintenance_start, $maintenance_end, $cpanel_stats_url, $cpu_threshold, $ram_threshold, $hdd_threshold, $preset_id, $latency_threshold_ms, $latency_threshold_mins, $body_keyword, $sq_username, $sq_password, $ts3_filetransfer_port, $enabled_metrics, $rcon_port, $rcon_password, $remote_actions_enabled, $allowed_actions, $asset_id, $heartbeat_interval, $heartbeat_grace, $mon_discord, $mon_slack, $mon_tg_token, $mon_tg_chat, $id]);
+            $mon_save_switches($id);
+            if ($prev_asset_id !== false && $prev_asset_id !== null && (int)$prev_asset_id !== $asset_id) {
+                bk_asset_drop_if_empty($pdo, (int)$prev_asset_id);
+            }
+            $pdo->commit();
+            log_monitor_event($pdo, $id, $name, $type, 'config_changed', 'Nastavení monitoru bylo upraveno');
+            bk_audit_log($pdo, 'monitor_updated', $name, 'monitor', $id);
+            echo json_encode(['success' => true, 'id' => $id, 'message' => 'Monitor úspěšně upraven'], JSON_UNESCAPED_UNICODE);
+        } else {
+            // The device (a new one by that name, or one of its own named
+            // after the monitor), the agent_key, a heartbeat token and the
+            // switches the form sent go in with the row (bk_monitor_create).
+            $created = bk_monitor_create($pdo, [
+                'name' => $name, 'type' => $type, 'target' => $target, 'port' => $port, 'category' => $category,
+                'timeout' => $timeout, 'email_notifications' => $email_notifications, 'sms_notifications' => $sms_notifications,
+                'notes' => $notes, 'maintenance' => $maintenance, 'monitored_processes' => $monitored_processes,
+                'maintenance_description' => $maintenance_description, 'maintenance_start' => $maintenance_start,
+                'maintenance_end' => $maintenance_end, 'cpanel_stats_url' => $cpanel_stats_url,
+                'cpu_threshold' => $cpu_threshold, 'ram_threshold' => $ram_threshold, 'hdd_threshold' => $hdd_threshold,
+                'preset_id' => $preset_id, 'latency_threshold_ms' => $latency_threshold_ms,
+                'latency_threshold_mins' => $latency_threshold_mins, 'body_keyword' => $body_keyword,
+                'sq_username' => $sq_username, 'sq_password' => $sq_password, 'ts3_filetransfer_port' => $ts3_filetransfer_port,
+                'enabled_metrics' => $enabled_metrics, 'rcon_port' => $rcon_port, 'rcon_password' => $rcon_password,
+                'remote_actions_enabled' => $remote_actions_enabled, 'allowed_actions' => $allowed_actions,
+                'heartbeat_interval' => $heartbeat_interval, 'heartbeat_grace' => $heartbeat_grace,
+                'discord_webhook_url' => $mon_discord, 'slack_webhook_url' => $mon_slack,
+                'telegram_bot_token' => $mon_tg_token, 'telegram_chat_id' => $mon_tg_chat,
+            ] + $mon_switches, $new_asset_name !== '' ? null : $asset_id, $new_asset_name !== '' ? $new_asset_name : null);
+            log_monitor_event($pdo, $created['id'], $name, $type, 'monitor_added', "Přidán nový monitor ({$type})");
+            bk_audit_log($pdo, 'monitor_created', $name, 'monitor', $created['id']);
+            echo json_encode(['success' => true, 'id' => $created['id'], 'message' => 'Monitor úspěšně vytvořen'], JSON_UNESCAPED_UNICODE);
+        }
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        // The PDO text named tables and columns; it goes to the log only.
+        bk_api_fail('save_monitor_failed', 500, $e, 'Monitor se nepodařilo uložit.');
+    }
+    exit;
+}
+
+/**
+ * Heartbeat setup info - the address the job should report to.
+ *
+ * The token is all the endpoint authorises, so nobody gets here without
+ * logging in and it is not returned in the regular monitor list either. If it
+ * leaked, a stranger could send heartbeats on your behalf and the monitor
+ * would stay green while the backup has long stopped - a silent failure, exactly the kind this
+ * typ monitoru vznikl.
+ */
+if ($action === 'heartbeat_info') {
+    bk_require_admin();
+
+    $hb_id = (int)($_GET['monitor_id'] ?? 0);
+    // A new token stops the address every job calls, and the monitor goes down
+    // until each is rewritten. So not on a plain GET, which any link can make,
+    // and on purpose not silently a read either: the caller asked for a rotation.
+    $regenerate = ($_GET['regenerate'] ?? '') === '1';
+    if ($regenerate) {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            bk_api_error(405, 'Vyžadován POST.');
+        }
+        bk_refuse_archived_write($pdo, $hb_id);
+    }
+
+    try {
+        $stmt = $pdo->prepare("SELECT id, name, type, heartbeat_token, heartbeat_interval, heartbeat_grace, last_heartbeat, heartbeat_last_result, heartbeat_last_message FROM monitors WHERE id = ? LIMIT 1");
+        $stmt->execute([$hb_id]);
+        $hb = $stmt->fetch();
+
+        if (!$hb || $hb['type'] !== 'heartbeat') {
+            bk_api_error(404, 'Heartbeat monitor nenalezen.');
+        }
+
+        // The token is missing on monitors created before this type existed,
+        // and on deliberate rotation. Both are handled the same - mint a new one.
+        if ($regenerate || empty($hb['heartbeat_token'])) {
+            $hb['heartbeat_token'] = bk_heartbeat_generate_token();
+            $stmt_tok = $pdo->prepare("UPDATE monitors SET heartbeat_token = ? WHERE id = ?");
+            $stmt_tok->execute([$hb['heartbeat_token'], $hb['id']]);
+            if ($regenerate) {
+                bk_audit_log($pdo, 'heartbeat_token_regenerated', (string)$hb['name'], 'monitor', (int)$hb['id']);
+            }
+        }
+
+        $base = dirname($_SERVER['SCRIPT_NAME'] ?? '/status/api.php');
+        $url = sprintf('%s%s/heartbeat.php?token=%s', bk_link_origin(), rtrim($base, '/'), $hb['heartbeat_token']);
+
+        $eval = bk_heartbeat_evaluate($hb);
+
+        echo json_encode([
+            'monitorId' => (int)$hb['id'],
+            'name' => $hb['name'],
+            'token' => $hb['heartbeat_token'],
+            // On bk_link_origin(), like every absolute link: the job keeps
+            // calling it long after this request, so not the request's Host.
+            'url' => $url,
+            'intervalSecs' => $hb['heartbeat_interval'] !== null ? (int)$hb['heartbeat_interval'] : null,
+            'graceSecs' => $hb['heartbeat_grace'] !== null ? (int)$hb['heartbeat_grace'] : null,
+            'lastSignalAt' => $hb['last_heartbeat'],
+            'lastResult' => $hb['heartbeat_last_result'],
+            'lastMessage' => $hb['heartbeat_last_message'],
+            'state' => $eval['status'],
+            'stateReason' => $eval['error'],
+            'ageSecs' => $eval['age_secs'],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] heartbeat_info selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Údaje o heartbeatu se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 2b2. Delete a monitor from the MySQL database
+if ($action === 'delete_monitor') {
+    bk_require_admin();
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $del_id = (int)($input['id'] ?? 0);
+    if ($del_id > 0) {
+        try {
+            $stmt_del_asset = $pdo->prepare("SELECT asset_id, name, type FROM monitors WHERE id = ?");
+            $stmt_del_asset->execute([$del_id]);
+            $del_row = $stmt_del_asset->fetch();
+            $del_asset_id = $del_row['asset_id'] ?? null;
+            $pdo->beginTransaction();
+            // Explicitly, not only through the foreign key: an install whose table
+            // was created without it must not keep access rows pointing at a
+            // monitor id that a new monitor could later reuse.
+            $pdo->prepare("DELETE FROM monitor_users WHERE monitor_id = ?")->execute([$del_id]);
+            $stmt = $pdo->prepare("DELETE FROM monitors WHERE id = ?");
+            $stmt->execute([$del_id]);
+            // Its device goes with the last monitor on it; nothing in /app
+            // could delete the empty one later.
+            if ($del_asset_id !== null) {
+                bk_asset_drop_if_empty($pdo, (int)$del_asset_id);
+            }
+            $pdo->commit();
+            if ($del_row) {
+                log_monitor_event($pdo, null, $del_row['name'], $del_row['type'], 'monitor_removed', "Monitor odebrán ({$del_row['type']})");
+                bk_audit_log($pdo, 'monitor_deleted', $del_row['name'], 'monitor', $del_id);
+            }
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            bk_api_fail('delete_monitor_failed', 500, $e, 'Monitor se nepodařilo smazat.');
+        }
+    } else {
+        bk_api_error(400, 'Neplatné ID monitoru');
+    }
+    exit;
+}
+
+// Archiving. A monitor that is gone for good - a replaced router, a closed site -
+// keeps its history but takes no part in anything live: it leaves every list and
+// summary, cron skips it, nobody is alerted and its agent's reports are refused.
+// A detail by id stays readable, and restoring brings it back as it was.
+if ($action === 'archive_monitor' || $action === 'unarchive_monitor') {
+    bk_require_admin();
+    $am_input = json_decode((string)file_get_contents('php://input'), true) ?: [];
+    $am_id = (int)($am_input['id'] ?? 0);
+    $am_archive = $action === 'archive_monitor';
+    $am_closed = 0;
+    try {
+        $stmt_am = $pdo->prepare("SELECT id, name, type, archived_at FROM monitors WHERE id = ? LIMIT 1");
+        $stmt_am->execute([$am_id]);
+        $am = $stmt_am->fetch();
+        if (!$am) {
+            bk_api_error(404, 'Monitor nenalezen.');
+        }
+        if ($am_archive === !empty($am['archived_at'])) {
+            bk_api_error(409, $am_archive ? 'Monitor už je archivovaný.' : 'Monitor není archivovaný.');
+        }
+        $pdo->beginTransaction();
+        if ($am_archive) {
+            $pdo->prepare("UPDATE monitors SET archived_at = NOW() WHERE id = ?")->execute([$am_id]);
+            // An open incident of a monitor nobody watches any more would stay
+            // open and escalate forever.
+            $stmt_open = $pdo->prepare("SELECT id FROM incidents WHERE monitor_id = ? AND status != 'resolved'");
+            $stmt_open->execute([$am_id]);
+            foreach ($stmt_open->fetchAll(PDO::FETCH_COLUMN) as $am_incident) {
+                $pdo->prepare("UPDATE incidents SET status = 'resolved', resolved_at = NOW() WHERE id = ?")->execute([(int)$am_incident]);
+                $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, 'resolved', 'Monitor byl archivován, incident je uzavřen.')")
+                    ->execute([(int)$am_incident]);
+                $am_closed++;
+            }
+            // Remote actions still waiting for this agent would never be picked up.
+            $pdo->prepare("UPDATE agent_actions SET status = 'failed', result_message = 'Monitor byl archivován.' WHERE monitor_id = ? AND status IN ('pending', 'sent')")
+                ->execute([$am_id]);
+        } else {
+            // Its last state is history; the next check or report says what is true now.
+            $pdo->prepare("UPDATE monitors SET archived_at = NULL, status = 'unknown', last_status_change = NOW() WHERE id = ?")->execute([$am_id]);
+        }
+        $pdo->commit();
+        // Every cached answer was computed with the monitor in (or out).
+        bk_kv_cache_clear($pdo);
+        log_monitor_event($pdo, $am_id, $am['name'], $am['type'], $am_archive ? 'monitor_archived' : 'monitor_restored', $am_archive ? 'Monitor archivován' : 'Monitor obnoven z archivu');
+        bk_audit_log($pdo, $am_archive ? 'monitor_archived' : 'monitor_restored', (string)$am['name'], 'monitor', $am_id);
+        echo json_encode(['success' => true, 'archived' => $am_archive, 'incidentsClosed' => $am_closed], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        bk_api_error(500, 'Archivaci se nepodařilo provést.');
+    }
+    exit;
+}
+
+// What an administrator needs to install the agent for one monitor: its key and
+// the addresses on this server. The app never showed the key, so an agent
+// installed by its instructions stopped at "AGENT_KEY is not set". The key is a
+// credential: admin-only, and every read is written to the audit log.
+if ($action === 'agent_install_info') {
+    bk_require_admin();
+    $ai_id = (int)($_GET['monitor_id'] ?? 0);
+    try {
+        $stmt_ai = $pdo->prepare("SELECT id, name, type, agent_key, archived_at FROM monitors WHERE id = ? LIMIT 1");
+        $stmt_ai->execute([$ai_id]);
+        $ai = $stmt_ai->fetch();
+        if (!$ai) {
+            bk_api_error(404, 'Monitor nenalezen.');
+        }
+        if (!empty($ai['archived_at'])) {
+            bk_api_error(409, 'Monitor je archivovaný. Nejdřív ho obnovte.');
+        }
+        if (empty($ai['agent_key'])) {
+            $ai['agent_key'] = bin2hex(random_bytes(16));
+            $pdo->prepare("UPDATE monitors SET agent_key = ? WHERE id = ?")->execute([$ai['agent_key'], $ai_id]);
+        }
+        $ai_dir = rtrim(str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? '/status/api.php'))), '/');
+        $ai_base = bk_link_origin() . $ai_dir;
+        bk_audit_log($pdo, 'agent_key_viewed', (string)$ai['name'], 'monitor', $ai_id);
+        echo json_encode([
+            'monitorId' => $ai_id,
+            'name' => $ai['name'],
+            'type' => strtolower((string)$ai['type']),
+            'agentKey' => $ai['agent_key'],
+            'apiUrl' => $ai_base . '/agent_api.php',
+            'files' => [
+                'openwrt' => $ai_base . '/agent_openwrt.sh',
+                'shell' => $ai_base . '/agent.sh',
+                'python' => $ai_base . '/agent.py',
+                'windows' => $ai_base . '/agent.ps1',
+                'docker' => $ai_base . '/docker-compose.agent.yml',
+            ],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Údaje pro instalaci agenta se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 2b2b. List of discovered but not-yet-monitored services (Service Discovery).
+// Agents have long stored this in monitors.last_details.discovered_services
+// (agent_api.php) and admin.php can import it, but none of the front-end apps
+// (apps/monitor React SPA) ever read it back - hence this endpoint.
+if ($action === 'discovered_services') {
+    bk_require_admin();
+    try {
+        // Already-monitored services are not proposed again - otherwise an
+        // imported service stayed in the panel as "unmonitored" (reported: kresd twice).
+        // Names per device: a service imported on one router hid the same
+        // service on every other router for good.
+        $existing_names = [];
+        $existing_port_asset = [];
+        $stmt_ex = $pdo->query("SELECT LOWER(name) AS lname, port, asset_id FROM monitors WHERE archived_at IS NULL");
+        while ($ex = $stmt_ex->fetch()) {
+            $existing_names[($ex['asset_id'] ?? '') . ':' . $ex['lname']] = true;
+            if ($ex['port'] !== null && $ex['asset_id'] !== null) {
+                $existing_port_asset[$ex['asset_id'] . ':' . $ex['port']] = true;
+            }
+        }
+
+        $stmt = $pdo->query("SELECT id, name, type, target, asset_id, last_details FROM monitors WHERE last_details IS NOT NULL AND archived_at IS NULL");
+        $services = [];
+        while ($row = $stmt->fetch()) {
+            $details = bk_monitor_details($row);
+            if (empty($details['discovered_services']) || !is_array($details['discovered_services'])) {
+                continue;
+            }
+            foreach ($details['discovered_services'] as $svc) {
+                if (empty($svc['name'])) continue;
+
+                $asset_id = $row['asset_id'] !== null ? (int)$row['asset_id'] : null;
+                $port = isset($svc['port']) && $svc['port'] !== '' ? (int)$svc['port'] : null;
+                if (isset($existing_names[($asset_id ?? '') . ':' . strtolower((string)$svc['name'])])) continue;
+                if ($port !== null && $asset_id !== null && isset($existing_port_asset[$asset_id . ':' . $port])) continue;
+
+                // Target of the future check: the agent's address, else the hostname
+                // from its report, else the source monitor's target. This used to
+                // insert the monitor NAME ("Router - Praha"), which the import
+                // then rightly rejected as an invalid address.
+                $resolved_target = trim((string)($svc['target'] ?? ''));
+                if ($resolved_target === '' || $resolved_target === '127.0.0.1' || $resolved_target === 'localhost') {
+                    $resolved_target = trim((string)($details['hostname'] ?? ''));
+                }
+                if ($resolved_target === '') {
+                    $resolved_target = trim((string)($row['target'] ?? ''));
+                }
+                // Pre-validation: a service that cannot be checked from the hosting
+                // (private address, no address) is offered as an agent-side check
+                // on agent monitors (vps/openwrt) - the agent verifies it locally.
+                // Blocking remains only where there is no agent to take the
+                // check over.
+                $import_blocked = $resolved_target === ''
+                    ? 'Agent nehlásí žádnou adresu, přes kterou by šla služba z hostingu testovat.'
+                    : bk_validate_import_target($resolved_target);
+                // Choosing the check mode:
+                //  - active (from the hosting) only when the service has a publicly
+                //    reachable target AND a type/port cron can test,
+                //  - otherwise agent-side, when the source monitor IS an agent and the
+                //    service has a process name or port (the agent verifies locally) -
+                //    this includes portless daemons (Turris Sentinel etc.),
+                //  - blocking remains only where no path is left.
+                $src_is_agent = in_array(strtolower((string)($row['type'] ?? '')), ['vps', 'openwrt'], true);
+                $svc_proc = isset($svc['process']) && $svc['process'] !== '' ? (string)$svc['process'] : null;
+                $cron_checkable_types = ['web', 'port', 'minecraft', 'teamspeak', 'discord'];
+                $svc_type_lc = strtolower((string)($svc['type'] ?? 'web'));
+                $active_possible = $import_blocked === null
+                    && (in_array($svc_type_lc, $cron_checkable_types, true) || ($port !== null && $port > 0));
+
+                $import_mode = 'active';
+                if (!$active_possible) {
+                    if ($src_is_agent && ($svc_proc !== null || ($port !== null && $port > 0))) {
+                        $import_mode = 'agent';
+                        $import_blocked = null;
+                    } elseif ($import_blocked === null) {
+                        $import_blocked = 'Službu nelze kontrolovat z hostingu (neznámý typ bez portu) a zdrojový monitor není agent, který by kontrolu převzal.';
+                    }
+                }
+
+                $services[] = [
+                    'sourceMonitorId' => (int)$row['id'],
+                    'sourceMonitorName' => $row['name'],
+                    'sourceHostname' => $details['hostname'] ?? null,
+                    'sourceAssetId' => $asset_id,
+                    'name' => (string)$svc['name'],
+                    'type' => (string)($svc['type'] ?? 'web'),
+                    'port' => $port,
+                    'target' => $resolved_target !== '' ? $resolved_target : null,
+                    'process' => isset($svc['process']) && $svc['process'] !== '' ? (string)$svc['process'] : null,
+                    'mode' => $import_mode,
+                    'importBlocked' => $import_blocked,
+                    'confidence' => (int)($svc['confidence'] ?? 0),
+                    'evidence' => is_array($svc['evidence'] ?? null) ? array_values($svc['evidence']) : [],
+                    'missing' => is_array($svc['missing'] ?? null) ? array_values($svc['missing']) : [],
+                ];
+            }
+        }
+        // Most confident proposals first - the admin usually wants those imported first.
+        usort($services, fn($a, $b) => $b['confidence'] <=> $a['confidence']);
+        echo json_encode(['services' => $services], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // [] read as "the agent found nothing to import".
+        bk_api_fail('discovered_services_unavailable', 500, $e, 'Nalezené služby se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 2b2c. Import one discovered service as a new monitor (Service Discovery -
+// the "propose -> confirm" step). Mirrors admin.php action_import_service,
+// jen jako JSON API pro React SPA.
+if ($action === 'import_discovered_service') {
+    bk_require_admin();
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $s_name = trim($input['name'] ?? '');
+    $s_type = trim($input['type'] ?? 'web');
+    $s_port = !empty($input['port']) ? (int)$input['port'] : null;
+    $s_target = trim($input['target'] ?? '127.0.0.1');
+    $source_monitor_id = !empty($input['sourceMonitorId']) ? (int)$input['sourceMonitorId'] : null;
+    if ($source_monitor_id) {
+        bk_refuse_archived_write($pdo, $source_monitor_id);
+    }
+
+    if ($s_name === '') {
+        bk_api_error(400, 'Název služby je povinný.');
+    }
+
+    // 'agent' mode: a private-network service is checked locally by the agent
+    // itself (process + port), the server only receives results. The monitor's
+    // target is then the PROCESS NAME, not a network address - public target validation is skipped.
+    $s_mode = ($input['mode'] ?? '') === 'agent' ? 'agent' : 'active';
+    $s_process = trim((string)($input['process'] ?? ''));
+    if ($s_mode === 'agent') {
+        $s_type = 'agent_service';
+        $s_target = $s_process !== '' && preg_match('/^[A-Za-z0-9_.@-]{1,64}$/', $s_process) ? $s_process : '';
+        if ($s_target === '' && !$s_port) {
+            bk_api_error(400, 'Agent-side kontrola potřebuje aspoň název procesu nebo port služby - agent nehlásí ani jedno.');
+        }
+    }
+
+    // Cron can actively check only these types. Anything else (dns, smtp,
+    // samba...) imports as a port check - otherwise the monitor just generated
+    // unmeasurable 'unknown' records every minute (that is how kresd got
+    // 0 % SLA despite never being tested by any check).
+    $cron_checkable = ['web', 'port', 'minecraft', 'teamspeak', 'discord', 'vps', 'openwrt', 'agent_service'];
+    if (!in_array($s_type, $cron_checkable, true)) {
+        if (!$s_port) {
+            bk_api_error(400, "Typ služby '{$s_type}' zatím neumíme aktivně kontrolovat a služba nehlásí port, přes který by šla testovat. Import by generoval jen prázdné kontroly.");
+        }
+        $s_type = 'port';
+    }
+
+    try {
+        // The discovering monitor runs on the same physical machine, so the new
+        // monitor rovnou dostane jeho asset I kategorii - bez kategorie by
+        // import ended up in the "Other" group, which confuses (reported by the user).
+        $discovered_asset_id = null;
+        $discovered_category = null;
+        if ($source_monitor_id) {
+            $stmt_src = $pdo->prepare("SELECT asset_id, category, target, last_details FROM monitors WHERE id = ?");
+            $stmt_src->execute([$source_monitor_id]);
+            $src_row = $stmt_src->fetch();
+            if ($src_row) {
+                if (!empty($src_row['asset_id'])) {
+                    $discovered_asset_id = (int)$src_row['asset_id'];
+                }
+                if (!empty($src_row['category'])) {
+                    $discovered_category = $src_row['category'];
+                }
+                // The check runs from the hosting, so the target must be the address
+                // of the machine where the agent discovered the service - not localhost
+                // and not the monitor name. Without a usable target, take the source
+                // monitor's target, or the hostname from its last report.
+                if ($s_target === '' || $s_target === '127.0.0.1' || $s_target === 'localhost') {
+                    $src_details = bk_monitor_details($src_row);
+                    $fallback_target = trim((string)($src_row['target'] ?? ''));
+                    if ($fallback_target === '') {
+                        $fallback_target = trim((string)($src_details['hostname'] ?? ''));
+                    }
+                    if ($fallback_target !== '') {
+                        $s_target = $fallback_target;
+                    }
+                }
+            }
+        }
+        // The final target (whether from the agent's discovery payload or the
+        // fallback above) is validated ALWAYS - an agent is a lower trust level
+        // than an admin and checks run from the hosting, where private/internal
+        // targets do not belong. Validation runs before creating the asset so a reject leaves no orphan.
+        // Exception: an agent-side check has no public address (target = process).
+        $target_error = $s_mode === 'agent' ? null : bk_validate_import_target($s_target);
+        if ($target_error !== null) {
+            bk_api_error(400, $target_error);
+        }
+
+        // Without the discovering monitor's device the service gets one of
+        // its own, in one transaction with the monitor (bk_monitor_create).
+        $created = bk_monitor_create($pdo, ['name' => $s_name, 'type' => $s_type, 'target' => $s_target,
+            'port' => $s_port, 'category' => $discovered_category], $discovered_asset_id);
+        $new_id = $created['id'];
+        log_monitor_event($pdo, $new_id, $s_name, $s_type, 'monitor_added', "Importováno z automatické detekce služeb (Service Discovery)");
+        bk_audit_log($pdo, 'monitor_created', $s_name . ' (Service Discovery)', 'monitor', $new_id);
+        echo json_encode(['success' => true, 'id' => $new_id, 'assetId' => $created['asset_id']], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_fail('import_failed', 500, $e, 'Službu se nepodařilo importovat.');
+    }
+    exit;
+}
+
+// 2b2d. Custom logo upload (admin-only). Accepts only raster formats verified
+// via getimagesize (magic bytes, not the extension) - SVG is rejected on
+// purpose: it can carry scripts and opening the uploaded URL directly would
+// run them on our domain. The file is stored under a fixed name in uploads/
+// and the URL goes straight into the custom_logo_url setting.
+/**
+ * Puts an uploaded logo in place as custom-logo.<ext> and only then removes
+ * the logos of other formats. The old ones used to be deleted first, so a
+ * failed move left the stored URL pointing at a file that was gone: a 404
+ * logo on every page. The new file lands under a temporary name and one
+ * rename replaces it. $move is move_uploaded_file() in production.
+ *
+ * @param callable(string, string): bool $move
+ * @return string the path of the new logo
+ */
+function bk_logo_replace(string $dir, string $tmp, string $ext, callable $move): string {
+    $staged = $dir . '/custom-logo.upload-' . bin2hex(random_bytes(4)) . '.' . $ext;
+    if (!$move($tmp, $staged)) {
+        throw new RuntimeException('Soubor se nepodařilo uložit.');
+    }
+    $dest = $dir . '/custom-logo.' . $ext;
+    if (!@rename($staged, $dest)) {
+        @unlink($staged);
+        throw new RuntimeException('Soubor se nepodařilo uložit.');
+    }
+    foreach ((glob($dir . '/custom-logo.*') ?: []) as $old) {
+        if ($old !== $dest) {
+            @unlink($old);
+        }
+    }
+    return $dest;
+}
+
+if ($action === 'upload_logo') {
+    bk_require_admin();
+    if (empty($_FILES['logo']) || !is_array($_FILES['logo'])) {
+        bk_api_error(400, 'Chybí soubor (pole "logo").');
+    }
+    $f = $_FILES['logo'];
+    if (($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        bk_api_error(400, 'Nahrání selhalo (kód ' . (int)$f['error'] . ').');
+    }
+    if ((int)$f['size'] > 2 * 1024 * 1024) {
+        bk_api_error(400, 'Soubor je příliš velký (max 2 MB).');
+    }
+    $info = @getimagesize($f['tmp_name']);
+    $allowed = [IMAGETYPE_PNG => 'png', IMAGETYPE_JPEG => 'jpg', IMAGETYPE_WEBP => 'webp'];
+    if (!$info || !isset($allowed[$info[2]])) {
+        bk_api_error(400, 'Podporované formáty: PNG, JPG, WebP. SVG z bezpečnostních důvodů nahrát nelze — vložte na něj URL ručně.');
+    }
+    try {
+        $ext = $allowed[$info[2]];
+        $dir = __DIR__ . '/uploads';
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
+            throw new RuntimeException('Adresář uploads/ nejde vytvořit.');
+        }
+        $dest = bk_logo_replace($dir, (string)$f['tmp_name'], $ext, 'move_uploaded_file');
+        // Cache-bust via mtime so a logo swap is not hostage to the browser cache.
+        $url = '/status/uploads/custom-logo.' . $ext . '?v=' . filemtime($dest);
+        bk_setting_set($pdo, 'custom_logo_url', $url);
+        bk_audit_log($pdo, 'setting_changed', 'custom_logo_url (upload loga, ' . strtoupper($ext) . ', ' . round($f['size'] / 1024) . ' kB)');
+        echo json_encode(['success' => true, 'url' => $url], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // Only the one sentence this action throws itself is shown; a PDO or
+        // filesystem message would name server paths.
+        $logo_why = $e instanceof RuntimeException ? ' ' . $e->getMessage() : '';
+        bk_api_fail('upload_logo_failed', 500, $e, 'Logo se nepodařilo uložit.' . $logo_why);
+    }
+    exit;
+}
+
+// 2b2e. Public appearance config for the React app - the same data index.php
+// already renders publicly (title, logo, custom menu links).
+if ($action === 'ui_config') {
+    $links_raw = json_decode(get_setting('custom_nav_links'), true);
+    $links = [];
+    if (is_array($links_raw)) {
+        foreach ($links_raw as $l) {
+            $l_name = trim((string)($l['name'] ?? ''));
+            $l_url = trim((string)($l['url'] ?? ''));
+            if ($l_name !== '' && preg_match('#^https?://#i', $l_url)) {
+                $links[] = ['name' => $l_name, 'url' => $l_url];
+            }
+        }
+    }
+    echo json_encode([
+        'siteTitle' => trim((string)get_setting('site_title', 'Blood Kings Monitoring')),
+        'customLogoUrl' => trim((string)get_setting('custom_logo_url')),
+        'customNavLinks' => $links,
+        // For the public page footer - the © line links to the main portal,
+        // same as the legacy footer.
+        'portalUrl' => trim((string)get_setting('portal_url')),
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// 2b2f. Queue a Remote Action (admin-only) - the JSON counterpart of the
+// admin.php form, for the Actions dropdown in the React device detail.
+// The same double consent check: global type list + per-monitor
+// allowed_actions; restart_service additionally requires a valid service name.
+if ($action === 'trigger_remote_action') {
+    bk_require_admin();
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $ra_mid = (int)($input['monitorId'] ?? 0);
+    $ra_action = trim((string)($input['action'] ?? ''));
+    $ra_service = trim((string)($input['serviceName'] ?? ''));
+    bk_refuse_archived_write($pdo, $ra_mid);
+
+    $ra_allowed_types = ['restart_wan', 'restart_wireguard', 'reboot_router', 'renew_dhcp', 'restart_service', 'reconnect_pppoe'];
+    try {
+        $stmt_ra = $pdo->prepare("SELECT remote_actions_enabled, allowed_actions, name FROM monitors WHERE id = ?");
+        $stmt_ra->execute([$ra_mid]);
+        $ra_monitor = $stmt_ra->fetch();
+        $ra_monitor_allowed = $ra_monitor ? array_filter(explode(',', (string)($ra_monitor['allowed_actions'] ?? ''))) : [];
+
+        if (!$ra_monitor || empty($ra_monitor['remote_actions_enabled'])) {
+            bk_api_error(400, 'Remote Actions nejsou pro tento monitor povolené - nejdřív je zapněte v jeho nastavení.');
+        }
+        if (!in_array($ra_action, $ra_allowed_types, true) || !in_array($ra_action, $ra_monitor_allowed, true)) {
+            bk_api_error(400, "Akce '{$ra_action}' není pro tento monitor v seznamu povolených akcí.");
+        }
+        if ($ra_action === 'restart_service' && !preg_match('/^[A-Za-z0-9_.@-]{1,64}$/', $ra_service)) {
+            bk_api_error(400, 'Akce restart_service vyžaduje název služby (povolené znaky: písmena, číslice, _.@-).');
+        }
+
+        $stmt = $pdo->prepare("INSERT INTO agent_actions (monitor_id, action_type, service_name, status) VALUES (?, ?, ?, 'pending')");
+        $stmt->execute([$ra_mid, $ra_action, $ra_action === 'restart_service' ? $ra_service : null]);
+        bk_audit_log($pdo, 'remote_action_triggered', $ra_action . ($ra_action === 'restart_service' ? " ({$ra_service})" : '') . ' na ' . $ra_monitor['name'], 'monitor', $ra_mid);
+        echo json_encode(['success' => true, 'queued' => $ra_action], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Akci se nepodařilo zařadit do fronty.');
+    }
+    exit;
+}
+
+// 2b2g. Convert a monitor to an agent-side check (admin-only). Used for
+// monitors whose target sits on a private network - an active check from the
+// hosting never succeeds there and only generates false outages.
+if ($action === 'convert_to_agent_check') {
+    bk_require_admin();
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $cv_id = (int)($input['id'] ?? 0);
+    $cv_proc = trim((string)($input['process'] ?? ''));
+    bk_refuse_archived_write($pdo, $cv_id);
+    if (!preg_match('/^[A-Za-z0-9_.@-]{1,64}$/', $cv_proc)) {
+        bk_api_error(400, 'Zadejte název procesu (písmena, číslice, _.@-), který má agent kontrolovat.');
+    }
+    try {
+        $stmt_cv = $pdo->prepare("SELECT m.id, m.name, m.asset_id FROM monitors m WHERE m.id = ?");
+        $stmt_cv->execute([$cv_id]);
+        $cv_mon = $stmt_cv->fetch();
+        if (!$cv_mon || $cv_mon['asset_id'] === null) {
+            bk_api_error(400, 'Monitor nenalezen nebo nemá přiřazené zařízení (asset).');
+        }
+        // The asset must have an agent to take the check over.
+        $stmt_ag = $pdo->prepare("SELECT COUNT(*) FROM monitors WHERE asset_id = ? AND type IN ('vps', 'openwrt') AND archived_at IS NULL");
+        $stmt_ag->execute([$cv_mon['asset_id']]);
+        if ((int)$stmt_ag->fetchColumn() === 0) {
+            bk_api_error(400, 'Na tomto zařízení není agent, který by kontrolu převzal.');
+        }
+        // History stays (only type and target change), the status resets to
+        // 'unknown' - nothing is claimed until the agent's first result.
+        $stmt_up = $pdo->prepare("UPDATE monitors SET type = 'agent_service', target = ?, status = 'unknown', last_status_change = NOW() WHERE id = ?");
+        $stmt_up->execute([$cv_proc, $cv_id]);
+        log_monitor_event($pdo, $cv_id, $cv_mon['name'], 'agent_service', 'monitor_updated', 'Převedeno na kontrolu agentem (proces ' . $cv_proc . ')');
+        bk_audit_log($pdo, 'monitor_updated', $cv_mon['name'] . ' → agent-side kontrola (' . $cv_proc . ')', 'monitor', $cv_id);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Převod se nepodařil.');
+    }
+    exit;
+}
+
+// 2b2h. Read-alert state (per user, not per browser).
+// GET returns the last read monitor_logs.id, POST advances it.
+if ($action === 'alerts_read_state') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        echo json_encode(['readUpToId' => 0], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+    $uid = (int)($_SESSION['admin_id'] ?? 0);
+    try {
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+            $up_to = max(0, (int)($input['readUpToId'] ?? 0));
+            $stmt = $pdo->prepare("UPDATE users SET alerts_read_log_id = GREATEST(COALESCE(alerts_read_log_id, 0), ?) WHERE id = ?");
+            $stmt->execute([$up_to, $uid]);
+            echo json_encode(['success' => true, 'readUpToId' => $up_to], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $stmt = $pdo->prepare("SELECT COALESCE(alerts_read_log_id, 0) FROM users WHERE id = ?");
+        $stmt->execute([$uid]);
+        echo json_encode(['readUpToId' => (int)$stmt->fetchColumn()], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // 0 turned every alert back to unread, and a failed POST looked saved.
+        bk_api_fail('alerts_read_state_unavailable', 500, $e, 'Stav přečtených upozornění se nepodařilo načíst ani uložit.');
+    }
+    exit;
+}
+
+// 2b2i. Catalogue of available dashboard tiles + the user's layout.
+// Answers "what do we actually collect": the catalogue derives from REAL data
+// (the metric map in vps_metrics + keys agents really sent), not
+// a fixed list - a tile nobody ever measured anything for is not offered.
+
+if ($action === 'dashboard_layout') {
+    $uid = (int)($_SESSION['admin_id'] ?? 0);
+
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        if (!$uid) {
+            bk_api_error(403, 'Rozložení lze uložit jen přihlášenému uživateli.');
+        }
+        $input = json_decode(file_get_contents('php://input'), true) ?: [];
+        $tiles = [];
+        foreach (($input['tiles'] ?? []) as $t) {
+            $key = preg_replace('/[^a-z0-9_]/', '', strtolower((string)($t['key'] ?? '')));
+            if ($key === '') continue;
+            $tiles[] = [
+                'key' => $key,
+                'visible' => !empty($t['visible']),
+                'size' => in_array($t['size'] ?? 'normal', ['normal', 'wide'], true) ? $t['size'] : 'normal',
+            ];
+        }
+        try {
+            bk_setting_set($pdo, 'dashboard_layout_user_' . $uid, json_encode($tiles, JSON_UNESCAPED_UNICODE));
+            echo json_encode(['success' => true, 'tiles' => $tiles], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            bk_api_error(500, 'Rozložení se nepodařilo uložit.');
+        }
+        exit;
+    }
+
+    // The catalogue names agent machines; a user's lists only their monitors.
+    bk_require_login();
+    $dl_visible = bk_visible_monitor_ids($pdo);
+    [$dl_scope, $dl_scope_params] = bk_list_scope_sql($pdo, $dl_visible, 'monitor_id');
+    [$dl_agent_scope, $dl_agent_params] = bk_list_scope_sql($pdo, $dl_visible, 'm.id');
+    try {
+        // 1. What is actually measured: vps_metrics columns with at least
+        //    one non-null value over the last 7 days.
+        // The catalogue offers only metrics the dashboard can draw from data
+        // the monitors endpoint really returns (cpu/ram/hdd on the monitor row).
+        // Further metrics (temperature, load, wifi clients...) join once they
+        // render - offering a switch without an implementation is a dead switch.
+        $metric_defs = [
+            'cpu' => ['col' => 'cpu_usage', 'label' => t('metric_label_cpu'), 'unit' => '%'],
+            'ram' => ['col' => 'ram_usage', 'label' => t('metric_label_ram'), 'unit' => '%'],
+            'hdd' => ['col' => 'hdd_usage', 'label' => t('metric_label_hdd'), 'unit' => '%'],
+        ];
+        $measured = [];
+        // A count that failed is no count: it used to become 0, and the editor
+        // marked a measured metric "nesbírá data". The failure goes to the
+        // catch below, which says the catalogue could not be read.
+        foreach ($metric_defs as $key => $def) {
+            $stmt_m = $pdo->prepare("SELECT COUNT(*) FROM vps_metrics WHERE `{$def['col']}` IS NOT NULL AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND {$dl_scope}");
+            $stmt_m->execute($dl_scope_params);
+            $measured[$key] = ['label' => $def['label'], 'unit' => $def['unit'], 'samples' => (int)$stmt_m->fetchColumn()];
+        }
+
+        // 2. Fixed dashboard panels (not metrics, but page sections).
+        $panels = [
+            'health' => t('tile_health'),
+            'attention' => t('tile_attention'),
+            'devices' => t('tile_devices'),
+            'monitors' => t('tile_monitors'),
+            'alerts' => t('tile_alerts'),
+            'insights' => t('tile_insights'),
+            'uptime_history' => t('tile_uptime_history'),
+            'regions' => t('tile_regions'),
+        ];
+
+        $catalog = [];
+        foreach ($panels as $key => $label) {
+            $catalog[] = ['key' => $key, 'label' => $label, 'kind' => 'panel', 'available' => true, 'samples' => null];
+        }
+        foreach ($measured as $key => $info) {
+            $catalog[] = [
+                'key' => 'metric_' . $key,
+                'label' => $info['label'] . ($info['unit'] !== '' ? " ({$info['unit']})" : ''),
+                'kind' => 'metric',
+                // A tile for a metric nobody measures would only show dashes.
+                'available' => $info['samples'] > 0,
+                'samples' => $info['samples'],
+            ];
+        }
+
+        // Dlazdice pro konkretni stroj: nabizi se jen agenti, kteri opravdu
+        // posilaji metriky (jinak by slo zapnout kartu, ktera nikdy nic
+        // neukaze). Klic nese id monitoru: metric_cpu_12.
+        try {
+            $stmt_a = $pdo->prepare("
+                SELECT m.id, m.name,
+                       (SELECT vm.cpu_usage FROM vps_metrics vm
+                        WHERE vm.monitor_id = m.id ORDER BY vm.id DESC LIMIT 1) AS cpu_usage
+                FROM monitors m
+                WHERE LOWER(m.type) IN ('vps', 'openwrt') AND {$dl_agent_scope}
+                ORDER BY m.name
+            ");
+            $stmt_a->execute($dl_agent_params);
+            foreach ($stmt_a->fetchAll() as $agent) {
+                if ($agent['cpu_usage'] === null) {
+                    continue;
+                }
+                foreach (['cpu' => t('metric_label_cpu'), 'ram' => t('metric_label_ram'), 'hdd' => t('metric_label_hdd')] as $mkey => $mlabel) {
+                    $catalog[] = [
+                        'key' => 'metric_' . $mkey . '_' . (int)$agent['id'],
+                        'label' => $mlabel . ' — ' . $agent['name'],
+                        'kind' => 'metric',
+                        'available' => true,
+                        'samples' => null,
+                    ];
+                }
+            }
+        } catch (Throwable $e) {
+            // Bez per-stroj dlazdic se katalog jen zkrati.
+            error_log('[api.php action=' . $action . '] per-machine tiles skipped: ' . $e->getMessage());
+        }
+
+        $saved = [];
+        if ($uid) {
+            $raw = get_setting('dashboard_layout_user_' . $uid, '');
+            if ($raw !== '') {
+                $decoded = json_decode($raw, true);
+                if (is_array($decoded)) $saved = $decoded;
+            }
+        }
+
+        echo json_encode(['catalog' => $catalog, 'tiles' => $saved], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Katalog dlaždic se nepodařilo sestavit.');
+    }
+    exit;
+}
+
+// 2b3. Read the system settings (admin-only, masked passwords)
+if ($action === 'get_settings') {
+    bk_require_admin();
+
+    // The list is shared with the write path and the legacy admin (db.php).
+    // When read and write drift apart, the form shows an empty field and saves it.
+    $all_keys = bk_settings_keys();
+    $secret_keys = bk_settings_secret_keys();
+
+    $settings = [];
+    $env_locked = [];
+    foreach ($all_keys as $key) {
+        // An unset key answers its default from bk_settings_defaults() (inside
+        // get_setting), never ''. The form posts back what it loaded, and a ''
+        // it posted back used to switch agent alerts off.
+        $val = get_setting($key, '');
+        $is_env = is_setting_env_defined($key);
+        if ($is_env) {
+            $env_locked[] = $key;
+        }
+        // Mask passwords/tokens: empty stays empty, otherwise ••••••+last 4 chars
+        if (in_array($key, $secret_keys, true) && $val !== '') {
+            $suffix = mb_strlen($val) >= 4 ? mb_substr($val, -4) : $val;
+            $val = '••••••' . $suffix;
+        }
+        $settings[$key] = $val;
+    }
+
+    echo json_encode(['settings' => $settings, 'envLocked' => $env_locked], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// 2b4. Save the system settings (admin-only)
+// One real test message through a notification channel, with the SAVED
+// settings. The settings page's test buttons used to flash "Test OK" without
+// calling anything - a dead webhook looked fine until the first outage.
+// Wipes a monitor's measured history. Irreversible, so it asks for the
+// monitor's own name back: a stray click on a button labelled "clear" must not
+// be able to delete months of measurements.
+if ($action === 'clear_monitor_history') {
+    bk_require_admin();
+    $ch_input = json_decode((string)file_get_contents('php://input'), true);
+    $ch_id = (int)($ch_input['monitor_id'] ?? 0);
+    $ch_confirm = trim((string)($ch_input['confirm_name'] ?? ''));
+    bk_refuse_archived_write($pdo, $ch_id);
+    if ($ch_id <= 0) {
+        bk_api_error(400, 'Chybí monitor_id.');
+    }
+    try {
+        $stmt_name = $pdo->prepare("SELECT name FROM monitors WHERE id = ? LIMIT 1");
+        $stmt_name->execute([$ch_id]);
+        $ch_name = $stmt_name->fetchColumn();
+        if ($ch_name === false) {
+            bk_api_error(404, 'Monitor nenalezen.');
+        }
+        if ($ch_confirm !== (string)$ch_name) {
+            bk_api_error(400, 'Pro potvrzení opište přesný název monitoru.');
+        }
+
+        bk_audit_log($pdo, 'monitor_history_cleared', (string)$ch_name, 'monitor', $ch_id);
+        $pdo->prepare("DELETE FROM monitor_logs WHERE monitor_id = ?")->execute([$ch_id]);
+        $pdo->prepare("DELETE FROM vps_metrics WHERE monitor_id = ?")->execute([$ch_id]);
+        $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = ?")->execute([$ch_id]);
+        // The state goes with it: keeping "up" next to an empty history would
+        // claim a measurement that no longer exists.
+        $pdo->prepare("
+            UPDATE monitors
+            SET status = 'unknown', last_checked = NULL, last_status_change = NULL, last_details = NULL
+            WHERE id = ?
+        ")->execute([$ch_id]);
+
+        echo json_encode(['success' => true, 'message' => 'Historie monitoru byla smazána.'], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=clear_monitor_history] ' . $e->getMessage());
+        bk_api_error(500, 'Historii se nepodařilo smazat.');
+    }
+    exit;
+}
+
+// Asks the geolocation API again where this server is. The answer is cached in
+// a setting and every check writes it into its log row, so a wrong one follows
+// the data around until somebody forces a new lookup.
+if ($action === 'redetect_location') {
+    bk_require_admin();
+    try {
+        $rl_loc = detect_server_location();
+        if ($rl_loc === null) {
+            bk_api_error(502, 'Geolokační služba neodpověděla, uložená lokalita zůstává beze změny.');
+        }
+        bk_setting_set($pdo, 'ip_loc_local', $rl_loc);
+        bk_audit_log($pdo, 'location_redetected', $rl_loc);
+        echo json_encode(['success' => true, 'location' => $rl_loc], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=redetect_location] ' . $e->getMessage());
+        bk_api_error(500, 'Lokalitu se nepodařilo zjistit.');
+    }
+    exit;
+}
+
+// Maintenance on or off in one click, for one monitor or several.
+//
+// Putting a machine into maintenance meant opening the edit form, ticking a
+// box and saving the whole monitor - so during an actual maintenance window,
+// when speed matters, the operator was editing forms. Several monitors at once
+// was not possible at all.
+if ($action === 'toggle_maintenance') {
+    // Admin only. Maintenance silences every alert for the monitors it covers,
+    // and without an end it lasts forever: a 'user' account - the kind created
+    // for notification subscriptions - could switch off alerting for the fleet.
+    bk_require_admin();
+    $tm_input = json_decode((string)file_get_contents('php://input'), true);
+    $tm_ids = [];
+    foreach ((array)($tm_input['monitor_ids'] ?? []) as $tm_id) {
+        $tm_id = (int)$tm_id;
+        if ($tm_id > 0) {
+            $tm_ids[] = $tm_id;
+        }
+    }
+    $tm_ids = array_values(array_unique($tm_ids));
+    foreach ($tm_ids as $tm_check_id) {
+        bk_refuse_archived_write($pdo, $tm_check_id);
+    }
+    $tm_on = !empty($tm_input['maintenance']);
+    $tm_desc = trim((string)($tm_input['description'] ?? ''));
+    $tm_end = trim((string)($tm_input['maintenance_end'] ?? ''));
+    if (count($tm_ids) === 0) {
+        bk_api_error(400, 'Chybí monitor_ids.');
+    }
+    // The window starts now, so an end that is not later never applies.
+    if ($tm_on && $tm_end !== '') {
+        $tm_to = strtotime($tm_end);
+        if ($tm_to === false) {
+            bk_api_error(400, 'Okno údržby má neplatné datum.');
+        }
+        if ($tm_to <= time()) {
+            bk_api_error(400, 'Konec údržby musí být později než začátek.');
+        }
+    }
+    try {
+        $place = implode(',', array_fill(0, count($tm_ids), '?'));
+        if ($tm_on) {
+            // The window is written with the flag, so cron can end it by itself
+            // (bk_maintenance_window_expired). Without an end it is a manual
+            // window that waits to be switched off - both are legitimate.
+            $stmt = $pdo->prepare("
+                UPDATE monitors
+                SET maintenance = 1,
+                    maintenance_description = ?,
+                    maintenance_start = NOW(),
+                    maintenance_end = ?
+                WHERE id IN ({$place})
+            ");
+            $stmt->execute(array_merge(
+                [$tm_desc !== '' ? $tm_desc : null, $tm_end !== '' ? $tm_end : null],
+                $tm_ids
+            ));
+        } else {
+            // Off clears the window too - a leftover start/end would make the
+            // next maintenance expire the moment it is switched on.
+            $stmt = $pdo->prepare("
+                UPDATE monitors
+                SET maintenance = 0, maintenance_description = NULL, maintenance_start = NULL, maintenance_end = NULL
+                WHERE id IN ({$place})
+            ");
+            $stmt->execute($tm_ids);
+        }
+        bk_audit_log(
+            $pdo,
+            $tm_on ? 'maintenance_on' : 'maintenance_off',
+            implode(', ', array_map('strval', $tm_ids))
+        );
+        echo json_encode(['success' => true, 'changed' => count($tm_ids), 'maintenance' => $tm_on], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=toggle_maintenance] ' . $e->getMessage());
+        bk_api_error(500, 'Údržbu se nepodařilo přepnout.');
+    }
+    exit;
+}
+
+// Which processes have been eating the machine over a whole window, not which
+// ones happened to be on top in the last report. process_samples has kept a
+// per-minute history for a long time and the only reader asked it about one
+// moment (the culprits panel), so "what has been chewing the CPU today?" could
+// only be answered by watching the page.
+if ($action === 'process_top') {
+    $pt_monitor = (int)($_GET['monitor_id'] ?? 0);
+    $pt_kind = ($_GET['kind'] ?? 'cpu') === 'ram' ? 'ram' : 'cpu';
+    $pt_minutes = min(43200, max(15, (int)($_GET['minutes'] ?? 1440)));
+    if ($pt_monitor <= 0) {
+        bk_api_error(400, 'Chybí monitor_id.');
+    }
+    // For the users the monitor belongs to, and admins: a monitor is its users' whole.
+    bk_require_monitor_view($pdo, $pt_monitor);
+    try {
+        if ((int)get_setting('process_history_days', '30') <= 0) {
+            echo json_encode(['enabled' => false, 'processes' => []], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $col = $pt_kind === 'ram' ? 'ram_mb' : 'cpu_pct';
+        // The average is over every sampled minute of the window, a minute a
+        // process was not among the top ten counting as zero. Over its own
+        // minutes only, a one-minute spike of 95 % outranked 40 % all day.
+        $stmt_minutes = $pdo->prepare("
+            SELECT COUNT(DISTINCT sampled_at) FROM process_samples
+            WHERE monitor_id = ? AND kind = ? AND sampled_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+        ");
+        $stmt_minutes->execute([$pt_monitor, $pt_kind, $pt_minutes]);
+        $pt_sampled = max(1, (int)$stmt_minutes->fetchColumn());
+        // Grouped by process NAME, not pid: a service that restarts keeps
+        // eating the same machine under a new pid, and a per-pid ranking would
+        // split it into a dozen harmless-looking rows.
+        $stmt = $pdo->prepare("
+            SELECT name,
+                   SUM({$col}) AS sum_val,
+                   MAX({$col}) AS max_val,
+                   COUNT(*) AS samples,
+                   MAX(sampled_at) AS last_seen
+            FROM process_samples
+            WHERE monitor_id = ? AND kind = ?
+              AND sampled_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+              AND {$col} IS NOT NULL
+            GROUP BY name
+            ORDER BY sum_val DESC
+            LIMIT 12
+        ");
+        $stmt->execute([$pt_monitor, $pt_kind, $pt_minutes]);
+        $rows = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $rows[] = [
+                'name' => (string)$r['name'],
+                'avg' => round((float)$r['sum_val'] / $pt_sampled, 2),
+                'max' => round((float)$r['max_val'], 2),
+                'samples' => (int)$r['samples'],
+                'lastSeenIso' => date('c', strtotime((string)$r['last_seen'])),
+            ];
+        }
+        echo json_encode([
+            'enabled' => true,
+            'kind' => $pt_kind,
+            'minutes' => $pt_minutes,
+            // The minutes the averages are over: those with any sample.
+            'sampledMinutes' => $pt_sampled,
+            'processes' => $rows,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // A 200 with processes: [] next to the error read as "nothing ran".
+        bk_api_fail('process_top_unavailable', 500, $e, 'Historii procesů se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// Per-interface traffic by day. The table keeps a row per interface per day
+// and the only reader summed it into today / 7 / 30 days, so "which day did we
+// move forty gigabytes?" had no answer. Admin only, like every other endpoint
+// that names interfaces - that is network topology.
+if ($action === 'interface_traffic_daily') {
+    $itd_monitor = (int)($_GET['monitor_id'] ?? 0);
+    $itd_days = min(180, max(1, (int)($_GET['days'] ?? 30)));
+    if ($itd_monitor <= 0) {
+        bk_api_error(400, 'Chybí monitor_id.');
+    }
+    // For the users the monitor belongs to, and admins: a monitor is its users' whole.
+    bk_require_monitor_view($pdo, $itd_monitor);
+    try {
+        $stmt = $pdo->prepare("
+            SELECT iface, date, rx_bytes_total, tx_bytes_total
+            FROM monitor_interface_traffic
+            WHERE monitor_id = ? AND date > DATE_SUB(CURDATE(), INTERVAL ? DAY)
+            ORDER BY iface ASC, date ASC
+        ");
+        $stmt->execute([$itd_monitor, $itd_days]);
+        // Link speeds the switch reported (lan_ports), by netdev name: a day
+        // above speed x 24 h is a counter artefact (charts-15), not traffic.
+        $itd_speed = [];
+        $stmt_det = $pdo->prepare("SELECT last_details FROM monitors WHERE id = ?");
+        $stmt_det->execute([$itd_monitor]);
+        $itd_details = json_decode((string)$stmt_det->fetchColumn(), true);
+        $itd_lan = is_array($itd_details['lan_ports'] ?? null) ? $itd_details['lan_ports'] : [];
+        foreach (array_merge((array)($itd_lan['ports'] ?? []), (array)($itd_lan['conduits'] ?? [])) as $itd_port) {
+            $itd_name = is_array($itd_port) ? (string)($itd_port['name'] ?? $itd_port['dev'] ?? '') : '';
+            if ($itd_name !== '' && is_numeric($itd_port['speed_mbit'] ?? null)) {
+                $itd_speed[$itd_name] = (float)$itd_port['speed_mbit'];
+            }
+        }
+        $by_iface = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $iface = (string)$r['iface'];
+            if (!isset($by_iface[$iface])) {
+                $by_iface[$iface] = ['iface' => $iface, 'total' => 0.0, 'linkMbit' => $itd_speed[$iface] ?? null, 'days' => []];
+            }
+            $ceiling = bk_iface_day_ceiling_bytes($itd_speed[$iface] ?? null);
+            $rx = $r['rx_bytes_total'] !== null ? (float)$r['rx_bytes_total'] : null;
+            $tx = $r['tx_bytes_total'] !== null ? (float)$r['tx_bytes_total'] : null;
+            $rejected = [];
+            if ($rx !== null && $rx > $ceiling) {
+                $rejected[] = 'rx';
+                $rx = null;
+            }
+            if ($tx !== null && $tx > $ceiling) {
+                $rejected[] = 'tx';
+                $tx = null;
+            }
+            $by_iface[$iface]['total'] += ($rx ?? 0) + ($tx ?? 0);
+            $day_row = [
+                'date' => (string)$r['date'],
+                // A day the agent never reported is absent from the table; a
+                // day it reported with no traffic is a real zero. Null here
+                // is only a rejected value, and `rejected` says which one.
+                'rxBytes' => $rx,
+                'txBytes' => $tx,
+            ];
+            if ($rejected) {
+                $day_row['rejected'] = $rejected;
+            }
+            $by_iface[$iface]['days'][] = $day_row;
+        }
+        // Busiest first: a router has a dozen interfaces and three of them
+        // carry everything.
+        $out = array_values($by_iface);
+        usort($out, fn($a, $b) => $b['total'] <=> $a['total']);
+        echo json_encode(['interfaces' => $out], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // interfaces: [] with a 200 is "no traffic", which a failed read is not.
+        bk_api_fail('interface_traffic_unavailable', 500, $e, 'Denní provoz se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// What was actually sent and whether it went. Admin only: it names
+// recipients and carries the delivery errors of the channels.
+if ($action === 'notification_log') {
+    // Admin only: it names the recipients and carries the channels' delivery errors.
+    bk_require_admin();
+    $nl_monitor = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
+    $nl_limit = min(200, max(1, (int)($_GET['limit'] ?? 50)));
+    // Paging by cursor, not by OFFSET: rows keep being written while somebody
+    // reads the log, and an offset page would repeat one row and skip another.
+    $nl_before = isset($_GET['before_id']) ? max(0, (int)$_GET['before_id']) : 0;
+    $nl_kind = trim((string)($_GET['kind'] ?? ''));
+    $nl_channel = trim((string)($_GET['channel'] ?? ''));
+    $nl_recipient = trim((string)($_GET['q'] ?? ''));
+    $nl_ok = isset($_GET['ok']) ? trim((string)$_GET['ok']) : '';
+    $nl_want_summary = ($_GET['summary'] ?? '') === '1';
+
+    if ($nl_ok !== '' && $nl_ok !== '0' && $nl_ok !== '1') {
+        bk_api_error(400, 'Parametr ok smí být jen 0 nebo 1.');
+    }
+
+    // delivery=failed,unknown - the known results only. A value outside them
+    // is a 400: a filter that dropped it silently would answer a wider
+    // question than the one asked. Only the whitelist's own strings are bound.
+    $nl_delivery_known = ['sent', 'failed', 'unknown', 'skipped'];
+    $nl_delivery = [];
+    $nl_delivery_raw = trim((string)($_GET['delivery'] ?? ''));
+    if ($nl_delivery_raw !== '') {
+        $nl_delivery_asked = array_map('trim', explode(',', $nl_delivery_raw));
+        if (array_diff($nl_delivery_asked, $nl_delivery_known) !== []) {
+            bk_api_error(400, 'Parametr delivery smí obsahovat jen sent, failed, unknown a skipped.');
+        }
+        $nl_delivery = array_values(array_intersect($nl_delivery_known, $nl_delivery_asked));
+    }
+    $nl_delivery_sql = bk_notification_delivery_sql('n');
+
+    // A time bound that cannot be parsed must not quietly become "no bound":
+    // the answer would then hold more rows than the administrator asked for
+    // and still look like the complete one.
+    $nl_range = ['from' => null, 'to' => null];
+    foreach (['from', 'to'] as $nl_bound) {
+        $nl_raw = trim((string)($_GET[$nl_bound] ?? ''));
+        if ($nl_raw === '') {
+            continue;
+        }
+        $nl_ts = strtotime($nl_raw);
+        if ($nl_ts === false) {
+            bk_api_error(400, "Parametr {$nl_bound} není platné datum.");
+        }
+        // A bare date as the upper bound means the whole day. "to=2026-09-20"
+        // asked for that day, not for the split second it began.
+        if ($nl_bound === 'to' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $nl_raw)) {
+            $nl_ts += 86399;
+        }
+        $nl_range[$nl_bound] = date('Y-m-d H:i:s', $nl_ts);
+    }
+
+    $nl_where = [];
+    $nl_params = [];
+    if ($nl_monitor > 0) {
+        $nl_where[] = 'n.monitor_id = ?';
+        $nl_params[] = $nl_monitor;
+    }
+    if ($nl_kind !== '') {
+        $nl_where[] = 'n.kind = ?';
+        $nl_params[] = $nl_kind;
+    }
+    if ($nl_channel !== '') {
+        $nl_where[] = 'n.channel = ?';
+        $nl_params[] = $nl_channel;
+    }
+    if ($nl_ok !== '') {
+        $nl_where[] = 'n.ok = ?';
+        $nl_params[] = (int)$nl_ok;
+    }
+    if ($nl_delivery !== []) {
+        $nl_where[] = "{$nl_delivery_sql} IN (" . implode(', ', array_fill(0, count($nl_delivery), '?')) . ')';
+        array_push($nl_params, ...$nl_delivery);
+    }
+    if ($nl_range['from'] !== null) {
+        $nl_where[] = 'n.created_at >= ?';
+        $nl_params[] = $nl_range['from'];
+    }
+    if ($nl_range['to'] !== null) {
+        $nl_where[] = 'n.created_at <= ?';
+        $nl_params[] = $nl_range['to'];
+    }
+    if ($nl_recipient !== '') {
+        // The LIKE wildcards in the needle are escaped: a search for "a_b" must
+        // not also match "axb", or the filter would silently widen itself.
+        $nl_where[] = 'n.recipient LIKE ?';
+        $nl_params[] = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $nl_recipient) . '%';
+    }
+    if ($nl_before > 0) {
+        $nl_where[] = 'n.id < ?';
+        $nl_params[] = $nl_before;
+    }
+    $where = $nl_where ? 'WHERE ' . implode(' AND ', $nl_where) : '';
+
+    try {
+        // One row more than asked for tells us whether another page exists,
+        // without a second COUNT over the whole table.
+        $nl_fetch = $nl_limit + 1;
+        $stmt = $pdo->prepare("
+            SELECT n.id, n.monitor_id, n.kind, n.status, n.channel, n.recipient, n.subject,
+                   n.method, n.ok, n.error_message, n.created_at,
+                   {$nl_delivery_sql} AS delivery_read, n.delivery AS delivery_stored, n.provider_reply,
+                   m.name AS monitor_name
+            FROM notification_log n
+            LEFT JOIN monitors m ON m.id = n.monitor_id
+            {$where}
+            ORDER BY n.id DESC
+            LIMIT {$nl_fetch}
+        ");
+        $stmt->execute($nl_params);
+        $nl_fetched = $stmt->fetchAll();
+        $nl_has_more = count($nl_fetched) > $nl_limit;
+        if ($nl_has_more) {
+            array_pop($nl_fetched);
+        }
+        $rows = [];
+        foreach ($nl_fetched as $r) {
+            $nl_row_kind = (string)($r['kind'] ?? 'other');
+            $rows[] = [
+                'id' => (int)$r['id'],
+                'monitorId' => $r['monitor_id'] !== null ? (int)$r['monitor_id'] : null,
+                'monitorName' => $r['monitor_name'],
+                'kind' => $nl_row_kind,
+                // Every status change is stored as kind 'alert', recoveries
+                // included, so the kind alone labelled a recovery "Outage
+                // alert". The same class the e-mail and Discord use tells
+                // them apart; read at request time, so old rows get it too.
+                'alertTone' => $nl_row_kind === 'alert' ? bk_alert_color_class((string)$r['status']) : null,
+                'status' => $r['status'],
+                'channel' => $r['channel'],
+                // The address is the point of the record: "did it reach ME?"
+                'recipient' => $r['recipient'],
+                // The subject is the only part of a message ever stored.
+                'subject' => $r['subject'],
+                'method' => $r['method'],
+                // ok = not refused; delivery says how much is known beyond
+                // that. A row from before delivery was recorded gets it derived
+                // (deliveryRecorded false), and never better than unknown for
+                // channels that could not confirm anything then.
+                'ok' => (bool)$r['ok'],
+                'delivery' => (string)$r['delivery_read'],
+                'deliveryRecorded' => $r['delivery_stored'] !== null,
+                'providerReply' => $r['provider_reply'],
+                'error' => $r['error_message'],
+                'atIso' => date('c', strtotime((string)$r['created_at'])),
+            ];
+        }
+
+        // The offered values come from the WHOLE log, not from the page on
+        // screen: a filter must never take away the option that would undo it.
+        $nl_kinds = $pdo->query("SELECT DISTINCT kind FROM notification_log ORDER BY kind")->fetchAll(PDO::FETCH_COLUMN);
+        $nl_channels = $pdo->query("SELECT DISTINCT channel FROM notification_log ORDER BY channel")->fetchAll(PDO::FETCH_COLUMN);
+
+        echo json_encode([
+            'entries' => $rows,
+            'nextCursor' => $nl_has_more && $rows ? $rows[count($rows) - 1]['id'] : null,
+            'kinds' => array_map('strval', $nl_kinds ?: []),
+            'channels' => array_map('strval', $nl_channels ?: []),
+            // Only when asked for: the second page does not need it, and it is
+            // two more aggregations. Never narrowed by the filters above - see
+            // bk_notification_summary().
+            'summary' => $nl_want_summary ? [
+                'last24h' => bk_notification_summary($pdo, 24),
+                'last7d' => bk_notification_summary($pdo, 24 * 7),
+            ] : null,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=notification_log] ' . $e->getMessage());
+        // 500, not a 200 with an empty list: both readers of this endpoint show
+        // an empty log as "nothing was sent", and a failed read is no evidence
+        // of that. The admin page turns the status code into a visible error.
+        bk_api_json(['entries' => [], 'error' => 'Historii notifikací se nepodařilo načíst.'], 500);
+    }
+    exit;
+}
+
+// The site's own faults that no data path reports (the /app warning). Admin
+// only: an excerpt of a hand-edited config.php is not for everyone.
+// configOutput: what config.php prints while it loads (db.php holds it back
+// from every response), or null. selfCheck: the cron's last check of the
+// public API (bk_self_check_run()), or null before its first run.
+if ($action === 'site_health') {
+    bk_require_admin();
+    try {
+        $sh_stmt = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = 'self_check_state'");
+        $sh_stmt->execute();
+        $sh_state = json_decode((string)$sh_stmt->fetchColumn(), true);
+        $sh_self = null;
+        if (is_array($sh_state)) {
+            $sh_self = [
+                'state' => (string)($sh_state['state'] ?? 'unknown'),
+                'url' => $sh_state['url'] ?? null,
+                'checkedAt' => $sh_state['checkedAt'] ?? null,
+                'failures' => (int)($sh_state['failures'] ?? 0),
+                'since' => $sh_state['since'] ?? null,
+                'reason' => $sh_state['reason'] ?? null,
+                'lastOkAt' => $sh_state['lastOkAt'] ?? null,
+                'alertAttemptAt' => $sh_state['alertAttemptAt'] ?? null,
+                'alertResult' => $sh_state['alertResult'] ?? null,
+            ];
+        }
+        echo json_encode(['configOutput' => bk_config_output(), 'selfCheck' => $sh_self], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=site_health] ' . $e->getMessage());
+        // 500, never "all is well" from a read that died.
+        bk_api_error(500, 'Stav webu se nepodařilo zjistit.');
+    }
+    exit;
+}
+
+// Which channel has stopped reaching whom (the /app warning). Admin only:
+// even masked, it says who is not being notified.
+if ($action === 'notification_health') {
+    bk_require_admin();
+    $nh_limit = 5000;
+    try {
+        // The messages that exist to reach a person about the monitoring.
+        // Invitations, resets and tests are one-offs, not a channel's health.
+        $nh_kinds = bk_notification_kinds(true);
+        $nh_in = implode(',', array_fill(0, count($nh_kinds), '?'));
+        $nh_delivery = bk_notification_delivery_sql('n');
+        $stmt = $pdo->prepare("
+            SELECT n.id, n.channel, n.recipient, n.error_message, n.provider_reply, n.created_at,
+                   {$nh_delivery} AS delivery_read, n.delivery AS delivery_stored
+            FROM notification_log n
+            WHERE n.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+              AND n.kind IN ({$nh_in})
+              AND {$nh_delivery} <> 'skipped'
+            ORDER BY n.id DESC
+            LIMIT " . ($nh_limit + 1));
+        $stmt->execute($nh_kinds);
+        $nh_fetched = $stmt->fetchAll();
+        // Newest first, so a cut drops the oldest rows - never the latest
+        // attempt, which is the one that decides.
+        $nh_truncated = count($nh_fetched) > $nh_limit;
+        if ($nh_truncated) {
+            array_pop($nh_fetched);
+        }
+        $nh_rows = [];
+        foreach (array_reverse($nh_fetched) as $r) {
+            $nh_rows[] = [
+                'channel' => (string)$r['channel'],
+                'recipient' => $r['recipient'],
+                'delivery' => (string)$r['delivery_read'],
+                'recorded' => $r['delivery_stored'] !== null,
+                'reply' => $r['provider_reply'],
+                'reason' => $r['error_message'],
+                'at' => (string)$r['created_at'],
+            ];
+        }
+        $nh_users = $pdo->query("SELECT username, email, phone FROM users")->fetchAll();
+        $nh_out = [];
+        foreach (bk_notification_problems($nh_rows) as $p) {
+            $who = bk_mask_recipient($p['recipient'], $nh_users);
+            // An older reason may still quote the address (a refused RCPT
+            // logged before the reason was cleaned); the answer never does.
+            $nh_reason = $p['lastReason'];
+            if ($nh_reason !== null && $p['recipient'] !== null && $p['recipient'] !== '') {
+                $nh_reason = str_ireplace($p['recipient'], '<recipient>', $nh_reason);
+            }
+            $nh_out[] = [
+                'channel' => $p['channel'],
+                'recipient' => $who['masked'],
+                'username' => $who['username'],
+                'state' => $p['state'],
+                'sinceIso' => date('c', strtotime($p['since'])),
+                'lastAtIso' => date('c', strtotime($p['lastAt'])),
+                'count' => $p['count'],
+                'lastReason' => $nh_reason,
+                'lastSentAtIso' => $p['lastSentAt'] !== null ? date('c', strtotime($p['lastSentAt'])) : null,
+                'legacy' => $p['legacy'],
+            ];
+        }
+        echo json_encode([
+            'problems' => $nh_out,
+            'windowDays' => 7,
+            'truncated' => $nh_truncated,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api.php action=notification_health] ' . $e->getMessage());
+        // 500, never an empty list: "no problems" from a query that died is
+        // the one answer this endpoint must not give.
+        bk_api_error(500, 'Stav doručování zpráv se nepodařilo zjistit.');
+    }
+    exit;
+}
+
+if ($action === 'test_notification') {
+    bk_require_admin();
+    $tn_input = json_decode((string)file_get_contents('php://input'), true);
+    $tn_channel = is_array($tn_input) ? (string)($tn_input['channel'] ?? '') : '';
+    if (!in_array($tn_channel, ['email', 'discord', 'telegram', 'slack'], true)) {
+        bk_api_error(400, 'Neznámý kanál (email, discord, telegram, slack).');
+    }
+    $tn_email = null;
+    $tn_me = [];
+    try {
+        $stmt_tn = $pdo->prepare("SELECT email, email_lang FROM users WHERE id = ? LIMIT 1");
+        $stmt_tn->execute([(int)($_SESSION['admin_id'] ?? 0)]);
+        $tn_me = $stmt_tn->fetch() ?: [];
+        $tn_email = !empty($tn_me['email']) ? (string)$tn_me['email'] : null;
+    } catch (Exception $e) {
+        error_log('[api.php action=test_notification] user lookup failed: ' . $e->getMessage());
+    }
+    $tn_result = bk_send_test_notification($tn_channel, $tn_email, bk_recipient_lang($tn_me));
+    bk_audit_log($pdo, 'test_notification', $tn_channel . ': ' . ($tn_result['ok'] ? 'ok' : 'failed'));
+    echo json_encode($tn_result, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($action === 'save_settings') {
+    bk_require_admin();
+
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (!$input || !isset($input['settings']) || !is_array($input['settings'])) {
+        bk_api_error(400, 'Chybějící data nastavení.');
+    }
+
+    $allowed_keys = bk_settings_keys();
+    $secret_keys = bk_settings_secret_keys();
+
+    // A switch is '1' or '0'. Anything else - above all '' - means the client
+    // lost the value, and storing it silently changed alerting (an empty
+    // agent_notifications_enabled read as "off"). The whole save is refused
+    // before anything is written, and the answer names the keys.
+    $bk_bad_switches = [];
+    foreach (bk_settings_boolean_keys() as $bool_key) {
+        if (!array_key_exists($bool_key, $input['settings']) || is_setting_env_defined($bool_key)) {
+            continue;
+        }
+        $bool_val = $input['settings'][$bool_key];
+        $bool_val = is_string($bool_val) ? trim($bool_val) : (is_int($bool_val) ? (string)$bool_val : null);
+        if (!in_array($bool_val, ['0', '1'], true)) {
+            $bk_bad_switches[] = $bool_key;
+        }
+    }
+    if ($bk_bad_switches !== []) {
+        bk_api_error(400, 'Přepínač musí být 0 nebo 1, prázdná hodnota se neukládá: ' . implode(', ', $bk_bad_switches), ['invalidKeys' => $bk_bad_switches]);
+    }
+
+    // Whole minutes, at least one. A cleared field reached the cron as 0, and an
+    // incident then never counted as overdue, with the switch still on.
+    if (array_key_exists('escalation_after_mins', $input['settings']) && !is_setting_env_defined('escalation_after_mins')) {
+        $bk_after = trim((string)$input['settings']['escalation_after_mins']);
+        if (!ctype_digit($bk_after) || (int)$bk_after < 1) {
+            bk_api_error(400, 'Lhůta na převzetí musí být celý počet minut, alespoň 1.', ['invalidKeys' => ['escalation_after_mins']]);
+        }
+    }
+
+    try {
+        $pdo->beginTransaction();
+        // Not bk_setting_set(): after a rollback the snapshot would hold values
+        // the table never kept.
+        $changed_settings = [];
+        $stmt_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
+
+        foreach ($input['settings'] as $key => $val) {
+            if (!in_array($key, $allowed_keys, true)) continue;
+            if (is_setting_env_defined($key)) continue;
+
+            $val = is_string($val) ? trim($val) : (string)$val;
+
+            // If the user left a masked password untouched, skip it
+            if (in_array($key, $secret_keys, true) && str_starts_with($val, '••••••')) {
+                continue;
+            }
+
+            if ((string)($system_settings[$key] ?? '') !== $val) {
+                $changed_settings[] = $key;
+            }
+            $stmt_set->execute([$key, $val, $val]);
+        }
+
+        $pdo->commit();
+        // Which keys only: the values include SMTP passwords, tokens and webhooks.
+        if ($changed_settings !== []) {
+            bk_audit_log($pdo, 'settings_updated', implode(', ', $changed_settings));
+        }
+        echo json_encode(['success' => true, 'message' => 'Nastavení systému bylo úspěšně uloženo.'], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        bk_api_fail('save_settings_failed', 500, $e, 'Nastavení se nepodařilo uložit.');
+    }
+    exit;
+}
+
+// 2b5. Generate and activate the Prometheus token (admin-only)
+if ($action === 'generate_metrics_token') {
+    bk_require_admin();
+
+    try {
+        $new_token = bin2hex(random_bytes(16));
+        // The settings table has key_name/key_value columns - the earlier
+        // setting_key/setting_value crashed the INSERT here and the
+        // "Activate token" button ended in a 500.
+        bk_setting_set($pdo, 'metrics_token', $new_token);
+        bk_audit_log($pdo, 'metrics_token_generated', '', 'system', null);
+
+        echo json_encode(['success' => true, 'metricsToken' => $new_token], JSON_UNESCAPED_UNICODE);
+    } catch (Exception $e) {
+        bk_api_error(500, 'Chyba při generování tokenu.');
+    }
+    exit;
+}
+
+// 2c. Recent event history from the DB (monitor_logs)
+if ($action === 'events') {
+    try {
+        $monitor_id = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
+        $limit = min(200, max(10, (int)($_GET['limit'] ?? 50)));
+        // Public view (scope=public, or no login): the status of the public
+        // set, the same for everyone, with reasons that name no process and no
+        // target. App view: only the monitors this viewer may see.
+        $ev_public = bk_public_view();
+        if (!$ev_public && $monitor_id > 0) {
+            bk_require_monitor_view($pdo, $monitor_id);
+        }
+        // A monitor's own event log stays readable after archiving; the fleet-wide log leaves it out.
+        $ev_visible = bk_request_monitor_ids($pdo);
+        [$ev_scope, $ev_scope_params] = $monitor_id > 0
+            ? bk_monitor_scope_sql($ev_visible, 'l.monitor_id')
+            : bk_list_scope_sql($pdo, $ev_visible, 'l.monitor_id');
+        $ev_params = array_merge($monitor_id > 0 ? [$monitor_id] : [], $ev_scope_params);
+        $ev_status_type = '';
+
+        // The last N rows COVER ONLY A FEW DOZEN MINUTES (cron writes every
+        // minute per monitor), so outages older than the window were simply
+        // absent and the UI claimed "all pass" while history had outages.
+        // The fresh window therefore always gets the latest down/warning rows
+        // mixed in regardless of age - the same principle the public status
+        // page uses to fill its incident list (a filtered query, not a log tail).
+        $where_monitor = $monitor_id > 0 ? 'AND l.monitor_id = ?' : '';
+        $select_cols = "l.id, l.checked_at, l.status, l.error_message, l.checked_from, l.response_time, l.source,
+                       m.id as monitor_id, m.name as monitor_name, m.target, m.type";
+
+        $stmt = $pdo->prepare("
+            SELECT $select_cols
+            FROM monitor_logs l
+            JOIN monitors m ON l.monitor_id = m.id
+            WHERE 1=1 $where_monitor AND {$ev_scope}
+            ORDER BY l.id DESC
+            LIMIT $limit
+        ");
+        $stmt->execute($ev_params);
+        $recent_rows = $stmt->fetchAll();
+
+        // A remote probe's failure (source 'probe') is not an outage, so it is
+        // not mixed in; it shows only where it falls in the fresh window.
+        $fail_limit = min(50, $limit);
+        $stmt_fails = $pdo->prepare("
+            SELECT $select_cols
+            FROM monitor_logs l
+            JOIN monitors m ON l.monitor_id = m.id
+            WHERE l.status IN ('down', 'warning') AND (l.source IS NULL OR l.source <> 'probe')
+              $where_monitor AND {$ev_scope}
+            ORDER BY l.id DESC
+            LIMIT $fail_limit
+        ");
+        $stmt_fails->execute($ev_params);
+
+        $rows_by_id = [];
+        foreach (array_merge($recent_rows, $stmt_fails->fetchAll()) as $mr) {
+            $rows_by_id[(int)$mr['id']] = $mr;
+        }
+        krsort($rows_by_id);
+        $rows = array_values($rows_by_id);
+
+        // A recovery is an OK check whose IMMEDIATELY PRECEDING check failed.
+        // Only the fresh tail ($recent_rows: every row past an id) has real
+        // neighbours - the older failures merged in above sit next to rows
+        // hours apart, so deciding this from the merged list (as the frontend
+        // did) invents recoveries at times when nothing happened. Without a
+        // monitor filter the tail interleaves monitors, but each one's rows in
+        // it are still its own consecutive checks: read per monitor, the
+        // fleet's log marks recoveries too, and a monitor's oldest row in the
+        // tail, whose predecessor is unknown, never is one. The tail is
+        // cron's rows only: a remote probe's (source 'probe') neither recovers
+        // an outage nor fails one, so its neighbours are the rows around it.
+        $recovery_ids = [];
+        $own_by_monitor = [];
+        foreach ($recent_rows as $r) {
+            if (($r['source'] ?? null) !== 'probe') {
+                $own_by_monitor[(int)$r['monitor_id']][] = $r;
+            }
+        }
+        foreach ($own_by_monitor as $own_rows) {
+            for ($i = 0, $n = count($own_rows) - 1; $i < $n; $i++) {
+                if ($own_rows[$i]['status'] === 'up'
+                    && in_array($own_rows[$i + 1]['status'], ['down', 'warning'], true)) {
+                    $recovery_ids[(int)$own_rows[$i]['id']] = true;
+                }
+            }
+        }
+
+        // When each failed check's outage ended: the first 'up' check of the
+        // same monitor recorded after it, read from monitor_logs. Not from the
+        // list above - for the older failures merged in, the nearest newer 'up'
+        // there is the oldest row of the recent window, so a 30-second blip from
+        // last week read as a six-day outage that ended half an hour ago.
+        // No 'up' since = still open: end and duration stay null.
+        //
+        // Oldest first per monitor: a failure before the found 'up' shares it
+        // with every failure between, and none after a failure means none after
+        // the later ones either - one indexed lookup per outage, not per row.
+        //
+        // "After" is a later second, or the same second written later (several
+        // locations check at once). Two lookups, not one ORDER BY checked_at
+        // LIMIT 1 over both: for that form MySQL 8.4 often walked the
+        // (monitor_id, checked_at) index from the monitor's oldest row up to
+        // the failure, 2-25 ms per outage.
+        //
+        // A remote probe's row (source 'probe') neither ends an outage nor is
+        // one: its 'down' gets no end, and its 'up' is skipped. source is not
+        // in idx_logs_cover_latency (monitor_id, status, checked_at), so a
+        // MIN() would read every 'up' row after the failure to filter it;
+        // ORDER BY checked_at LIMIT 1 on that index, forced so the planner
+        // cannot take the walk above, stops at the first 'up' that is not a
+        // probe's - usually the first one.
+        $down_rows = array_values(array_filter($rows, fn ($r) => $r['status'] === 'down' && ($r['source'] ?? null) !== 'probe'));
+        usort($down_rows, fn ($a, $b) => [(int)$a['monitor_id'], (string)$a['checked_at'], (int)$a['id']]
+            <=> [(int)$b['monitor_id'], (string)$b['checked_at'], (int)$b['id']]);
+        $stmt_next_up = $pdo->prepare("
+            SELECT COALESCE(
+                (SELECT checked_at FROM monitor_logs FORCE INDEX (idx_logs_cover_latency)
+                 WHERE monitor_id = ? AND status = 'up' AND checked_at = ? AND id > ?
+                   AND (source IS NULL OR source <> 'probe')
+                 ORDER BY checked_at ASC LIMIT 1),
+                (SELECT checked_at FROM monitor_logs FORCE INDEX (idx_logs_cover_latency)
+                 WHERE monitor_id = ? AND status = 'up' AND checked_at > ?
+                   AND (source IS NULL OR source <> 'probe')
+                 ORDER BY checked_at ASC LIMIT 1)
+            )
+        ");
+        $outage_end_ts = [];
+        $last_lookup = null;
+        foreach ($down_rows as $d) {
+            $d_mid = (int)$d['monitor_id'];
+            $d_ts = (int)strtotime((string)$d['checked_at']);
+            if ($last_lookup !== null && $last_lookup[0] === $d_mid && ($last_lookup[1] === null || $d_ts < $last_lookup[1])) {
+                $outage_end_ts[(int)$d['id']] = $last_lookup[1];
+                continue;
+            }
+            $stmt_next_up->execute([$d_mid, $d['checked_at'], (int)$d['id'], $d_mid, $d['checked_at']]);
+            $next_up = $stmt_next_up->fetchColumn();
+            $end_ts = ($next_up !== false && $next_up !== null) ? (int)strtotime((string)$next_up) : null;
+            $outage_end_ts[(int)$d['id']] = $end_ts;
+            $last_lookup = [$d_mid, $end_ts];
+        }
+
+        $events = [];
+        foreach ($rows as $r) {
+            $outage_duration = null;
+            $outage_end = null;
+            $end_ts = $outage_end_ts[(int)$r['id']] ?? null;
+            if ($end_ts !== null) {
+                $outage_duration = $end_ts - (int)strtotime((string)$r['checked_at']);
+                $outage_end = date('d.m.Y H:i:s', $end_ts);
+            }
+
+            $ev_label = bk_status_label((string)$r['status'], true);
+            $events[] = [
+                'id' => (int)$r['id'],
+                'time' => date('d.m.Y H:i:s', strtotime($r['checked_at'])),
+                'timeIso' => date('c', strtotime($r['checked_at'])),
+                'monitorId' => (int)$r['monitor_id'],
+                'monitorName' => $r['monitor_name'],
+                'target' => $ev_public ? null : $r['target'],
+                'type' => strtoupper($r['type']),
+                // An unknown check location stays null. A hardcoded location
+                // (Frankfurt/RackNerd) used to be filled in here - for 37 of 40
+                // events it was invented, because the column was empty.
+                'location' => $r['checked_from'] ?: null,
+                // Maintenance and 'unknown' rows were "OK" here - a green badge
+                // for a check that did not pass (C-11). A check row that says
+                // 'unknown' is an agent-side check whose agent went quiet.
+                'status' => $ev_label['key'] === 'up' ? 'OK' : mb_strtoupper(bk_status_label($ev_label['key'], true, 'cs')['label']),
+                'rawStatus' => $r['status'],
+                'statusKey' => $ev_label['key'],
+                'statusLabel' => $ev_label['label'],
+                'statusTone' => $ev_label['tone'],
+                'errorMsg' => ($ev_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: bk_event_fallback_text($ev_label['key']),
+                // A stored 0 is an older failed check or maintenance row: unmeasured.
+                'responseTime' => (int)$r['response_time'] > 0 ? (int)$r['response_time'] : null,
+                // Who wrote the row: 'cron', 'heartbeat', 'agent', 'probe', or
+                // null for a row from before schema r024.
+                'source' => $r['source'] ?? null,
+                // A failure that is part of an outage. A remote probe's 'down'
+                // is a failed measurement, not an outage: rawStatus says
+                // 'down', isDown false, and it has no outage end.
+                'isDown' => $r['status'] === 'down' && ($r['source'] ?? null) !== 'probe',
+                // true = this OK check ended an outage. false on rows whose
+                // neighbour is unknown - never a guess.
+                'isRecovery' => isset($recovery_ids[(int)$r['id']]),
+                'outageDurationSec' => $outage_duration,
+                'outageEnd' => $outage_end,
+            ];
+        }
+        // Which check recorded the LAST status change.
+        //
+        // It cannot be found in the list above: that list is the newest rows
+        // plus the newest failures, so for a monitor that has been down for
+        // hours the transition itself has already fallen out of both windows,
+        // and every routine passing check looks alike anyway. The row is
+        // therefore looked up by monitors.last_status_change - the only record
+        // of WHEN the state changed - and its status has to agree with the
+        // monitor's, otherwise it is a neighbouring check rather than the
+        // change. Nothing found stays null; no row is promoted on a guess.
+        $status_change = null;
+        if ($monitor_id > 0) {
+            try {
+                $stmt_mon = $pdo->prepare("SELECT status, last_status_change, type FROM monitors WHERE id = ? LIMIT 1");
+                $stmt_mon->execute([$monitor_id]);
+                $mon_row = $stmt_mon->fetch();
+                $ev_status_type = is_array($mon_row) ? (string)($mon_row['type'] ?? '') : '';
+                $changed_at = is_array($mon_row) ? ($mon_row['last_status_change'] ?? null) : null;
+                $changed_ts = ($changed_at !== null && $changed_at !== '') ? strtotime((string)$changed_at) : false;
+
+                if ($changed_ts !== false) {
+                    // +-120 s: the log INSERT and the monitors UPDATE are two
+                    // statements of the same run, so they differ by about a
+                    // second - never by a check interval. A remote probe's row
+                    // (source 'probe') set no state, so it is never the change.
+                    $stmt_change = $pdo->prepare("
+                        SELECT id, checked_at, status, error_message, checked_from, response_time
+                        FROM monitor_logs
+                        WHERE monitor_id = ? AND status = ? AND checked_at BETWEEN ? AND ?
+                          AND (source IS NULL OR source <> 'probe')
+                        ORDER BY ABS(TIMESTAMPDIFF(SECOND, checked_at, ?)) ASC, id ASC
+                        LIMIT 1
+                    ");
+                    $stmt_change->execute([
+                        $monitor_id,
+                        (string)$mon_row['status'],
+                        date('Y-m-d H:i:s', $changed_ts - 120),
+                        date('Y-m-d H:i:s', $changed_ts + 120),
+                        date('Y-m-d H:i:s', $changed_ts),
+                    ]);
+                    $change_row = $stmt_change->fetch();
+
+                    if (is_array($change_row)) {
+                        // The state it came FROM. Absent (the first check ever,
+                        // or older rows already pruned) stays null - "it was up
+                        // before" is not a safe default. A remote probe's row
+                        // (source 'probe') is skipped: node_api only logs it,
+                        // and its 'up' just before cron's recovery read as a
+                        // change from 'up'. A row from before r024 still counts.
+                        $stmt_prev = $pdo->prepare("
+                            SELECT status FROM monitor_logs
+                            WHERE monitor_id = ? AND id < ? AND (source IS NULL OR source <> 'probe')
+                            ORDER BY id DESC LIMIT 1
+                        ");
+                        $stmt_prev->execute([$monitor_id, (int)$change_row['id']]);
+                        $prev = $stmt_prev->fetchColumn();
+                        $status_change = [
+                            'changedAtIso' => date('c', strtotime((string)$change_row['checked_at'])),
+                            'status' => (string)$change_row['status'],
+                            'fromStatus' => ($prev === false || $prev === null) ? null : (string)$prev,
+                            'errorMsg' => $change_row['error_message'] !== null && $change_row['error_message'] !== ''
+                                ? (string)$change_row['error_message']
+                                : null,
+                            'location' => $change_row['checked_from'] ?: null,
+                            'responseTime' => (int)$change_row['response_time'] > 0 ? (int)$change_row['response_time'] : null,
+                        ];
+                    }
+                }
+            } catch (Throwable $e) {
+                error_log('[api.php action=events] status change lookup failed: ' . $e->getMessage());
+            }
+        }
+
+        if ($ev_public && is_array($status_change)) {
+            $status_change['errorMsg'] = bk_public_reason($status_change['errorMsg'], $ev_status_type);
+        }
+        echo bk_json_safe(['events' => $events, 'statusChange' => $status_change]);
+    } catch (Throwable $e) {
+        // events: [] read as "nothing happened" on the timeline.
+        bk_api_fail('events_unavailable', 500, $e, 'Události se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 2c1a2. Executive Summary + Timeline pro jeden monitor. Tahle logika (health
+// score, knowledge tips, forecast/anomaly/network insights, textual summary)
+// has existed in PHP and served the public status page (index.php/monitor.php)
+// for a long time - but the React SPA never called it and instead assembled
+// its own generic template sentence on the client ("Monitor X (type) runs on target Y...").
+// Tenhle endpoint vystavuje tu samou serverovou logiku jako JSON.
+if ($action === 'monitor_insights') {
+    $monitor_id = isset($_GET['monitor_id']) ? (int)$_GET['monitor_id'] : 0;
+    if ($monitor_id <= 0) {
+        bk_api_error(400, 'Chybí monitor_id.');
+    }
+    bk_require_monitor_view($pdo, $monitor_id);
+    try {
+        $stmt_mon = $pdo->prepare("SELECT * FROM monitors WHERE id = ?");
+        $stmt_mon->execute([$monitor_id]);
+        $monitor = $stmt_mon->fetch();
+        if (!$monitor) {
+            bk_api_error(404, 'Monitor nenalezen.');
+        }
+
+        $details = bk_monitor_details($monitor);
+        bk_enrich_monitor_details($pdo, $monitor, $details);
+
+        // The newest of cron's own checks: a remote probe's row (source
+        // 'probe') carries no stages, and its status is not the monitor's.
+        $stmt_last_log = $pdo->prepare("SELECT status, check_stages FROM monitor_logs WHERE monitor_id = ? AND (source IS NULL OR source <> 'probe') ORDER BY id DESC LIMIT 1");
+        $stmt_last_log->execute([$monitor_id]);
+        $last_log = $stmt_last_log->fetch();
+        $status = $last_log['status'] ?? ($monitor['status'] ?? 'unknown');
+        $check_stages = null;
+        if (!empty($last_log['check_stages'])) {
+            $decoded_stages = json_decode($last_log['check_stages'], true);
+            if (is_array($decoded_stages)) $check_stages = $decoded_stages;
+        }
+
+        $enabled_metrics = bk_get_enabled_metrics($monitor, $pdo);
+        $knowledge_tips = bk_get_knowledge_tips($monitor, $details, $check_stages, $status, $enabled_metrics, $pdo);
+        $monitor_insights = array_merge(
+            bk_get_forecast_insights($pdo, $monitor),
+            bk_get_anomaly_insights($pdo, $monitor),
+            bk_get_network_insights($pdo, $monitor, $details)
+        );
+
+        $is_teamspeak = strtolower($monitor['type'] ?? '') === 'teamspeak';
+        // TeamSpeak's own area score (build_teamspeak_health_areas), kept only
+        // as the `healthScore` field for older clients. Nothing here reads it.
+        $health_score = null;
+        if ($is_teamspeak) {
+            $health_areas = build_teamspeak_health_areas($monitor, $status, $check_stages, $details, $pdo);
+            $health_score = bk_compute_health_score($health_areas);
+        }
+
+        // The health score 0-100 with its breakdown (N-1), from the monitor's
+        // OWN stored details - not the enriched ones the tips read: those
+        // borrow CPU/RAM of a linked agent, so a website would score its
+        // server's load here and a different number in action=health. The
+        // server has its own score. A failure is null with the reason in the
+        // log; "not enough data" is a health object whose score is null.
+        $health = null;
+        try {
+            $health = bk_health_labelled(bk_health_for_monitors($pdo, [$monitor], false)[$monitor_id]);
+        } catch (Throwable $he) {
+            error_log('[api.php action=monitor_insights] health of ' . $monitor_id . ': ' . $he->getMessage());
+        }
+        // TeamSpeak's sentence quotes a score, as it always has, but now the
+        // ring's: the area score above could print 40 next to a ring of 95.
+        // Other types keep a sentence without one.
+        $summary_score = ($is_teamspeak && $health !== null) ? ['score' => $health['score'] ?? null] : null;
+
+        $timeline = bk_get_monitor_timeline($pdo, $monitor_id, 30);
+        // $pdo a $details navic: shrnuti si z nich dopocita, jak dlouho je
+        // metrika nad prahem a ktery proces za tim stoji.
+        $summary = bk_build_executive_summary(
+            $monitor,
+            $summary_score,
+            $knowledge_tips,
+            $monitor_insights,
+            array_slice($timeline, 0, 5),
+            $pdo,
+            is_array($details) ? $details : []
+        );
+
+        // The asset page's "Souhrn stavu": the state and the pressure only,
+        // because the findings list right below it names every concern once.
+        $status_sentence = bk_build_executive_summary(
+            $monitor,
+            $summary_score,
+            $knowledge_tips,
+            $monitor_insights,
+            [],
+            $pdo,
+            is_array($details) ? $details : [],
+            false
+        );
+
+        echo bk_json_safe([
+            'summary' => $summary,
+            'statusSentence' => $status_sentence,
+            'health' => $health,
+            // The monitor's state in the shared vocabulary (C-11), so the chip
+            // next to the summary says what the sentence says.
+            'status' => bk_status_label((string)($monitor['status'] ?? ''), bk_monitor_has_reported($monitor, $details)),
+            'healthScore' => $health_score,
+            'tips' => array_map(fn($t) => ['severity' => $t['severity'], 'text' => $t['text']], $knowledge_tips),
+            'insights' => array_map(fn($i) => ['text' => $i['text'] ?? ''], $monitor_insights),
+            'timeline' => array_map(fn($e) => [
+                'type' => $e['event_type'],
+                'description' => $e['description'],
+                'at' => $e['ts'],
+                'relative' => bk_relative_time_label($e['ts']),
+            ], $timeline),
+        ]);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Nepodařilo se sestavit souhrn monitoru.');
+    }
+    exit;
+}
+
+// C-12. One findings feed.
+//
+// Five advice systems disagreed: the dashboard's attention list (built in the
+// browser), dashboard_insights, the router recommendations, the summary tips
+// and the Insights page's own cards. This is the one list: the attention
+// reasons (bk_attention_reasons), the insights (bk_collect_insights) and the
+// router recommendations (the same engine as the Monday e-mail), each with a
+// severity on one scale and the device it is about. The dashboard takes the
+// top three, the Insights page everything grouped by device, the asset page
+// `monitor_id=` for one device.
+//
+// A source that fails is named in `sourceErrors` - the list is then
+// incomplete and must say so, never pass for "nothing found".
+if ($action === 'findings') {
+    bk_require_login();
+    $fd_monitor = (int)($_GET['monitor_id'] ?? 0);
+    if ($fd_monitor > 0) {
+        bk_require_monitor_view($pdo, $fd_monitor);
+    }
+    $fd_visible = bk_visible_monitor_ids($pdo);
+    [$fd_scope, $fd_scope_params] = bk_list_scope_sql($pdo, $fd_visible, 'm.id');
+    // summary=1: the counts alone, for the header bell and the sidebar badge
+    // (N-3). They poll it, and every poll recomputed thresholds and the router
+    // recommendations of the whole fleet, so the fleet's counts are kept for
+    // a minute per viewer scope. The counts do not depend on the language.
+    // The full list is always fresh, and a mute clears the kept counts.
+    $fd_summary = ($_GET['summary'] ?? '') === '1';
+    $fd_summary_key = $fd_monitor === 0 ? 'findings_summary_' . substr(md5((string)json_encode($fd_visible)), 0, 16) : null;
+    if ($fd_summary && $fd_summary_key !== null) {
+        $fd_kept = bk_kv_cache_get($fd_summary_key);
+        if ($fd_kept !== null) {
+            echo bk_json_safe($fd_kept['data'] + ['cachedAt' => date('c', $fd_kept['at'])]);
+            exit;
+        }
+    }
+    try {
+        $fd_limit = min(500, max(1, (int)($_GET['limit'] ?? 50)));
+        $fd_offset = max(0, (int)($_GET['offset'] ?? 0));
+        $fd_stmt = $pdo->prepare("
+            SELECT m.*, vm.cpu_usage, vm.ram_usage, vm.hdd_usage
+            FROM monitors m
+            LEFT JOIN vps_metrics vm
+                   ON vm.id = (SELECT vm2.id FROM vps_metrics vm2 WHERE vm2.monitor_id = m.id ORDER BY vm2.id DESC LIMIT 1)
+            WHERE m.type NOT IN ('node', 'probe') AND {$fd_scope}" . ($fd_monitor > 0 ? ' AND m.id = ?' : '') . "
+            ORDER BY m.id ASC
+        ");
+        $fd_stmt->execute(array_merge($fd_scope_params, $fd_monitor > 0 ? [$fd_monitor] : []));
+        $fd_rows = $fd_stmt->fetchAll();
+
+        $fd_findings = [];
+        $fd_muted = [];
+        $fd_errors = [];
+        $fd_ssl_days_limit = max(1, (int)get_setting('ssl_alert_days', '14'));
+        $fd_last_log = $pdo->prepare("SELECT status, check_stages FROM monitor_logs WHERE monitor_id = ? AND (source IS NULL OR source <> 'probe') ORDER BY id DESC LIMIT 1");
+        // A status finding's reason is the newest check that found the monitor
+        // in its current state since it entered it, never a remote probe's row
+        // (source 'probe'): node_api only logs it, and neither its 'up' after
+        // an outage cron confirmed nor its own 'down' says why cron has the
+        // monitor down.
+        // A state set without a row (maintenance switched off, a restore from
+        // the archive) must not take the words of an earlier spell of it, so
+        // the rows start at last_status_change - 120 s: the log INSERT and the
+        // monitors UPDATE are two statements of the same run, so the row that
+        // set the state can be a second older than the stamp.
+        $fd_state_log = $pdo->prepare("SELECT error_message FROM monitor_logs WHERE monitor_id = ? AND status = ? AND (? IS NULL OR checked_at >= ?) AND (source IS NULL OR source <> 'probe') ORDER BY id DESC LIMIT 1");
+        $fd_base = fn (array $row, string $source, string $kind, string $severity): array => [
+            'key' => $source . ':' . (int)$row['id'] . ':' . $kind,
+            'source' => $source,
+            'kind' => $kind,
+            'severity' => $severity,
+            'monitorId' => (int)$row['id'],
+            'monitorName' => (string)$row['name'],
+            'monitorType' => strtolower((string)$row['type']),
+        ];
+        $fd_source_of = ['status_down' => 'status', 'status_warning' => 'status', 'status_unknown_stale' => 'status',
+            'unreachable' => 'check', 'ssl_expired' => 'certificate', 'ssl_expiring' => 'certificate',
+            'metric_high' => 'metric', 'agent_update' => 'agent'];
+
+        foreach ($fd_rows as $fd_row) {
+            $fd_mid = (int)$fd_row['id'];
+            $fd_details = bk_monitor_details($fd_row);
+            $fd_reasons = [];
+            $fd_last_log->execute([$fd_mid]);
+            $fd_log = $fd_last_log->fetch() ?: null;
+            try {
+                $fd_limits = bk_monitor_thresholds($pdo, $fd_row);
+                $fd_metrics = [];
+                foreach (['cpu' => 'cpu_usage', 'ram' => 'ram_usage', 'hdd' => 'hdd_usage'] as $fd_key => $fd_col) {
+                    $fd_metrics[$fd_key] = [
+                        'value' => $fd_row[$fd_col] !== null ? (float)$fd_row[$fd_col] : null,
+                        'limit' => $fd_limits[$fd_key] ?? BK_DEFAULT_THRESHOLDS[$fd_key],
+                    ];
+                }
+                $fd_agent_type = $fd_details['agent_type'] ?? null;
+                $fd_reasons = bk_attention_reasons([
+                    'status' => (string)($fd_row['status'] ?? ''),
+                    'has_reported' => bk_monitor_has_reported($fd_row, $fd_details),
+                    'type' => strtolower((string)($fd_row['type'] ?? '')),
+                    'target' => (string)($fd_row['target'] ?? ''),
+                    'ssl_days' => is_numeric($fd_details['ssl_days_remaining'] ?? null) ? (int)$fd_details['ssl_days_remaining'] : null,
+                    'ssl_alert_days' => $fd_ssl_days_limit,
+                    'agent_version' => is_string($fd_details['agent_version'] ?? null) ? $fd_details['agent_version'] : null,
+                    'agent_latest' => is_string($fd_agent_type) ? bk_get_agent_latest_version($fd_agent_type) : null,
+                    'metrics' => $fd_metrics,
+                ]);
+                foreach ($fd_reasons as $fd_r) {
+                    $fd_f = $fd_base($fd_row, $fd_source_of[$fd_r['kind']] ?? 'status', $fd_r['kind'], $fd_r['severity']);
+                    $fd_text = bk_attention_reason_text($fd_r);
+                    $fd_f['title'] = $fd_text['title'];
+                    $fd_f['detail'] = $fd_text['detail'];
+                    $fd_f['action'] = null;
+                    $fd_f['since'] = null;
+                    if (str_starts_with($fd_r['kind'], 'status_')) {
+                        // Since when, and in the words of the newest check
+                        // that found this state.
+                        $fd_changed = !empty($fd_row['last_status_change']) ? strtotime((string)$fd_row['last_status_change']) : false;
+                        $fd_f['since'] = $fd_changed !== false ? date('c', $fd_changed) : null;
+                        $fd_from = $fd_changed !== false ? date('Y-m-d H:i:s', $fd_changed - 120) : null;
+                        $fd_state_log->execute([$fd_mid, (string)$fd_row['status'], $fd_from, $fd_from]);
+                        $fd_err = $fd_state_log->fetchColumn();
+                        $fd_f['detail'] = is_string($fd_err) && $fd_err !== '' ? $fd_err : null;
+                    }
+                    $fd_findings[] = $fd_f;
+                }
+            } catch (Throwable $fd_e) {
+                error_log('[api.php action=findings] attention of ' . $fd_mid . ': ' . $fd_e->getMessage());
+                $fd_errors[] = ['source' => 'attention', 'monitorId' => $fd_mid, 'error' => 'attention_unavailable'];
+            }
+
+            // The knowledge tips (CR-9b), the asset page's former second
+            // advice list. One device reads them as its page did, with the
+            // agent data it borrows from the same host; the fleet lists each
+            // measurement once, at the monitor that took it.
+            try {
+                $fd_tip_details = $fd_details;
+                if ($fd_monitor > 0) {
+                    bk_enrich_monitor_details($pdo, $fd_row, $fd_tip_details);
+                }
+                $fd_stages = json_decode((string)($fd_log['check_stages'] ?? ''), true);
+                $fd_tips = bk_get_knowledge_tips(
+                    $fd_row,
+                    $fd_tip_details,
+                    is_array($fd_stages) ? $fd_stages : null,
+                    (string)($fd_log['status'] ?? ($fd_row['status'] ?? 'unknown')),
+                    bk_get_enabled_metrics($fd_row, $pdo),
+                    $pdo
+                );
+                foreach (bk_tip_findings($fd_tips, $fd_reasons) as $fd_tip) {
+                    $fd_f = $fd_base($fd_row, 'tip', $fd_tip['kind'], $fd_tip['severity']);
+                    $fd_f['title'] = $fd_tip['title'];
+                    $fd_f['detail'] = null;
+                    $fd_f['action'] = null;
+                    $fd_f['since'] = null;
+                    $fd_findings[] = $fd_f;
+                }
+            } catch (Throwable $fd_e) {
+                error_log('[api.php action=findings] tips of ' . $fd_mid . ': ' . $fd_e->getMessage());
+                $fd_errors[] = ['source' => 'tip', 'monitorId' => $fd_mid, 'error' => 'tips_unavailable'];
+            }
+        }
+
+        // Router recommendations: the Monday e-mail's engine, read-only like
+        // action=router_recommendations (the digest owns the snapshot).
+        $fd_routers = array_values(array_filter($fd_rows, fn ($r) => strtolower((string)$r['type']) === 'openwrt'));
+        if ($fd_routers) {
+            try {
+                $fd_batch = bk_router_rec_inputs_batch($pdo, array_map(fn ($r) => (int)$r['id'], $fd_routers), date('Y-m-d'));
+            } catch (Throwable $fd_e) {
+                error_log('[api.php action=findings] router inputs: ' . $fd_e->getMessage());
+                $fd_batch = null;
+                $fd_errors[] = ['source' => 'router', 'monitorId' => null, 'error' => 'router_recommendations_unavailable'];
+            }
+            foreach ($fd_batch === null ? [] : $fd_routers as $fd_row) {
+                $fd_mid = (int)$fd_row['id'];
+                try {
+                    $fd_in = $fd_batch[$fd_mid] ?? ['window' => bk_router_rec_window(date('Y-m-d')), 'disks' => [], 'state' => []];
+                    $fd_in['monitor'] = $fd_row;
+                    $fd_in['details'] = bk_monitor_details($fd_row);
+                    $fd_in['now'] = time();
+                    $fd_res = bk_router_rec_evaluate($fd_in);
+                    if (!$fd_res['applicable']) {
+                        continue;
+                    }
+                    $fd_state = is_array($fd_in['state'] ?? null) ? $fd_in['state'] : [];
+                    $fd_split = bk_router_rec_split($fd_res['items'], $fd_state);
+                    foreach (['items' => false, 'muted' => true] as $fd_list => $fd_is_muted) {
+                        foreach ($fd_split[$fd_list] as $fd_item) {
+                            $fd_json = bk_rec_item_json($fd_item, $fd_state[(string)$fd_item['key']] ?? null);
+                            $fd_f = $fd_base($fd_row, 'router', (string)$fd_json['key'], (string)$fd_json['severity']);
+                            $fd_f['title'] = $fd_json['title'];
+                            $fd_f['detail'] = $fd_json['measured'];
+                            $fd_f['action'] = $fd_json['action'];
+                            $fd_f['since'] = $fd_json['openSince'];
+                            $fd_f['rec'] = $fd_json;
+                            if ($fd_is_muted) {
+                                $fd_f['muted'] = true;
+                                $fd_muted[] = $fd_f;
+                            } else {
+                                $fd_findings[] = $fd_f;
+                            }
+                        }
+                    }
+                } catch (Throwable $fd_e) {
+                    error_log('[api.php action=findings] router ' . $fd_mid . ': ' . $fd_e->getMessage());
+                    $fd_errors[] = ['source' => 'router', 'monitorId' => $fd_mid, 'error' => 'router_recommendations_unavailable'];
+                }
+            }
+        }
+
+        // Insights: one device fresh, the fleet from the shared five-minute
+        // cache (the admin's) or fresh for a user's own monitors.
+        $fd_insights_at = null;
+        try {
+            $fd_cache_key = ($fd_monitor === 0 && $fd_visible === null)
+                ? ($GLOBALS['BK_LANG'] === 'en' ? 'dashboard_insights_cache_en' : 'dashboard_insights_cache_cs')
+                : null;
+            $fd_cached = $fd_cache_key !== null ? bk_kv_cache_get($fd_cache_key) : null;
+            if ($fd_cached !== null) {
+                $fd_insights = $fd_cached['data'];
+                $fd_insights_at = $fd_cached['at'];
+            } else {
+                $fd_insights = bk_collect_insights($pdo, $fd_rows);
+                if ($fd_cache_key !== null) {
+                    bk_kv_cache_put($pdo, $fd_cache_key, $fd_insights);
+                }
+            }
+            $fd_by_id = [];
+            foreach ($fd_rows as $fd_row) {
+                $fd_by_id[(int)$fd_row['id']] = $fd_row;
+            }
+            foreach ($fd_insights as $fd_i) {
+                $fd_row = $fd_by_id[(int)($fd_i['monitorId'] ?? 0)] ?? null;
+                if ($fd_row === null) {
+                    continue;
+                }
+                $fd_f = $fd_base($fd_row, 'insight', (string)($fd_i['kind'] ?? 'trend') . '-' . substr(md5((string)($fd_i['text'] ?? '')), 0, 10), (string)($fd_i['severity'] ?? 'info'));
+                $fd_f['title'] = (string)($fd_i['text'] ?? '');
+                $fd_f['detail'] = ($fd_i['detail'] ?? '') !== '' ? (string)$fd_i['detail'] : null;
+                $fd_f['action'] = null;
+                $fd_f['since'] = null;
+                $fd_findings[] = $fd_f;
+            }
+        } catch (Throwable $fd_e) {
+            error_log('[api.php action=findings] insights: ' . $fd_e->getMessage());
+            $fd_errors[] = ['source' => 'insight', 'monitorId' => null, 'error' => 'insights_unavailable'];
+        }
+
+        // Critical first, then the cause before its symptoms (a status before
+        // a metric, a metric before a trend), then the device by name.
+        $fd_sev = ['critical' => 0, 'warning' => 1, 'info' => 2];
+        $fd_src = ['status' => 0, 'certificate' => 1, 'check' => 2, 'router' => 3, 'metric' => 4, 'tip' => 5, 'insight' => 6, 'agent' => 7];
+        $fd_cmp = fn (array $a, array $b): int => [$fd_sev[$a['severity']] ?? 3, $fd_src[$a['source']] ?? 9, $a['monitorName'], $a['key']]
+            <=> [$fd_sev[$b['severity']] ?? 3, $fd_src[$b['source']] ?? 9, $b['monitorName'], $b['key']];
+        usort($fd_findings, $fd_cmp);
+        usort($fd_muted, $fd_cmp);
+
+        $fd_counts = ['critical' => 0, 'warning' => 0, 'info' => 0];
+        $fd_devices = [];
+        foreach ($fd_findings as $fd_f) {
+            $fd_counts[$fd_f['severity']] = ($fd_counts[$fd_f['severity']] ?? 0) + 1;
+            $fd_mid = $fd_f['monitorId'];
+            if (!isset($fd_devices[$fd_mid])) {
+                $fd_devices[$fd_mid] = ['monitorId' => $fd_mid, 'monitorName' => $fd_f['monitorName'], 'monitorType' => $fd_f['monitorType'],
+                    'worst' => $fd_f['severity'], 'critical' => 0, 'warning' => 0, 'info' => 0, 'total' => 0];
+            }
+            $fd_devices[$fd_mid][$fd_f['severity']]++;
+            $fd_devices[$fd_mid]['total']++;
+        }
+        // The list is sorted worst first, so a device's first finding is its worst.
+        $fd_devices = array_values($fd_devices);
+
+        $fd_summary_body = [
+            'total' => count($fd_findings),
+            'counts' => $fd_counts,
+            'devicesWithFindings' => count($fd_devices),
+            'monitorsChecked' => count($fd_rows),
+            'sourceErrors' => $fd_errors,
+            'generatedAt' => date('c'),
+        ];
+        // Kept only when complete: a source that failed must not be repeated
+        // as the answer for a minute after it recovers.
+        if ($fd_summary_key !== null && $fd_errors === []) {
+            bk_kv_cache_put($pdo, $fd_summary_key, $fd_summary_body);
+        }
+        if ($fd_summary) {
+            echo bk_json_safe($fd_summary_body + ['cachedAt' => null]);
+            exit;
+        }
+
+        echo bk_json_safe([
+            'findings' => array_slice($fd_findings, $fd_offset, $fd_limit),
+            'total' => count($fd_findings),
+            'offset' => $fd_offset,
+            'counts' => $fd_counts,
+            'devices' => $fd_devices,
+            // Devices looked at, so the page can say "Ostatní zařízení bez nálezů (9)".
+            'monitorsChecked' => count($fd_rows),
+            'muted' => $fd_muted,
+            'canMute' => ($_SESSION['admin_role'] ?? '') === 'admin',
+            'sourceErrors' => $fd_errors,
+            'insightsCachedAt' => $fd_insights_at,
+            'generatedAt' => date('c'),
+        ]);
+    } catch (Throwable $e) {
+        bk_api_fail('findings_unavailable', 500, $e, 'Zjištění se nepodařilo sestavit.');
+    }
+    exit;
+}
+
+// N-1. Health score 0-100 of the network and of each monitor.
+//
+// One documented formula (bk_health_score, docs/api.md "Health score") from
+// measured values only; an unmeasured component drops out, too little data is
+// a null score. The app view scores the monitors this viewer may see, each
+// with its breakdown. The public view (scope=public or anonymous) answers
+// with the network-level score of the public set ONLY: without the hardware
+// components and the router's internals, and without a score per monitor -
+// the public cards already show each service's availability and response,
+// and a second per-monitor number that differs from the app's (no hardware
+// there) would only confuse. Its deductions name public monitors, as the
+// public cards do. The public answer is kept for a minute (unworded, so each
+// visitor still gets their language): every visitor would otherwise
+// recompute it.
+if ($action === 'health') {
+    try {
+        $hs_public = bk_public_view();
+        $hs_payload = null;
+        if ($hs_public) {
+            // A kept answer of an older shape (before the named deductions)
+            // is recomputed, not served for the rest of its minute.
+            $hs_kept = bk_kv_cache_get('health_cache_public', fn (array $data): bool => is_array($data['network']['deductions'] ?? null));
+            if ($hs_kept !== null) {
+                $hs_payload = $hs_kept['data'];
+            }
+        }
+        if ($hs_payload === null) {
+            [$hs_scope, $hs_params] = bk_list_scope_sql($pdo, bk_request_monitor_ids($pdo), 'id');
+            $hs_stmt = $pdo->prepare("SELECT * FROM monitors WHERE type NOT IN ('node', 'probe') AND archived_at IS NULL AND {$hs_scope} ORDER BY id ASC");
+            $hs_stmt->execute($hs_params);
+            $hs_rows = $hs_stmt->fetchAll();
+            $hs_healths = bk_health_for_monitors($pdo, $hs_rows, $hs_public);
+            $hs_names = [];
+            foreach ($hs_rows as $hs_row) {
+                $hs_names[(int)$hs_row['id']] = (string)$hs_row['name'];
+            }
+            $hs_payload = [
+                'network' => bk_health_network($hs_healths, $hs_names),
+                'formulaVersion' => BK_HEALTH_FORMULA_VERSION,
+                'generatedAt' => date('c'),
+            ];
+            if (!$hs_public) {
+                $hs_payload['assets'] = [];
+                foreach ($hs_rows as $hs_row) {
+                    $hs_h = $hs_healths[(int)$hs_row['id']];
+                    $hs_payload['assets'][] = ['monitorId' => (int)$hs_row['id']] + $hs_h;
+                }
+            } else {
+                bk_kv_cache_put($pdo, 'health_cache_public', $hs_payload);
+            }
+        }
+        $hs_payload['network'] = bk_health_labelled($hs_payload['network']);
+        foreach ($hs_payload['assets'] ?? [] as $hs_i => $hs_asset) {
+            $hs_payload['assets'][$hs_i] = bk_health_labelled($hs_asset);
+        }
+        echo bk_json_safe($hs_payload);
+    } catch (Throwable $e) {
+        bk_api_fail('health_unavailable', 500, $e, 'Skóre zdraví se nepodařilo spočítat.');
+    }
+    exit;
+}
+
+// 2c1b. Daily availability breakdown for the last N days (dashboard heatmap) -
+// real aggregates from monitor_logs, not a guess from the monitor's current state.
+if ($action === 'daily_uptime') {
+    try {
+        $days = min(366, max(1, (int)($_GET['days'] ?? 30)));
+
+        // Public view: the public set. App view: the monitors this viewer may see.
+        [$du_scope, $du_scope_params] = bk_list_scope_sql($pdo, bk_request_monitor_ids($pdo), 'id');
+        $stmt_mon = $pdo->prepare("SELECT id, name FROM monitors WHERE type NOT IN ('node', 'probe') AND {$du_scope} ORDER BY id ASC");
+        $stmt_mon->execute($du_scope_params);
+        $mon_rows = $stmt_mon->fetchAll();
+
+        $du_ids = array_map(fn ($m) => (int)$m['id'], $mon_rows);
+        $du_today = date('Y-m-d');
+        $du_first = date('Y-m-d', strtotime('-' . $days . ' day', strtotime($du_today)));
+
+        // Finished days come from the uptime_daily rollup: its seconds (the
+        // day in time), its check counts and its average response. The rollup
+        // is kept forever while monitor_logs is pruned after 30 days, so a
+        // 90-day strip read from the logs lost the response curve and the
+        // check counts of days 31-90 (N-2); and the 30-day GROUP BY over the
+        // raw logs on every page load was the endpoint's main cost.
+        $du_roll = [];
+        if ($du_ids) {
+            $du_in = implode(',', array_fill(0, count($du_ids), '?'));
+            $stmt_ud = $pdo->prepare("
+                SELECT monitor_id, day, checks_total, checks_up, checks_down, checks_warning, avg_response_ms,
+                       secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured
+                FROM uptime_daily
+                WHERE day >= ? AND day < ? AND monitor_id IN ({$du_in})
+            ");
+            $stmt_ud->execute(array_merge([$du_first, $du_today], $du_ids));
+            foreach ($stmt_ud->fetchAll() as $ud) {
+                $du_roll[(int)$ud['monitor_id']][(string)$ud['day']] = $ud;
+            }
+        }
+
+        // The raw logs are read only for the days the count rollup has not
+        // reached: today, and whatever cron has not rolled up yet (it runs
+        // over the last five days on every run, so after an outage of cron
+        // the gap is read from the logs until it catches up). The rollup
+        // writes every monitor of a day in one statement, so the newest
+        // rolled-up day of any monitor marks where the rollup stands.
+        $du_rolled_through = $pdo->query("SELECT MAX(day) FROM uptime_daily WHERE day < CURDATE() AND checks_total > 0")->fetchColumn();
+        $du_logs_from = $du_first;
+        if (is_string($du_rolled_through) && $du_rolled_through >= $du_first) {
+            $du_logs_from = date('Y-m-d', strtotime('+1 day', strtotime($du_rolled_through)));
+        }
+        $stmt_days = $pdo->prepare("
+            SELECT monitor_id, DATE(checked_at) AS day,
+                   SUM(CASE WHEN status = 'up' THEN 1 ELSE 0 END) AS up_count,
+                   SUM(CASE WHEN status = 'down' THEN 1 ELSE 0 END) AS down_count,
+                   SUM(CASE WHEN status = 'warning' THEN 1 ELSE 0 END) AS warning_count,
+                   SUM(CASE WHEN status = 'maintenance' THEN 1 ELSE 0 END) AS maint_count,
+                   COUNT(*) AS total_count,
+                   AVG(CASE WHEN response_time > 0 THEN response_time END) AS avg_rt
+            FROM monitor_logs
+            WHERE checked_at >= ?
+            GROUP BY monitor_id, DATE(checked_at)
+        ");
+        $stmt_days->execute([$du_logs_from . ' 00:00:00']);
+
+        $by_monitor = [];
+        while ($row = $stmt_days->fetch()) {
+            $by_monitor[(int)$row['monitor_id']][$row['day']] = $row;
+        }
+        // A rolled-up day with check counts speaks for itself; the logs fill
+        // in only a day whose row holds no counts (a day of maintenance rows,
+        // or one the count rollup has not reached).
+        foreach ($du_roll as $du_mid => $du_days) {
+            foreach ($du_days as $du_day => $ud) {
+                if ((int)$ud['checks_total'] > 0 && !isset($by_monitor[$du_mid][$du_day])) {
+                    $by_monitor[$du_mid][$du_day] = [
+                        'up_count' => $ud['checks_up'], 'down_count' => $ud['checks_down'],
+                        'warning_count' => $ud['checks_warning'], 'maint_count' => 0,
+                        'total_count' => $ud['checks_total'], 'avg_rt' => $ud['avg_response_ms'],
+                    ];
+                }
+            }
+        }
+
+        // The day's availability in time (bk_uptime_segments), not in rows:
+        // a day a silent agent wrote no row at all was "no data" here, and
+        // the strip showed grey where the router was off. Today is computed
+        // live; finished days come from the uptime_daily rollup (cron, every
+        // ten minutes). A day rolled up before the time columns existed knows
+        // only its check counts and is flagged approx by bk_uptime_daily_part.
+        $du_time = [];
+        foreach (bk_uptime_segments_for($pdo, strtotime($du_today . ' 00:00:00'), time(), $du_ids) as $du_mid => $du_seg) {
+            $du_time[$du_mid][$du_today] = bk_uptime_summary($du_seg['segments'], $du_seg['from'], $du_seg['to']);
+        }
+        foreach ($du_roll as $du_mid => $du_days) {
+            foreach ($du_days as $du_day => $ud) {
+                if ($ud['secs_up'] !== null || (int)$ud['checks_total'] > 0) {
+                    $du_time[$du_mid][$du_day] = bk_uptime_totals([bk_uptime_daily_part($ud)]) + ['approx' => $ud['secs_up'] === null ? 1 : 0];
+                }
+            }
+        }
+
+        // Frontend (dashboard.tsx) expects `series` keyed by monitor id -> day
+        // list, i.e. Record<number, DayRow[]>, not an array of
+        // {monitorId, name, days} objects. A shape mismatch here means
+        // data.series is always undefined, so the real data never loads and
+        // the UI silently falls back to a fabricated all-green 30-day history.
+        $series = [];
+        foreach ($mon_rows as $m) {
+            $mid = (int)$m['id'];
+            $day_list = [];
+            for ($i = $days - 1; $i >= 0; $i--) {
+                $day_key = date('Y-m-d', strtotime("-$i day"));
+                $day_display = date('j.n.', strtotime($day_key));
+                $d = $by_monitor[$mid][$day_key] ?? null;
+                // A finished day the rollup has not reached yet (cron behind,
+                // the first minutes after a deploy) falls back to its check
+                // counts rather than to "no data" - flagged approx, so its
+                // coverage stays unknown instead of a whole measured day.
+                $tm = $du_time[$mid][$day_key]
+                    ?? ($d ? bk_uptime_totals([bk_uptime_daily_part([
+                        'checks_up' => $d['up_count'], 'checks_down' => $d['down_count'],
+                        'checks_warning' => $d['warning_count'], 'checks_maintenance' => $d['maint_count'],
+                    ])]) + ['approx' => 1] : null);
+
+                // 'unknown' rows (types without an active check) are not
+                // measurements - they count into no status, otherwise a monitor
+                // nobody ever tested would show false outages.
+                $cell = bk_uptime_day_cell($tm, $d ? [
+                    'up' => (int)$d['up_count'], 'down' => (int)$d['down_count'], 'warning' => (int)$d['warning_count'],
+                ] : null);
+                $args = $cell['detailArgs'];
+                if (in_array($cell['detailKey'], ['day_silent_detail', 'day_down_time_detail', 'day_warning_time_detail'], true)) {
+                    $args[0] = bk_format_duration_secs((int)$args[0]);
+                } elseif ($cell['detailKey'] === 'day_partial_detail') {
+                    // In hours, as the strip's tooltip reads it ("14 h z 24 h"),
+                    // not "14 h z 1 d".
+                    $hours = fn (int $s): string => $s >= 3600 ? (int)round($s / 3600) . ' h' : bk_format_duration_secs($s);
+                    $args = [$hours((int)$args[0]), $hours((int)$args[1])];
+                }
+
+                $day_list[] = [
+                    'date' => $day_display,
+                    'day' => $day_key,
+                    'status' => $cell['status'],
+                    'uptimePct' => $cell['uptimePct'],
+                    // The day's average response for the latency sparkline - null until
+                    // something actually answered that day (0 would claim instant responses).
+                    'avgMs' => ($d && $d['avg_rt'] !== null) ? (int)round((float)$d['avg_rt']) : null,
+                    'coveragePct' => $cell['coveragePct'],
+                    'measuredSecs' => $cell['measuredSecs'],
+                    'expectedSecs' => $cell['expectedSecs'],
+                    'downMin' => $cell['downMin'],
+                    'degradedMin' => $cell['degradedMin'],
+                    'maintenanceMin' => $cell['maintenanceMin'],
+                    'detail' => vsprintf(t($cell['detailKey']), $args),
+                ];
+            }
+
+            $series[$mid] = $day_list;
+        }
+
+        // Cast to stdClass (not JSON_FORCE_OBJECT, which would also flatten
+        // the nested `days` arrays into objects) so `series` always encodes
+        // as a {monitorId: days[]} object even if it's empty or its keys
+        // happen to form a 0-indexed sequence - json_encode() would
+        // otherwise emit `[]` for a plain array in either case, and the
+        // frontend indexes into it by id.
+        echo json_encode(['series' => (object)$series], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // An empty series drew an empty 30-day strip where days of outage were.
+        bk_api_fail('daily_uptime_unavailable', 500, $e, 'Denní dostupnost se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// Availability over several windows at once (24 h / 7 d / 30 d / 90 d) for the
+// public page. One pass over 90 days of logs instead of four sla_report calls -
+// those would also compute percentiles and last outages four times, which nobody here wants.
+// A window without a single measured check is null, not 100.
+if ($action === 'uptime_windows') {
+    try {
+        // Public view: the public set. App view: the monitors this viewer may see.
+        $uw_visible = bk_request_monitor_ids($pdo);
+        $uw_archived = bk_archived_monitor_ids($pdo);
+        $uw_ids = [];
+        foreach ($pdo->query("SELECT id FROM monitors WHERE type NOT IN ('node', 'probe')")->fetchAll(PDO::FETCH_COLUMN) as $uw_id) {
+            $uw_id = (int)$uw_id;
+            if (in_array($uw_id, $uw_archived, true)) {
+                continue;
+            }
+            if ($uw_visible !== null && !in_array($uw_id, $uw_visible, true)) {
+                continue;
+            }
+            $uw_ids[] = $uw_id;
+        }
+        // In time, not in rows: the row count let a silent agent's blackout
+        // vanish (one 'down' row). d1 is the last 24 hours from the logs;
+        // 7/30/90 are calendar days, today live and the rest from the
+        // uptime_daily rollup, which outlives the 30-day log retention.
+        $uw_to = time();
+        $uw_out = [];
+        $uw_24h = bk_uptime_segments_for($pdo, $uw_to - 86400, $uw_to, $uw_ids);
+        $uw_days = bk_uptime_day_windows($pdo, $uw_ids, [7, 30, 90]);
+        foreach ($uw_ids as $uw_mid) {
+            $uw_seg = $uw_24h[$uw_mid] ?? null;
+            $row = ['d1' => $uw_seg !== null ? bk_uptime_summary($uw_seg['segments'], $uw_seg['from'], $uw_seg['to'])['pct'] : null];
+            foreach ([7, 30, 90] as $w) {
+                $row["d{$w}"] = $uw_days[$uw_mid][$w]['pct'] ?? null;
+            }
+            // The first day with data in the 90-day window (W1-B2). Against
+            // windowStart below, 90 days over a monitor that exists for 40
+            // print "data od <since>" instead of passing for a quarter.
+            $row['since'] = $uw_days[$uw_mid][90]['since'] ?? null;
+            if ($row['d1'] === null && $row['d90'] === null) {
+                // Nothing measured at all: the monitor stays out, as before.
+                continue;
+            }
+            $uw_out[$uw_mid] = $row;
+        }
+        // (object): an empty result and sequential ids must both stay an object,
+        // the frontend indexes into it by monitor id. windowStart is each
+        // window's first calendar day in the server's zone, so the client
+        // compares day strings and a browser elsewhere cannot shift the cut.
+        echo json_encode([
+            'windows' => (object)$uw_out,
+            'windowStart' => [
+                'd7' => date('Y-m-d', strtotime('-6 day', strtotime('today'))),
+                'd30' => date('Y-m-d', strtotime('-29 day', strtotime('today'))),
+                'd90' => date('Y-m-d', strtotime('-89 day', strtotime('today'))),
+            ],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_fail('uptime_windows_unavailable', 500, $e, 'Dostupnost se nepodařilo spočítat.');
+    }
+    exit;
+}
+
+// Embeddable SVG status badge - `<img src=".../api.php?action=badge&monitor_id=N">`
+// on a foreign site. Without an id it summarises the fleet. Honesty applies
+// here too: an unknown state is grey "unknown", not green "online", and a
+// nonexistent monitor is 404, not an invented badge.
+if ($action === 'badge') {
+    $bdg_lang = ($_GET['lang'] ?? '') === 'en' ? 'en' : 'cs';
+    $bdg_words = [
+        'cs' => ['up' => 'online', 'down' => 'výpadek', 'warning' => 'zhoršeno', 'maintenance' => 'údržba', 'unknown' => 'neznámý', 'fleet_ok' => 'vše online', 'fleet_down' => 'výpadek'],
+        'en' => ['up' => 'online', 'down' => 'outage', 'warning' => 'degraded', 'maintenance' => 'maintenance', 'unknown' => 'unknown', 'fleet_ok' => 'all online', 'fleet_down' => 'outage'],
+    ][$bdg_lang];
+    $bdg_colors = ['up' => '#3fb950', 'down' => '#f85149', 'warning' => '#d29922', 'maintenance' => '#d29922', 'unknown' => '#8b949e'];
+
+    $bdg_mid = (int)($_GET['monitor_id'] ?? 0);
+    try {
+        if ($bdg_mid > 0) {
+            $stmt_bdg = $pdo->prepare("SELECT name, status, maintenance, last_checked FROM monitors WHERE id = ? AND archived_at IS NULL LIMIT 1");
+            $stmt_bdg->execute([$bdg_mid]);
+            $bdg_row = $stmt_bdg->fetch();
+            // A monitor off the public page (W1-G3) answers like a missing one
+            // to anyone who may not see it: the badge prints its name, and ids
+            // are easy to count through.
+            $bdg_allowed = in_array($bdg_mid, bk_public_monitor_ids($pdo), true)
+                || (!empty($_SESSION['admin_logged_in']) && bk_can_view_monitor($pdo, $bdg_mid));
+            if (!$bdg_row || !$bdg_allowed) {
+                bk_api_error(404, 'Monitor nenalezen.');
+            }
+            $bdg_label = (string)$bdg_row['name'];
+            if (($_GET['type'] ?? '') === 'uptime') {
+                // Uptime variant (from the legacy badge.php, now an alias of
+                // this action): 30-day availability instead of the live state.
+                // No measurements = grey "no data", never a made-up percent.
+                $bdg_uptime = bk_uptime_30d($pdo, $bdg_mid);
+                if ($bdg_uptime === null) {
+                    $bdg_state = 'unknown';
+                    $bdg_value = $bdg_lang === 'en' ? 'no data' : 'bez dat';
+                } else {
+                    $bdg_state = $bdg_uptime < 95.0 ? 'down' : ($bdg_uptime < 99.0 ? 'warning' : 'up');
+                    // 99.999 (five seconds in 30 days) printed "100.00 %".
+                    $bdg_value = number_format(bk_uptime_pct_round($bdg_uptime, 2), 2, '.', '') . ' %';
+                }
+            } else {
+                // The fleet badge's verdict: with the collector stopped, a stored
+                // "up" is only what somebody last saw, not a state anyone checks.
+                $bdg_state = [
+                    'healthy' => 'up',
+                    'down' => 'down',
+                    'maintenance' => 'maintenance',
+                    'degraded' => $bdg_row['status'] === 'warning' ? 'warning' : 'unknown',
+                ][bk_overall_verdict([$bdg_row], bk_collection_is_fresh())['verdict']] ?? 'unknown';
+                $bdg_value = $bdg_words[$bdg_state];
+            }
+        } else {
+            // Summary of the public set, with the verdict public_status gives
+            // (W1-B4). It said "vše online" unless something was down - a
+            // degraded or unknown monitor and a stopped collector included.
+            [$bdg_scope, $bdg_params] = bk_list_scope_sql($pdo, bk_public_monitor_ids($pdo), 'id');
+            $stmt_bdg = $pdo->prepare("SELECT status, maintenance, last_checked FROM monitors WHERE {$bdg_scope}");
+            $stmt_bdg->execute($bdg_params);
+            $bdg_verdict = bk_overall_verdict($stmt_bdg->fetchAll(), bk_collection_is_fresh());
+            $bdg_label = trim((string)get_setting('site_title', 'status')) ?: 'status';
+            $bdg_state = [
+                'healthy' => 'up',
+                'down' => 'down',
+                'degraded' => 'warning',
+                'maintenance' => 'maintenance',
+            ][$bdg_verdict['verdict']] ?? 'unknown';
+            $bdg_value = [
+                'up' => $bdg_words['fleet_ok'],
+                'down' => $bdg_words['fleet_down'] . ' (' . $bdg_verdict['counts']['down'] . ')',
+                'warning' => $bdg_words['warning'],
+                'maintenance' => $bdg_words['maintenance'],
+            ][$bdg_state] ?? $bdg_words['unknown'];
+        }
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Stav se nepodařilo zjistit.');
+    }
+
+    // Width by estimate, ~6.2 px per character at 11px Verdana - the same trick
+    // shields.io uses; pixel-perfect measurement is not needed here.
+    $bdg_lw = (int)max(40, round(strlen($bdg_label) * 6.2) + 12);
+    $bdg_vw = (int)max(40, round(mb_strlen($bdg_value) * 6.2) + 12);
+    $bdg_w = $bdg_lw + $bdg_vw;
+    $bdg_color = $bdg_colors[$bdg_state];
+    $bdg_label_x = htmlspecialchars($bdg_label, ENT_QUOTES);
+    $bdg_value_x = htmlspecialchars($bdg_value, ENT_QUOTES);
+    // Centres of both fields for text-anchor="middle".
+    $bdg_lw2 = (int)round($bdg_lw / 2);
+    $bdg_vw2 = $bdg_lw + (int)round($bdg_vw / 2);
+
+    header('Content-Type: image/svg+xml; charset=utf-8');
+    // Short cache: a badge on a foreign site must not hammer the DB on every
+    // view, but must not claim "online" about a dead server for an hour either.
+    header('Cache-Control: public, max-age=60');
+    echo <<<SVG
+<svg xmlns="http://www.w3.org/2000/svg" width="{$bdg_w}" height="20" role="img" aria-label="{$bdg_label_x}: {$bdg_value_x}">
+  <linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>
+  <clipPath id="r"><rect width="{$bdg_w}" height="20" rx="3" fill="#fff"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="{$bdg_lw}" height="20" fill="#555"/>
+    <rect x="{$bdg_lw}" width="{$bdg_vw}" height="20" fill="{$bdg_color}"/>
+    <rect width="{$bdg_w}" height="20" fill="url(#s)"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="{$bdg_lw2}" y="14">{$bdg_label_x}</text>
+    <text x="{$bdg_vw2}" y="14">{$bdg_value_x}</text>
+  </g>
+</svg>
+SVG;
+    exit;
+}
+
+// 2c2. Incidents and outages from the DB (incidents and monitor_logs)
+// A duration goes out in seconds and the app formats it in the reader's
+// language. It was a Czech text, in the wrong forms: "1 dní, 2 hodin".
+
+if ($action === 'incidents') {
+    try {
+        $incidents = [];
+        // Public view: open outages and announced incidents for everyone, without
+        // targets, operator names or reasons that name a process. App view: the
+        // monitors this viewer may see, plus incidents tied to no monitor.
+        $inc_public = bk_public_view();
+        // The public view covers the public set: an outage of a hidden server is
+        // not announced to anonymous visitors under its name (W1-G3).
+        $inc_visible = bk_request_monitor_ids($pdo);
+        [$inc_scope, $inc_scope_params] = bk_list_scope_sql($pdo, $inc_visible, 'm.id');
+        [$inc_m_scope, $inc_m_params] = bk_monitor_scope_sql($inc_visible, 'monitor_id');
+        $inc_manual_where = $inc_visible === null ? '1=1' : "(monitor_id IS NULL OR {$inc_m_scope})";
+
+        // Outages of TARGET monitors that are down RIGHT NOW - takes the latest
+        // 'down' row per currently unavailable monitor, not every historical down
+        // row (that would show long-resolved outages as still ongoing). Never a
+        // remote probe's (source 'probe'): cron has the monitor down, and the
+        // card's reason is the words of cron's check, not a probe's.
+        // No inner catch any more: a failed read here used to leave the list
+        // empty, and the page said "no outages" during one. Every query of
+        // this action now fails the whole answer (the outer catch -> 500).
+        $stmt_logs = $pdo->prepare("
+            SELECT l.id, l.monitor_id, l.checked_at, l.error_message,
+                   m.name as monitor_name, m.target, m.type, m.last_status_change
+            FROM monitor_logs l
+            JOIN monitors m ON l.monitor_id = m.id
+            WHERE m.status = 'down' AND {$inc_scope}
+              AND l.id = (SELECT l2.id FROM monitor_logs l2
+                          WHERE l2.monitor_id = l.monitor_id AND l2.status = 'down'
+                            AND (l2.source IS NULL OR l2.source <> 'probe')
+                          ORDER BY l2.id DESC LIMIT 1)
+            ORDER BY l.id DESC
+        ");
+        $stmt_logs->execute($inc_scope_params);
+        $log_rows = $stmt_logs->fetchAll();
+
+        // Open DB incidents by monitor - a live outage links to them so it
+        // can be acknowledged/closed from the UI (the lifecycle creates them
+        // automatically on the transition to down).
+        $open_by_monitor = [];
+        // monitor_id has to be SELECTed - the loop below indexes by it.
+        // Without it every open incident landed under key 0, so no
+        // monitor ever matched and "acknowledged by" and the incident
+        // id came out null for all of them: the Ack button was missing
+        // on exactly the incidents that had one.
+        $stmt_open = $pdo->query("
+            SELECT id, monitor_id, acknowledged_by, acknowledged_at, escalated_at
+            FROM incidents
+            WHERE status != 'resolved' AND monitor_id IS NOT NULL
+        ");
+        foreach ($stmt_open->fetchAll() as $oi) {
+            $open_by_monitor[(int)$oi['monitor_id']] = $oi;
+        }
+
+        foreach ($log_rows as $r) {
+            // When the outage STARTED, not when it was last confirmed. For an
+            // actively checked monitor cron writes a log every cycle, so the
+            // newest 'down' row is a few minutes old and the duration on the
+            // card reset with every check - an outage running since morning
+            // kept reporting "2 minutes". last_status_change is stamped once,
+            // on the transition to down. Rows from before that column existed
+            // fall back to the log.
+            $start_ts = !empty($r['last_status_change'])
+                ? strtotime((string)$r['last_status_change'])
+                : false;
+            if ($start_ts === false || $start_ts <= 0) {
+                $start_ts = strtotime($r['checked_at']);
+            }
+            $open_inc = $open_by_monitor[(int)$r['monitor_id']] ?? null;
+            $incidents[] = [
+                'id' => (int)$r['id'],
+                'incidentId' => $open_inc ? (int)$open_inc['id'] : null,
+                'acknowledgedBy' => ($open_inc && !$inc_public) ? $open_inc['acknowledged_by'] : null,
+                'acknowledgedAt' => ($open_inc && !empty($open_inc['acknowledged_at']))
+                    ? date('c', strtotime((string)$open_inc['acknowledged_at']))
+                    : null,
+                // Escalation happened silently: cron stamps it and nobody
+                // could see that an outage had already been escalated past
+                // whoever was supposed to pick it up.
+                'escalatedAt' => (!$inc_public && $open_inc && !empty($open_inc['escalated_at']))
+                    ? date('c', strtotime((string)$open_inc['escalated_at']))
+                    : null,
+                'monitor_id' => (int)$r['monitor_id'],
+                'monitor_name' => $r['monitor_name'],
+                'target' => $inc_public ? null : $r['target'],
+                'type' => strtoupper($r['type']),
+                'status' => 'open',
+                'severity' => 'down',
+                'started_at' => date('d.m.Y H:i:s', $start_ts),
+                'resolved_at' => null,
+                'duration_secs' => max(0, time() - $start_ts),
+                // Null when the check stored no reason (a remote probe's row,
+                // typically): "Cílový port neodpovídá" was a cause made up,
+                // and only in Czech. The page says the reason is unknown.
+                'reason' => ($inc_public ? bk_public_reason($r['error_message'], (string)$r['type']) : $r['error_message']) ?: null,
+            ];
+        }
+
+        // Manually reported / global incidents (the `incidents` table - title/impact/status,
+        // without a link to a specific monitor).
+        $manual_incidents = [];
+        // Every open incident, however old, and the latest 50 closed ones. One
+        // limit over both let a long outage's record fall off the list: the page
+        // then called it closed, and opening another one answered 409.
+        $inc_rows = [];
+        foreach (["status != 'resolved'", "status = 'resolved'"] as $inc_i => $inc_state) {
+            $stmt_inc = $pdo->prepare("
+                SELECT id, title, impact, status, created_at, updated_at, resolved_at,
+                       monitor_id, acknowledged_by, acknowledged_at, postmortem
+                FROM incidents
+                WHERE ({$inc_manual_where}) AND {$inc_state}
+                ORDER BY id DESC" . ($inc_i === 1 ? ' LIMIT 50' : ''));
+            $stmt_inc->execute($inc_visible === null ? [] : $inc_m_params);
+            $inc_rows = array_merge($inc_rows, $stmt_inc->fetchAll());
+        }
+        usort($inc_rows, fn ($a, $b) => (int)$b['id'] <=> (int)$a['id']);
+        foreach ($inc_rows as $r) {
+            $start_ts = strtotime($r['created_at']);
+            $end_ts = $r['resolved_at'] ? strtotime($r['resolved_at']) : time();
+            $updates = [];
+            $stmt_upd = $pdo->prepare("SELECT status, message, created_at FROM incident_updates WHERE incident_id = ? ORDER BY id ASC");
+            $stmt_upd->execute([(int)$r['id']]);
+            foreach ($stmt_upd->fetchAll() as $u) {
+                // The lifecycle stores the raw check failure and the incident
+                // actions the operator's name; the public view gets neither.
+                $updates[] = [
+                    'status' => $u['status'],
+                    'message' => $inc_public ? bk_public_incident_update($u['message']) : $u['message'],
+                    'at' => date('d.m.Y H:i:s', strtotime($u['created_at'])),
+                ];
+            }
+
+            $manual_incidents[] = [
+                'id' => (int)$r['id'],
+                'title' => $r['title'],
+                'impact' => $r['impact'],
+                'status' => $r['status'],
+                'monitorId' => $r['monitor_id'] !== null ? (int)$r['monitor_id'] : null,
+                'acknowledgedBy' => $inc_public ? null : $r['acknowledged_by'],
+                'acknowledgedAt' => $r['acknowledged_at'] ? date('d.m.Y H:i:s', strtotime($r['acknowledged_at'])) : null,
+                'postmortem' => $r['postmortem'],
+                'createdAt' => date('d.m.Y H:i:s', $start_ts),
+                'resolvedAt' => $r['resolved_at'] ? date('d.m.Y H:i:s', $end_ts) : null,
+                'durationSecs' => max(0, $end_ts - $start_ts),
+                'updates' => $updates,
+            ];
+        }
+
+        echo json_encode(['incidents' => $incidents, 'manualIncidents' => $manual_incidents], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // Both lists empty was the green "no incidents" box.
+        bk_api_fail('incidents_unavailable', 500, $e, 'Incidenty se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 2c2x. Actions on an incident (admin-only): acknowledge, note/status change,
+// resolve with a note, postmortem. Every step is written into
+// incident_updates - the timeline stays complete no matter who did what.
+if ($action === 'incident_action') {
+    bk_require_admin();
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $incident_id = (int)($input['id'] ?? 0);
+    $op = (string)($input['op'] ?? '');
+    $username = $_SESSION['admin_username'] ?? 'admin';
+
+    try {
+        // The monitor's state comes along: closing an incident does not end the
+        // outage, and the caller has to be told so plainly instead of watching
+        // the outage stay on the page with no explanation.
+        $stmt = $pdo->prepare("
+            SELECT i.id, i.status, i.monitor_id, m.status AS monitor_status
+            FROM incidents i
+            LEFT JOIN monitors m ON m.id = i.monitor_id
+            WHERE i.id = ?
+        ");
+        $stmt->execute([$incident_id]);
+        $incident = $stmt->fetch();
+        if (!$incident) {
+            bk_api_error(404, 'Incident nenalezen.');
+        }
+
+        // Extra fields for the answer - empty unless an operation has something
+        // to report beyond success.
+        $ia_extra = [];
+        $ia_still_down = $incident['monitor_id'] !== null
+            && (string)($incident['monitor_status'] ?? '') === 'down';
+
+        $add_update = function (string $status, string $message) use ($pdo, $incident_id) {
+            $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, ?, ?)")
+                ->execute([$incident_id, $status, $message]);
+        };
+
+        if ($op === 'ack') {
+            $pdo->prepare("UPDATE incidents SET acknowledged_by = ?, acknowledged_at = NOW() WHERE id = ?")
+                ->execute([$username, $incident_id]);
+            $add_update((string)$incident['status'], "Incident převzal: {$username}");
+            bk_audit_log($pdo, 'incident_ack', "Incident #{$incident_id} převzat", 'incident', $incident_id);
+        } elseif ($op === 'note') {
+            $message = trim((string)($input['message'] ?? ''));
+            if ($message === '') {
+                bk_api_error(400, 'Poznámka nesmí být prázdná.');
+            }
+            $status = in_array($input['status'] ?? '', ['investigating', 'identified', 'monitoring'], true)
+                ? $input['status'] : (string)$incident['status'];
+            $pdo->prepare("UPDATE incidents SET status = ? WHERE id = ?")->execute([$status, $incident_id]);
+            $add_update($status, "[{$username}] " . $message);
+            bk_audit_log($pdo, 'incident_note', "Incident #{$incident_id}: poznámka", 'incident', $incident_id);
+        } elseif ($op === 'resolve') {
+            $note = trim((string)($input['note'] ?? ''));
+            $pdo->prepare("UPDATE incidents SET status = 'resolved', resolved_at = NOW() WHERE id = ?")
+                ->execute([$incident_id]);
+            // A closed incident over a monitor that is still down is a record
+            // closed, not an outage ended. The timeline says which one happened.
+            $ia_note = "[{$username}] " . ($note !== '' ? $note : 'Incident uzavřen ručně.');
+            if ($ia_still_down) {
+                $ia_note .= ' Monitor byl v tu chvíli stále nedostupný.';
+                $ia_extra['monitorStillDown'] = true;
+            }
+            $add_update('resolved', $ia_note);
+            bk_audit_log($pdo, 'incident_resolve', "Incident #{$incident_id} uzavřen", 'incident', $incident_id);
+        } elseif ($op === 'postmortem') {
+            $text = trim((string)($input['postmortem'] ?? ''));
+            $pdo->prepare("UPDATE incidents SET postmortem = ? WHERE id = ?")
+                ->execute([$text !== '' ? $text : null, $incident_id]);
+            $add_update((string)$incident['status'], "[{$username}] Postmortem " . ($text !== '' ? 'doplněn.' : 'odstraněn.'));
+            bk_audit_log($pdo, 'incident_postmortem', "Incident #{$incident_id}: postmortem", 'incident', $incident_id);
+        } else {
+            bk_api_error(400, 'Neznámá operace.');
+        }
+
+        echo json_encode(array_merge(['success' => true], $ia_extra), JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Akci se nepodařilo provést.');
+    }
+    exit;
+}
+
+// 2c3. Manual incident report (admin-only) - writes into `incidents` + the first
+// message into `incident_updates`.
+if ($action === 'create_incident') {
+    bk_require_admin();
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $title = trim($input['title'] ?? '');
+    $message = trim($input['message'] ?? '');
+    $impact = in_array($input['impact'] ?? '', ['minor', 'major', 'critical'], true) ? $input['impact'] : 'minor';
+    // An incident may belong to a monitor. Closing the incident of a monitor that
+    // is still down used to leave its outage with no record to work in: the
+    // outage card hangs off the open incident, and there was none - no notes, no
+    // acknowledge, and the escalation had nothing to escalate. Opening one again
+    // must not wait for the service to recover.
+    $ci_monitor_id = isset($input['monitorId']) ? (int)$input['monitorId'] : 0;
+
+    if ($title === '') {
+        bk_api_error(400, 'Název incidentu je povinný.');
+    }
+    if ($ci_monitor_id > 0) {
+        $stmt_ci_mon = $pdo->prepare("SELECT id FROM monitors WHERE id = ?");
+        $stmt_ci_mon->execute([$ci_monitor_id]);
+        if ($stmt_ci_mon->fetchColumn() === false) {
+            bk_api_error(404, 'Monitor nenalezen.');
+        }
+        bk_refuse_archived_write($pdo, $ci_monitor_id);
+        $stmt_ci_open = $pdo->prepare("SELECT id FROM incidents WHERE monitor_id = ? AND status != 'resolved' LIMIT 1");
+        $stmt_ci_open->execute([$ci_monitor_id]);
+        $ci_open = $stmt_ci_open->fetchColumn();
+        if ($ci_open !== false) {
+            // Two open incidents for one monitor would split the timeline and the
+            // outage card can only ever link to one of them.
+            bk_api_error(409, 'Tento monitor už má otevřený incident.', ['id' => (int)$ci_open]);
+        }
+    }
+
+    try {
+        $stmt = $pdo->prepare("INSERT INTO incidents (title, impact, status, monitor_id) VALUES (?, ?, 'investigating', ?)");
+        $stmt->execute([$title, $impact, $ci_monitor_id > 0 ? $ci_monitor_id : null]);
+        $incident_id = (int)$pdo->lastInsertId();
+
+        if ($message !== '') {
+            $stmt_upd = $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, 'investigating', ?)");
+            $stmt_upd->execute([$incident_id, $message]);
+        }
+
+        bk_audit_log($pdo, 'incident_created', $title, 'incident', $incident_id);
+        echo json_encode(['success' => true, 'id' => $incident_id], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Incident se nepodařilo uložit.');
+    }
+    exit;
+}
+
+// 2d. SLA Report - real uptime and outage data from monitor_logs over the last 30 days
+// 2b2j. SLA overview for the websites page: 7/30/365-day availability per monitor.
+// sla_report can take 3.7 s (detailed outages, MTTR) - the websites page needs
+// just the percentages, so they come from one windowed query cached for 10 minutes.
+// 2b2k. Vantage point overview: where the checks really ran from.
+// Groups monitor_logs by checked_from (nodes write their location via
+// node_api.php, cron keeps the default). Returns only what is in the
+// data - no map with invented dots across the world.
+// 2b2l. Metric presets: named sets of "what shows and when it is a problem",
+// assignable to monitors. Reading is public (the UI needs them to render),
+// writing is for a logged-in admin only.
+if ($action === 'presets') {
+    try {
+        $presets = [];
+        $stmt = $pdo->query("SELECT id, name, description, service_type, metrics, cpu_threshold, ram_threshold, hdd_threshold FROM metric_presets ORDER BY name");
+        foreach ($stmt->fetchAll() as $r) {
+            $metrics = json_decode($r['metrics'] ?? '', true);
+            $presets[] = [
+                'id' => (int)$r['id'],
+                'name' => $r['name'],
+                'description' => $r['description'],
+                'serviceType' => $r['service_type'],
+                'metrics' => is_array($metrics) ? $metrics : [],
+                // null = the preset does not govern the threshold and leaves it to the monitor
+                'cpuThreshold' => $r['cpu_threshold'] !== null ? (int)$r['cpu_threshold'] : null,
+                'ramThreshold' => $r['ram_threshold'] !== null ? (int)$r['ram_threshold'] : null,
+                'hddThreshold' => $r['hdd_threshold'] !== null ? (int)$r['hdd_threshold'] : null,
+            ];
+        }
+
+        // How many monitors use the preset - so a delete's impact is visible.
+        // No catch of its own: usedBy 0 after a failed read made deleting a
+        // preset that monitors rely on look harmless.
+        $usage = [];
+        $stmt_u = $pdo->query("SELECT preset_id, COUNT(*) AS c FROM monitors WHERE preset_id IS NOT NULL GROUP BY preset_id");
+        foreach ($stmt_u->fetchAll() as $u) {
+            $usage[(int)$u['preset_id']] = (int)$u['c'];
+        }
+        foreach ($presets as &$p) {
+            $p['usedBy'] = $usage[$p['id']] ?? 0;
+        }
+        unset($p);
+
+        // Catalogue of available metrics per service type (source: the profiles).
+        $catalog = [];
+        foreach (get_service_profiles() as $type => $profile) {
+            if (empty($profile['metrics'])) {
+                continue;
+            }
+            $catalog[$type] = [
+                'label' => $profile['label'],
+                'metrics' => array_map(
+                    fn($m) => ['key' => $m['key'], 'label' => $m['label'], 'recommended' => !empty($m['recommended'])],
+                    $profile['metrics']
+                ),
+            ];
+        }
+
+        echo json_encode(['presets' => $presets, 'catalog' => $catalog], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Presety se nepodařilo načíst.');
+    }
+    exit;
+}
+
+if ($action === 'save_preset' || $action === 'delete_preset') {
+    bk_require_admin();
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+
+    try {
+        if ($action === 'save_preset') {
+            $name = trim((string)($input['name'] ?? ''));
+            if ($name === '') {
+                bk_api_error(400, 'Název presetu nesmí být prázdný.');
+            }
+            $metrics = [];
+            foreach ((array)($input['metrics'] ?? []) as $mk) {
+                $clean = preg_replace('/[^a-z0-9_]/', '', strtolower((string)$mk));
+                if ($clean !== '') {
+                    $metrics[] = $clean;
+                }
+            }
+            // An empty threshold = the preset does not govern it; zero is a valid
+            // value, hence '' is distinguished from 0 and no default is substituted.
+            $thr = function ($v) {
+                if ($v === null || $v === '') {
+                    return null;
+                }
+                return max(0, min(100, (int)$v));
+            };
+            $id = (int)($input['id'] ?? 0);
+            $params = [
+                $name,
+                trim((string)($input['description'] ?? '')) ?: null,
+                trim((string)($input['serviceType'] ?? '')) ?: null,
+                json_encode(array_values(array_unique($metrics)), JSON_UNESCAPED_UNICODE),
+                $thr($input['cpuThreshold'] ?? null),
+                $thr($input['ramThreshold'] ?? null),
+                $thr($input['hddThreshold'] ?? null),
+            ];
+            if ($id > 0) {
+                $stmt = $pdo->prepare("UPDATE metric_presets SET name = ?, description = ?, service_type = ?, metrics = ?, cpu_threshold = ?, ram_threshold = ?, hdd_threshold = ? WHERE id = ?");
+                $stmt->execute(array_merge($params, [$id]));
+                bk_audit_log($pdo, 'preset_updated', "Preset '{$name}' upraven", 'preset', $id);
+            } else {
+                $stmt = $pdo->prepare("INSERT INTO metric_presets (name, description, service_type, metrics, cpu_threshold, ram_threshold, hdd_threshold) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                $stmt->execute($params);
+                $id = (int)$pdo->lastInsertId();
+                bk_audit_log($pdo, 'preset_created', "Preset '{$name}' vytvořen", 'preset', $id);
+            }
+            echo json_encode(['success' => true, 'id' => $id], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // delete_preset
+        $id = (int)($input['id'] ?? 0);
+        // Monitors merely lose the preset and return to their own settings -
+        // deleting a preset must not take anyone's monitoring down.
+        $pdo->prepare("UPDATE monitors SET preset_id = NULL WHERE preset_id = ?")->execute([$id]);
+        $pdo->prepare("DELETE FROM metric_presets WHERE id = ?")->execute([$id]);
+        bk_audit_log($pdo, 'preset_deleted', "Preset #{$id} smazán", 'preset', $id);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Operaci s presetem se nepodařilo provést.');
+    }
+    exit;
+}
+
+// 2b2m. Breakdown of the last check (DNS -> TCP -> TLS -> HTTP).
+//
+// The data existed from the start, but was stored solely in monitor_logs and
+// no API served it - so the app had no way to tell in which stage a site
+// stalled. Returns the latest check that actually carries the breakdown.
+if ($action === 'check_stages') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    if ($monitor_id <= 0) {
+        bk_api_error(400, 'Chybí monitor_id.');
+    }
+    bk_require_monitor_view($pdo, $monitor_id);
+    try {
+        $stmt = $pdo->prepare("
+            SELECT check_stages, checked_at, response_time, status
+            FROM monitor_logs
+            WHERE monitor_id = ? AND check_stages IS NOT NULL AND check_stages <> ''
+            ORDER BY id DESC
+            LIMIT 1
+        ");
+        $stmt->execute([$monitor_id]);
+        $row = $stmt->fetch();
+
+        if (!$row) {
+            // No breakdown yet - not an error, it just has not been measured.
+            echo json_encode(['stages' => null], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $stages = json_decode($row['check_stages'], true);
+        echo json_encode([
+            'stages' => is_array($stages) ? $stages : null,
+            'checkedAt' => $row['checked_at'],
+            'responseMs' => (int)$row['response_time'] > 0 ? (int)$row['response_time'] : null,
+            'status' => $row['status'],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Rozpad kontroly se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 2b2n. Public status pages: a custom monitor selection under a custom slug.
+//
+// Reading is public (the page is meant to be public), but hidden pages are
+// admin-only and only the monitors the page really contains are returned.
+// 2b2o. Export konfigurace (admin-only).
+//
+// A self-hosted tool on shared hosting: when the account closes or moves,
+// its owner should be able to take what they set up - monitors, presets,
+// status pages and settings. Without this the only backup is a manual dump
+// from phpMyAdmin.
+//
+// Deliberately NOT exported: passwords, tokens, agent keys, the cron key and
+// measured data. A secret in a downloadable file is a leak waiting to happen,
+// and the cron key is one: it authorises node_api.php, cron.php?key= and agent
+// registration. The measurement history is tens of MB and no use for
+// restoring settings.
+if ($action === 'export_config') {
+    // Admin only: internal targets, notes, SMTP and SMS account identifiers.
+    bk_require_admin();
+
+    try {
+        $export = [
+            'exportedAt' => date('c'),
+            'schemaVersion' => defined('BK_SCHEMA_VERSION') ? BK_SCHEMA_VERSION : null,
+            'monitors' => [],
+            'presets' => [],
+            'statusPages' => [],
+            'settings' => [],
+        ];
+
+        $stmt = $pdo->query("
+            SELECT name, type, target, port, category, timeout, notes,
+                   email_notifications, sms_notifications,
+                   monitored_processes, cpu_threshold, ram_threshold, hdd_threshold,
+                   latency_threshold_ms, latency_threshold_mins,
+                   body_keyword, cpanel_stats_url, enabled_metrics,
+                   remote_actions_enabled, allowed_actions
+            FROM monitors ORDER BY id
+        ");
+        $export['monitors'] = $stmt->fetchAll();
+        // cpanel_stats.php authenticates by ?key= alone, so the stored URL is a
+        // credential. The file promises no secrets: the address stays, the key goes.
+        foreach ($export['monitors'] as &$exp_monitor) {
+            if (!empty($exp_monitor['cpanel_stats_url'])) {
+                $exp_monitor['cpanel_stats_url'] = strtok((string)$exp_monitor['cpanel_stats_url'], '?#');
+            }
+        }
+        unset($exp_monitor);
+
+        try {
+            $export['presets'] = $pdo->query("SELECT name, description, service_type, metrics, cpu_threshold, ram_threshold, hdd_threshold FROM metric_presets ORDER BY name")->fetchAll();
+        } catch (Throwable $e) {
+            // Stara DB bez tabulky presetu - export ostatniho ma stale smysl.
+            // null, not []: the file must not claim there were no presets.
+            error_log('[api.php action=export_config] presets skipped: ' . $e->getMessage());
+            $export['presets'] = null;
+        }
+        try {
+            $export['statusPages'] = $pdo->query("SELECT title, slug, description, is_public, monitor_ids FROM status_pages ORDER BY title")->fetchAll();
+        } catch (Throwable $e) {
+            // Same as presets: a backup that silently lacks the status pages
+            // would restore without them. null says "not exported".
+            error_log('[api.php action=export_config] status pages skipped: ' . $e->getMessage());
+            $export['statusPages'] = null;
+        }
+
+        // The stored settings the form shows in full: bk_settings_keys()
+        // minus bk_settings_secret_keys(), the list the form masks. A name
+        // pattern decided this before, so site_url and pushover_user_key were
+        // left out while caches, per-user layouts and the per-node location
+        // rows went in. A new credential cannot slip through unmasked:
+        // run_settings_parity_lint.php fails on one missing from the list.
+        // The one exception is cron_key: the form shows it in full for the
+        // cron URL, but it authorises node_api.php, cron.php?key= and agent
+        // registration (while agent_registration_token is empty), so the
+        // backup file leaves it out.
+        $exp_keys = array_diff(bk_settings_keys(), bk_settings_secret_keys(), ['cron_key']);
+        foreach ($pdo->query("SELECT key_name, key_value FROM settings ORDER BY key_name")->fetchAll() as $row) {
+            $k = (string)$row['key_name'];
+            if (in_array($k, $exp_keys, true)) {
+                $export['settings'][$k] = $row['key_value'];
+            }
+        }
+
+        bk_audit_log($pdo, 'config_exported', 'Export konfigurace stažen', 'system', null);
+
+        $filename = 'bloodkings-config-' . date('Y-m-d') . '.json';
+        header('Content-Type: application/json; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . $filename . '"');
+        echo json_encode($export, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Export se nepodařilo sestavit.');
+    }
+    exit;
+}
+
+// Vlastni profil prihlaseneho uzivatele - pro /app/profile.
+//
+// Zrcadli legacy handler change_password v admin.php: zmena hesla vyzaduje
+// stavajici heslo, samotny profil ne. Cizi ucet tudy zmenit nejde - ID se
+// bere VYHRADNE ze session.
+if ($action === 'my_profile' || $action === 'update_profile' || $action === 'oauth_unlink') {
+    bk_require_login();
+    $mp_uid = (int)$_SESSION['admin_id'];
+
+    if ($action === 'my_profile') {
+        try {
+            $stmt_mp = $pdo->prepare("SELECT username, email, phone, whatsapp_apikey, sms_notifications, whatsapp_notifications, email_lang, totp_enabled, oauth_provider FROM users WHERE id = ? LIMIT 1");
+            $stmt_mp->execute([$mp_uid]);
+            $mp = $stmt_mp->fetch();
+            if (!$mp) {
+                bk_api_error(404, 'Účet nenalezen.');
+            }
+            echo json_encode([
+                'username' => $mp['username'],
+                'email' => $mp['email'] ?: null,
+                'phone' => $mp['phone'] ?: null,
+                // Klic se vraci maskovany - je to credential pro CallMeBot.
+                'whatsappApikeySet' => ($mp['whatsapp_apikey'] ?? '') !== '',
+                'smsNotifications' => !empty($mp['sms_notifications']),
+                'whatsappNotifications' => !empty($mp['whatsapp_notifications']),
+                // NULL = ridit se globalnim nastavenim email_lang.
+                'emailLang' => in_array($mp['email_lang'], ['cs', 'en'], true) ? $mp['email_lang'] : null,
+                'totpEnabled' => !empty($mp['totp_enabled']),
+                'totpRecoveryRemaining' => !empty($mp['totp_enabled']) ? bk_totp_recovery_remaining($pdo, $mp_uid) : null,
+                'oauthProvider' => $mp['oauth_provider'] ?: null,
+            ], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            error_log('[my_profile] ' . $e->getMessage());
+            bk_api_error(500, 'Profil se nepodařilo načíst.');
+        }
+        exit;
+    }
+
+    $mp_input = json_decode(file_get_contents('php://input'), true) ?: [];
+
+    try {
+        $stmt_me = $pdo->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+        $stmt_me->execute([$mp_uid]);
+        $mp_me = $stmt_me->fetch();
+        if (!$mp_me) {
+            bk_api_error(404, 'Účet nenalezen.');
+        }
+
+        if ($action === 'oauth_unlink') {
+            // Odpojeni chce heslo - ukradena session nesmi tise odpojit
+            // prihlasovani a prevzit ucet pres OAuth provider.
+            if (!bk_api_password_ok($pdo, $mp_me, (string)($mp_input['password'] ?? ''))) {
+                bk_api_error(400, 'Nesprávné heslo - účet zůstává propojený.');
+            }
+            $pdo->prepare("UPDATE users SET oauth_provider = NULL, oauth_id = NULL WHERE id = ?")->execute([$mp_uid]);
+            bk_audit_log($pdo, 'oauth_unlinked', '', 'user', $mp_uid);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // update_profile
+        $mp_email = trim((string)($mp_input['email'] ?? ''));
+        if ($mp_email === '') {
+            bk_api_error(400, 'E-mail je povinný.');
+        }
+        // The password reset goes to this address, so whoever changes it can take
+        // the account: it asks for the same proof as a new password. A stolen
+        // session has the session and nothing else.
+        $mp_email_changed = $mp_email !== (string)($mp_me['email'] ?? '');
+        if ($mp_email_changed && !bk_api_password_ok($pdo, $mp_me, (string)($mp_input['oldPassword'] ?? ''))) {
+            bk_api_error(400, 'Změna e-mailu vyžaduje stávající heslo. Změna neproběhla.');
+        }
+        $mp_phone = trim((string)($mp_input['phone'] ?? ''));
+        $mp_lang = in_array($mp_input['emailLang'] ?? null, ['cs', 'en'], true) ? $mp_input['emailLang'] : null;
+        $mp_sms = !empty($mp_input['smsNotifications']) ? 1 : 0;
+        $mp_wa = !empty($mp_input['whatsappNotifications']) ? 1 : 0;
+        // Prazdny klic = beze zmeny (vraci se jen maskovany priznak, takze
+        // formular original nezna a nesmi ho prepsat prazdnem).
+        $mp_wa_key = trim((string)($mp_input['whatsappApikey'] ?? ''));
+        $mp_wa_key_sql = $mp_wa_key !== '' ? $mp_wa_key : $mp_me['whatsapp_apikey'];
+
+        $mp_new_pass = (string)($mp_input['newPassword'] ?? '');
+        $mp_hash = $mp_me['password_hash'];
+        if ($mp_new_pass !== '') {
+            if (strlen($mp_new_pass) < 8) {
+                bk_api_error(400, 'Heslo musí mít alespoň 8 znaků.');
+            }
+            if (!bk_api_password_ok($pdo, $mp_me, (string)($mp_input['oldPassword'] ?? ''))) {
+                bk_api_error(400, 'Stávající heslo je nesprávné. Změna neproběhla.');
+            }
+            $mp_hash = password_hash($mp_new_pass, PASSWORD_BCRYPT);
+        }
+
+        $pdo->prepare("UPDATE users SET email = ?, phone = ?, whatsapp_apikey = ?, sms_notifications = ?, whatsapp_notifications = ?, email_lang = ?, password_hash = ? WHERE id = ?")
+            ->execute([$mp_email, $mp_phone ?: null, $mp_wa_key_sql, $mp_sms, $mp_wa, $mp_lang, $mp_hash, $mp_uid]);
+        bk_audit_log($pdo, $mp_new_pass !== '' ? 'password_changed' : 'profile_updated', 'Vlastní profil', 'user', $mp_uid);
+        if ($mp_email_changed) {
+            bk_audit_log($pdo, 'email_changed', 'Vlastní profil', 'user', $mp_uid);
+        }
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[update_profile] ' . $e->getMessage());
+        bk_api_error(500, 'Profil se nepodařilo uložit.');
+    }
+    exit;
+}
+
+// Nastaveni hesla z pozvanky / resetu - pro React stranku /app/set-password.
+//
+// Zrcadli bk_render_set_password_page z admin.php: token se hashuje, plati
+// jen do expirace a spotrebuje se prvnim uspesnym nastavenim. Neplatny token
+// dostane stejnou odpoved jako expirovany - z chyby se neda poznat, jestli
+// token nekdy existoval.
+if ($action === 'set_password') {
+    $sp_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $sp_token = trim((string)($sp_input['token'] ?? ''));
+    $sp_pass = (string)($sp_input['password'] ?? '');
+
+    if ($sp_token === '') {
+        bk_api_error(400, 'Chybí token.');
+    }
+    if (strlen($sp_pass) < 8) {
+        bk_api_error(400, 'Heslo musí mít alespoň 8 znaků.');
+    }
+
+    try {
+        $sp_hash = hash('sha256', $sp_token);
+        $stmt_sp = $pdo->prepare("SELECT id, username FROM users WHERE password_reset_token_hash = ? AND password_reset_expires > NOW() LIMIT 1");
+        $stmt_sp->execute([$sp_hash]);
+        $sp_user = $stmt_sp->fetch();
+        if (!$sp_user) {
+            bk_api_error(400, 'Odkaz je neplatný nebo už vypršel. Požádejte o nový.');
+        }
+        $stmt_up = $pdo->prepare("UPDATE users SET password_hash = ?, password_reset_token_hash = NULL, password_reset_expires = NULL WHERE id = ?");
+        $stmt_up->execute([password_hash($sp_pass, PASSWORD_BCRYPT), (int)$sp_user['id']]);
+        bk_audit_log($pdo, 'password_set_via_link', '', 'user', (int)$sp_user['id'], (int)$sp_user['id'], $sp_user['username']);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[set_password] ' . $e->getMessage());
+        bk_api_error(500, 'Heslo se nepodařilo nastavit.');
+    }
+    exit;
+}
+
+// 2FA pro prihlaseneho uzivatele. Dvoukrokovy postup: secret zije jen v session,
+// dokud uzivatel kodem nepotvrdi, ze se mu QR opravdu naskenoval - jinak by sel
+// ucet zamknout neoverenym secretem.
+if ($action === 'totp_setup' || $action === 'totp_confirm' || $action === 'totp_disable' || $action === 'totp_recovery_regenerate') {
+    bk_require_login();
+    $totp_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $totp_uid = (int)$_SESSION['admin_id'];
+
+    try {
+        $stmt_me = $pdo->prepare("SELECT id, username, password_hash, totp_enabled FROM users WHERE id = ? LIMIT 1");
+        $stmt_me->execute([$totp_uid]);
+        $totp_me = $stmt_me->fetch();
+        if (!$totp_me) {
+            bk_api_error(404, 'Účet nenalezen.');
+        }
+
+        // A new authenticator goes on an account only with its password, and
+        // never over one in use: a stolen session could otherwise put its own
+        // on the account, with fresh recovery codes, and lock the owner out.
+        // Replacing one means switching 2FA off first, which asks the password.
+        if (($action === 'totp_setup' || $action === 'totp_confirm') && !empty($totp_me['totp_enabled'])) {
+            bk_api_error(409, '2FA už je zapnuté. Novou aplikaci nastavíte, až ho vypnete.');
+        }
+
+        if ($action === 'totp_setup') {
+            $totp_secret = bk_totp_generate_secret();
+            $_SESSION['totp_pending_secret'] = $totp_secret;
+            $totp_issuer = rawurlencode(get_setting('site_title', 'Blood Kings'));
+            // The account's own name: the label read a session key nothing
+            // ever sets, so every account was "…:admin" in the authenticator.
+            $totp_account = rawurlencode((string)$totp_me['username']);
+            echo json_encode([
+                'secret' => $totp_secret,
+                'otpauthUri' => "otpauth://totp/{$totp_issuer}:{$totp_account}?secret={$totp_secret}&issuer={$totp_issuer}&algorithm=SHA1&digits=6&period=30",
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($action === 'totp_confirm') {
+            $totp_pending = $_SESSION['totp_pending_secret'] ?? '';
+            $totp_code = trim((string)($totp_input['code'] ?? ''));
+            if ($totp_pending === '') {
+                bk_api_error(400, '2FA nastavení vypršelo, začněte prosím znovu.');
+            }
+            if (!bk_api_password_ok($pdo, $totp_me, (string)($totp_input['password'] ?? ''))) {
+                bk_api_error(400, 'Nesprávné heslo - 2FA zůstává vypnuté.');
+            }
+            if (!bk_totp_verify_code($totp_pending, $totp_code)) {
+                bk_api_error(400, 'Neplatný kód z autentikační aplikace.');
+            }
+            $stmt_t = $pdo->prepare("UPDATE users SET totp_secret = ?, totp_enabled = 1 WHERE id = ?");
+            $stmt_t->execute([$totp_pending, $totp_uid]);
+            unset($_SESSION['totp_pending_secret']);
+            bk_audit_log($pdo, 'totp_enabled', '', 'user', $totp_uid);
+            // Recovery codes are part of enabling 2FA, not an optional extra -
+            // without them a lost phone means a locked account. Returned in
+            // plaintext exactly once; only hashes are stored.
+            $totp_recovery = bk_totp_generate_recovery_codes($pdo, $totp_uid);
+            echo json_encode(['success' => true, 'recoveryCodes' => $totp_recovery], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($action === 'totp_recovery_regenerate') {
+            // A new set invalidates the old one, so it demands the password -
+            // a stolen session must not be able to mint sign-in codes.
+            if (empty($totp_me['totp_enabled'])) {
+                bk_api_error(400, 'Záložní kódy mají smysl jen se zapnutým 2FA.');
+            }
+            if (!bk_api_password_ok($pdo, $totp_me, (string)($totp_input['password'] ?? ''))) {
+                bk_api_error(400, 'Nesprávné heslo - kódy zůstávají beze změny.');
+            }
+            $totp_recovery = bk_totp_generate_recovery_codes($pdo, $totp_uid);
+            bk_audit_log($pdo, 'totp_recovery_regenerated', '', 'user', $totp_uid);
+            echo json_encode(['success' => true, 'recoveryCodes' => $totp_recovery], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // totp_disable: vypnuti chce aktualni heslo - ukradena session bez
+        // znalosti hesla 2FA tise nevypne.
+        if (!bk_api_password_ok($pdo, $totp_me, (string)($totp_input['password'] ?? ''))) {
+            bk_api_error(400, 'Nesprávné heslo - 2FA zůstává zapnuté.');
+        }
+        $stmt_t = $pdo->prepare("UPDATE users SET totp_secret = NULL, totp_enabled = 0 WHERE id = ?");
+        $stmt_t->execute([$totp_uid]);
+        // Codes without 2FA are a sign-in backdoor - they go with it.
+        try {
+            $pdo->prepare("DELETE FROM totp_recovery_codes WHERE user_id = ?")->execute([$totp_uid]);
+        } catch (Throwable $e) {
+            // 2FA is already off; codes that outlive it cannot sign anyone in,
+            // because the login checks them only while totp_enabled = 1.
+            error_log('[api.php action=totp_disable] recovery codes not deleted: ' . $e->getMessage());
+        }
+        bk_audit_log($pdo, 'totp_disabled', '', 'user', $totp_uid);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[totp] ' . $e->getMessage());
+        bk_api_error(500, 'Operace se nepodařila.');
+    }
+    exit;
+}
+
+// Jedna status stranka podle slugu - pro verejnou stranku v Reactu.
+//
+// Chovani kopiruje legacy index.php?page=: skryta stranka je pro anonyma
+// k nerozeznani od neexistujici (404 v obou pripadech), aby se existence
+// skrytych stranek nedala zjistit zkousenim adres.
+if ($action === 'status_page') {
+    $sp_slug = trim((string)($_GET['slug'] ?? ''));
+    if ($sp_slug === '') {
+        bk_api_error(400, 'Chybí slug.');
+    }
+    try {
+        $stmt_sp = $pdo->prepare("SELECT title, description, is_public, monitor_ids, display_options FROM status_pages WHERE slug = ? LIMIT 1");
+        $stmt_sp->execute([$sp_slug]);
+        $sp_row = $stmt_sp->fetch();
+        // Hidden pages are the admin's drafts, not something every account may open.
+        $sp_is_admin = bk_viewer()['is_admin'];
+
+        if (!$sp_row || ((int)$sp_row['is_public'] !== 1 && !$sp_is_admin)) {
+            bk_api_error(404, 'Stránka nenalezena.');
+        }
+
+        $sp_ids = json_decode($sp_row['monitor_ids'] ?? '', true);
+        // The options always come back complete with defaults filled in - the
+        // client then does not need to know what a missing key means.
+        $sp_opts = json_decode($sp_row['display_options'] ?? '', true) ?: [];
+        echo json_encode([
+            'title' => $sp_row['title'],
+            'description' => $sp_row['description'],
+            // Prazdny vyber znamena "vsechny verejne monitory" - stejne jako legacy.
+            'monitorIds' => is_array($sp_ids) ? array_map('intval', $sp_ids) : [],
+            'displayOptions' => [
+                'showRegions' => $sp_opts['showRegions'] ?? true,
+                'showEvents' => $sp_opts['showEvents'] ?? true,
+                'showIncidents' => $sp_opts['showIncidents'] ?? true,
+                'showUptime' => $sp_opts['showUptime'] ?? true,
+                'detailLevel' => ($sp_opts['detailLevel'] ?? 'full') === 'status' ? 'status' : 'full',
+            ],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // A failed query is not a missing page. Its 404 made /app/public say
+        // "Stránka nenalezena", noindex the page and judge the whole fleet.
+        bk_api_fail('status_page_unavailable', 500, $e, 'Status stránku se nepodařilo načíst.');
+    }
+    exit;
+}
+
+if ($action === 'status_pages') {
+    // Hidden pages are the admin's drafts, not something every account may open.
+    $is_admin_sp = bk_viewer()['is_admin'];
+    try {
+        $stmt = $pdo->query("SELECT id, title, slug, description, is_public, monitor_ids, display_options FROM status_pages ORDER BY title");
+        $pages = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $public = (int)$r['is_public'] === 1;
+            if (!$public && !$is_admin_sp) {
+                continue;
+            }
+            $ids = json_decode($r['monitor_ids'] ?? '', true);
+            $pages[] = [
+                'id' => (int)$r['id'],
+                'title' => $r['title'],
+                'slug' => $r['slug'],
+                'description' => $r['description'],
+                'isPublic' => $public,
+                // An empty list = the page shows all public monitors.
+                'monitorIds' => is_array($ids) ? array_values(array_map('intval', $ids)) : [],
+                'displayOptions' => (function () use ($r) {
+                    $o = json_decode($r['display_options'] ?? '', true) ?: [];
+                    return [
+                        'showRegions' => $o['showRegions'] ?? true,
+                        'showEvents' => $o['showEvents'] ?? true,
+                        'showIncidents' => $o['showIncidents'] ?? true,
+                        'showUptime' => $o['showUptime'] ?? true,
+                        'detailLevel' => ($o['detailLevel'] ?? 'full') === 'status' ? 'status' : 'full',
+                    ];
+                })(),
+            ];
+        }
+        echo json_encode(['pages' => $pages], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Status stránky se nepodařilo načíst.');
+    }
+    exit;
+}
+
+if ($action === 'save_status_page' || $action === 'delete_status_page') {
+    bk_require_admin();
+    $input = json_decode(file_get_contents('php://input'), true) ?: [];
+    try {
+        if ($action === 'delete_status_page') {
+            $pdo->prepare("DELETE FROM status_pages WHERE id = ?")->execute([(int)($input['id'] ?? 0)]);
+            bk_audit_log($pdo, 'status_page_deleted', 'Status stránka smazána', 'status_page', (int)($input['id'] ?? 0));
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $title = trim((string)($input['title'] ?? ''));
+        if ($title === '') {
+            bk_api_error(400, 'Název stránky nesmí být prázdný.');
+        }
+
+        // The slug goes into the URL, hence safe characters only. Derived from
+        // the title when the user leaves it empty.
+        $slug = strtolower(trim((string)($input['slug'] ?? '')));
+        if ($slug === '') {
+            $slug = $title;
+        }
+        $slug = preg_replace('/[^a-z0-9]+/', '-', bk_slug_ascii($slug));
+        $slug = trim((string)$slug, '-');
+        if ($slug === '') {
+            $slug = 'stranka-' . time();
+        }
+
+        $ids = [];
+        foreach ((array)($input['monitorIds'] ?? []) as $mid) {
+            $mid = (int)$mid;
+            if ($mid > 0) {
+                $ids[] = $mid;
+            }
+        }
+
+        // Display options: known keys only, so arbitrary JSON cannot be stored
+        // in the database. When everything is at its default, NULL is stored -
+        // an unconfigured page and a "show everything" page are the same thing.
+        $display = null;
+        if (isset($input['displayOptions']) && is_array($input['displayOptions'])) {
+            $opts = [];
+            foreach (['showRegions', 'showEvents', 'showIncidents', 'showUptime'] as $flag) {
+                if (array_key_exists($flag, $input['displayOptions']) && !$input['displayOptions'][$flag]) {
+                    $opts[$flag] = false;
+                }
+            }
+            $lvl = $input['displayOptions']['detailLevel'] ?? null;
+            if ($lvl === 'status') {
+                $opts['detailLevel'] = 'status';
+            }
+            $display = $opts ? json_encode($opts) : null;
+        }
+
+        $params = [
+            $title,
+            $slug,
+            trim((string)($input['description'] ?? '')) ?: null,
+            !empty($input['isPublic']) ? 1 : 0,
+            json_encode(array_values(array_unique($ids))),
+            $display,
+        ];
+        $id = (int)($input['id'] ?? 0);
+        if ($id > 0) {
+            $stmt = $pdo->prepare("UPDATE status_pages SET title = ?, slug = ?, description = ?, is_public = ?, monitor_ids = ?, display_options = ? WHERE id = ?");
+            $stmt->execute(array_merge($params, [$id]));
+            bk_audit_log($pdo, 'status_page_updated', "Status stránka '{$title}' upravena", 'status_page', $id);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO status_pages (title, slug, description, is_public, monitor_ids, display_options) VALUES (?, ?, ?, ?, ?, ?)");
+            $stmt->execute($params);
+            $id = (int)$pdo->lastInsertId();
+            bk_audit_log($pdo, 'status_page_created', "Status stránka '{$title}' vytvořena", 'status_page', $id);
+        }
+        echo json_encode(['success' => true, 'id' => $id, 'slug' => $slug], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        // A duplicate slug is the user's error, not the server's - say it clearly.
+        $duplicate = str_contains($e->getMessage(), 'uniq_status_page_slug') || $e->getCode() === '23000';
+        bk_api_error($duplicate ? 400 : 500, $duplicate
+            ? 'Stránka s tímto slugem už existuje — zvolte jiný.'
+            : 'Status stránku se nepodařilo uložit.');
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Status stránku se nepodařilo uložit.');
+    }
+    exit;
+}
+
+if ($action === 'regions') {
+    try {
+        $days = max(1, min(30, (int)($_GET['days'] ?? 7)));
+        // Public view: where the checks run from and how often they succeed,
+        // nothing more. A user's app view counts only their monitors and never
+        // reads or writes the fleet-wide cache.
+        $rg_public = bk_public_view();
+        $rg_visible = bk_request_monitor_ids($pdo);
+        // Two shared caches: the public set, the same for every visitor, and
+        // the whole fleet for administrators. A user's own scope is not cached.
+        $rg_cacheable = $rg_public || $rg_visible === null;
+        [$rg_scope, $rg_scope_params] = bk_list_scope_sql($pdo, $rg_visible, 'monitor_id');
+        $rg_project = function (array $payload) use ($rg_public): array {
+            if ($rg_public) {
+                $payload['regions'] = array_map(
+                    fn($r) => ['location' => $r['location'] ?? null, 'country' => $r['country'] ?? bk_location_country($r['location'] ?? null), 'successRate' => $r['successRate'] ?? null],
+                    $payload['regions'] ?? []
+                );
+            }
+            return $payload;
+        };
+
+        // Server-side cache, stejny vzorec jako websites_overview o kus niz.
+        //
+        // Agregace 30 dni monitor_logs bezi na tomhle hostingu ~5 s I S krycim
+        // indexem - casovani skaluje linearne s oknem (0,45 s pro den, 5 s pro
+        // mesic), takze index se pouziva a pomale je proste secteni ctvrt
+        // milionu radku. Mista mereni se pritom meni jen kdyz pribude sonda
+        // nebo lokalita Cloudflare - 10 minut stara odpoved je porad pravdiva,
+        // a `cachedAt` to odpovedi priznava.
+        $regions_cache_key = 'regions_cache_' . $days . 'd' . ($rg_public ? '_public' : '');
+        $cached = $rg_cacheable ? bk_kv_cache_get($regions_cache_key) : null;
+        if ($cached !== null) {
+            echo json_encode($rg_project($cached['data']), JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $stmt = $pdo->prepare("
+            SELECT checked_from,
+                   COUNT(*) AS checks,
+                   SUM(status = 'up') AS up_checks,
+                   SUM(status = 'down') AS down_checks,
+                   AVG(NULLIF(response_time, 0)) AS avg_response,
+                   MIN(checked_at) AS first_seen,
+                   MAX(checked_at) AS last_seen,
+                   COUNT(DISTINCT monitor_id) AS monitors
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+              AND status IN ('up', 'down', 'warning')
+              AND {$rg_scope}
+            GROUP BY checked_from
+            ORDER BY checks DESC
+        ");
+        $stmt->execute(array_merge([$days], $rg_scope_params));
+
+        $regions = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $checks = (int)$r['checks'];
+            $regions[] = [
+                // null = the node does not report its location; the UI says so plainly.
+                'location' => $r['checked_from'] !== null && $r['checked_from'] !== '' ? $r['checked_from'] : null,
+                // ISO 3166-1 alpha-2 from the label, null = no country known:
+                // the page draws its own flag instead of the emoji (Windows
+                // shows those as two letters).
+                'country' => bk_location_country($r['checked_from'] ?? null),
+                'checks' => $checks,
+                'upChecks' => (int)$r['up_checks'],
+                'downChecks' => (int)$r['down_checks'],
+                // A warning answered: it is a success here, as in the uptime
+                // figures - counted as a failure, ten checks with one slow
+                // answer read 90 % next to "0 selhání". One failed check in
+                // 20 000 is 99.995: never "100 %".
+                'successRate' => $checks > 0
+                    ? bk_uptime_pct_round((($checks - (int)$r['down_checks']) / $checks) * 100, 2, (int)$r['down_checks'] > 0)
+                    : null,
+                // Average via NULLIF(...,0): a zero response is not a measurement.
+                'avgResponseMs' => $r['avg_response'] !== null ? round((float)$r['avg_response']) : null,
+                'monitors' => (int)$r['monitors'],
+                'firstSeen' => $r['first_seen'],
+                'lastSeen' => $r['last_seen'],
+            ];
+        }
+
+        $regions_payload = ['days' => $days, 'regions' => $regions, 'cachedAt' => date('c')];
+        if ($rg_cacheable) {
+            bk_kv_cache_put($pdo, $regions_cache_key, $regions_payload);
+        }
+        echo json_encode($rg_project($regions_payload), JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Přehled měřicích míst se nepodařilo sestavit.');
+    }
+    exit;
+}
+
+if ($action === 'websites_overview') {
+    bk_require_login();
+    // The cache holds the whole fleet; a user gets only their monitors out of it,
+    // and the filtered map is never written back.
+    $wo_visible = bk_visible_monitor_ids($pdo);
+    $wo_filter = function (array $data) use ($wo_visible, $pdo): array {
+        $wo_monitors = (array)($data['monitors'] ?? []);
+        if ($wo_visible !== null) {
+            $wo_monitors = array_intersect_key($wo_monitors, array_flip($wo_visible));
+        }
+        // Archived sites leave the overview, also when the cache predates the archiving.
+        $wo_monitors = array_diff_key($wo_monitors, array_flip(bk_archived_monitor_ids($pdo)));
+        // The HTTP code the latest check recorded (W2-10, honest-14), read
+        // fresh - not from the ten-minute cache. The card printed "200 OK" for
+        // any site that was up and "OFFLINE" for a slow one, a code nobody
+        // measured. null = the latest check recorded none (it failed before
+        // HTTP, or the monitor is not a web check), and the card shows "—".
+        // The latest of cron's checks: a remote probe's row (source 'probe')
+        // stores no stages, and every five minutes it blanked the code.
+        $wo_http = $pdo->prepare("SELECT check_stages, checked_at FROM monitor_logs WHERE monitor_id = ? AND (source IS NULL OR source <> 'probe') ORDER BY id DESC LIMIT 1");
+        $wo_web = $pdo->query("SELECT id FROM monitors WHERE type = 'web'")->fetchAll(PDO::FETCH_COLUMN);
+        foreach (array_map('intval', $wo_web) as $wo_mid) {
+            if (!isset($wo_monitors[$wo_mid])) {
+                continue;
+            }
+            $wo_http->execute([$wo_mid]);
+            $wo_last = $wo_http->fetch();
+            $wo_stages = is_array($wo_last) ? json_decode((string)($wo_last['check_stages'] ?? ''), true) : null;
+            $wo_code = is_array($wo_stages) ? ($wo_stages['http']['status_code'] ?? null) : null;
+            $wo_monitors[$wo_mid]['httpStatusCode'] = is_numeric($wo_code) && (int)$wo_code > 0 ? (int)$wo_code : null;
+            $wo_monitors[$wo_mid]['httpCheckedAt'] = is_array($wo_last) ? date('c', strtotime((string)$wo_last['checked_at'])) : null;
+        }
+        $data['monitors'] = (object)$wo_monitors;
+        // The limit cron alerts at (ssl_alert_days), read fresh rather than
+        // cached: the Insights page lists a certificate by the same rule the
+        // alert uses, not by a number of its own (W1-B6).
+        $data['sslAlertDays'] = max(1, (int)get_setting('ssl_alert_days', '14'));
+        return $data;
+    };
+    try {
+        $cached = bk_kv_cache_get('websites_overview_cache');
+        if ($cached !== null) {
+            echo json_encode($wo_filter($cached['data']), JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // Which monitors have anything measured, and since when. The
+        // percentages themselves are computed in time below.
+        $stmt = $pdo->query("
+            SELECT monitor_id, MIN(checked_at) AS measured_since
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+              AND status IN ('up','down','warning')
+            GROUP BY monitor_id
+        ");
+        $sla = [];
+        while ($row = $stmt->fetch()) {
+            $sla[(int)$row['monitor_id']] = [
+                'sla7' => null,
+                'sla30' => null,
+                'sla365' => null,
+                'measuredSince' => $row['measured_since'],
+                // How many days the long window really covers; set below.
+                // It started at 0, which the page read as "rok".
+                'longTermDays' => null,
+            ];
+        }
+
+        // Long windows from uptime_daily. The real history length is returned
+        // too, so the UI can say "over 47 days" instead of pretending a year.
+        try {
+            $stmt_long = $pdo->query("
+                SELECT monitor_id,
+                       MIN(day) AS since,
+                       DATEDIFF(CURDATE(), MIN(day)) + 1 AS days_covered
+                FROM uptime_daily
+                WHERE day >= DATE_SUB(CURDATE(), INTERVAL 365 DAY)
+                GROUP BY monitor_id
+            ");
+            foreach ($stmt_long->fetchAll() as $lrow) {
+                $mid = (int)$lrow['monitor_id'];
+                if (!isset($sla[$mid])) {
+                    $sla[$mid] = ['sla7' => null, 'sla30' => null, 'sla365' => null, 'measuredSince' => null, 'longTermDays' => null];
+                }
+                $sla[$mid]['longTermDays'] = (int)$lrow['days_covered'];
+                if (empty($sla[$mid]['measuredSince']) && !empty($lrow['since'])) {
+                    $sla[$mid]['measuredSince'] = $lrow['since'];
+                }
+            }
+        } catch (Throwable $e) {
+            // Without the rollup table the long window stays null - visibly empty.
+            error_log('[api.php action=' . $action . '] long-term coverage unavailable: ' . $e->getMessage());
+        }
+        // Before the first rollup (a new monitor, the minutes after midnight)
+        // the window holds only what was measured since: today, not a year.
+        foreach ($sla as $mid => $row) {
+            if ($row['longTermDays'] === null && !empty($row['measuredSince'])) {
+                $since = strtotime(date('Y-m-d', (int)strtotime((string)$row['measuredSince'])));
+                $sla[$mid]['longTermDays'] = min(365, (int)floor((strtotime('today') - $since) / 86400) + 1);
+            }
+        }
+
+        // Availability in time, not in rows (bk_uptime_day_windows): the
+        // same definition as the badge and the SLA report. A window without a
+        // single measured second = null, not an invented 100 %.
+        foreach (bk_uptime_day_windows($pdo, array_keys($sla), [7, 30, 365]) as $wo_mid => $wo_win) {
+            $sla[$wo_mid]['sla7'] = $wo_win[7]['pct'];
+            $sla[$wo_mid]['sla30'] = $wo_win[30]['pct'];
+            $sla[$wo_mid]['sla365'] = $wo_win[365]['pct'];
+        }
+
+        $data = [
+            'slaGoal' => (float)get_setting('sla_goal_pct', '99.95'),
+            'monitors' => $sla,
+        ];
+        bk_kv_cache_put($pdo, 'websites_overview_cache', $data);
+        echo json_encode($wo_filter($data), JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_error(500, 'Přehled SLA se nepodařilo sestavit.');
+    }
+    exit;
+}
+
+if ($action === 'sla_report') {
+    bk_require_login();
+    // A user's report covers only their monitors, and so do the fleet totals.
+    [$sla_scope, $sla_scope_params] = bk_list_scope_sql($pdo, bk_visible_monitor_ids($pdo), 'm.id');
+    try {
+        $days = min(366, max(1, (int)($_GET['days'] ?? 30)));
+
+        // Per-monitor uptime and outages
+        $stmt = $pdo->prepare("
+            SELECT m.id, m.name, m.target, m.type, m.status as current_status, m.last_status_change,
+                   COUNT(l.id) as total_checks,
+                   SUM(CASE WHEN l.status = 'up' THEN 1 ELSE 0 END) as up_checks,
+                   SUM(CASE WHEN l.status = 'down' THEN 1 ELSE 0 END) as down_checks
+            FROM monitors m
+            LEFT JOIN monitor_logs l ON l.monitor_id = m.id AND l.checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+            WHERE m.type NOT IN ('node', 'probe') AND {$sla_scope}
+            GROUP BY m.id, m.name, m.target, m.type, m.status, m.last_status_change
+            ORDER BY m.id ASC
+        ");
+        $stmt->execute(array_merge([$days], $sla_scope_params));
+        $monitors = $stmt->fetchAll();
+
+        // The loop here used to fire 3 queries PER monitor (last outage, its
+        // end, percentiles) - N+1 in its purest form. Now three batched
+        // queries before the loop; results live in maps keyed by monitor_id and
+        // the values are bit-for-bit identical (pinned by integration tests).
+        // One query per monitor is left in the loop, and only for a monitor
+        // with a down row: where its last outage started ($stmt_out_start).
+        $sla_outage_by_mid = [];
+        // No catch of its own: a failed read here used to report "never down"
+        // (lastOutage null) for every monitor. It fails the report instead.
+        // The latest down row of every monitor + the nearest following 'up' or
+        // 'maintenance' row, where that outage ended (the correlated subquery
+        // runs only for monitors that ever went down). Neither is a remote
+        // probe's row (source 'probe'), see the start below.
+        //
+        // The fleet-wide MAX(id) stays a read of idx_logs_cover_latency alone:
+        // source is in no index, so filtering it there would look up every
+        // kept 'down' row of every monitor on every report. Only a monitor
+        // whose latest 'down' is a probe's gets a second lookup, backwards on
+        // that index from its newest 'down' to the first that is not a probe's.
+        $sla_out_end = "(SELECT u.checked_at FROM monitor_logs u
+                    WHERE u.monitor_id = l.monitor_id AND u.status IN ('up', 'maintenance') AND u.id > l.id
+                      AND (u.source IS NULL OR u.source <> 'probe')
+                    ORDER BY u.id ASC LIMIT 1) AS end_at";
+        $stmt_out_all = $pdo->query("
+            SELECT l.monitor_id, l.id, l.checked_at, l.error_message, l.source, {$sla_out_end}
+            FROM monitor_logs l
+            JOIN (SELECT monitor_id, MAX(id) AS max_id FROM monitor_logs WHERE status = 'down' GROUP BY monitor_id) ld
+              ON ld.max_id = l.id
+        ");
+        $stmt_out_own = $pdo->prepare("
+            SELECT l.monitor_id, l.id, l.checked_at, l.error_message, l.source, {$sla_out_end}
+            FROM monitor_logs l FORCE INDEX (idx_logs_cover_latency)
+            WHERE l.monitor_id = ? AND l.status = 'down' AND (l.source IS NULL OR l.source <> 'probe')
+            ORDER BY l.checked_at DESC LIMIT 1
+        ");
+        foreach ($stmt_out_all->fetchAll() as $orow) {
+            if (($orow['source'] ?? null) === 'probe') {
+                $stmt_out_own->execute([(int)$orow['monitor_id']]);
+                $orow = $stmt_out_own->fetch();
+                if (!is_array($orow)) {
+                    continue;
+                }
+            }
+            $sla_outage_by_mid[(int)$orow['monitor_id']] = $orow;
+        }
+        // When that outage STARTED: cron writes a row on every check, so the
+        // latest down row is the outage's last minute, and a two-hour outage
+        // read as "11:59 -> 12:00 (1 min)" with an MTTR of one minute. The
+        // start is the first down row after the last 'up' or 'maintenance'
+        // row before it: the first failed check, while the incident opens only
+        // once alert_confirm_failures confirms the failure. The outage ends at
+        // the next 'up' or 'maintenance' row, and a warning inside does not
+        // split it. A maintenance window bounds it the way availability counts
+        // it (maintenance time is outside the percentage and the outage
+        // minutes): a window's rows end an outage and are not one, but a
+        // 'down' row logged inside a window is an
+        // outage until the window's next row, as it is in availability. The
+        // incident stays open over a window and closes at the next 'up'.
+        // Unlike availability, the outage is cron's: a remote probe's row
+        // (source 'probe') neither starts it with a 'down' nor ends or splits
+        // it with an 'up'. A row from before schema r024 has no source and
+        // still counts, a probe's of that time too.
+        // "Before" / "after" is an earlier / later second, or the same second
+        // written earlier / later: cron and the older rows of a remote probe
+        // both log a monitor, so an 'up' and a 'down' can share a second. b.at
+        // is the second of that last 'up' or 'maintenance' row, the subquery
+        // on u its id within that second. An earlier second is one lookup per
+        // status: over an IN list MySQL reads the whole range instead of
+        // diving to its end. source is not in idx_logs_cover_latency
+        // (monitor_id, status, checked_at), so a MAX() would read the whole
+        // range to filter it; ORDER BY checked_at DESC LIMIT 1 on that index,
+        // forced, stops at the newest row that is not a probe's. The start
+        // itself is read the same way, ascending: over a month-long outage a
+        // MIN() would look up every one of its down rows. Without either in
+        // the kept logs (30 days) the start is the oldest down row there is,
+        // so an older outage is clipped to it.
+        $stmt_out_start = $pdo->prepare("
+            SELECT d.checked_at FROM monitor_logs d FORCE INDEX (idx_logs_cover_latency)
+            CROSS JOIN (SELECT COALESCE(
+                  (SELECT MAX(checked_at) FROM monitor_logs
+                   WHERE monitor_id = ? AND status IN ('up', 'maintenance') AND checked_at = ? AND id < ?
+                     AND (source IS NULL OR source <> 'probe')),
+                  GREATEST(
+                      COALESCE((SELECT checked_at FROM monitor_logs FORCE INDEX (idx_logs_cover_latency)
+                                WHERE monitor_id = ? AND status = 'up' AND checked_at < ?
+                                  AND (source IS NULL OR source <> 'probe')
+                                ORDER BY checked_at DESC LIMIT 1), '1970-01-01 00:00:00'),
+                      COALESCE((SELECT checked_at FROM monitor_logs FORCE INDEX (idx_logs_cover_latency)
+                                WHERE monitor_id = ? AND status = 'maintenance' AND checked_at < ?
+                                  AND (source IS NULL OR source <> 'probe')
+                                ORDER BY checked_at DESC LIMIT 1), '1970-01-01 00:00:00'))) AS at) b
+            WHERE d.monitor_id = ? AND d.status = 'down' AND d.checked_at <= ? AND d.checked_at >= b.at
+              AND (d.source IS NULL OR d.source <> 'probe')
+              AND (d.checked_at > b.at OR d.id > (
+                  SELECT COALESCE(MAX(u.id), 0) FROM monitor_logs u
+                  WHERE u.monitor_id = ? AND u.status IN ('up', 'maintenance') AND u.checked_at = b.at AND u.id < ?
+                    AND (u.source IS NULL OR u.source <> 'probe')))
+            ORDER BY d.checked_at ASC LIMIT 1
+        ");
+
+        $sla_pct_by_mid = [];
+        try {
+            // Exact percentiles in one pass: ROW_NUMBER/COUNT per monitor and
+            // only the rows at percentile positions leave the query. The position
+            // formula matches the original PHP: idx = floor(p*(n-1)), rn = idx+1.
+            $stmt_pct = $pdo->prepare("
+                SELECT monitor_id, rn, cnt, response_time FROM (
+                    SELECT monitor_id, response_time,
+                           ROW_NUMBER() OVER (PARTITION BY monitor_id ORDER BY response_time) AS rn,
+                           COUNT(*) OVER (PARTITION BY monitor_id) AS cnt
+                    FROM monitor_logs
+                    WHERE response_time IS NOT NULL AND response_time > 0
+                          AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+                ) t
+                WHERE rn = FLOOR(0.50 * (cnt - 1)) + 1
+                   OR rn = FLOOR(0.95 * (cnt - 1)) + 1
+                   OR rn = FLOOR(0.99 * (cnt - 1)) + 1
+            ");
+            $stmt_pct->execute([$days]);
+            foreach ($stmt_pct->fetchAll() as $prow) {
+                $p_mid = (int)$prow['monitor_id'];
+                $p_rn = (int)$prow['rn'];
+                $p_cnt = (int)$prow['cnt'];
+                $p_val = (int)$prow['response_time'];
+                // One row can occupy several positions at once (small n).
+                foreach ([['p50', 0.50], ['p95', 0.95], ['p99', 0.99]] as [$pk, $pp]) {
+                    if ($p_rn === (int)floor($pp * ($p_cnt - 1)) + 1) {
+                        $sla_pct_by_mid[$p_mid][$pk] = $p_val;
+                    }
+                }
+            }
+        } catch (Throwable $t) {
+            // The percentiles need window functions (MySQL 8 / MariaDB 10.2).
+            // Without them p50/p95/p99 stay null and the report prints "—";
+            // availability does not depend on them.
+            error_log('[api.php action=sla_report] percentiles unavailable: ' . $t->getMessage());
+        }
+
+        // Availability in time, not in rows (bk_uptime_segments): a silent
+        // agent's single 'down' row used to leave a three-day blackout at
+        // ~99.99 %, and outageMinutes was the number of down ROWS.
+        // Calendar days, today included: today live, the finished days from
+        // the uptime_daily rollup - which also reaches past the 30 days the
+        // raw logs are kept.
+        $sla_time = bk_uptime_day_windows($pdo, array_map(fn ($m) => (int)$m['id'], $monitors), [$days]);
+
+        // Check counts past the 30 days the raw logs are kept (W1-B2): "Rok"
+        // counted the last month of rows under a one-year label. The finished
+        // days come from the rollup, today from the logs - the same split the
+        // percentages use. Up to 30 days the logs hold everything.
+        $sla_checks = null;
+        if ($days > 30) {
+            $sla_checks = [];
+            $stmt_ck = $pdo->prepare("
+                SELECT monitor_id, SUM(checks_total) AS total, SUM(checks_up) AS up, SUM(checks_down) AS down
+                FROM uptime_daily
+                WHERE day >= ? AND day < CURDATE()
+                GROUP BY monitor_id
+            ");
+            $stmt_ck->execute([date('Y-m-d', strtotime('-' . ($days - 1) . ' day', strtotime('today')))]);
+            foreach ($stmt_ck->fetchAll() as $ck) {
+                $sla_checks[(int)$ck['monitor_id']] = ['total' => (int)$ck['total'], 'up' => (int)$ck['up'], 'down' => (int)$ck['down']];
+            }
+            $stmt_ck_today = $pdo->query("
+                SELECT monitor_id, COUNT(*) AS total, SUM(status = 'up') AS up, SUM(status = 'down') AS down
+                FROM monitor_logs
+                WHERE checked_at >= CURDATE() AND status IN ('up', 'down', 'warning')
+                GROUP BY monitor_id
+            ");
+            foreach ($stmt_ck_today->fetchAll() as $ck) {
+                $ck_mid = (int)$ck['monitor_id'];
+                $sla_checks[$ck_mid] = [
+                    'total' => ($sla_checks[$ck_mid]['total'] ?? 0) + (int)$ck['total'],
+                    'up' => ($sla_checks[$ck_mid]['up'] ?? 0) + (int)$ck['up'],
+                    'down' => ($sla_checks[$ck_mid]['down'] ?? 0) + (int)$ck['down'],
+                ];
+            }
+        }
+        // The first day with data across the report, against the window's
+        // first day (windowStart): a year over seven weeks of history says so.
+        $sla_since = null;
+
+        // Incidents opened in the window, per monitor (W2-7: the SLA table's
+        // "incidenty" column). A failed read is null - unknown - and the
+        // report still goes out; it is not a zero.
+        $sla_incidents = null;
+        try {
+            $stmt_inc = $pdo->prepare("
+                SELECT monitor_id, COUNT(*) AS n FROM incidents
+                WHERE monitor_id IS NOT NULL AND created_at >= ?
+                GROUP BY monitor_id
+            ");
+            $stmt_inc->execute([date('Y-m-d', strtotime('-' . ($days - 1) . ' day', strtotime('today')))]);
+            $sla_incidents = [];
+            foreach ($stmt_inc->fetchAll() as $inc) {
+                $sla_incidents[(int)$inc['monitor_id']] = (int)$inc['n'];
+            }
+        } catch (Throwable $t) {
+            error_log('[api.php action=sla_report] incident counts unavailable: ' . $t->getMessage());
+        }
+
+        $report = [];
+        $sla_window_start = strtotime('-' . ($days - 1) . ' day', strtotime('today'));
+        foreach ($monitors as $m) {
+            $mid = (int)$m['id'];
+            if ($sla_checks !== null) {
+                $m['total_checks'] = $sla_checks[$mid]['total'] ?? 0;
+                $m['up_checks'] = $sla_checks[$mid]['up'] ?? 0;
+                $m['down_checks'] = $sla_checks[$mid]['down'] ?? 0;
+            }
+            $up = (int)$m['up_checks'];
+            $down = (int)$m['down_checks'];
+            $sla_sum = $sla_time[$mid][$days] ?? null;
+            // A monitor without a single measured second in the window has no
+            // SLA - null, not a perfect 100.0 in a report nobody measured.
+            $uptimePct = $sla_sum['pct'] ?? null;
+            $mon_since = $sla_sum['since'] ?? null;
+            if ($mon_since !== null && ($sla_since === null || strcmp($mon_since, $sla_since) < 0)) {
+                $sla_since = $mon_since;
+            }
+
+            // The last outage from the batched map - the outage end is the nearest
+            // following 'up' or 'maintenance' row (action=events ends one at the
+            // next 'up' only). A monitor that left 'down' for warning or unknown
+            // without either since has no measured end: end and duration stay
+            // null (it used to end at its own start, 0 s, and that went into
+            // the MTTR).
+            $last_outage = null;
+            $out_end_ts = null;
+            $out_row = $sla_outage_by_mid[$mid] ?? null;
+            if ($out_row) {
+                $out_at = (string)$out_row['checked_at'];
+                $out_id = (int)$out_row['id'];
+                $stmt_out_start->execute([$mid, $out_at, $out_id, $mid, $out_at, $mid, $out_at, $mid, $out_at, $mid, $out_id]);
+                $out_start = strtotime((string)($stmt_out_start->fetchColumn() ?: $out_at));
+                $resolved = $m['current_status'] !== 'down';
+                $out_end_ts = $resolved
+                    ? ($out_row['end_at'] ? strtotime($out_row['end_at']) : null)
+                    : time();
+                $last_outage = [
+                    'start' => date('d.m.Y H:i:s', $out_start),
+                    'end' => $resolved && $out_end_ts !== null ? date('d.m.Y H:i:s', $out_end_ts) : null,
+                    'durationSec' => $out_end_ts !== null ? max(0, $out_end_ts - $out_start) : null,
+                    // Null, not a made-up "Port neodpovídá" (see incidents).
+                    'reason' => $out_row['error_message'] ?: null,
+                    'resolved' => $resolved,
+                ];
+            }
+
+            // Null, not 0: nobody measured it, so nobody can say it had no outage.
+            $outageMinutes = ($sla_sum['pct'] ?? null) !== null ? (int)round($sla_sum['outage'] / 60) : null;
+            // The recovery time of an outage that ended in this window. One from
+            // 25 days ago was a 7-day report's MTTR.
+            $mttr = ($last_outage['resolved'] ?? false) && $out_end_ts !== null && $out_end_ts >= $sla_window_start
+                ? $last_outage['durationSec'] : null;
+
+            $p50 = $sla_pct_by_mid[$mid]['p50'] ?? null;
+            $p95 = $sla_pct_by_mid[$mid]['p95'] ?? null;
+            $p99 = $sla_pct_by_mid[$mid]['p99'] ?? null;
+
+            $report[] = [
+                'id' => $mid,
+                'name' => $m['name'],
+                'target' => $m['target'],
+                'type' => strtoupper($m['type']),
+                'currentStatus' => $m['current_status'],
+                'lastStatusChange' => $m['last_status_change'] ? date('c', strtotime($m['last_status_change'])) : null,
+                'uptimePercent' => $uptimePct,
+                'totalChecks' => (int)$m['total_checks'],
+                'upChecks' => $up,
+                'downChecks' => $down,
+                'outageMinutes' => $outageMinutes,
+                // Of which the agent was silent - the outage nobody wrote a row for.
+                'silentMinutes' => $sla_sum !== null ? (int)round($sla_sum['silent'] / 60) : 0,
+                // Time nothing measured (cron stopped, an agent-side check's
+                // agent went quiet): outside the percentage, and said so.
+                'unmeasuredMinutes' => $sla_sum !== null ? (int)round($sla_sum['unmeasured'] / 60) : null,
+                // The time the percentage is taken over; budgetMinutes below
+                // is the downtime the SLA goal allows in it.
+                'measuredMinutes' => $sla_sum !== null ? (int)round($sla_sum['measured'] / 60) : null,
+                'incidentCount' => $sla_incidents === null ? null : ($sla_incidents[$mid] ?? 0),
+                'since' => $mon_since,
+                'lastOutage' => $last_outage,
+                'mttrSec' => $mttr,
+                'p50Ms' => $p50,
+                'p95Ms' => $p95,
+                'p99Ms' => $p99,
+            ];
+        }
+
+        $sla_goal = (float)get_setting('sla_goal_pct', '99.95');
+        // Downtime against the budget (W2-7): "20 min z 43 min" ranks the
+        // monitors, a bar of 99.9x % did not. The budget is what the goal
+        // allows over the time actually measured; null where nothing was.
+        foreach ($report as &$sla_row) {
+            $sla_row['budgetMinutes'] = $sla_row['measuredMinutes'] !== null
+                ? round($sla_row['measuredMinutes'] * (100 - $sla_goal) / 100, 1)
+                : null;
+        }
+        unset($sla_row);
+        // Average only over monitors with actually measured SLA; without a
+        // single one the result is null, not an invented 100 %.
+        $uptime_vals = array_filter(array_column($report, 'uptimePercent'), fn($v) => $v !== null);
+        // The mean of 99.999 and perfect months rounds to 100.0 at three
+        // decimals; below 100 stays below 100.
+        $overall_uptime = count($uptime_vals) > 0
+            ? bk_uptime_pct_round(array_sum($uptime_vals) / count($uptime_vals), 3)
+            : null;
+        $outage_values = array_filter(array_column($report, 'outageMinutes'), fn ($v) => $v !== null);
+        $total_outage = $outage_values !== [] ? array_sum($outage_values) : null;
+        $mttr_values = array_filter(array_column($report, 'mttrSec'), fn($v) => $v !== null);
+        $overall_mttr = !empty($mttr_values) ? round(array_sum($mttr_values) / count($mttr_values)) : null;
+
+        // The Prometheus token is a credential - it belongs in the response ONLY
+        // for a logged-in administrator. sla_report is otherwise a public endpoint,
+        // so without this condition anyone who opened /app/reports could read the
+        // token (and metrics.php would genuinely answer them).
+        $is_admin_session = !empty($_SESSION['admin_logged_in']) && ($_SESSION['admin_role'] ?? '') === 'admin';
+        $metrics_token = $is_admin_session ? trim((string)get_setting('metrics_token')) : '';
+        $site_title = trim((string)get_setting('site_title', 'Blood Kings Monitoring'));
+        $custom_logo_url = trim((string)get_setting('custom_logo_url', ''));
+
+        echo json_encode([
+            'slaGoal' => $sla_goal,
+            'days' => $days,
+            'windowStart' => date('Y-m-d', strtotime('-' . ($days - 1) . ' day', strtotime('today'))),
+            'since' => $sla_since,
+            // Latency percentiles read raw logs, which are kept for 30 days.
+            'percentileDays' => min($days, 30),
+            'overallUptime' => $overall_uptime,
+            'totalOutageMinutes' => $total_outage,
+            'overallMttrSec' => $overall_mttr,
+            'monitors' => $report,
+            'metricsToken' => $metrics_token,
+            'siteTitle' => $site_title,
+            'customLogoUrl' => $custom_logo_url,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // A DB error here used to return 100% uptime and 0 outage minutes -
+        // a perfect SLA precisely when nothing is known about the real state.
+        // The machine code (W2-7, correctness-18) lets the page show a
+        // failure, not its "no data yet, check cron" hint.
+        bk_api_fail('sla_report_unavailable', 500, $e, 'Nepodařilo se sestavit SLA report.');
+    }
+    exit;
+}
+
+// 2e. Audit logs from the database (settings changes, sign-ins, audit trail)
+if ($action === 'audit_logs') {
+    // Admin only: the raw check history of every monitor. It used to answer
+    // anyone, with error texts naming processes and internal targets.
+    bk_require_login();
+    bk_require_admin();
+    try {
+        $limit = min(200, max(10, (int)($_GET['limit'] ?? 50)));
+
+        // The same problem as action=events: the log tail covers only a few
+        // dozen minutes, older error rows fall out of the window and the trail
+        // then lies that all is OK. The latest down/warning rows are therefore
+        // always mixed in.
+        $audit_cols = "l.id, l.checked_at as time, l.monitor_id, l.status, l.response_time, l.error_message, l.source, l.checked_from, m.name as monitor_name, m.type as monitor_type";
+        [$al_active, $al_active_params] = bk_active_monitor_sql($pdo, 'l.monitor_id');
+        $al_bind = function (PDOStatement $st, int $last_limit) use ($al_active_params): void {
+            $pos = 1;
+            foreach ($al_active_params as $al_param) {
+                $st->bindValue($pos++, $al_param, PDO::PARAM_INT);
+            }
+            $st->bindValue($pos, $last_limit, PDO::PARAM_INT);
+        };
+        $stmt = $pdo->prepare("
+            SELECT $audit_cols
+            FROM monitor_logs l
+            LEFT JOIN monitors m ON m.id = l.monitor_id
+            WHERE {$al_active}
+            ORDER BY l.id DESC
+            LIMIT ?
+        ");
+        $al_bind($stmt, $limit);
+        $stmt->execute();
+        $recent_rows = $stmt->fetchAll();
+
+        $stmt_fails = $pdo->prepare("
+            SELECT $audit_cols
+            FROM monitor_logs l
+            LEFT JOIN monitors m ON m.id = l.monitor_id
+            WHERE l.status IN ('down', 'warning') AND {$al_active}
+            ORDER BY l.id DESC
+            LIMIT ?
+        ");
+        $al_bind($stmt_fails, min(50, $limit));
+        $stmt_fails->execute();
+
+        $rows_by_id = [];
+        foreach (array_merge($recent_rows, $stmt_fails->fetchAll()) as $mr) {
+            $rows_by_id[(int)$mr['id']] = $mr;
+        }
+        krsort($rows_by_id);
+        $rows = array_values($rows_by_id);
+
+        $logs = [];
+        foreach ($rows as $r) {
+            // The shared vocabulary (C-11): a maintenance or unknown check was
+            // "KONTROLA OK" here, and a check without a response time said
+            // "(Odezva  ms)".
+            $al_label = bk_status_label((string)($r['status'] ?? ''), true);
+            $mName = $r['monitor_name'] ?: "Monitor #{$r['monitor_id']}";
+            $mType = strtoupper($r['monitor_type'] ?: 'HTTP');
+            $al_rt = (int)$r['response_time'] > 0 ? sprintf(t('audit_check_rt'), (int)$r['response_time']) : '';
+
+            $logs[] = [
+                'id' => (int)$r['id'],
+                'time' => date('d.m.Y H:i:s', strtotime($r['time'])),
+                'action' => ($al_label['key'] === 'up' ? t('audit_check_ok') : mb_strtoupper($al_label['label'])) . ": {$mName}",
+                'details' => $r['error_message'] ?: "[{$mName}] {$mType} " . bk_event_fallback_text($al_label['key']) . $al_rt,
+                'status' => $al_label['key'] === 'unknown_stale' ? 'unknown' : $al_label['key'],
+                'statusKey' => $al_label['key'],
+                'statusLabel' => $al_label['label'],
+                'statusTone' => $al_label['tone'],
+                // Who wrote the row. Every row used to name the cron, also an
+                // agent's report or a remote probe's check.
+                'user' => match ((string)($r['source'] ?? '')) {
+                    'cron' => t('audit_source_cron'),
+                    'agent' => t('audit_source_agent'),
+                    'probe' => sprintf(t('audit_source_probe'), (string)($r['checked_from'] ?? '?')),
+                    'heartbeat' => t('audit_source_heartbeat'),
+                    default => t('audit_source_unknown'),
+                },
+            ];
+        }
+        echo bk_json_safe(['logs' => $logs]);
+    } catch (Throwable $e) {
+        // logs: [] read as "nothing happened".
+        bk_api_fail('audit_logs_unavailable', 500, $e, 'Protokol kontrol se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 2g. Time series and metrics for charts (metric_series)
+// Map of metric keys (see apps/monitor/src/api/types.ts MetricKey) to real
+// columns in `vps_metrics`. 'response_time'/'latency' is special - it is
+// measured on every check into monitor_logs, not on agent reports into vps_metrics.
+// The definition lives in functions.php - cron needs it too for daily rollups.
+$BK_METRIC_COLUMN_MAP = bk_metric_column_map();
+
+if ($action === 'metric_series') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? $_GET['id'] ?? 1);
+    $metric = $_GET['metric'] ?? 'response_time';
+    $period = $_GET['period'] ?? '24h';
+    $minutes = bk_period_minutes($period) ?? 1440;
+
+    // ?previous=1 vrátí stejně dlouhé okno posunuté o jednu periodu zpět -
+    // podklad pro srovnávací křivku v grafu ("je tohle na úterý normální?").
+    // Posun je přesně jedna perioda, aby na sebe obě křivky seděly bod po bodu.
+    $previous_window = !empty($_GET['previous']);
+    $window_sql = $previous_window
+        ? 'checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE) AND checked_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)'
+        : 'checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)';
+    $window_params = $previous_window ? [$minutes * 2, $minutes] : [$minutes];
+
+    // Periods longer than the raw-data retention (30 days) read from the daily rollup
+    // `metrics_daily`. 0 = the regular window over vps_metrics.
+    $long_term_days = $period === '1y' ? 365 : ($period === '180d' ? 180 : ($period === '90d' ? 90 : 0));
+    $daily_range = [];
+
+    try {
+        // The id itself wins over "some monitor of that asset". With OR and a bare
+        // LIMIT 1, MySQL is free to return the sibling with the lower id, so an asset
+        // with several monitors answered chart requests with another monitor's data.
+        // Among the monitors this viewer may see: a user gets only their own;
+        // anyone else's monitor answers like one that does not exist.
+        $stmt_mon = bk_visible_monitor_stmt($pdo, $monitor_id, 'id');
+        $real_id = $stmt_mon->fetchColumn();
+
+        if (!$real_id) {
+            echo json_encode(['points' => [], 'unit' => '', 'label' => 'Metrika', 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $points = [];
+        if (($metric === 'response_time' || $metric === 'latency') && $long_term_days > 0) {
+            // 90 days and a year from the daily rollup (W1-B2). The period
+            // fell back to 1440 minutes here, so "1 rok" drew the last 24 hours.
+            // A point is the day's average answer; the rollup keeps no minimum
+            // or maximum for it, so the band stays empty rather than invented.
+            // ?previous=1 shifts the window by one period, as the raw path does.
+            $unit = 'ms';
+            $label = bk_metric_label('response_time', 'Doba odezvy (HTTP/Ping)');
+            $stmt = $pdo->prepare("
+                SELECT day, avg_response_ms, checks_total
+                FROM uptime_daily
+                WHERE monitor_id = ? AND day >= DATE_SUB(CURDATE(), INTERVAL ? DAY) AND day < DATE_SUB(CURDATE(), INTERVAL ? DAY)
+                ORDER BY day ASC
+            ");
+            $stmt->execute($previous_window
+                ? [$real_id, 2 * $long_term_days - 1, $long_term_days - 1]
+                : [$real_id, $long_term_days - 1, -1]);
+            foreach ($stmt->fetchAll() as $r) {
+                if ($r['avg_response_ms'] === null) {
+                    continue;
+                }
+                // The day's local midnight from PHP, not UNIX_TIMESTAMP(day): on
+                // db.php's last resort the session runs on today's UTC offset,
+                // and then every day of the other season comes out an hour off.
+                $r['ts'] = strtotime((string)$r['day']);
+                $points[] = [(int)$r['ts'], round((float)$r['avg_response_ms'], 2)];
+                $daily_range[] = ['ts' => (int)$r['ts'], 'min' => null, 'max' => null, 'samples' => (int)$r['checks_total']];
+            }
+        } elseif ($metric === 'response_time' || $metric === 'latency') {
+            $unit = 'ms';
+            $label = bk_metric_label('response_time', 'Doba odezvy (HTTP/Ping)');
+            // > 0, not just IS NOT NULL: failed checks and maintenance rows used
+            // to be logged as 0, and those rows stay for the 30-day retention.
+            // An outage drawn as a 0 ms dip is the fastest point on the chart.
+            $stmt = $pdo->prepare("
+                SELECT UNIX_TIMESTAMP(checked_at) as ts, response_time as val
+                FROM monitor_logs
+                WHERE monitor_id = ? AND {$window_sql} AND response_time > 0
+                ORDER BY checked_at ASC
+            ");
+            $stmt->execute(array_merge([$real_id], $window_params));
+            foreach ($stmt->fetchAll() as $r) {
+                $points[] = [(int)$r['ts'], (float)$r['val']];
+            }
+        } elseif (isset($BK_METRIC_COLUMN_MAP[$metric])) {
+            $def = $BK_METRIC_COLUMN_MAP[$metric];
+            $col = $def['col'];
+            $unit = $def['unit'];
+            // Cumulative counters (firewall, DNS, TCP retransmissions) are stored
+            // as the kernel reports them - ever-growing. Drawing them directly
+            // would give a rising ramp that tells nothing. The chart therefore
+            // gets the DELTA between measurements, and its title says so.
+            $is_counter = !empty($def['counter']);
+            $label = bk_metric_label($metric, $def['label'], $is_counter);
+            // A STEP metric is already the increment between two reports (the
+            // ingest subtracted them), so a raw point needs no arithmetic. What
+            // it does need is the right aggregation: the day of a step is the
+            // SUM of its minutes, and an average would draw a day with 40
+            // errors as "0.03 errors" - a chart nobody would ever look at twice.
+            $is_step = !empty($def['step']);
+
+            if ($long_term_days > 0) {
+                // Raw data is pruned after 30 days, so a year cannot be built from
+                // it. A point is the daily AVERAGE; min/max ride along so spikes
+                // the average would hide stay visible.
+                $stmt = $pdo->prepare("
+                    SELECT day, avg_val, min_val, max_val, samples
+                    FROM metrics_daily
+                    WHERE monitor_id = ? AND metric_key = ? AND day >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+                    ORDER BY day ASC
+                ");
+                $stmt->execute([$real_id, $metric, $long_term_days]);
+                foreach ($stmt->fetchAll() as $r) {
+                    if ($r['avg_val'] === null) {
+                        continue;
+                    }
+                    $r['ts'] = strtotime((string)$r['day']); // local midnight, as in uptime_daily above
+                    if ($is_counter) {
+                        // For a counter the daily increment is the difference between the
+                        // day's max and min. The average of a counter means nothing.
+                        if ($r['max_val'] === null || $r['min_val'] === null) {
+                            continue;
+                        }
+                        $points[] = [(int)$r['ts'], round((float)$r['max_val'] - (float)$r['min_val'], 2)];
+                        continue;
+                    }
+                    if ($is_step) {
+                        // The day's total, immune to the reset bug above: a lost
+                        // report loses nothing, the next step spans it.
+                        $points[] = [(int)$r['ts'], round((float)$r['avg_val'] * (int)$r['samples'], 2)];
+                        continue;
+                    }
+                    $points[] = [(int)$r['ts'], round((float)$r['avg_val'], 2)];
+                    $daily_range[] = [
+                        'ts' => (int)$r['ts'],
+                        'min' => $r['min_val'] !== null ? round((float)$r['min_val'], 2) : null,
+                        'max' => $r['max_val'] !== null ? round((float)$r['max_val'], 2) : null,
+                        'samples' => (int)$r['samples'],
+                    ];
+                }
+            } else {
+                $stmt = $pdo->prepare("
+                    SELECT UNIX_TIMESTAMP(checked_at) as ts, {$col} as val
+                    FROM vps_metrics
+                    WHERE monitor_id = ? AND {$window_sql} AND {$col} IS NOT NULL
+                    ORDER BY checked_at ASC
+                ");
+                $stmt->execute(array_merge([$real_id], $window_params));
+
+                if ($is_counter) {
+                    // The delta against the previous measurement. When the value drops,
+                    // the counter was reset (reboot, firewall restart), and across a
+                    // gap in time the increment belongs to no one reading - both
+                    // points are skipped (charts-15). Computing them would fabricate
+                    // a spike that never happened.
+                    $points = bk_counter_delta_points(array_map(
+                        fn ($r) => [(int)$r['ts'], (float)$r['val']],
+                        $stmt->fetchAll()
+                    ));
+                } else {
+                    foreach ($stmt->fetchAll() as $r) {
+                        $points[] = [(int)$r['ts'], (float)$r['val']];
+                    }
+                }
+            }
+        } else {
+            echo json_encode(['points' => [], 'unit' => '', 'label' => 'Metrika', 'error' => 'Neznámá metrika'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // No fabrication: an empty series means the agent has not sent this
+        // metric yet or the period has no records - not that we make one up.
+        // distinctValues lets the metric page tell a constant (or 2-3 state)
+        // metric from a real curve (W2-4, charts-21): nine panels over the
+        // value 8 said nothing one sentence could not.
+        $series_payload = [
+            'unit' => $unit,
+            'label' => $label,
+            'points' => $points,
+            'distinctValues' => count(array_unique(array_map(fn ($p) => (string)$p[1], $points))),
+        ];
+        // The same projection the batch endpoint sends, so the detail page can
+        // draw where this is heading instead of only printing the number.
+        $md_forecast = bk_days_to_full($pdo, (int)$real_id);
+        if (isset($md_forecast[$metric])) {
+            $series_payload['daysToFull'] = $md_forecast[$metric];
+        }
+        if ($long_term_days > 0) {
+            // The client must be able to tell it is looking at daily averages,
+            // not individual measurements - otherwise it would read precision into the chart the data does not have.
+            $series_payload['resolution'] = 'daily';
+            $series_payload['dailyRange'] = $daily_range;
+        }
+        echo json_encode($series_payload, JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // points: [] with a 200 was the chart's "no data in the database".
+        bk_api_fail('metric_series_unavailable', 500, $e, 'Metriku se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 2g1a. Hour-by-day heatmap of one metric over the raw-sample window.
+//
+// One cell = one hour of one day. The value is the hour's average (for
+// counters the hour's increment, max - min, the same rule the daily rollup
+// uses - the average of a counter means nothing). An hour with no sample is
+// NULL and stays NULL all the way to the UI: an empty cell, never a
+// fabricated zero, which for most metrics would read as "everything idle".
+if ($action === 'metric_heatmap') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $metric = $_GET['metric'] ?? 'response_time';
+    // Raw samples are pruned after 30 days - a longer window would silently
+    // render as this same 30-day one, so the cap keeps the label honest.
+    $hm_days = max(1, min(30, (int)($_GET['days'] ?? 30)));
+
+    try {
+        // Among the monitors this viewer may see: a user gets only their own;
+        // anyone else's monitor answers like one that does not exist.
+        $stmt_mon = bk_visible_monitor_stmt($pdo, $monitor_id, 'id');
+        $real_id = $stmt_mon->fetchColumn();
+        if (!$real_id) {
+            echo json_encode(['days' => [], 'unit' => '', 'label' => '', 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($metric === 'response_time' || $metric === 'latency') {
+            $unit = 'ms';
+            $label = bk_metric_label('response_time', 'Doba odezvy (HTTP/Ping)');
+            $stmt = $pdo->prepare("
+                SELECT DATE(checked_at) AS d, HOUR(checked_at) AS h,
+                       AVG(response_time) AS cell_val, COUNT(*) AS samples
+                FROM monitor_logs
+                WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND response_time > 0
+                GROUP BY d, h
+            ");
+            $stmt->execute([$real_id, $hm_days]);
+        } elseif (isset($BK_METRIC_COLUMN_MAP[$metric])) {
+            $def = $BK_METRIC_COLUMN_MAP[$metric];
+            $col = $def['col'];
+            $unit = $def['unit'];
+            $label = bk_metric_label($metric, $def['label'], !empty($def['counter']));
+            $cell_expr = "AVG({$col})";
+            if (!empty($def['counter'])) {
+                $cell_expr = "MAX({$col}) - MIN({$col})";
+            } elseif (!empty($def['step'])) {
+                // Each row already holds one minute's increment: an hour of the
+                // heatmap is their SUM, never their average.
+                $cell_expr = "SUM({$col})";
+            }
+            $stmt = $pdo->prepare("
+                SELECT DATE(checked_at) AS d, HOUR(checked_at) AS h,
+                       {$cell_expr} AS cell_val, COUNT(*) AS samples
+                FROM vps_metrics
+                WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY) AND {$col} IS NOT NULL
+                GROUP BY d, h
+            ");
+            $stmt->execute([$real_id, $hm_days]);
+        } else {
+            echo json_encode(['days' => [], 'unit' => '', 'label' => '', 'error' => 'Neznámá metrika'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $by_day = [];
+        foreach ($stmt->fetchAll() as $r) {
+            $by_day[$r['d']][(int)$r['h']] = [
+                'v' => round((float)$r['cell_val'], 2),
+                'n' => (int)$r['samples'],
+            ];
+        }
+
+        // A dense grid: every day of the window, all 24 hours. The client then
+        // renders a gap as a gap without computing which days are missing -
+        // and a day the agent slept through shows as a visibly empty row.
+        // PHP's "today" and MySQL's DATE() must agree for the grid to line up;
+        // both follow the server timezone (no per-user TZ exists here).
+        // The first day with a sample (charts-25): a metric measured since the
+        // 15th drew 23 empty rows above its data, which read as 23 days of
+        // silence. The grid stays dense (every day asked for, so the client
+        // never computes which days are missing); `firstSampleDay` tells the
+        // page where to start it and lets it say "měří se od 15. 9.". null =
+        // not one sample in the window.
+        $first_day = $by_day ? min(array_map('strval', array_keys($by_day))) : null;
+        $days_out = [];
+        for ($i = $hm_days - 1; $i >= 0; $i--) {
+            $day = date('Y-m-d', strtotime("-{$i} days"));
+            $hours = [];
+            $samples = [];
+            for ($h = 0; $h < 24; $h++) {
+                $cell = $by_day[$day][$h] ?? null;
+                $hours[] = $cell !== null ? $cell['v'] : null;
+                $samples[] = $cell !== null ? $cell['n'] : 0;
+            }
+            $days_out[] = ['day' => $day, 'hours' => $hours, 'samples' => $samples];
+        }
+
+        echo bk_json_safe([
+            'unit' => $unit,
+            'label' => $label,
+            'firstSampleDay' => $first_day,
+            'requestedDays' => $hm_days,
+            'days' => $days_out,
+        ]);
+    } catch (Throwable $e) {
+        bk_api_fail('metric_heatmap_unavailable', 500, $e, 'Heatmapu se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 2g1a2. Which other metrics of the same device moved with this one.
+//
+// The chart says CPU peaked at 19:40; "what was running" answers with
+// processes. This answers with the device's OTHER metrics - the peak came
+// with iowait, or with nothing at all.
+//
+// Only metrics stored in vps_metrics take part, and that is what makes the
+// result trustworthy: they share one measurement row, so samples pair up
+// exactly instead of being averaged into common time buckets. Averaging
+// smooths both series and inflates the coefficient - a correlation nobody
+// measured. response_time lives in monitor_logs and is therefore not offered.
+if ($action === 'metric_correlations') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $metric = $_GET['metric'] ?? '';
+    $period = $_GET['period'] ?? '24h';
+    $minutes = bk_period_minutes($period) ?? 1440;
+    // Raw samples only - the daily rollup keeps no per-metric alignment.
+    $minutes = min($minutes, 30 * 24 * 60);
+    $corr_min_pairs = 10;
+    // Eight is what fits without turning the panel into a wall, but the rest
+    // must be reachable: a metric below the cut looked simply absent ("where
+    // is IPv4?"). `all=1` returns every comparison, including the ones whose
+    // coefficient is undefined and their reason.
+    $corr_top = !empty($_GET['all']) ? 100 : 8;
+
+    if (!isset($BK_METRIC_COLUMN_MAP[$metric])) {
+        echo json_encode([
+            'correlations' => [],
+            'error' => 'Korelace se počítají jen pro metriky hlášené agentem.',
+        ], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        // Among the monitors this viewer may see: a user gets only their own;
+        // anyone else's monitor answers like one that does not exist.
+        $stmt_mon = bk_visible_monitor_stmt($pdo, $monitor_id, 'id, type');
+        $mon_row = $stmt_mon->fetch();
+        if (!$mon_row) {
+            echo json_encode(['correlations' => [], 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $real_id = (int)$mon_row['id'];
+        $mon_type = (string)($mon_row['type'] ?? '');
+
+        // Candidates: every mapped metric except the target, minus the ones
+        // restricted to another monitor type. The same-column check below is a
+        // guard, not a live filter: today the only shared column
+        // (ts_clients_online, read by ts_clients / discord_presence /
+        // mc_players) is already split by 'only', so nothing reaches it. It
+        // stays because an alias added without 'only' would otherwise show up
+        // as a perfect correlation of a metric with itself under another name.
+        $candidates = [];
+        $subject_family = bk_metric_family($metric);
+        foreach ($BK_METRIC_COLUMN_MAP as $key => $def) {
+            // Its own family is arithmetic, not a relationship (charts-29).
+            if ($key === $metric || bk_metric_family($key) === $subject_family) {
+                continue;
+            }
+            if (!empty($def['only']) && !in_array($mon_type, $def['only'], true)) {
+                continue;
+            }
+            if ($def['col'] === $BK_METRIC_COLUMN_MAP[$metric]['col']) {
+                continue;
+            }
+            $candidates[$key] = $def;
+        }
+
+        $columns = [$BK_METRIC_COLUMN_MAP[$metric]['col']];
+        foreach ($candidates as $def) {
+            $columns[] = $def['col'];
+        }
+        $columns = array_values(array_unique($columns));
+        $select = implode(', ', array_map(fn($c) => "`{$c}`", $columns));
+
+        $stmt = $pdo->prepare("
+            SELECT UNIX_TIMESTAMP(checked_at) AS bk_ts, {$select}
+            FROM vps_metrics
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+            ORDER BY checked_at ASC
+        ");
+        $stmt->execute([$real_id, $minutes]);
+        $rows = $stmt->fetchAll();
+        // The readings' times, so a counter increment across a gap is no
+        // increment at all (charts-15), exactly as the chart draws it.
+        $row_ts = array_map(fn($r) => (int)$r['bk_ts'], $rows);
+
+        $series = [];
+        foreach ($columns as $col) {
+            $series[$col] = array_map(fn($r) => $r[$col] === null ? null : (float)$r[$col], $rows);
+        }
+
+        $target_def = $BK_METRIC_COLUMN_MAP[$metric];
+        $target = !empty($target_def['counter'])
+            ? bk_counter_deltas($series[$target_def['col']], $row_ts)
+            : $series[$target_def['col']];
+
+        $out = [];
+        foreach ($candidates as $key => $def) {
+            $values = !empty($def['counter']) ? bk_counter_deltas($series[$def['col']], $row_ts) : $series[$def['col']];
+            $res = bk_pearson($target, $values, $corr_min_pairs);
+            // A metric the agent never reported is absent, not uncorrelated -
+            // listing it would fill the panel with rows about nothing.
+            if ($res['pairs'] === 0) {
+                continue;
+            }
+            $out[] = [
+                'key' => $key,
+                'family' => bk_metric_family($key),
+                'label' => bk_metric_label($key, $def['label'], !empty($def['counter'])),
+                'unit' => $def['unit'],
+                'r' => $res['r'],
+                'pairs' => $res['pairs'],
+                'reason' => $res['reason'],
+            ];
+        }
+
+        // Strongest relationship first, in either direction - a strong negative
+        // correlation is every bit as interesting as a positive one. Rows
+        // without a coefficient sink to the bottom instead of being hidden.
+        usort($out, function ($a, $b) {
+            $ra = $a['r'] === null ? -1 : abs($a['r']);
+            $rb = $b['r'] === null ? -1 : abs($b['r']);
+            return $rb <=> $ra;
+        });
+
+        $total = count($out);
+        // The short list keeps the strongest member of each family: Load 1,
+        // 5 and 15 in three rows said one thing three times. all=1 lists
+        // every comparison, family members included.
+        if (empty($_GET['all'])) {
+            $seen_family = [];
+            $out = array_values(array_filter($out, function ($row) use (&$seen_family) {
+                if (isset($seen_family[$row['family']])) {
+                    return false;
+                }
+                $seen_family[$row['family']] = true;
+                return true;
+            }));
+        }
+        echo bk_json_safe([
+            'metric' => $metric,
+            'label' => bk_metric_label($metric, $target_def['label']),
+            'family' => $subject_family,
+            'samples' => count($rows),
+            'minPairs' => $corr_min_pairs,
+            'total' => $total,
+            'correlations' => array_slice($out, 0, $corr_top),
+        ]);
+    } catch (Throwable $e) {
+        bk_api_fail('metric_correlations_unavailable', 500, $e, 'Korelace se nepodařilo spočítat.');
+    }
+    exit;
+}
+
+// 2g1c. Traffic split by link role - a router with an LTE backup: which bytes
+// went over the primary line and which over the backup, and when the router
+// was on the backup at all (wan_lost / wan_restored). See bk_get_link_traffic().
+if ($action === 'link_traffic') {
+    // Interface names and per-link traffic are a map of the network: only for
+    // the users a monitor belongs to (and admins), never for anonymous visitors.
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $days = max(1, min(30, (int)($_GET['days'] ?? 30)));
+    try {
+        // The exact monitor id wins over "a monitor of that asset" - with
+        // OR + LIMIT 1 alone a sibling with a lower id answered instead.
+        // Among the monitors this viewer may see: a user gets only their own;
+        // anyone else's monitor answers like one that does not exist.
+        $stmt_mon = bk_visible_monitor_stmt($pdo, $monitor_id, 'id, type, last_details');
+        $mon_row = $stmt_mon->fetch();
+        if (!$mon_row) {
+            bk_api_error(404, 'Monitor nenalezen');
+        }
+        $details = bk_monitor_details($mon_row);
+        $out = bk_get_link_traffic($pdo, (int)$mon_row['id'], $details, $days);
+        $out['monitor'] = ['id' => (int)$mon_row['id'], 'type' => (string)$mon_row['type']];
+        echo json_encode($out, JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[api] link_traffic selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Chyba při načítání provozu podle linky');
+    }
+    exit;
+}
+
+// 2g1b. Context for the metric detail page (Level 3).
+//
+// The chart data itself comes from `metric_series` - this endpoint supplies
+// the rest: what the metric means, which thresholds this monitor has, which
+// related metrics it actually reports and what happened around it. Statistics
+// (current/average/peak) are deliberately NOT sent: the client computes them
+// from the very points it draws, so after switching the period they cannot
+// describe a different window than the chart.
+if ($action === 'metric_detail') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $metric = (string)($_GET['metric'] ?? '');
+    bk_require_monitor_view($pdo, $monitor_id);
+    $map = bk_metric_column_map();
+
+    if (!isset($map[$metric]) && $metric !== 'response_time' && $metric !== 'latency') {
+        bk_api_error(404, 'Neznámá metrika.');
+    }
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT id, name, type, target, port, asset_id, preset_id, cpu_threshold, ram_threshold, hdd_threshold
+            FROM monitors WHERE id = ? LIMIT 1
+        ");
+        $stmt->execute([$monitor_id]);
+        $mon = $stmt->fetch();
+
+        if (!$mon) {
+            bk_api_error(404, 'Monitor nenalezen.');
+        }
+
+        $is_latency = ($metric === 'response_time' || $metric === 'latency');
+        $def = $is_latency
+            ? ['label' => 'Doba odezvy (HTTP/Ping)', 'unit' => 'ms', 'counter' => false]
+            : $map[$metric];
+        // The page title follows ?lang (charts-22); the counter flag rides
+        // separately, so the bare name carries no "(increase)" here.
+        $def['label'] = bk_metric_label($is_latency ? 'response_time' : $metric, $def['label']);
+
+        // Related metrics: only those this monitor actually reports in its latest
+        // measurement. Offering a link into an empty chart is worse than nothing.
+        $related = [];
+        $mon_type = strtolower((string)$mon['type']);
+        try {
+            // A few readings, not one: a counter's chip shows its latest
+            // increment, as its chart does, not the total since boot, and the
+            // readings' cadence tells an increment across a gap (none).
+            $stmt_latest = $pdo->prepare("SELECT * FROM vps_metrics WHERE monitor_id = ? ORDER BY checked_at DESC LIMIT 6");
+            $stmt_latest->execute([(int)$mon['id']]);
+            $recent = array_reverse($stmt_latest->fetchAll());
+            $latest = $recent === [] ? null : $recent[count($recent) - 1];
+            $recent_ts = array_map(fn($r) => (int)strtotime((string)$r['checked_at']), $recent);
+            if ($latest !== null) {
+                foreach ($map as $rkey => $rdef) {
+                    if ($rkey === $metric) continue;
+                    if (!empty($rdef['only']) && !in_array($mon_type, $rdef['only'], true)) continue;
+                    $col = $rdef['col'];
+                    if (!array_key_exists($col, $latest) || $latest[$col] === null) continue;
+                    $is_counter = !empty($rdef['counter']);
+                    $value = (float)$latest[$col];
+                    if ($is_counter) {
+                        $deltas = bk_counter_deltas(array_map(fn($r) => $r[$col] === null ? null : (float)$r[$col], $recent), $recent_ts);
+                        $value = $deltas[count($deltas) - 1];
+                    }
+                    $related[] = [
+                        'key' => $rkey,
+                        'label' => bk_metric_label($rkey, $rdef['label'], $is_counter),
+                        'unit' => $rdef['unit'],
+                        'latest' => $value,
+                    ];
+                }
+            }
+        } catch (PDOException $e) {
+            // A missing column on an older database does not mean the page cannot
+            // render - only that related metrics are not offered.
+            error_log('[metric_detail] Příbuzné metriky selhaly: ' . $e->getMessage());
+        }
+
+        // Thresholds exist only for metrics that can be watched. Elsewhere a band
+        // in the chart would pretend a limit nobody ever set.
+        // Preset > monitor - the same order as the alerts in agent_api; the chart
+        // bands must draw the same limit that actually alerts.
+        $threshold_key = ['cpu' => 'cpu', 'ram' => 'ram', 'hdd' => 'hdd'][$metric] ?? null;
+        $eff_detail = bk_monitor_thresholds($pdo, $mon);
+        $critical = ($threshold_key !== null && $eff_detail[$threshold_key] !== null && (float)$eff_detail[$threshold_key] > 0)
+            ? (float)$eff_detail[$threshold_key]
+            : null;
+
+        // Events for the chart markers. Same source as the Timeline, so the chart
+        // and the timeline never show a different history.
+        // The vantage point of the last check - ONLY for the metrics the
+        // monitoring server measures itself (response time). Everything else
+        // is measured by the agent about its own machine, and monitor_logs
+        // would hand back cron's own label ('Main Server'), which would claim
+        // the router's CPU was measured from the hosting.
+        $md_checked_from = null;
+        if ($metric === 'response_time' || $metric === 'latency') {
+            try {
+                $stmt_cf = $pdo->prepare("SELECT checked_from FROM monitor_logs WHERE monitor_id = ? AND checked_from IS NOT NULL AND checked_from <> '' ORDER BY id DESC LIMIT 1");
+                $stmt_cf->execute([(int)$mon['id']]);
+                $cf = $stmt_cf->fetchColumn();
+                $md_checked_from = ($cf === false || $cf === null || $cf === '') ? null : (string)$cf;
+            } catch (Throwable $e) {
+                error_log('[api.php action=metric_detail] checked_from lookup failed: ' . $e->getMessage());
+            }
+        }
+
+        $events = [];
+        foreach (bk_get_monitor_timeline($pdo, (int)$mon['id'], 30) as $ev) {
+            $ts = strtotime((string)$ev['ts']);
+            if ($ts === false) continue;
+            $events[] = [
+                't' => $ts * 1000,
+                'type' => $ev['event_type'],
+                'label' => (string)($ev['description'] ?: $ev['event_type']),
+            ];
+        }
+
+        echo json_encode([
+            'monitor' => [
+                'id' => (int)$mon['id'],
+                'name' => $mon['name'],
+                'type' => $mon['type'],
+                // What is actually being measured, and from where. A latency of
+                // 6 ms says nothing until the page can name the target and the
+                // vantage point - unknown stays null, never a guessed location.
+                'target' => $mon['target'] !== null && $mon['target'] !== '' ? (string)$mon['target'] : null,
+                'port' => $mon['port'] !== null ? (int)$mon['port'] : null,
+                'checkedFrom' => $md_checked_from,
+                'assetId' => $mon['asset_id'] !== null ? (int)$mon['asset_id'] : null,
+            ],
+            'metric' => [
+                'key' => $metric,
+                'label' => $def['label'],
+                'unit' => $def['unit'],
+                'counter' => !empty($def['counter']),
+                // A step series is already an increment per report: a bucket is
+                // the SUM of its minutes, so the app must not average it either.
+                'step' => !empty($def['step']),
+            ],
+            // `warning` is DERIVED (the band below the configured limit), not
+            // something an admin ever typed. The frontend words the two
+            // differently, so it has to be able to tell them apart.
+            'thresholdsDerived' => ['warning' => true, 'critical' => false],
+            'thresholds' => [
+                // The warning band sits 15 points below the critical limit - same
+                // as the legacy page, so both show the same thing.
+                'warning' => $critical !== null ? max(0.0, $critical - 15) : null,
+                'critical' => $critical,
+            ],
+            'related' => $related,
+            'events' => $events,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[metric_detail] ' . $e->getMessage());
+        bk_api_error(500, 'Nepodařilo se načíst kontext metriky.');
+    }
+    exit;
+}
+
+// 2g1c. What was running on the machine in a given time window.
+//
+// Answers the question the chart alone cannot: I can see a CPU spike at 19:40,
+// but what caused it? Read exclusively from here, on demand - no page issues
+// this query on load, because process_samples is the largest table in the database.
+// The covering index handles it regardless (measured over 1.7 million rows:
+// 0.089 ms, 60 rows examined), but running it on every dashboard view would
+// mean paying for data nobody is looking at.
+if ($action === 'process_history') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $kind = ($_GET['kind'] ?? 'cpu') === 'ram' ? 'ram' : 'cpu';
+    // Window centre in UNIX seconds (the point the user clicked in the chart)
+    // and the radius in minutes.
+    $around = (int)($_GET['at'] ?? 0);
+    $radius = min(180, max(1, (int)($_GET['radius'] ?? 10)));
+
+    if ($monitor_id <= 0 || $around <= 0) {
+        bk_api_error(400, 'Chybí monitor_id nebo čas.');
+    }
+    // Process names, PIDs and per-process usage describe what runs on the machine:
+    // only for the users the monitor belongs to, and admins.
+    bk_require_monitor_view($pdo, $monitor_id);
+
+    try {
+        // The window is computed in SQL, not in PHP.
+        //
+        // `sampled_at` is written by agent_api.php via NOW(), i.e. in the database
+        // zone, while PHP here runs in the application zone - two hours apart on
+        // the test environment. If the bounds were built with date(), the query
+        // would ask about a different two hours than where the data lies, and the
+        // panel would forever report "nothing for this moment". FROM_UNIXTIME
+        // shares the zone with NOW(), so both sides speak about the same moment.
+        $stmt = $pdo->prepare(
+            "SELECT sampled_at, name, pid, cpu_pct, ram_mb, kept_reason
+               FROM process_samples
+              WHERE monitor_id = ? AND kind = ?
+                AND sampled_at BETWEEN DATE_SUB(FROM_UNIXTIME(?), INTERVAL ? MINUTE)
+                                   AND DATE_ADD(FROM_UNIXTIME(?), INTERVAL ? MINUTE)
+              ORDER BY " . ($kind === 'ram' ? 'ram_mb' : 'cpu_pct') . " DESC
+              LIMIT 60"
+        );
+        $stmt->execute([$monitor_id, $kind, $around, $radius, $around, $radius]);
+        $rows = $stmt->fetchAll();
+
+        // The window bounds are reported by the database, so the UI displays the
+        // same time the search really used. So is whether the window reaches
+        // into the stretch cron thins to peaks (bk_prune_process_samples): an
+        // empty answer there is "nothing notable", and it returns no row that
+        // could say so.
+        $ph_keep_days = max(0, (int)get_setting('process_history_days', '30'));
+        $ph_peak_after = max(0, (int)get_setting('process_history_peak_after_days', '0'));
+        $ph_thinning = $ph_peak_after > 0 && $ph_peak_after < $ph_keep_days;
+        $stmt_win = $pdo->prepare(
+            "SELECT DATE_SUB(FROM_UNIXTIME(?), INTERVAL ? MINUTE) AS win_from,
+                    DATE_ADD(FROM_UNIXTIME(?), INTERVAL ? MINUTE) AS win_to,
+                    DATE_SUB(FROM_UNIXTIME(?), INTERVAL ? MINUTE) < DATE_SUB(NOW(), INTERVAL ? DAY) AS win_thinned"
+        );
+        $stmt_win->execute([$around, $radius, $around, $radius, $around, $radius, $ph_peak_after]);
+        $win = $stmt_win->fetch() ?: [];
+        $from = $win['win_from'] ?? null;
+        $to = $win['win_to'] ?? null;
+
+        $samples = [];
+        $pruned = $ph_thinning && (int)($win['win_thinned'] ?? 0) === 1;
+        foreach ($rows as $r) {
+            if (($r['kept_reason'] ?? '') === 'peak') {
+                $pruned = true;
+            }
+            $samples[] = [
+                'at' => $r['sampled_at'],
+                'name' => $r['name'],
+                'pid' => $r['pid'] !== null ? (int)$r['pid'] : null,
+                // An unmeasured dimension stays null - the table will show a dash.
+                'cpuPct' => $r['cpu_pct'] !== null ? round((float)$r['cpu_pct'], 1) : null,
+                'ramMb' => $r['ram_mb'] !== null ? round((float)$r['ram_mb'], 1) : null,
+            ];
+        }
+
+        echo json_encode([
+            'samples' => $samples,
+            'from' => $from,
+            'to' => $to,
+            // An empty result has two different causes and the client must tell
+            // them apart: either history is not enabled, or the window really had nothing.
+            'enabled' => (int)get_setting('process_history_days', '30') > 0,
+            // A thinned window keeps only the peaks - "nothing here" then means
+            // "things ran, just nothing significant", not "nothing ran".
+            'pruned' => $pruned,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[process_history] ' . $e->getMessage());
+        bk_api_error(500, 'Nepodařilo se načíst historii procesů.');
+    }
+    exit;
+}
+
+// 2g2. Batched load of all device charts in one DB query (instead of 9 separate
+// metric_series requests) - a much faster device-detail page load.
+if ($action === 'metric_series_batch') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? $_GET['id'] ?? 1);
+    $period = $_GET['period'] ?? '24h';
+    $minutes = bk_period_minutes($period);
+    if ($minutes === null) {
+        // 90d/180d/1y live in the daily rollups, which only action=metric_series
+        // reads. This answered them with the last 24 hours under the long label.
+        bk_api_json([
+            'error' => 'period_unsupported',
+            'message' => 'Období delší než 30 dní čte action=metric_series (denní souhrny).',
+        ], 400);
+    }
+
+    try {
+        // Among the monitors this viewer may see: a user gets only their own;
+        // anyone else's monitor answers like one that does not exist.
+        $stmt_mon = bk_visible_monitor_stmt($pdo, $monitor_id, 'id, type');
+        $mon_row = $stmt_mon->fetch();
+        $real_id = $mon_row['id'] ?? null;
+        $mon_type = strtolower((string)($mon_row['type'] ?? ''));
+
+        if (!$real_id) {
+            echo json_encode(['series' => [], 'error' => 'Monitor nenalezen'], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        $series = [];
+        $days_to_full = bk_days_to_full($pdo, (int)$real_id);
+
+        // Latency - from monitor_logs (one row per check)
+        $stmt_lat = $pdo->prepare("
+            SELECT UNIX_TIMESTAMP(checked_at) as ts, response_time as val
+            FROM monitor_logs
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE) AND response_time > 0
+            ORDER BY checked_at ASC
+        ");
+        $stmt_lat->execute([$real_id, $minutes]);
+        $lat_points = [];
+        foreach ($stmt_lat->fetchAll() as $r) {
+            $lat_points[] = [(int)$r['ts'], (float)$r['val']];
+        }
+        $series['response_time'] = ['unit' => 'ms', 'label' => bk_metric_label('response_time', 'Doba odezvy (HTTP/Ping)'), 'points' => $lat_points];
+
+        // C-3: every series carries previousAvg, the mean of the same-length
+        // window one period earlier (what ?previous=1 of metric_series draws),
+        // so a tile can say "higher than before" without a second request per
+        // chart. Aggregated in SQL - the previous window's rows are never
+        // fetched. null = fewer than 3 samples there (a new agent, or 30d,
+        // whose previous window lies past the 30-day raw retention).
+        $prev_window = 'checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE) AND checked_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)';
+        $prev_params = [$real_id, $minutes * 2, $minutes];
+        $stmt_lat_prev = $pdo->prepare("SELECT COUNT(response_time) AS n, AVG(response_time) AS a FROM monitor_logs WHERE monitor_id = ? AND {$prev_window} AND response_time > 0");
+        $stmt_lat_prev->execute($prev_params);
+        $lat_prev = $stmt_lat_prev->fetch() ?: ['n' => 0, 'a' => null];
+        $series['response_time']['previousAvg'] = bk_aggregate_mean($lat_prev['n'], $lat_prev['a']);
+
+        // All agent metrics - from vps_metrics (one row per agent report), in one query.
+        $cols = array_column($BK_METRIC_COLUMN_MAP, 'col');
+        $col_list = implode(', ', array_map(fn($c) => "`$c`", $cols));
+        $stmt_vm = $pdo->prepare("
+            SELECT UNIX_TIMESTAMP(checked_at) as ts, {$col_list}
+            FROM vps_metrics
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? MINUTE)
+            ORDER BY checked_at ASC
+        ");
+        $stmt_vm->execute([$real_id, $minutes]);
+        $vm_rows = $stmt_vm->fetchAll();
+
+        // Previous window (C-3). A plain series compares means, so SQL does
+        // the averaging; a counter's chart shows increments, so its mean must
+        // be of increments too - those few columns are read row by row and
+        // go through the same gap-aware deltas as the chart (charts-15).
+        $prev_agg_cols = [];
+        $prev_counter_cols = [];
+        foreach ($BK_METRIC_COLUMN_MAP as $def) {
+            if (!empty($def['counter'])) {
+                $prev_counter_cols[$def['col']] = true;
+            } else {
+                // ??= because several series share one column
+                // (ts_clients_online): re-numbering it would hand its alias
+                // to the next column and swap two metrics' means.
+                $prev_agg_cols[$def['col']] ??= count($prev_agg_cols);
+            }
+        }
+        $prev_select = [];
+        foreach ($prev_agg_cols as $c => $i) {
+            $prev_select[] = "COUNT(`$c`) AS n{$i}, AVG(`$c`) AS a{$i}";
+        }
+        $stmt_vm_prev = $pdo->prepare('SELECT ' . implode(', ', $prev_select) . " FROM vps_metrics WHERE monitor_id = ? AND {$prev_window}");
+        $stmt_vm_prev->execute($prev_params);
+        $vm_prev = $stmt_vm_prev->fetch() ?: [];
+        $prev_counter_rows = [];
+        if ($prev_counter_cols !== []) {
+            $counter_list = implode(', ', array_map(fn($c) => "`$c`", array_keys($prev_counter_cols)));
+            $stmt_ctr_prev = $pdo->prepare("SELECT UNIX_TIMESTAMP(checked_at) AS ts, {$counter_list} FROM vps_metrics WHERE monitor_id = ? AND {$prev_window} ORDER BY checked_at ASC");
+            $stmt_ctr_prev->execute($prev_params);
+            $prev_counter_rows = $stmt_ctr_prev->fetchAll();
+        }
+
+        foreach ($BK_METRIC_COLUMN_MAP as $metric_key => $def) {
+            // A series restricted to another monitor type is not offered at all.
+            if (!empty($def['only']) && !in_array($mon_type, $def['only'], true)) {
+                continue;
+            }
+            $pts = [];
+            foreach ($vm_rows as $r) {
+                if ($r[$def['col']] !== null) {
+                    $pts[] = [(int)$r['ts'], (float)$r[$def['col']]];
+                }
+            }
+            // A cumulative counter gets the same increments as metric_series
+            // (charts-06). The raw values are lifetime totals - "Firewall -
+            // propuštěno 912044" said nothing about the chart's window.
+            $is_counter = !empty($def['counter']);
+            if ($is_counter) {
+                $pts = bk_counter_delta_points($pts);
+            }
+            $series[$metric_key] = [
+                'unit' => $def['unit'],
+                'label' => bk_metric_label($metric_key, $def['label'], $is_counter),
+                'points' => $pts,
+            ];
+            if ($is_counter) {
+                $series[$metric_key]['counter'] = true;
+                $prev_pts = [];
+                foreach ($prev_counter_rows as $r) {
+                    if ($r[$def['col']] !== null) {
+                        $prev_pts[] = [(int)$r['ts'], (float)$r[$def['col']]];
+                    }
+                }
+                $series[$metric_key]['previousAvg'] = bk_series_mean(bk_counter_delta_points($prev_pts));
+            } else {
+                $pi = $prev_agg_cols[$def['col']];
+                $series[$metric_key]['previousAvg'] = bk_aggregate_mean($vm_prev["n{$pi}"] ?? 0, $vm_prev["a{$pi}"] ?? null);
+            }
+            // Days until this metric reaches 100 %, where that is a real
+            // projection. The chart card has always had a badge for it and
+            // never a number to put in it. Absent = no forecast, never a zero.
+            if (isset($days_to_full[$metric_key])) {
+                $series[$metric_key]['daysToFull'] = $days_to_full[$metric_key];
+            }
+        }
+
+        echo json_encode(['series' => $series], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // series: [] with a 200 made every chart on the asset page say "no data".
+        bk_api_fail('metric_series_unavailable', 500, $e, 'Grafy se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 2f. Manual digest send (admin-only)
+if ($action === 'send_digest') {
+    bk_require_admin();
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $period = ($input['period'] ?? $_GET['period'] ?? '') === 'monthly' ? 'monthly' : 'weekly';
+    try {
+        $counts = null;
+        send_digest_report($pdo, $period, $counts);
+        $res = bk_digest_result_message($period, $counts, $GLOBALS['last_mail_method'] ?? null);
+        echo json_encode(['success' => $res['ok'], 'message' => $res['message'], 'sent' => $counts['sent'],
+            'total' => $counts['total']], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_fail('send_digest_failed', 500, $e, 'Digest se nepodařilo odeslat.');
+    }
+    exit;
+}
+
+// 2f. Digest preview in the browser, nothing sent (admin-only)
+//
+// The same page as admin.php's own preview, so the app no longer opens
+// admin.php for it. A GET read: build_digest_data(..., false) leaves the trend
+// snapshot the next real digest compares against untouched.
+if ($action === 'digest_preview') {
+    bk_require_admin();
+    // An unknown period is refused, never shown as the weekly digest.
+    $dp_raw = $_GET['period'] ?? '';
+    if ($dp_raw !== 'weekly' && $dp_raw !== 'monthly') {
+        bk_api_error(400, 'Období musí být weekly nebo monthly.');
+    }
+    $dp_period = $dp_raw === 'monthly' ? 'monthly' : 'weekly';
+    try {
+        // In the language the digest would reach the viewing admin in, as in admin.php.
+        $stmt_dp = $pdo->prepare("SELECT email_lang FROM users WHERE id = ? LIMIT 1");
+        $stmt_dp->execute([(int)($_SESSION['admin_id'] ?? 0)]);
+        $dp_html = bk_with_email_lang(bk_recipient_lang($stmt_dp->fetch() ?: []), function () use ($pdo, $dp_period) {
+            return render_digest_html(build_digest_data($pdo, $dp_period, false));
+        });
+    } catch (Throwable $e) {
+        bk_api_fail('digest_preview_failed', 500, $e, 'Náhled souhrnu se nepodařilo sestavit.');
+    }
+    // Set only now, so a failure above still answers as JSON.
+    header('Content-Type: text/html; charset=utf-8');
+    header('Cache-Control: no-store');
+    echo $dp_html;
+    exit;
+}
+
+// 2f. Notification subscriptions of the current user
+if ($action === 'get_subscriptions') {
+    bk_require_login();
+    $user_id = (int)($_SESSION['admin_id'] ?? 0);
+    try {
+        // Alerts only about monitors this account may see.
+        [$gs_scope, $gs_scope_params] = bk_list_scope_sql($pdo, bk_visible_monitor_ids($pdo), 'id');
+        $stmt_mon = $pdo->prepare("SELECT id, name, type, email_notifications, sms_notifications FROM monitors WHERE {$gs_scope} ORDER BY id ASC");
+        $stmt_mon->execute($gs_scope_params);
+        $monitors = $stmt_mon->fetchAll();
+        $stmt_me = $pdo->prepare("SELECT sms_notifications, whatsapp_notifications FROM users WHERE id = ?");
+        $stmt_me->execute([$user_id]);
+        $gs_me = $stmt_me->fetch() ?: [];
+        $stmt_sub = $pdo->prepare("SELECT monitor_id, email_notifications, sms_notifications, whatsapp_notifications FROM user_subscriptions WHERE user_id = ?");
+        $stmt_sub->execute([$user_id]);
+        $subs = [];
+        foreach ($stmt_sub->fetchAll() as $s) {
+            $subs[(int)$s['monitor_id']] = $s;
+        }
+
+        // What the alert really uses, not 0 for a monitor without a row: an
+        // administrator gets that monitor's alerts by its own switches.
+        $gs_admin = bk_viewer()['is_admin'];
+        $result = [];
+        foreach ($monitors as $m) {
+            $mid = (int)$m['id'];
+            $result[] = [
+                'id' => $mid,
+                'name' => $m['name'],
+                'type' => $m['type'],
+            ] + bk_subscription_effective($gs_admin, $subs[$mid] ?? null, $m, $gs_me);
+        }
+        echo json_encode(['subscriptions' => $result], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // [] read as "subscribed to nothing", and saving that form would say so.
+        bk_api_fail('subscriptions_unavailable', 500, $e, 'Odběry se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 2g. Save the notification subscriptions
+if ($action === 'save_subscriptions') {
+    bk_require_login();
+    $user_id = (int)($_SESSION['admin_id'] ?? 0);
+    $input = json_decode(file_get_contents('php://input'), true);
+    if (!$input || !isset($input['subscriptions'])) {
+        bk_api_error(400, 'Chybějící data.');
+    }
+    try {
+        $pdo->beginTransaction();
+        $stmt_old = $pdo->prepare("SELECT monitor_id, email_notifications, sms_notifications, whatsapp_notifications FROM user_subscriptions WHERE user_id = ?");
+        $stmt_old->execute([$user_id]);
+        $ss_old = [];
+        foreach ($stmt_old->fetchAll() as $o) {
+            $ss_old[(int)$o['monitor_id']] = $o;
+        }
+        // The form lists no archived monitor, so their rows are kept: deleted
+        // here, alerts about a restored monitor stopped without a word.
+        $stmt_del = $pdo->prepare("DELETE FROM user_subscriptions WHERE user_id = ?
+            AND monitor_id NOT IN (SELECT id FROM monitors WHERE archived_at IS NOT NULL)");
+        $stmt_del->execute([$user_id]);
+        $stmt_ins = $pdo->prepare("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications, sms_notifications, whatsapp_notifications) VALUES (?, ?, ?, ?, ?)");
+        $stmt_me = $pdo->prepare("SELECT sms_notifications, whatsapp_notifications FROM users WHERE id = ?");
+        $stmt_me->execute([$user_id]);
+        $ss_me = $stmt_me->fetch() ?: [];
+        $stmt_mon = $pdo->prepare("SELECT email_notifications, sms_notifications FROM monitors WHERE id = ?");
+        $ss_admin = bk_viewer()['is_admin'];
+        foreach ($input['subscriptions'] as $s) {
+            $mid = (int)($s['id'] ?? 0);
+            // A subscription to someone else's monitor would mail its name and
+            // outage reasons to an account that may not see it.
+            if ($mid <= 0 || !bk_can_view_monitor($pdo, $mid)) continue;
+            $stmt_mon->execute([$mid]);
+            $ss_mon = $stmt_mon->fetch();
+            // A monitor deleted since the form loaded has nothing to alert about.
+            if ($ss_mon === false) continue;
+            $ss_chosen = ['email' => (int)($s['email'] ?? 0), 'sms' => (int)($s['sms'] ?? 0), 'whatsapp' => (int)($s['whatsapp'] ?? 0)];
+            // What the form showed when it loaded tells which boxes the account
+            // changed, and only those are stored. A client that does not send
+            // it is a bundle from before "shown", which showed the stored row
+            // with 0 for NULL or no row; its untouched boxes are those values.
+            // Taking the alerts of now as its baseline pinned an old tab's
+            // unticked e-mail for every monitor at its first save.
+            $ss_shown = [];
+            foreach (['email', 'sms', 'whatsapp'] as $ch) {
+                $ss_shown[$ch] = (int)($ss_old[$mid][$ch . '_notifications'] ?? 0);
+            }
+            if (isset($s['shown']) && is_array($s['shown'])) {
+                foreach ($ss_shown as $ch => $v) {
+                    $ss_shown[$ch] = (int)($s['shown'][$ch] ?? $v);
+                }
+            }
+            $ss_row = bk_subscription_row_to_store($ss_admin, $ss_old[$mid] ?? null, $ss_chosen, $ss_shown, $ss_mon, $ss_me);
+            if ($ss_row === null) continue;
+            $stmt_ins->execute([$user_id, $mid, $ss_row['email_notifications'], $ss_row['sms_notifications'], $ss_row['whatsapp_notifications']]);
+        }
+        $pdo->commit();
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        error_log('[save_subscriptions] ' . $e->getMessage());
+        bk_api_error(500, 'Odběry se nepodařilo uložit.');
+    }
+    exit;
+}
+
+
+// 3. User list from the database (requires login)
+// User management for the React app (/app/users). Until 2026-08-17 these
+// actions DID NOT EXIST: appApi posted save_user/delete_user, the unknown
+// action fell through to the default response with HTTP 200 and no error key -
+// and the UI reported "saved" while nothing happened at all. Same logic as the admin.php handlers.
+if ($action === 'save_user' || $action === 'delete_user') {
+    bk_require_admin();
+    $su_input = json_decode(file_get_contents('php://input'), true) ?: [];
+
+    if ($action === 'delete_user') {
+        $du_id = (int)($su_input['id'] ?? 0);
+        if ($du_id === (int)($_SESSION['admin_id'] ?? 0)) {
+            bk_api_error(400, 'Nemůžete smazat svůj vlastní přihlášený účet.');
+        }
+        try {
+            $stmt_du = $pdo->prepare("SELECT username FROM users WHERE id = ?");
+            $stmt_du->execute([$du_id]);
+            $du_username = $stmt_du->fetchColumn();
+            if ($du_username === false) {
+                bk_api_error(404, 'Uživatel nenalezen.');
+            }
+            // Explicitly, not only through the foreign key: an install whose
+            // table was created without it must not keep access rows of a deleted account.
+            $pdo->prepare("DELETE FROM monitor_users WHERE user_id = ?")->execute([$du_id]);
+            $pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$du_id]);
+            bk_audit_log($pdo, 'user_deleted', (string)$du_username, 'user', $du_id);
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+        } catch (Throwable $e) {
+            error_log('[delete_user] ' . $e->getMessage());
+            bk_api_error(500, 'Uživatele se nepodařilo smazat.');
+        }
+        exit;
+    }
+
+    // save_user
+    $su_id = (int)($su_input['id'] ?? 0);
+    $su_username = trim((string)($su_input['username'] ?? ''));
+    $su_email = trim((string)($su_input['email'] ?? ''));
+    $su_phone = trim((string)($su_input['phone'] ?? ''));
+    $su_role = ($su_input['role'] ?? '') === 'admin' ? 'admin' : 'user';
+    $su_password = (string)($su_input['password'] ?? '');
+    // Which monitors this account may see. A monitor can belong to several
+    // users. Absent = keep the current assignment (a client that does not send
+    // it must not wipe it); an empty list removes every assignment.
+    $su_monitor_ids = null;
+    if (array_key_exists('monitorIds', $su_input)) {
+        $su_monitor_ids = array_values(array_unique(array_filter(
+            array_map('intval', (array)$su_input['monitorIds']),
+            fn($v) => $v > 0
+        )));
+    }
+    // Replaces the account's assignments inside the caller's transaction. Only
+    // ids of existing monitors are stored. Returns the stored count, or null
+    // when the request did not touch assignments.
+    $su_assign = function (int $uid) use ($pdo, $su_monitor_ids): ?int {
+        if ($su_monitor_ids === null) {
+            return null;
+        }
+        // The access editor lists only live monitors, so what it sends cannot
+        // speak for archived ones: their assignments stay as they were.
+        $pdo->prepare("DELETE FROM monitor_users WHERE user_id = ? AND monitor_id NOT IN (SELECT id FROM monitors WHERE archived_at IS NOT NULL)")->execute([$uid]);
+        if (!$su_monitor_ids) {
+            return 0;
+        }
+        [$su_scope, $su_scope_params] = bk_monitor_scope_sql($su_monitor_ids, 'id');
+        $stmt_assign = $pdo->prepare("INSERT INTO monitor_users (monitor_id, user_id) SELECT id, ? FROM monitors WHERE archived_at IS NULL AND " . $su_scope);
+        $stmt_assign->execute(array_merge([$uid], $su_scope_params));
+        return $stmt_assign->rowCount();
+    };
+
+    if ($su_username === '' || $su_email === '') {
+        bk_api_error(400, 'Uživatelské jméno a e-mail jsou povinné.');
+    }
+    if ($su_password !== '' && strlen($su_password) < 8) {
+        bk_api_error(400, 'Heslo musí mít alespoň 8 znaků.');
+    }
+
+    try {
+        if ($su_id > 0) {
+            // Old values for the audit - silently changing someone else's e-mail
+            // is a takeover vector, the audit must say what exactly changed.
+            $stmt_old = $pdo->prepare("SELECT username, email, phone, role FROM users WHERE id = ?");
+            $stmt_old->execute([$su_id]);
+            $su_old = $stmt_old->fetch();
+            if (!$su_old) {
+                bk_api_error(404, 'Uživatel nenalezen.');
+            }
+            $pdo->beginTransaction();
+            if ($su_old['role'] === 'admin' && $su_role !== 'admin' && bk_is_last_admin($pdo, $su_id)) {
+                $pdo->rollBack();
+                bk_api_error(409, 'Toto je poslední administrátor. Nejdřív jmenujte jiného.');
+            }
+            if ($su_password !== '') {
+                $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ?, password_hash = ? WHERE id = ?")
+                    ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash($su_password, PASSWORD_BCRYPT), $su_id]);
+            } else {
+                $pdo->prepare("UPDATE users SET username = ?, email = ?, phone = ?, role = ? WHERE id = ?")
+                    ->execute([$su_username, $su_email, $su_phone, $su_role, $su_id]);
+            }
+            $su_assigned = $su_assign($su_id);
+            $pdo->commit();
+            $su_changes = [];
+            if ($su_old['username'] !== $su_username) $su_changes[] = "jméno {$su_old['username']} -> {$su_username}";
+            if ($su_old['email'] !== $su_email) $su_changes[] = "e-mail {$su_old['email']} -> {$su_email}";
+            if ((string)$su_old['phone'] !== $su_phone) $su_changes[] = 'telefon změněn';
+            if ($su_old['role'] !== $su_role) $su_changes[] = "role {$su_old['role']} -> {$su_role}";
+            if ($su_password !== '') $su_changes[] = 'heslo nastaveno adminem';
+            if ($su_assigned !== null) $su_changes[] = "přístup k monitorům: {$su_assigned}";
+            bk_audit_log($pdo, 'user_updated', $su_username . (!empty($su_changes) ? ' (' . implode(', ', $su_changes) . ')' : ' (beze změny)'), 'user', $su_id);
+            echo json_encode(['success' => true, 'id' => $su_id], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        if ($su_password !== '') {
+            // The admin typed the password by hand - no invitation.
+            $pdo->beginTransaction();
+            $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)")
+                ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash($su_password, PASSWORD_BCRYPT)]);
+            $su_new_id = (int)$pdo->lastInsertId();
+            $su_assign($su_new_id);
+            $pdo->commit();
+            bk_audit_log($pdo, 'user_created', $su_username . ' (' . $su_role . ', heslo nastaveno adminem)', 'user', $su_new_id);
+            echo json_encode(['success' => true, 'id' => $su_new_id, 'invited' => false], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+
+        // Without a password: a placeholder hash matching no plaintext, and an
+        // invitation link - the admin never knows the user's password.
+        $pdo->beginTransaction();
+        $pdo->prepare("INSERT INTO users (username, email, phone, role, password_hash) VALUES (?, ?, ?, ?, ?)")
+            ->execute([$su_username, $su_email, $su_phone, $su_role, password_hash(bin2hex(random_bytes(32)), PASSWORD_BCRYPT)]);
+        $su_new_id = (int)$pdo->lastInsertId();
+        $su_assign($su_new_id);
+        $pdo->commit();
+        $su_token = bk_issue_password_reset_token($pdo, $su_new_id);
+        $su_link = bk_link_origin() . '/app/set-password?token=' . $su_token;
+        $su_site = get_setting('site_title', 'Blood Kings');
+        $su_body = '<h1>Vítejte v ' . htmlspecialchars($su_site) . '</h1>'
+            . '<p>Byl pro vás vytvořen účet <strong>' . htmlspecialchars($su_username) . '</strong>. Nastavte si prosím heslo kliknutím na odkaz níže (platnost 48 hodin):</p>'
+            . '<p><a href="' . htmlspecialchars($su_link) . '">' . htmlspecialchars($su_link) . '</a></p>';
+        bk_audit_log($pdo, 'user_created', $su_username . ' (' . $su_role . ', pozvánka e-mailem)', 'user', $su_new_id);
+        $su_sent = send_email($su_email, 'Nastavení hesla - ' . $su_site, $su_body, [], [
+            'kind' => 'invitation',
+        ]);
+        // invited=false when the mail fails: the UI then truthfully says "account
+        // created, but the invitation did not go out" instead of a lying "invitation sent".
+        echo json_encode(['success' => true, 'id' => $su_new_id, 'invited' => (bool)$su_sent], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+        if ((string)$e->getCode() === '23000') {
+            bk_api_error(400, 'Uživatelské jméno nebo e-mail už existuje.');
+        } else {
+            error_log('[save_user] ' . $e->getMessage());
+            bk_api_error(500, 'Uživatele se nepodařilo uložit.');
+        }
+    }
+    exit;
+}
+
+if ($action === 'users') {
+    // Admin only: every account's e-mail, phone and 2FA state. A non-admin
+    // needs at most their own row, which my_profile already returns.
+    bk_require_login();
+    bk_require_admin();
+    try {
+        $stmt = $pdo->query("SELECT id, username, email, phone, role, totp_enabled, oauth_provider, created_at FROM users ORDER BY id ASC");
+        $rows = $stmt->fetchAll();
+        // Assigned monitors per account, for the admin's access editor.
+        $assigned_by_user = [];
+        try {
+            foreach ($pdo->query("SELECT user_id, monitor_id FROM monitor_users ORDER BY monitor_id")->fetchAll() as $mu) {
+                $assigned_by_user[(int)$mu['user_id']][] = (int)$mu['monitor_id'];
+            }
+        } catch (PDOException $e) {
+            error_log('[users] monitor_users unavailable: ' . $e->getMessage());
+        }
+        $users = [];
+        foreach ($rows as $u) {
+            $users[] = [
+                'id' => (int)$u['id'],
+                'username' => $u['username'],
+                'email' => $u['email'],
+                'phone' => $u['phone'] ?? null,
+                'role' => $u['role'] ?? 'admin',
+                'totpEnabled' => !empty($u['totp_enabled']),
+                'oauthProvider' => $u['oauth_provider'] ?? null,
+                'createdAt' => $u['created_at'] ? date('c', strtotime($u['created_at'])) : null,
+                'isSelf' => ($u['id'] == ($_SESSION['admin_id'] ?? 0)),
+                'monitorIds' => $assigned_by_user[(int)$u['id']] ?? [],
+            ];
+        }
+        echo json_encode(['users' => $users], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        bk_api_fail('users_unavailable', 500, $e, 'Seznam uživatelů se nepodařilo načíst.');
+    }
+    exit;
+}
+
+// 4. Historie metrik pro grafy
+if ($action === 'metrics_history') {
+    $monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $period = $_GET['period'] ?? '24h';
+    // One monitor for the users it belongs to; monitor_id=0 averages every
+    // agent in the fleet, which only an admin may see.
+    if ($monitor_id > 0) {
+        bk_require_monitor_view($pdo, $monitor_id);
+    } else {
+        bk_require_login();
+        bk_require_admin();
+    }
+
+    $result = [
+        'labels' => [], 'cpu' => [], 'ram' => [], 'hdd' => [], 'net' => [],
+        'cpu_avg' => 0, 'cpu_max' => 0, 'ram_avg' => 0, 'ram_max' => 0, 'hdd_avg' => 0, 'hdd_max' => 0, 'net_avg' => 0, 'net_max' => 0,
+    ];
+
+    try {
+        if ($period === '7d') {
+            $stmt = $pdo->prepare("
+                SELECT DATE_FORMAT(MIN(checked_at), '%d.%m. %H:00') AS label,
+                       AVG(cpu_usage) AS cpu, MAX(cpu_usage) AS cpu_peak,
+                       AVG(ram_usage) AS ram, MAX(ram_usage) AS ram_peak,
+                       AVG(hdd_usage) AS hdd, MAX(hdd_usage) AS hdd_peak,
+                       AVG(net_usage) AS net, MAX(net_usage) AS net_peak
+                FROM vps_metrics
+                WHERE (monitor_id = ? OR ? = 0) AND checked_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                GROUP BY DATE_FORMAT(checked_at, '%Y-%m-%d %H')
+                ORDER BY MIN(checked_at) ASC
+            ");
+            $stmt->execute([$monitor_id, $monitor_id]);
+        } elseif ($period === '30d') {
+            $stmt = $pdo->prepare("
+                SELECT DATE_FORMAT(MIN(checked_at), '%d.%m.') AS label,
+                       AVG(cpu_usage) AS cpu, MAX(cpu_usage) AS cpu_peak,
+                       AVG(ram_usage) AS ram, MAX(ram_usage) AS ram_peak,
+                       AVG(hdd_usage) AS hdd, MAX(hdd_usage) AS hdd_peak,
+                       AVG(net_usage) AS net, MAX(net_usage) AS net_peak
+                FROM vps_metrics
+                WHERE (monitor_id = ? OR ? = 0) AND checked_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                GROUP BY DATE(checked_at)
+                ORDER BY MIN(checked_at) ASC
+            ");
+            $stmt->execute([$monitor_id, $monitor_id]);
+        } else {
+            $stmt = $pdo->prepare("
+                SELECT DATE_FORMAT(checked_at, '%H:%i') AS label,
+                       cpu_usage AS cpu, cpu_usage AS cpu_peak,
+                       ram_usage AS ram, ram_usage AS ram_peak,
+                       hdd_usage AS hdd, hdd_usage AS hdd_peak,
+                       net_usage AS net, net_usage AS net_peak
+                FROM vps_metrics
+                WHERE (monitor_id = ? OR ? = 0) AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+                ORDER BY checked_at ASC
+            ");
+            $stmt->execute([$monitor_id, $monitor_id]);
+        }
+        $rows = $stmt->fetchAll();
+
+        // No rows = no chart. A synthetic sine series used to be generated here
+        // "for a natural look" - invented data passed off as measurements.
+        // An empty array lets the frontend say "no data", which is the truth.
+        $peaks = ['cpu' => [], 'ram' => [], 'hdd' => [], 'net' => []];
+        foreach ($rows as $r) {
+            $result['labels'][] = $r['label'];
+            // A NULL metric (e.g. cpuusage without CloudLinux) stays NULL -
+            // the chart shows a gap, not a false zero.
+            $result['cpu'][] = $r['cpu'] !== null ? round((float)$r['cpu'], 1) : null;
+            $result['ram'][] = $r['ram'] !== null ? round((float)$r['ram'], 1) : null;
+            $result['hdd'][] = $r['hdd'] !== null ? round((float)$r['hdd'], 1) : null;
+            $result['net'][] = $r['net'] !== null ? round((float)$r['net'], 1) : null;
+            foreach ($peaks as $mk => $list) {
+                if ($r["{$mk}_peak"] !== null) {
+                    $peaks[$mk][] = round((float)$r["{$mk}_peak"], 1);
+                }
+            }
+        }
+
+        // Averages/maxima only from actually measured values; without a single
+        // value it stays null and the frontend prints a dash instead of a zero.
+        // The maximum is the highest single reading. Over 7 and 30 days the
+        // points are hourly or daily averages, and their maximum hid a minute
+        // at 100 % behind "13 %".
+        foreach (['cpu', 'ram', 'hdd', 'net'] as $mk) {
+            $valid = array_filter($result[$mk], fn($v) => $v !== null);
+            if (!empty($valid)) {
+                $result["{$mk}_avg"] = round(array_sum($valid) / count($valid), 1);
+                $result["{$mk}_max"] = $peaks[$mk] !== [] ? max($peaks[$mk]) : max($valid);
+            } else {
+                $result["{$mk}_avg"] = null;
+                $result["{$mk}_max"] = null;
+            }
+        }
+    } catch (Throwable $e) {
+        // The zero averages of the empty $result above went out as measurements.
+        bk_api_fail('metrics_history_unavailable', 500, $e, 'Historii metrik se nepodařilo načíst.');
+    }
+
+    echo json_encode($result, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+// 5. Public aggregated overview
+/**
+ * Data-collection health - for a watchdog running outside this server.
+ *
+ * Answers a single question: is cron still running? When it stops, the app
+ * does not break - it keeps showing the last known states and looks healthy.
+ * Of all the ways monitoring can fail, this one is the most insidious,
+ * because it does not announce itself.
+ *
+ * The endpoint is deliberately public: the watchdog has nothing to log in
+ * with and learns nothing sensitive here - just the last run time and counts.
+ * It is also the cheapest possible response, so it can be polled every few minutes.
+ */
+if ($action === 'collection_health') {
+    try {
+        $last_run = get_setting('last_cron_run', '');
+        $last_run_ts = $last_run !== '' ? strtotime($last_run) : false;
+
+        // How soon cron must report before it counts as a problem.
+        // The run interval is 1-5 minutes; the default 15 minutes allows a slow
+        // run or a skipped tick, but not an hour-long outage.
+        $max_age = max(60, (int)get_setting('collection_max_age_secs', '900'));
+
+        // Never ran = we do not know things are bad, but we surely do not know
+        // they are good. The watchdog must treat it as a problem, not as "fine so far".
+        $age = $last_run_ts !== false ? (time() - $last_run_ts) : null;
+
+        $duration_raw = get_setting('last_cron_duration_ms', '');
+        $monitors_raw = get_setting('last_cron_monitors', '');
+
+        echo json_encode([
+            'lastRunAt' => $last_run_ts !== false ? date('c', $last_run_ts) : null,
+            'ageSecs' => $age,
+            'maxAgeSecs' => $max_age,
+            'stale' => $age === null || $age > $max_age,
+            // An empty string means "cron never ran with this stamp", not a zero
+            // duration - hence NULL, not 0.
+            'lastDurationMs' => $duration_raw !== '' ? (int)$duration_raw : null,
+            'monitorsChecked' => $monitors_raw !== '' ? (int)$monitors_raw : null,
+            'serverTime' => date('c'),
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] collection_health selhal: ' . $e->getMessage());
+        bk_api_error(503, 'Stav sběru dat se nepodařilo zjistit.');
+    }
+    exit;
+}
+
+if ($action === 'public_status') {
+    try {
+        // The public view covers the public set (W1-G3), the same for everyone.
+        // Inside the app a user's dashboard counts only the monitors assigned to them.
+        $ps_visible = bk_request_monitor_ids($pdo);
+        [$ps_scope, $ps_params] = bk_list_scope_sql($pdo, $ps_visible, 'id');
+        [$ps_log_scope, $ps_log_params] = bk_list_scope_sql($pdo, $ps_visible, 'monitor_id');
+        [$ps_m_scope, $ps_m_params] = bk_list_scope_sql($pdo, $ps_visible, 'm.id');
+        $stmt_rows = $pdo->prepare("SELECT id, type, status, maintenance, last_checked FROM monitors WHERE {$ps_scope}");
+        $stmt_rows->execute($ps_params);
+        $ps_rows = $stmt_rows->fetchAll();
+        $total_monitors = count($ps_rows);
+
+        // One verdict, the same one the fleet badge prints (W1-B4). It used to
+        // be "healthy unless something is down": a degraded monitor, an
+        // unknown one and a stopped collector all read as all-clear.
+        $ps_verdict = bk_overall_verdict($ps_rows, bk_collection_is_fresh());
+        $ps_counts = $ps_verdict['counts'];
+
+        // The newest real check, or null. It fell back to date('c'), so a set
+        // nobody had measured looked checked a second ago.
+        $ps_last = null;
+        foreach ($ps_rows as $ps_row) {
+            if (!empty($ps_row['last_checked']) && ($ps_last === null || strcmp((string)$ps_row['last_checked'], $ps_last) > 0)) {
+                $ps_last = (string)$ps_row['last_checked'];
+            }
+        }
+
+        // null (not 100.0) until real data says otherwise - a fresh install
+        // or a dead cron with zero logged checks isn't "100% uptime", it's
+        // unmeasured, and the frontend needs to tell those two apart.
+        $avg_uptime = null;
+        // No inner catches in this action any more: an empty node list or a
+        // null uptime after a failed read looked like a real answer. Any
+        // failure now reaches the outer catch and answers 500.
+        // In time, not in rows (bk_uptime_segments) - the same number the
+        // badge and the SLA report print for each monitor.
+        $uptime_values = [];
+        foreach (bk_uptime_day_windows($pdo, array_map(fn($r) => (int)$r['id'], $ps_rows), [30]) as $ps_win) {
+            if ($ps_win[30]['pct'] !== null) {
+                $uptime_values[] = $ps_win[30]['pct'];
+            }
+        }
+        if (!empty($uptime_values)) {
+            // The mean of 99.999 and three perfect months rounds to 100.0 at
+            // three decimals: an outage the public headline figure hid.
+            $avg_uptime = bk_uptime_pct_round(array_sum($uptime_values) / count($uptime_values), 3);
+        }
+
+        // Nodes are the machines that report on their own (agents) and the
+        // servers probed as hosts - not every monitor that happens to carry
+        // details: websites and Discord were listed as "nodes" through that.
+        // response_time is not a monitors column - the latest value comes from
+        // monitor_logs. No name/outage fallback: with no real nodes an empty
+        // list is returned, not a hardcoded "Donald"/"Router - Praha".
+        // The value is the newest one measured in the node's current state:
+        // an online node whose checks since an outage measured nothing
+        // (TeamSpeak up through the agent fallback, a router whose ping got no
+        // answer) showed the latency it had before the outage. The rows start
+        // 10 s before last_status_change: cron and agent_api log the check
+        // before they stamp the change, so the row that set the state can be a
+        // second older than the stamp. Not the 120 s the findings use: those
+        // rows are filtered by status, these are not, and checks come a minute
+        // apart, so 120 s reached back past a short outage. A node with no
+        // recorded change (NULL) is not bounded.
+        $nodes = [];
+        $stmt_nodes = $pdo->prepare("
+            SELECT m.name, m.status, m.maintenance,
+                   (SELECT l.response_time FROM monitor_logs l
+                    WHERE l.monitor_id = m.id AND l.response_time > 0
+                      AND (m.last_status_change IS NULL OR l.checked_at >= m.last_status_change - INTERVAL 10 SECOND)
+                      AND l.checked_at >= NOW() - INTERVAL 15 MINUTE
+                    ORDER BY l.id DESC LIMIT 1) AS response_time
+            FROM monitors m
+            WHERE LOWER(m.type) IN ('agent', 'vps', 'openwrt', 'teamspeak', 'node', 'router')
+              AND {$ps_m_scope}
+        ");
+        $stmt_nodes->execute($ps_m_params);
+        $ps_node_states = ['up' => 'online', 'warning' => 'warning', 'down' => 'offline', 'maintenance' => 'maintenance'];
+        while ($nd = $stmt_nodes->fetch()) {
+            $nd_status = !empty($nd['maintenance']) ? 'maintenance' : strtolower((string)$nd['status']);
+            $nodes[] = [
+                'name' => $nd['name'],
+                // Unknown and maintenance keep their own words: both used to
+                // become "offline", a red dot for a server nobody had checked yet.
+                'status' => $ps_node_states[$nd_status] ?? 'unknown',
+                // Only for a node that answers now: the site map prints it next
+                // to the state word as the latency the node has, and a down,
+                // maintenance or unknown node has none.
+                'latencyMs' => in_array($nd_status, ['up', 'warning'], true) && $nd['response_time'] !== null ? (int)$nd['response_time'] : null,
+            ];
+        }
+
+        // null until a real measurement exists - "10 ms" as a fabricated
+        // default would misrepresent actual latency the same way the old
+        // 100% uptime default misrepresented actual availability.
+        $avg_latency = null;
+        $stmt_latency = $pdo->prepare("
+            SELECT AVG(response_time) as avg_latency
+            FROM monitor_logs
+            WHERE checked_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR) AND response_time > 0 AND {$ps_log_scope}
+        ");
+        $stmt_latency->execute($ps_log_params);
+        $lat_row = $stmt_latency->fetch() ?: null;
+        if ($lat_row && isset($lat_row['avg_latency']) && $lat_row['avg_latency'] !== null) {
+            $avg_latency = (int)round($lat_row['avg_latency']);
+        }
+
+        $agents_online = count(array_filter($nodes, fn($n) => $n['status'] === 'online'));
+        $agents_total = count($nodes);
+
+        echo json_encode([
+            // healthy | degraded | down | maintenance | unknown (bk_overall_verdict)
+            'status' => $ps_verdict['verdict'],
+            'uptimePercent' => $avg_uptime,
+            'totalMonitors' => $total_monitors,
+            'downMonitors' => $ps_counts['down'],
+            'warningMonitors' => $ps_counts['warning'],
+            'unknownMonitors' => $ps_counts['unknown'],
+            'unmeasuredMonitors' => $ps_counts['unmeasured'],
+            'maintenanceMonitors' => $ps_counts['maintenance'],
+            'agentsOnline' => $agents_online,
+            'agentsTotal' => $agents_total,
+            'avgLatencyMs' => $avg_latency,
+            'lastUpdated' => $ps_last !== null ? date('c', (int)strtotime($ps_last)) : null,
+            'nodes' => $nodes,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        // Never return an invented "healthy" state on error - the client must see
+        // that the infrastructure state could not be determined, not a false "all OK".
+        error_log('[api] public_status failed: ' . $e->getMessage());
+        bk_api_error(500, 'Nepodařilo se zjistit stav infrastruktury.');
+    }
+    exit;
+}
+
+/**
+ * Link speed measurement history and per-period averages.
+ *
+ * The router measures via librespeed-cli and stores results in /tmp, a
+ * ramdisk - gone after a reboot. The agent sends them here, so this is
+ * the only place where the history truly survives.
+ *
+ * Averages are computed only from what was actually measured in the window;
+ * `samples` says from how many measurements, so "average of thirty" can be
+ * told apart from "average of one".
+ */
+if ($action === 'speedtest_history') {
+    $sp_monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $sp_limit = max(1, min(200, (int)($_GET['limit'] ?? 60)));
+    bk_require_monitor_view($pdo, $sp_monitor_id);
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT measured_at, download_mbps, upload_mbps, ping_ms, jitter_ms, server_name,
+                   source, iface, tool, link_mbit, uplink, uplink_source, proto
+            FROM speedtest_results
+            WHERE monitor_id = ?
+            ORDER BY measured_at DESC
+            LIMIT {$sp_limit}
+        ");
+        $stmt->execute([$sp_monitor_id]);
+        $sp_rows = $stmt->fetchAll();
+
+        // The averages are computed in PHP, not with AVG(): which line a row
+        // belongs to can depend on the outage events (an inferred backup), and
+        // that is not a column SQL could filter on. A year is ~425 rows.
+        $sp_now = time();
+        $stmt_avg = $pdo->prepare("
+            SELECT measured_at, download_mbps, upload_mbps, ping_ms, uplink, uplink_source
+            FROM speedtest_results
+            WHERE monitor_id = ? AND measured_at >= DATE_SUB(NOW(), INTERVAL 365 DAY)
+        ");
+        $stmt_avg->execute([$sp_monitor_id]);
+        $sp_avg_rows = $stmt_avg->fetchAll();
+
+        // The outage events must reach back to the oldest row either list holds.
+        $sp_since = $sp_now - 365 * 86400;
+        foreach ($sp_rows as $r) {
+            $sp_ts = strtotime((string)$r['measured_at']);
+            if ($sp_ts !== false && $sp_ts < $sp_since) {
+                $sp_since = $sp_ts;
+            }
+        }
+        $sp_down = bk_wan_down_ranges($pdo, [$sp_monitor_id], $sp_since - 1, $sp_now)[$sp_monitor_id] ?? [];
+        $sp_rows = bk_speedtest_attribute_rows($sp_rows, $sp_down);
+        $sp_avg_rows = bk_speedtest_attribute_rows($sp_avg_rows, $sp_down);
+
+        $measurements = [];
+        foreach ($sp_rows as $r) {
+            $measurements[] = [
+                'measuredAt' => $r['measured_at'],
+                // NULL stays NULL: librespeed sometimes returns no jitter and a zero
+                // would claim a perfectly stable line.
+                'downloadMbps' => $r['download_mbps'] !== null ? round((float)$r['download_mbps'], 2) : null,
+                'uploadMbps' => $r['upload_mbps'] !== null ? round((float)$r['upload_mbps'], 2) : null,
+                'pingMs' => $r['ping_ms'] !== null ? round((float)$r['ping_ms'], 1) : null,
+                'jitterMs' => $r['jitter_ms'] !== null ? round((float)$r['jitter_ms'], 1) : null,
+                'server' => $r['server_name'],
+                // Who ran it (WAN 3.3): the router's own nightly test or the
+                // agent's probe. The column is the old `source`, whose
+                // 'librespeed' constant the migration rewrote to 'turris'.
+                'startedBy' => in_array($r['source'] ?? null, ['turris', 'agent'], true) ? $r['source'] : null,
+                'iface' => $r['iface'] ?? null,
+                'tool' => $r['tool'] ?? null,
+                'linkMbit' => $r['link_mbit'] !== null ? (int)$r['link_mbit'] : null,
+                // Which line carried it: measured ('counters'), guessed from an
+                // outage ('outage') or unknown (both null). Never a silent WAN.
+                'uplink' => $r['uplink'],
+                'uplinkSource' => $r['uplink_source'],
+                'proto' => in_array($r['proto'] ?? null, ['http', 'https'], true) ? $r['proto'] : null,
+            ];
+        }
+
+        $sp_split = bk_speedtest_averages($sp_avg_rows, ['week' => 7, 'month' => 30, 'year' => 365], $sp_now);
+
+        echo json_encode([
+            'measurements' => $measurements,
+            // The WAN line: LTE and mixed rows never drag it down.
+            'averages' => $sp_split['wan'],
+            'backupAverages' => $sp_split['backup'],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] speedtest_history selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Historii měření rychlosti se nepodařilo načíst.');
+    }
+    exit;
+}
+
+/**
+ * What the week says about one router (CORE 3.9).
+ *
+ * The SAME engine the Monday e-mail runs, in the language of the request: the
+ * page and the e-mail must never tell the owner two different stories, so the
+ * texts are the server's and the app renders them as they arrive.
+ *
+ * Read-only on purpose. The digest owns the snapshot (`router_rec_state`) -
+ * if a page load wrote it, opening the router on Sunday evening would make
+ * Monday's e-mail call every open item "unchanged since last week".
+ */
+if ($action === 'router_recommendations') {
+    $rr_monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    bk_require_monitor_view($pdo, $rr_monitor_id);
+    try {
+        $rr_stmt = $pdo->prepare("SELECT * FROM monitors WHERE id = ?");
+        $rr_stmt->execute([$rr_monitor_id]);
+        $rr_monitor = $rr_stmt->fetch();
+        if (!$rr_monitor) {
+            bk_api_error(404, 'Monitor nenalezen.');
+        }
+        $rr_details = bk_monitor_details($rr_monitor);
+        $rr_in = bk_router_rec_inputs($pdo, $rr_monitor, $rr_details, date('Y-m-d'));
+        $rr_res = bk_router_rec_evaluate($rr_in);
+        $rr_state = is_array($rr_in['state'] ?? null) ? $rr_in['state'] : [];
+        $rr_split = bk_router_rec_split($rr_res['items'], $rr_state);
+
+        $rr_items = [];
+        foreach ($rr_split['items'] as $rr_item) {
+            $rr_items[] = bk_rec_item_json($rr_item, $rr_state[(string)$rr_item['key']] ?? null);
+        }
+        $rr_muted = [];
+        $rr_seen = [];
+        foreach ($rr_split['muted'] as $rr_item) {
+            $rr_key = (string)$rr_item['key'];
+            $rr_seen[$rr_key] = true;
+            $rr_muted[] = bk_rec_item_json($rr_item, $rr_state[$rr_key] ?? null);
+        }
+        // A mute whose rule no longer fires: listed with null texts and
+        // `active: false`, or the owner could never take the mute back.
+        foreach ($rr_state as $rr_key => $rr_row) {
+            if (empty($rr_row['muted_at']) || isset($rr_seen[(string)$rr_key])) {
+                continue;
+            }
+            $rr_id = (string)($rr_row['rule_id'] ?? '');
+            $rr_muted[] = bk_rec_item_json([
+                'id' => $rr_id,
+                'key' => (string)$rr_key,
+                'area' => bk_rec_area_of($rr_id),
+                'severity' => (string)($rr_row['muted_severity'] ?? 'info'),
+                'subject' => ['kind' => 'router'],
+                'params' => [],
+                'openSince' => $rr_row['first_seen'] ?? null,
+            ], $rr_row, false);
+        }
+
+        $rr_window = null;
+        if ($rr_res['applicable']) {
+            $rr_days = $rr_in['window']['days'] ?? [];
+            $rr_prev = $rr_in['window']['prev_days'] ?? [];
+            $rr_window = [
+                'from' => $rr_days[0] ?? null,
+                'to' => $rr_days === [] ? null : $rr_days[count($rr_days) - 1],
+                'previousFrom' => $rr_prev[0] ?? null,
+                'previousTo' => $rr_prev === [] ? null : $rr_prev[count($rr_prev) - 1],
+                'daysWithData' => (int)$rr_res['days_with_data'],
+            ];
+        }
+        echo json_encode([
+            'monitorId' => $rr_monitor_id,
+            'applicable' => (bool)$rr_res['applicable'],
+            'reason' => $rr_res['reason'],
+            'generatedAt' => date('c'),
+            'window' => $rr_window,
+            // Muting is an admin decision: it silences a finding for everybody
+            // who can see the router, not just for the person clicking.
+            'canMute' => ($_SESSION['admin_role'] ?? '') === 'admin',
+            'missingPackages' => bk_rec_missing_packages($rr_details['agent_tools'] ?? null),
+            'items' => $rr_items,
+            'muted' => $rr_muted,
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] router_recommendations selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Doporučení pro router se nepodařilo sestavit.');
+    }
+    exit;
+}
+
+/**
+ * "I know about this one" - mute or unmute a single recommendation (CORE 3.9).
+ *
+ * A mute is per router and per key and remembers the severity it was made at,
+ * so it silences the finding as it is today and NOT a worse version of it: a
+ * disk muted at "warm" comes back the week it starts failing. That is why the
+ * engine is run here instead of trusting a severity from the request body -
+ * the client must not be able to decide how loud a finding has to get before
+ * it is heard again.
+ */
+if ($action === 'router_recommendation_mute') {
+    bk_require_admin();
+    $rm_input = json_decode((string)file_get_contents('php://input'), true);
+    if (!is_array($rm_input)) {
+        $rm_input = $_POST;
+    }
+    $rm_monitor_id = (int)($rm_input['monitor_id'] ?? 0);
+    $rm_key = trim((string)($rm_input['key'] ?? ''));
+    $rm_on = !empty($rm_input['muted']);
+    $rm_reason = mb_substr(trim((string)($rm_input['reason'] ?? '')), 0, 255);
+    bk_require_monitor_view($pdo, $rm_monitor_id);
+    bk_refuse_archived_write($pdo, $rm_monitor_id);
+
+    // The key is stored and later matched against what the engine produces, so
+    // it is validated the same way twice: shape, and a rule id that exists.
+    $rm_rule = explode(':', $rm_key, 2)[0];
+    if (!preg_match('/^[a-z0-9_]{3,40}(:[A-Za-z0-9._:-]{1,39})?$/', $rm_key)
+        || !in_array($rm_rule, bk_router_rec_thresholds()['rank'], true)) {
+        bk_api_error(400, 'Neznámý klíč doporučení.');
+    }
+
+    try {
+        $rm_stmt = $pdo->prepare("SELECT * FROM monitors WHERE id = ?");
+        $rm_stmt->execute([$rm_monitor_id]);
+        $rm_monitor = $rm_stmt->fetch();
+        if (!$rm_monitor) {
+            bk_api_error(404, 'Monitor nenalezen.');
+        }
+        $rm_mute = null;
+        if ($rm_on) {
+            $rm_in = bk_router_rec_inputs($pdo, $rm_monitor, bk_monitor_details($rm_monitor), date('Y-m-d'));
+            $rm_res = bk_router_rec_evaluate($rm_in);
+            // Not firing right now = `info` (CORE 3.9): the mute then hides
+            // nothing worse than the mildest degree, and anything above it
+            // comes straight back.
+            $rm_severity = 'info';
+            foreach ($rm_res['items'] as $rm_item) {
+                if ((string)$rm_item['key'] === $rm_key) {
+                    $rm_severity = (string)$rm_item['severity'];
+                    break;
+                }
+            }
+            $rm_by = (string)($_SESSION['admin_username'] ?? '');
+            $rm_now = date('Y-m-d H:i:s');
+            $pdo->prepare("
+                INSERT INTO router_rec_state
+                    (monitor_id, rec_key, rule_id, active, severity, first_seen, last_seen,
+                     muted_at, muted_by, muted_severity, mute_reason)
+                VALUES (?, ?, ?, 0, NULL, NULL, NULL, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    muted_at = VALUES(muted_at), muted_by = VALUES(muted_by),
+                    muted_severity = VALUES(muted_severity), mute_reason = VALUES(mute_reason)
+            ")->execute([$rm_monitor_id, $rm_key, $rm_rule, $rm_now, $rm_by, $rm_severity,
+                $rm_reason !== '' ? $rm_reason : null]);
+            $rm_mute = ['at' => $rm_now, 'by' => $rm_by,
+                'reason' => $rm_reason !== '' ? $rm_reason : null, 'severity' => $rm_severity];
+        } else {
+            $pdo->prepare("
+                UPDATE router_rec_state
+                SET muted_at = NULL, muted_by = NULL, muted_severity = NULL, mute_reason = NULL
+                WHERE monitor_id = ? AND rec_key = ?
+            ")->execute([$rm_monitor_id, $rm_key]);
+        }
+        bk_audit_log($pdo, $rm_on ? 'router_rec_mute' : 'router_rec_unmute',
+            $rm_key . ($rm_reason !== '' ? ': ' . $rm_reason : ''), 'monitor', $rm_monitor_id);
+        // The bell's kept counts still hold the muted item.
+        bk_kv_cache_clear($pdo, ['findings_summary_']);
+        echo json_encode(['ok' => true, 'key' => $rm_key, 'muted' => $rm_on, 'mute' => $rm_mute],
+            JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] router_recommendation_mute selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Změnu se nepodařilo uložit.');
+    }
+    exit;
+}
+
+/**
+ * The daily SMART history of a router's disks (CORE 3.9).
+ *
+ * `last_details` carries only the newest reading and the next report
+ * overwrites it, so "did the bad blocks grow since spring" has no answer
+ * without this table. A day with no reading has no row and comes back as a
+ * gap - never as a zero, which would draw a disk that cooled to 0 °C.
+ *
+ * No serial number or WWN can appear here: the disk is identified by
+ * `disk_key`, a hash of transport, port, model and size, and the tables have
+ * no column to put an identifier in.
+ */
+if ($action === 'storage_history') {
+    $sh_monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $sh_days = max(1, min(400, (int)($_GET['days'] ?? 90)));
+    bk_require_monitor_view($pdo, $sh_monitor_id);
+
+    try {
+        $sh_stmt = $pdo->prepare("
+            SELECT id, disk_key, name, transport, port, model, smart_model, size_bytes,
+                   rotational, first_seen, last_seen, replaced_at,
+                   (replaced_at IS NULL AND last_seen >= DATE_SUB(NOW(), INTERVAL 3 HOUR)) AS present
+            FROM storage_disks
+            WHERE monitor_id = ?
+            ORDER BY name
+        ");
+        $sh_stmt->execute([$sh_monitor_id]);
+        $sh_disks = $sh_stmt->fetchAll();
+
+        $sh_daily = [];
+        if ($sh_disks !== []) {
+            $sh_ids = array_map(fn (array $d): int => (int)$d['id'], $sh_disks);
+            $sh_in = implode(',', array_fill(0, count($sh_ids), '?'));
+            $sh_rows = $pdo->prepare("
+                SELECT * FROM storage_disk_daily
+                WHERE disk_id IN ({$sh_in}) AND day >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
+                ORDER BY day
+            ");
+            $sh_rows->execute(array_merge($sh_ids, [$sh_days]));
+            foreach ($sh_rows->fetchAll() as $sh_row) {
+                $sh_daily[(int)$sh_row['disk_id']][] = $sh_row;
+            }
+        }
+
+        // NULL stays NULL through every conversion below: a counter the drive
+        // does not implement is not a counter at zero.
+        $sh_int = fn ($v): ?int => $v === null ? null : (int)$v;
+        $sh_out = [];
+        foreach ($sh_disks as $sh_disk) {
+            $sh_list = [];
+            foreach ($sh_daily[(int)$sh_disk['id']] ?? [] as $r) {
+                $sh_temp_n = $sh_int($r['temp_n']);
+                $sh_list[] = [
+                    'day' => $r['day'],
+                    'samples' => (int)$r['samples'],
+                    'smartPassed' => $r['smart_passed'] === null ? null : (bool)$r['smart_passed'],
+                    'tempMin' => $sh_int($r['temp_min']),
+                    'tempAvg' => ($sh_temp_n !== null && $sh_temp_n > 0 && $r['temp_sum'] !== null)
+                        ? round((float)$r['temp_sum'] / $sh_temp_n, 1) : null,
+                    'tempMax' => $sh_int($r['temp_max']),
+                    'powerOnHours' => $sh_int($r['power_on_hours']),
+                    'powerCycles' => $sh_int($r['power_cycles']),
+                    'unsafeShutdowns' => $sh_int($r['unsafe_shutdowns']),
+                    'reallocated' => $sh_int($r['reallocated_sectors']),
+                    'pending' => $sh_int($r['pending_sectors']),
+                    'offlineUncorrectable' => $sh_int($r['offline_uncorrectable']),
+                    'reportedUncorrect' => $sh_int($r['reported_uncorrect']),
+                    'crcErrors' => $sh_int($r['crc_errors']),
+                    'runtimeBadBlocks' => $sh_int($r['runtime_bad_blocks']),
+                    'mediaErrors' => $sh_int($r['media_errors']),
+                    'errorLogCount' => $sh_int($r['error_log_count']),
+                    'wearPct' => $sh_int($r['wear_pct']),
+                    'emmcLife' => $sh_int($r['emmc_life']),
+                    'writtenBytes' => $sh_int($r['written_bytes']),
+                    'hostWrittenBytes' => $sh_int($r['host_written_bytes']),
+                    'hostWrittenPartial' => (bool)$r['host_written_partial'],
+                ];
+            }
+            $sh_out[] = [
+                'key' => $sh_disk['disk_key'],
+                'name' => $sh_disk['name'],
+                'transport' => $sh_disk['transport'],
+                'port' => $sh_disk['port'],
+                'model' => $sh_disk['model'],
+                'smartModel' => $sh_disk['smart_model'],
+                'sizeBytes' => $sh_int($sh_disk['size_bytes']),
+                'rotational' => $sh_disk['rotational'] === null ? null : (bool)$sh_disk['rotational'],
+                'firstSeen' => $sh_disk['first_seen'],
+                'lastSeen' => $sh_disk['last_seen'],
+                'replacedAt' => $sh_disk['replaced_at'],
+                'present' => (bool)$sh_disk['present'],
+                'daily' => $sh_list,
+            ];
+        }
+        echo json_encode(['monitorId' => $sh_monitor_id, 'days' => $sh_days, 'disks' => $sh_out],
+            JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] storage_history selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Historii disků se nepodařilo načíst.');
+    }
+    exit;
+}
+
+/**
+ * Where the WAN line is limited, as the server classified it (WAN 3.4, 3.6).
+ *
+ * The classifier is PHP and only PHP: the card renders the class and the
+ * reason it was given and never re-derives one, so the page and the weekly
+ * e-mail cannot drift apart. Everything it cannot prove comes back as
+ * `inconclusive` with the reason - never as a softer claim.
+ */
+if ($action === 'wan_bottleneck') {
+    $wb_monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    bk_require_monitor_view($pdo, $wb_monitor_id);
+
+    try {
+        $wb_stmt = $pdo->prepare("
+            SELECT id, last_details, wan_plan_down_mbit, wan_plan_up_mbit, wan_plan_ok_pct, wan_probe_enabled
+            FROM monitors WHERE id = ?
+        ");
+        $wb_stmt->execute([$wb_monitor_id]);
+        $wb_monitor = $wb_stmt->fetch();
+        if (!$wb_monitor) {
+            bk_api_error(404, 'Monitor nenalezen.');
+        }
+        $wb_details = bk_monitor_details($wb_monitor);
+        $wb_path = is_array($wb_details['wan_path'] ?? null) ? $wb_details['wan_path'] : null;
+        $wb_tools = is_array($wb_details['agent_tools'] ?? null) ? $wb_details['agent_tools'] : [];
+        $wb_int = fn ($v): ?int => $v === null ? null : (int)$v;
+
+        // More than the three shown: a probe that was gated (background
+        // traffic, an unverified path) does not count towards the three the
+        // aggregate stands on, so the classifier has to be able to look past it.
+        $wb_agent = $pdo->prepare("
+            SELECT id, measured_at, download_mbps, upload_mbps, server_name, source, link_mbit, diagnostics,
+                   uplink, uplink_source
+            FROM speedtest_results
+            WHERE monitor_id = ? AND source = 'agent' AND measured_at >= DATE_SUB(NOW(), INTERVAL 21 DAY)
+            ORDER BY measured_at DESC LIMIT 10
+        ");
+        $wb_agent->execute([$wb_monitor_id]);
+        $wb_agent_rows = $wb_agent->fetchAll();
+
+        // The newest Turris row that did not run over the backup: its LTE
+        // figure next to the agent's probes would read as a slow WAN. Up to
+        // a week of nights is looked at, the attribution picks the first.
+        $wb_turris = $pdo->prepare("
+            SELECT id, measured_at, download_mbps, upload_mbps, server_name, source, link_mbit, diagnostics,
+                   uplink, uplink_source
+            FROM speedtest_results
+            WHERE monitor_id = ? AND (source IS NULL OR source <> 'agent')
+            ORDER BY measured_at DESC LIMIT 7
+        ");
+        $wb_turris->execute([$wb_monitor_id]);
+        $wb_turris_rows = $wb_turris->fetchAll();
+
+        $wb_since = time() - 21 * 86400;
+        foreach ($wb_turris_rows as $r) {
+            $wb_ts = strtotime((string)$r['measured_at']);
+            if ($wb_ts !== false && $wb_ts < $wb_since) {
+                $wb_since = $wb_ts;
+            }
+        }
+        $wb_down = bk_wan_down_ranges($pdo, [$wb_monitor_id], $wb_since - 1, time())[$wb_monitor_id] ?? [];
+        $wb_agent_rows = bk_speedtest_attribute_rows($wb_agent_rows, $wb_down);
+        $wb_turris_rows = array_slice(array_values(array_filter(
+            bk_speedtest_attribute_rows($wb_turris_rows, $wb_down),
+            fn (array $r): bool => !bk_speedtest_off_wan($r)
+        )), 0, 1);
+
+        // Server capability is observed, never assumed (WAN 3.4): the Turris
+        // list publishes no capacity. Only the maximum this server has ever
+        // delivered leaves the query - no other account's router and no other
+        // account's value.
+        $wb_server_max = [];
+        $wb_names = [];
+        foreach ($wb_agent_rows as $r) {
+            if (($r['server_name'] ?? '') !== '' && !bk_speedtest_off_wan($r)) {
+                $wb_names[(string)$r['server_name']] = true;
+            }
+        }
+        if ($wb_names !== []) {
+            $wb_in = implode(',', array_fill(0, count($wb_names), '?'));
+            $wb_cap = $pdo->prepare("
+                SELECT server_name, MAX(download_mbps) AS dl, MAX(upload_mbps) AS ul
+                FROM speedtest_results
+                WHERE server_name IN ({$wb_in}) AND measured_at >= DATE_SUB(NOW(), INTERVAL 90 DAY)
+                GROUP BY server_name
+            ");
+            $wb_cap->execute(array_keys($wb_names));
+            foreach ($wb_cap->fetchAll() as $r) {
+                $wb_server_max[(string)$r['server_name']] = [
+                    'dl' => $r['dl'] === null ? null : (float)$r['dl'],
+                    'ul' => $r['ul'] === null ? null : (float)$r['ul'],
+                ];
+            }
+        }
+
+        $wb_ctx = [
+            'plan_down' => $wb_int($wb_monitor['wan_plan_down_mbit']),
+            'plan_up' => $wb_int($wb_monitor['wan_plan_up_mbit']),
+            'plan_ok_pct' => $wb_int($wb_monitor['wan_plan_ok_pct']),
+            'threaded_napi' => is_bool($wb_path['wan_threaded_napi'] ?? null) ? $wb_path['wan_threaded_napi'] : null,
+            'server_max' => $wb_server_max,
+            'now' => time(),
+        ];
+
+        $wb_tests = [];
+        foreach (array_merge(array_slice($wb_agent_rows, 0, 3), $wb_turris_rows) as $r) {
+            $wb_diag = json_decode((string)($r['diagnostics'] ?? ''), true);
+            $wb_tests[] = [
+                'measuredAt' => $r['measured_at'],
+                'startedBy' => in_array($r['source'] ?? null, ['turris', 'agent'], true) ? $r['source'] : null,
+                // An agent probe over the backup is still listed (it happened),
+                // with its line and the ran_over_backup verdict.
+                'uplink' => $r['uplink'],
+                'uplinkSource' => $r['uplink_source'],
+                'server' => $r['server_name'],
+                'downloadMbps' => $r['download_mbps'] === null ? null : round((float)$r['download_mbps'], 2),
+                'uploadMbps' => $r['upload_mbps'] === null ? null : round((float)$r['upload_mbps'], 2),
+                'linkMbit' => $wb_int($r['link_mbit']),
+                'verdict' => bk_wan_test_verdict($r, $wb_ctx),
+                'diagnostics' => is_array($wb_diag) ? $wb_diag : null,
+            ];
+        }
+
+        echo json_encode([
+            'monitorId' => $wb_monitor_id,
+            'generatedAt' => date('c'),
+            'canEdit' => ($_SESSION['admin_role'] ?? '') === 'admin',
+            'plan' => [
+                'downMbit' => $wb_ctx['plan_down'],
+                'upMbit' => $wb_ctx['plan_up'],
+                'okPct' => $wb_ctx['plan_ok_pct'],
+            ],
+            // The router's own probe is not built in this release (wave 2).
+            // The keys travel so the card has one shape to render and the
+            // agent one shape to meet; `enabledServer` is the stored consent.
+            'probe' => [
+                'enabledServer' => (bool)$wb_monitor['wan_probe_enabled'],
+                'state' => is_array($wb_details['wan_probe_state'] ?? null) ? $wb_details['wan_probe_state'] : null,
+                'waitSince' => $wb_details['wan_probe_wait_since'] ?? null,
+                'budgetSpent' => false,
+            ],
+            'verdict' => bk_wan_bottleneck($wb_agent_rows, $wb_ctx),
+            'tests' => $wb_tests,
+            'wanPath' => $wb_path,
+            'linkDev' => $wb_details['wan_link_dev'] ?? null,
+            'linkMbit' => $wb_int($wb_details['wan_link_mbit'] ?? null),
+            'tools' => [
+                'librespeedCli' => is_bool($wb_tools['librespeed_cli'] ?? null) ? $wb_tools['librespeed_cli'] : null,
+                'ethtool' => is_bool($wb_tools['ethtool'] ?? null) ? $wb_tools['ethtool'] : null,
+                'tc' => is_bool($wb_tools['tc'] ?? null) ? $wb_tools['tc'] : null,
+            ],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] wan_bottleneck selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Rozbor linky WAN se nepodařilo sestavit.');
+    }
+    exit;
+}
+
+/**
+ * The router's tariff, and the consent for its own probe (WAN 3.6, INDEX 3.4).
+ *
+ * The plan is the one thing the classifier cannot measure: without it nothing
+ * is ever called "below plan" (WAN 3.0), so a rate is stored as null when it
+ * is not set and never as a zero that would read as "the line should do
+ * nothing". A value outside the range is a client error and is refused -
+ * clamping it would store a plan the owner never entered.
+ */
+if ($action === 'wan_settings_save') {
+    bk_require_admin();
+    $ws_input = json_decode((string)file_get_contents('php://input'), true);
+    if (!is_array($ws_input)) {
+        $ws_input = $_POST;
+    }
+    $ws_monitor_id = (int)($ws_input['monitor_id'] ?? 0);
+    bk_require_monitor_view($pdo, $ws_monitor_id);
+    bk_refuse_archived_write($pdo, $ws_monitor_id);
+
+    $ws_bad = [];
+    $ws_range = function ($value, int $min, int $max, string $name) use (&$ws_bad): ?int {
+        if ($value === null || $value === '') {
+            return null;
+        }
+        if (!is_numeric($value) || (int)$value < $min || (int)$value > $max) {
+            $ws_bad[] = $name;
+            return null;
+        }
+        return (int)$value;
+    };
+    $ws_down = $ws_range($ws_input['plan_down_mbit'] ?? null, 1, 100000, 'plan_down_mbit');
+    $ws_up = $ws_range($ws_input['plan_up_mbit'] ?? null, 1, 100000, 'plan_up_mbit');
+    $ws_pct = $ws_range($ws_input['plan_ok_pct'] ?? null, 30, 100, 'plan_ok_pct');
+    if ($ws_bad !== []) {
+        bk_api_error(400, 'Neplatná hodnota: ' . implode(', ', $ws_bad));
+    }
+
+    try {
+        // This release has no probe toggle, so the app does not send the key.
+        // A missing key must leave the stored consent alone - reading it as
+        // `false` would silently withdraw a consent nobody took back.
+        if (array_key_exists('probe_enabled', $ws_input)) {
+            $ws_probe = !empty($ws_input['probe_enabled']) ? 1 : 0;
+            $pdo->prepare("
+                UPDATE monitors
+                SET wan_plan_down_mbit = ?, wan_plan_up_mbit = ?, wan_plan_ok_pct = ?, wan_probe_enabled = ?
+                WHERE id = ?
+            ")->execute([$ws_down, $ws_up, $ws_pct, $ws_probe, $ws_monitor_id]);
+        } else {
+            $pdo->prepare("
+                UPDATE monitors
+                SET wan_plan_down_mbit = ?, wan_plan_up_mbit = ?, wan_plan_ok_pct = ?
+                WHERE id = ?
+            ")->execute([$ws_down, $ws_up, $ws_pct, $ws_monitor_id]);
+        }
+        $ws_read = $pdo->prepare("SELECT wan_probe_enabled FROM monitors WHERE id = ?");
+        $ws_read->execute([$ws_monitor_id]);
+        $ws_enabled = (bool)$ws_read->fetchColumn();
+        bk_audit_log($pdo, 'wan_plan_saved',
+            sprintf('Tarif WAN: %s / %s Mbit/s, %s %%',
+                $ws_down === null ? '—' : (string)$ws_down,
+                $ws_up === null ? '—' : (string)$ws_up,
+                $ws_pct === null ? '85' : (string)$ws_pct),
+            'monitor', $ws_monitor_id);
+        echo json_encode([
+            'ok' => true,
+            'plan' => ['downMbit' => $ws_down, 'upMbit' => $ws_up, 'okPct' => $ws_pct],
+            'probe' => ['enabledServer' => $ws_enabled],
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] wan_settings_save selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Nastavení se nepodařilo uložit.');
+    }
+    exit;
+}
+
+/**
+ * The real audit trail - who signed in, who changed what.
+ *
+ * The `audit_log` table is filled from 62 places and the legacy admin has
+ * its own page over it, but React never showed it: its "log" called
+ * `audit_logs` (with an "s"), which is check results, then all with a
+ * hardcoded "System Agent (Cron)" user. Filters for sign-ins and config changes
+ * could therefore never find anything.
+ *
+ * Admin-only: it contains who signed in from where, including failed
+ * attempts and IP addresses.
+ */
+if ($action === 'user_audit_log') {
+    bk_require_admin();
+
+    $ua_limit = max(10, min(500, (int)($_GET['limit'] ?? 100)));
+
+    try {
+        $stmt = $pdo->prepare("
+            SELECT id, actor_username, action, target_type, target_id, description, ip_address, user_agent, created_at
+            FROM audit_log
+            ORDER BY id DESC
+            LIMIT ?
+        ");
+        $stmt->bindValue(1, $ua_limit, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $entries = [];
+        foreach ($stmt->fetchAll() as $row) {
+            $entries[] = [
+                'id' => (int)$row['id'],
+                'time' => $row['created_at'],
+                'action' => $row['action'],
+                // NULL when someone unauthenticated performed the action (a failed
+                // sign-in attempt with an unknown name) - substituting "system"
+                // would claim the application did it.
+                'actor' => $row['actor_username'],
+                'targetType' => $row['target_type'],
+                'targetId' => $row['target_id'] !== null ? (int)$row['target_id'] : null,
+                'description' => $row['description'],
+                'ip' => $row['ip_address'],
+                // NULL for records predating user-agent storage and for cron
+                // actions (cron has no browser).
+                'userAgent' => $row['user_agent'],
+            ];
+        }
+
+        echo json_encode(['entries' => $entries], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] user_audit_log selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Auditní protokol se nepodařilo načíst.');
+    }
+    exit;
+}
+
+/**
+ * Public e-mail subscriptions - visitors without accounts.
+ *
+ * Double opt-in: the form is public, so anyone can type any address - nothing
+ * is sent until the owner clicks the confirmation link. The response is
+ * deliberately identical whether the address is new, pending or already
+ * subscribed, so the form cannot be used to probe who subscribes. The
+ * confirm/unsubscribe links lead to React pages with an explicit button -
+ * mail scanners follow bare GET links and would confirm or cancel
+ * subscriptions nobody asked for.
+ */
+if ($action === 'public_subscribe') {
+    $ps_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $ps_email = trim((string)($ps_input['email'] ?? ''));
+    $ps_lang = ($ps_input['lang'] ?? '') === 'en' ? 'en' : 'cs';
+    if (!filter_var($ps_email, FILTER_VALIDATE_EMAIL)) {
+        bk_api_error(400, 'Neplatná e-mailová adresa.');
+    }
+    $ps_ip = bk_client_ip();
+    try {
+        // Sign-up rate limit per IP: the form must not become a mail cannon.
+        $stmt_rl = $pdo->prepare("SELECT COUNT(*) FROM public_subscribers WHERE created_ip = ? AND created_at > DATE_SUB(NOW(), INTERVAL 1 HOUR)");
+        $stmt_rl->execute([$ps_ip]);
+        if ((int)$stmt_rl->fetchColumn() >= 5) {
+            bk_api_error(429, 'Příliš mnoho pokusů. Zkuste to později.');
+        }
+        $ps_token = bk_public_sub_issue($pdo, $ps_email, $ps_lang, $ps_ip);
+        if ($ps_token !== null && !bk_public_sub_send_confirm($ps_email, $ps_lang, $ps_token, bk_link_origin())) {
+            // The operator needs to know delivery is broken; the visitor must
+            // not, because the answer would identify them. See below.
+            error_log('[public_subscribe] potvrzovací e-mail se nepodařilo odeslat');
+        }
+        // The response is deliberately constant for every outcome - new address,
+        // already confirmed, or resend cooldown.
+        //
+        // It used to carry an `emailSent` flag, meant as honesty about delivery.
+        // But only the not-yet-subscribed path ever attempts a send, so ANY
+        // per-request delivery signal identifies membership the moment sending
+        // breaks: an attacker submits an address and reads "send failed" =>
+        // "not a subscriber". Reporting a fixed `true` instead just inverted
+        // that (CI, which has no mail server, made it obvious). Delivery health
+        // is an operator concern and goes to the log above; what the visitor is
+        // told stays true for every case and reveals nothing about who
+        // subscribes.
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[public_subscribe] ' . $e->getMessage());
+        bk_api_error(500, 'Odběr se nepodařilo založit.');
+    }
+    exit;
+}
+
+if ($action === 'public_subscribe_confirm') {
+    $psc_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $psc_token = trim((string)($psc_input['token'] ?? ''));
+    if ($psc_token === '') {
+        bk_api_error(400, 'Chybí token.');
+    }
+    try {
+        $stmt_psc = $pdo->prepare("SELECT id FROM public_subscribers WHERE confirm_token_hash = ? AND confirmed_at IS NULL LIMIT 1");
+        $stmt_psc->execute([hash('sha256', $psc_token)]);
+        $psc_row = $stmt_psc->fetch();
+        if (!$psc_row) {
+            bk_api_error(400, 'Odkaz je neplatný nebo už byl použit.');
+        }
+        $pdo->prepare("UPDATE public_subscribers SET confirmed_at = NOW(), confirm_token_hash = NULL WHERE id = ?")
+            ->execute([(int)$psc_row['id']]);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[public_subscribe_confirm] ' . $e->getMessage());
+        bk_api_error(500, 'Potvrzení se nepodařilo.');
+    }
+    exit;
+}
+
+if ($action === 'public_unsubscribe') {
+    $pu_input = json_decode(file_get_contents('php://input'), true) ?: [];
+    $pu_token = trim((string)($pu_input['token'] ?? ''));
+    if ($pu_token === '') {
+        bk_api_error(400, 'Chybí token.');
+    }
+    try {
+        $stmt_pu = $pdo->prepare("DELETE FROM public_subscribers WHERE unsubscribe_token = ?");
+        $stmt_pu->execute([$pu_token]);
+        // Deleting an already-deleted row is still a successful unsubscribe -
+        // the link in an old mail must never show the visitor an error.
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[public_unsubscribe] ' . $e->getMessage());
+        bk_api_error(500, 'Odhlášení se nepodařilo.');
+    }
+    exit;
+}
+
+// Admin overview of public subscribers - the admin must be able to see and
+// remove addresses (somebody asks to be removed by hand, GDPR requests...).
+if ($action === 'public_subscribers' || $action === 'delete_public_subscriber') {
+    bk_require_admin();
+    try {
+        if ($action === 'delete_public_subscriber') {
+            $dps_input = json_decode(file_get_contents('php://input'), true) ?: [];
+            $pdo->prepare("DELETE FROM public_subscribers WHERE id = ?")->execute([(int)($dps_input['id'] ?? 0)]);
+            bk_audit_log($pdo, 'public_subscriber_deleted', '', 'subscriber', (int)($dps_input['id'] ?? 0));
+            echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        $ps_rows = $pdo->query("SELECT id, email, lang, confirmed_at, created_at FROM public_subscribers ORDER BY id DESC")->fetchAll();
+        $ps_out = [];
+        foreach ($ps_rows as $r) {
+            $ps_out[] = [
+                'id' => (int)$r['id'],
+                'email' => $r['email'],
+                'lang' => $r['lang'],
+                'confirmed' => !empty($r['confirmed_at']),
+                'createdAt' => $r['created_at'],
+            ];
+        }
+        echo json_encode(['subscribers' => $ps_out], JSON_UNESCAPED_UNICODE);
+    } catch (Throwable $e) {
+        error_log('[public_subscribers] ' . $e->getMessage());
+        bk_api_error(500, 'Seznam odběratelů se nepodařilo načíst.');
+    }
+    exit;
+}
+
+/**
+ * Password reset request from React.
+ *
+ * This action never existed in api.php. The app only checked `res.ok`, and
+ * because an unknown action returned 200, it printed "password reset
+ * instructions were sent" every time - and no e-mail ever went out.
+ *
+ * The response is deliberately identical for existing and nonexistent
+ * e-mails, otherwise the form could be used to probe who has an account.
+ */
+if ($action === 'forgot_password') {
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $fp_email = trim((string)($input['email'] ?? ''));
+
+    try {
+        bk_password_reset_request($pdo, $fp_email, get_setting('site_title', 'Blood Kings'));
+    } catch (Throwable $e) {
+        // Even a send failure must not reveal whether the account exists. Into
+        // the log yes, into the response no.
+        error_log('[api] forgot_password selhal: ' . $e->getMessage());
+    }
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'Pokud e-mail v systému existuje, byl na něj odeslán odkaz pro nastavení nového hesla.',
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/**
+ * Creating the first administrator account from the React wizard.
+ *
+ * The action was missing, so the wizard reported "Installation successful"
+ * and created nothing. It never happened in practice only because
+ * `action=session` never returned the `installed` field and the app stayed
+ * on its default `true` - two halves of one unfinished feature, each hiding the other.
+ *
+ * An account can be created ONLY into an empty users table. Otherwise a
+ * public endpoint could add an administrator to a running installation.
+ */
+if ($action === 'setup') {
+    try {
+        $user_count = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
+        if ($user_count > 0) {
+            bk_api_error(409, 'Instalace už proběhla - účet existuje. Přihlaste se, nebo použijte obnovu hesla.');
+        }
+
+        $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+        $su_username = trim((string)($input['username'] ?? ''));
+        $su_email = trim((string)($input['email'] ?? ''));
+        $su_password = (string)($input['password'] ?? '');
+
+        if ($su_username === '' || $su_email === '' || strlen($su_password) < 8) {
+            bk_api_error(400, 'Zadejte jméno, e-mail a heslo dlouhé aspoň 8 znaků.');
+        }
+        if (!filter_var($su_email, FILTER_VALIDATE_EMAIL)) {
+            bk_api_error(400, 'E-mail nemá platný tvar.');
+        }
+
+        $stmt = $pdo->prepare("INSERT INTO users (username, email, role, password_hash) VALUES (?, ?, 'admin', ?)");
+        $stmt->execute([$su_username, $su_email, password_hash($su_password, PASSWORD_BCRYPT, ['cost' => 12])]);
+        $new_user_id = (int)$pdo->lastInsertId();
+
+        // Sign in right away - otherwise the wizard would end on a login form
+        // for the account it just created itself. A new session id, as login
+        // does, so a session id planted before the install is not the admin's.
+        session_regenerate_id(true);
+        $_SESSION['admin_logged_in'] = true;
+        $_SESSION['admin_id'] = $new_user_id;
+        $_SESSION['admin_username'] = $su_username;
+        $_SESSION['admin_role'] = 'admin';
+
+        bk_audit_log($pdo, 'setup_completed', $su_username, 'user', $new_user_id, $new_user_id, $su_username);
+        // The CSRF token a login hands out. Without it the session had none, so
+        // the new admin's first save in the app was refused with 403 until they
+        // signed out and in again - and since W1-H2 setup is the only way a
+        // fresh install gets its first account.
+        echo json_encode(['success' => true, 'id' => $new_user_id, 'csrfToken' => bk_csrf_token()], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] setup selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Účet se nepodařilo založit.');
+    }
+    exit;
+}
+
+/**
+ * Export historie kontrol jednoho monitoru do CSV.
+ *
+ * The "Export CSV" button on the monitor detail pointed at this action, but
+ * it never existed - the visitor downloaded the default JSON service
+ * overview with a 200 instead of a table and had no way to see the failure.
+ *
+ * Error texts go only to the logged-in: the monitor page is public and error
+ * messages can carry internal server names that are not visible on it.
+ */
+if ($action === 'export_csv') {
+    $csv_monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $csv_days = max(1, min(366, (int)($_GET['days'] ?? 30)));
+    bk_require_monitor_view($pdo, $csv_monitor_id);
+    $csv_is_admin = !empty($_SESSION['admin_logged_in']);
+
+    try {
+        $stmt_mon = $pdo->prepare("SELECT id, name FROM monitors WHERE id = ? LIMIT 1");
+        $stmt_mon->execute([$csv_monitor_id]);
+        $csv_monitor = $stmt_mon->fetch();
+
+        if (!$csv_monitor) {
+            bk_api_error(404, 'Monitor nenalezen.');
+        }
+
+        $stmt_logs = $pdo->prepare("
+            SELECT checked_at, status, response_time, checked_from, error_message
+            FROM monitor_logs
+            WHERE monitor_id = ? AND checked_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+            ORDER BY id DESC
+        ");
+        $stmt_logs->execute([$csv_monitor_id, $csv_days]);
+
+        // The JSON header is set at the top of the file; for a download it must
+        // be overridden, or the browser displays the file instead of saving it.
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="monitor-' . $csv_monitor_id . '-' . date('Y-m-d') . '.csv"');
+        header('Cache-Control: no-store');
+
+        $out = fopen('php://output', 'w');
+        // BOM so Excel recognises UTF-8 and does not scramble the diacritics in names.
+        fwrite($out, "\xEF\xBB\xBF");
+
+        $header = ['Čas kontroly', 'Stav', 'Odezva (ms)', 'Měřeno z'];
+        if ($csv_is_admin) {
+            $header[] = 'Chybová hláška';
+        }
+        fputcsv($out, $header);
+
+        foreach ($stmt_logs->fetchAll() as $log) {
+            $row = [
+                $log['checked_at'],
+                $log['status'],
+                // An unmeasured response stays empty, not zero - a zero would read
+                // as a lightning-fast answer in the table. Older rows store 0 for it.
+                (int)$log['response_time'] > 0 ? (int)$log['response_time'] : '',
+                $log['checked_from'] ?? '',
+            ];
+            if ($csv_is_admin) {
+                $row[] = $log['error_message'] ?? '';
+            }
+            fputcsv($out, $row);
+        }
+        fclose($out);
+    } catch (PDOException $e) {
+        error_log('[api] export_csv selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Export se nepodařilo sestavit.');
+    }
+    exit;
+}
+
+/**
+ * Annotations for the metric charts ("deploy happened here", "disk swapped").
+ *
+ * schema.sql has defined the `metric_annotations` table since its first
+ * version (an older database gets it from a migration since 20260927r021),
+ * and the chart had clickable controls, but the endpoint they posted to never
+ * existed. The note was silently dropped and the user got a 200. Not a
+ * single row was ever written into that table.
+ */
+if ($action === 'save_annotation') {
+    bk_require_admin();
+
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $ann_monitor_id = (int)($input['monitor_id'] ?? 0);
+    $ann_metric = trim((string)($input['metric_key'] ?? ''));
+    $ann_note = trim((string)($input['note'] ?? ''));
+    $ann_ts_raw = trim((string)($input['timestamp'] ?? ''));
+    $ann_ts = $ann_ts_raw !== '' ? strtotime($ann_ts_raw) : false;
+    bk_refuse_archived_write($pdo, $ann_monitor_id);
+
+    if ($ann_monitor_id <= 0 || $ann_metric === '' || $ann_note === '' || $ann_ts === false) {
+        bk_api_error(400, 'Chybí monitor, metrika, čas nebo text poznámky.');
+    }
+
+    try {
+        $stmt = $pdo->prepare("
+            INSERT INTO metric_annotations (monitor_id, metric_key, timestamp, note, created_by)
+            VALUES (?, ?, ?, ?, ?)
+        ");
+        $stmt->execute([
+            $ann_monitor_id,
+            mb_substr($ann_metric, 0, 30),
+            date('Y-m-d H:i:s', $ann_ts),
+            // Cap the note server-side: the client sends maxLength=500, but the
+            // client is not a security boundary. The note is rendered escaped,
+            // so this is a size limit, not the XSS defence.
+            mb_substr($ann_note, 0, 500),
+            $_SESSION['admin_id'] ?? null,
+        ]);
+        // Read the id BEFORE the audit entry: bk_audit_log() inserts a row of
+        // its own, and lastInsertId() would then report the audit row's id.
+        // The response has been returning that foreign id all along - harmless
+        // while nobody used it, wrong the moment deletion did.
+        $ann_new_id = (int)$pdo->lastInsertId();
+        bk_audit_log($pdo, 'annotation_created', mb_substr($ann_note, 0, 80), 'monitor', $ann_monitor_id);
+        echo json_encode(['success' => true, 'id' => $ann_new_id], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] save_annotation selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Poznámku se nepodařilo uložit.');
+    }
+    exit;
+}
+
+/** Annotations to draw into the chart. Operational notes are for the logged-in only. */
+if ($action === 'annotations') {
+    if (empty($_SESSION['admin_logged_in'])) {
+        // Not 403: for an anonymous visitor the chart simply has no notes,
+        // which is not an error the frontend should surface.
+        echo json_encode(['annotations' => []], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    $ann_monitor_id = (int)($_GET['monitor_id'] ?? 0);
+    $ann_metric = trim((string)($_GET['metric'] ?? ''));
+    $ann_hours = max(1, min(8760, (int)($_GET['hours'] ?? 24)));
+    // Notes on someone else's monitor are not this user's to read. The empty
+    // list is the same answer an anonymous caller already gets.
+    if (!bk_can_view_monitor($pdo, $ann_monitor_id)) {
+        echo json_encode(['annotations' => []], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    try {
+        $sql = "SELECT a.id, UNIX_TIMESTAMP(a.timestamp) AS ts, a.note, u.username
+                FROM metric_annotations a
+                LEFT JOIN users u ON u.id = a.created_by
+                WHERE a.monitor_id = ? AND a.timestamp >= DATE_SUB(NOW(), INTERVAL ? HOUR)";
+        $params = [$ann_monitor_id, $ann_hours];
+        if ($ann_metric !== '') {
+            $sql .= " AND a.metric_key = ?";
+            $params[] = $ann_metric;
+        }
+        $sql .= " ORDER BY a.timestamp ASC LIMIT 200";
+
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+
+        $annotations = [];
+        foreach ($stmt->fetchAll() as $a) {
+            $annotations[] = [
+                'id' => (int)$a['id'],
+                'ts' => (int)$a['ts'],
+                'note' => $a['note'],
+                // NULL when the author has since vanished - inventing "admin" would
+                // attribute the note to someone who did not write it.
+                'author' => $a['username'],
+            ];
+        }
+        echo json_encode(['annotations' => $annotations], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] annotations selhaly: ' . $e->getMessage());
+        bk_api_error(500, 'Poznámky se nepodařilo načíst.');
+    }
+    exit;
+}
+
+/** Deleting a chart note. Admin-only, the same gate as creating one. */
+if ($action === 'delete_annotation') {
+    bk_require_admin();
+
+    $input = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $ann_id = (int)($input['id'] ?? 0);
+    if ($ann_id <= 0) {
+        bk_api_error(400, 'Chybí id poznámky.');
+    }
+
+    try {
+        // Read before delete: the audit entry names what vanished, not just a number.
+        $stmt = $pdo->prepare("SELECT monitor_id, note FROM metric_annotations WHERE id = ? LIMIT 1");
+        $stmt->execute([$ann_id]);
+        $ann_row = $stmt->fetch();
+        if (!$ann_row) {
+            bk_api_error(404, 'Poznámka nenalezena.');
+        }
+        $pdo->prepare("DELETE FROM metric_annotations WHERE id = ?")->execute([$ann_id]);
+        bk_audit_log($pdo, 'annotation_deleted', mb_substr((string)$ann_row['note'], 0, 80), 'monitor', (int)$ann_row['monitor_id']);
+        echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log('[api] delete_annotation selhal: ' . $e->getMessage());
+        bk_api_error(500, 'Poznámku se nepodařilo smazat.');
+    }
+    exit;
+}
+
+/**
+ * The game portal's view of its servers (bk_portal_status).
+ *
+ * The portal called api.php with no action and got the default service
+ * overview: monitors picked by a LIKE on type or name, a Discord block
+ * nothing filled and 20 players_max for one nobody measured. An empty action
+ * answers the same as portal_status until the portal asks for it by name,
+ * and says so in a Deprecation header.
+ */
+if ($action === 'portal_status' || $action === '') {
+    if ($action === '') {
+        // RFC 9745: deprecated since 2026-11-04 (UTC).
+        header('Deprecation: @1793750400');
+        header('Link: <api.php?action=portal_status>; rel="successor-version"');
+    }
+    try {
+        $portal = bk_portal_status($pdo);
+    } catch (Throwable $e) {
+        // Every service "offline" was the answer to a failed read.
+        bk_api_fail('overview_unavailable', 500, $e, 'Přehled služeb se nepodařilo načíst.');
+    }
+    echo json_encode($portal, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+/**
+ * An unknown action must be heard.
+ *
+ * Everything that matched no handler above falls through here, and it used to
+ * silently receive the default service overview with a 200. A typo in an
+ * action name thus looked like success - exactly why nobody noticed for years
+ * that `save_annotation` (chart notes) and `setup` (the first-run wizard) were
+ * missing from api.php. The caller got 200, the note was dropped, nobody learned anything.
+ */
+bk_api_error(400, sprintf('Neznámá akce „%s".', $action));

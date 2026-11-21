@@ -1,0 +1,74 @@
+<?php
+/**
+ * Configuration file template for Blood Kings Status Monitoring
+ * 
+ * The installer at /app/setup writes config.php from this file after it has
+ * tested the database connection. By hand: copy this file to "config.php" in
+ * the same directory and fill in your MySQL database credentials below.
+ * A config.php that still holds the placeholder password counts as "not set
+ * up" and the installer may replace it; one with real credentials, never.
+ * 
+ * THE "config.php" FILE IS IGNORED BY GIT AND MUST NOT BE COMMITTED!
+ */
+
+// Prevent direct access to the configuration file
+if (count(get_included_files()) === 1) {
+    http_response_code(403);
+    exit("Access denied.");
+}
+
+// Error reporting settings (disable display_errors in production)
+ini_set('display_errors', 0);
+ini_set('display_startup_errors', 0);
+error_reporting(E_ALL);
+
+// Start session for administration with secure cookie flags
+if (session_status() === PHP_SESSION_NONE && !headers_sent()) {
+    // HttpOnly: JS cannot access cookie (XSS protection)
+    // SameSite=Lax: Cookie not sent on cross-site POST/fetch
+    // Secure: Enabled automatically when running over HTTPS
+    $bk_https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'secure' => $bk_https,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+    @session_start();
+}
+
+// --- DATABASE CONFIGURATION ---
+// db.php lets you pass 'pgsql' here, but every migration and query in this
+// app (schema.sql, db.php, api.php, functions.php, cron.php) is written in
+// MySQL dialect (AUTO_INCREMENT, ON DUPLICATE KEY UPDATE, backticked
+// identifiers, ...). Setting DB_DRIVER to 'pgsql' will connect fine and
+// then silently fail every migration/query that follows - this app only
+// actually works against MySQL/MariaDB today.
+define('DB_DRIVER', 'mysql');
+define('DB_HOST', '127.0.0.1');
+define('DB_PORT', 3306);
+define('DB_NAME', 'bloodkings_status');
+define('DB_USER', 'bloodkings');
+define('DB_PASS', 'heslo_databaze');
+
+// --- SMTP ---
+// SMTP is NOT configured here: the complete configuration (host, port, account,
+// password, encryption) lives in the database, managed in Admin -> Settings -> SMTP.
+// The earlier commented-out SMTP_* constants here promised precedence over the DB,
+// but no code ever read them - it was dead (and confusing) documentation.
+
+// --- OTHER SETTINGS ---
+// There are no default admin credentials. schema.sql creates no account; the
+// installer at /app/setup creates the first administrator with a password of
+// your own (every installer step is refused once any account exists).
+// This zone is PHP's AND the database session's, so SQL NOW() and PHP's date()
+// mean the same instant even when the database server runs in another zone.
+// After connecting, db.php (bk_db_clock_sync) keeps the server's own zone if it
+// agrees with this one in winter and summer, else sets this zone by name (needs
+// MySQL's time-zone tables), and only as a last resort today's UTC offset, which
+// reads times across a DST switch an hour off. health.php ("DB clock across
+// DST") says which one this server got.
+define('TIMEZONE', 'Europe/Prague');
+date_default_timezone_set(TIMEZONE);

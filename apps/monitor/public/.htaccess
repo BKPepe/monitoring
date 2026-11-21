@@ -1,0 +1,55 @@
+# SPA fallback pro React Router (BrowserRouter s base /app/).
+# Bez něj F5 na /app/<route> hledá soubor na disku a vrací 404.
+#
+# Historie (08/2026): pravidla tu dlouho neměla ŽÁDNÝ efekt, protože v
+# cPanel Application Manageru byla na URL /app zaregistrovaná aplikace -
+# Passenger si to URI vzal a .htaccess se v jeho kontextu neprocesuje.
+# Přeregistrováním aplikace na jiné URL se to vyřešilo. Kdyby se F5 na
+# route zase rozbilo, tohle je první místo, kam se podívat.
+RewriteEngine On
+
+# Hashed build files are served as they are, and a missing one is a real 404.
+# Answering it with the app page (200 text/html) made a stale tab fail on a
+# MIME error instead of a missing file, and hid the problem from any check
+# (W1-F4).
+RewriteRule ^assets/ - [L]
+
+# The public status page has its own HTML with an indexable head (W1-G4).
+# Only the page itself: /app/public/<anything> is the app's "not found".
+RewriteRule ^public/?$ public.html [L]
+
+# Skutečné soubory a adresáře buildu se servírují beze změny.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+# A path with a file extension asks for a file, not for a page of the app:
+# robots.txt, favicon.ico or an old chunk get a real 404 (W1-F4).
+RewriteCond %{REQUEST_URI} !\.[A-Za-z0-9]{1,8}$
+RewriteRule . index.html [L]
+
+# The branded page for those 404s, instead of the server's default.
+ErrorDocument 404 /app/404.html
+
+# Výpis adresáře nemá u buildových assetů co dělat.
+Options -Indexes
+
+# The app page itself is never stored: after a sign-out, Back or a cache must not
+# bring back the previous account's screen. Every load asks the server again.
+# Hashed assets keep their own caching.
+#
+# Search engines: everything behind the login stays out of the index through
+# this header (and the meta tag in index.html). public.html, the public status
+# page, carries neither - it is meant to be indexed (owner decision, W1-G4).
+<IfModule mod_headers.c>
+    <FilesMatch "^index\.html$">
+        Header set Cache-Control "no-store"
+        Header set X-Robots-Tag "noindex, nofollow"
+    </FilesMatch>
+    <FilesMatch "^public\.html$">
+        # A status page must be fresh; a minute-old verdict is fine, a cached
+        # day-old shell is not. The data itself comes from the API anyway.
+        Header set Cache-Control "no-cache"
+    </FilesMatch>
+    <FilesMatch "^404\.html$">
+        Header set X-Robots-Tag "noindex"
+    </FilesMatch>
+</IfModule>

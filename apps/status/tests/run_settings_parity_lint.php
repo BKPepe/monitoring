@@ -1,0 +1,238 @@
+<?php
+/**
+ * Checks that React, api.php and the legacy admin talk about the same settings.
+ *
+ * Run:  php apps/status/tests/run_settings_parity_lint.php
+ *
+ * Why it exists: the key list existed three times - in admin.php for writing,
+ * and in api.php separately for reading and for writing. They drifted apart and
+ * nobody noticed, because it never surfaces as an error:
+ *
+ *   whatsapp_api_endpoint, whatsapp_token, whatsapp_phone_number
+ *       could be saved, but get_settings never returned them. React therefore
+ *       showed empty fields and the next "Save all" stored empty values - the
+ *       settings vanished without anyone making a mistake.
+ *
+ *   agent_outdated_email_enabled
+ *       React had a toggle for it, but the API knew that key neither for
+ *       reading nor for writing. You could flip it, save it, and after a
+ *       reload it was back.
+ *
+ * The keys now live in one place (bk_settings_keys() in db.php). This lint
+ * covers what a single source cannot: that the UI does not ask for a key the
+ * server has never heard of.
+ */
+
+$root = realpath(__DIR__ . '/..');
+$repo = realpath(__DIR__ . '/../../..');
+
+// db.php cannot simply be included - it connects to the database at the end.
+// Only those two functions are extracted, the same way the other tests do it.
+require_once __DIR__ . '/assert_helpers.php';
+bk_test_load_functions($root . '/db.php', [
+    'bk_settings_keys', 'bk_settings_secret_keys', 'bk_settings_defaults', 'bk_settings_boolean_keys',
+]);
+
+foreach (['bk_settings_keys', 'bk_settings_defaults', 'bk_settings_boolean_keys'] as $bk_fn) {
+    if (!function_exists($bk_fn)) {
+        fwrite(STDERR, "{$bk_fn}() se nepodařilo načíst z db.php - přejmenovala se?\n");
+        exit(1);
+    }
+}
+
+$known = bk_settings_keys();
+$secrets = bk_settings_secret_keys();
+$problems = [];
+
+// 1. Secret keys must be a subset of all keys - otherwise something that is
+//    never read gets masked, and you believe it is hidden when it is not.
+foreach ($secrets as $key) {
+    if (!in_array($key, $known, true)) {
+        $problems[] = sprintf('bk_settings_secret_keys() zná %s, ale bk_settings_keys() ne', $key);
+    }
+}
+
+// 2. No file may keep its own copy of the list. This is checked through a
+//    characteristic key: if someone copies the list around again, the literal
+//    'oauth_github_client_secret' shows up outside db.php.
+$copy_marker = 'oauth_github_client_secret';
+foreach (['api.php', 'admin.php'] as $file) {
+    $src = file_get_contents($root . '/' . $file);
+    if ($src !== false && str_contains($src, "'" . $copy_marker . "'")) {
+        $problems[] = sprintf(
+            '%s obsahuje vlastní seznam klíčů (našel se %s) - má volat bk_settings_keys()',
+            $file,
+            $copy_marker
+        );
+    }
+}
+
+// 3. Keys React touches. Taken from `k="..."` on form fields, `set('...')` on
+//    toggles and `settings.key` in conditions.
+$settings_page = $repo . '/apps/monitor/src/pages/settings.tsx';
+$tsx = file_get_contents($settings_page);
+if ($tsx === false) {
+    fwrite(STDERR, "settings.tsx se nepodařilo načíst.\n");
+    exit(1);
+}
+
+$ui_keys = [];
+preg_match_all('/\bk="([a-z0-9_]+)"/', $tsx, $m);
+$ui_keys = array_merge($ui_keys, $m[1] ?? []);
+preg_match_all("/\bset\('([a-z0-9_]+)'/", $tsx, $m);
+$ui_keys = array_merge($ui_keys, $m[1] ?? []);
+// `settings.key` only where the value is compared or used as a value -
+// otherwise translation keys from t('settings.something') would match too.
+preg_match_all('/settings\.([a-z0-9_]+)\??\s*(?:===|!==|\|\||\?\.)/', $tsx, $m);
+$ui_keys = array_merge($ui_keys, $m[1] ?? []);
+
+// Template-built keys: OAuth fields are formed as `oauth_${op.key}_client_id`
+// over the provider list. If templates were simply ignored, a typo in one
+// (…_clientid) would pass the lint - and that is exactly the silent kind of bug
+// this lint was written for. They are expanded using the list in settings.tsx.
+preg_match_all('/OAUTH_PROVIDERS\s*=\s*\[(.*?)\n\];/s', $tsx, $m);
+$providers = [];
+if (!empty($m[1][0])) {
+    preg_match_all("/\bkey:\s*'([a-z0-9_]+)'/", $m[1][0], $pm);
+    $providers = $pm[1] ?? [];
+}
+
+preg_match_all('/\bk=\{`([a-z0-9_]*)\$\{[a-z]+\.key\}([a-z0-9_]*)`\}/i', $tsx, $m, PREG_SET_ORDER);
+foreach ($m as $tpl) {
+    if (!$providers) {
+        $problems[] = sprintf(
+            'settings.tsx skládá klíč šablonou %s${…}%s, ale seznam poskytovatelů se nepodařilo přečíst',
+            $tpl[1],
+            $tpl[2]
+        );
+        continue;
+    }
+    foreach ($providers as $p) {
+        $ui_keys[] = $tpl[1] . $p . $tpl[2];
+    }
+}
+
+$ui_keys = array_values(array_unique($ui_keys));
+sort($ui_keys);
+
+foreach ($ui_keys as $key) {
+    if (!in_array($key, $known, true)) {
+        $problems[] = sprintf('settings.tsx pracuje s klíčem %s, který bk_settings_keys() nezná', $key);
+    }
+}
+
+// 4. The defaults map. Reading and saving share bk_settings_defaults(); a
+//    caller that passes a different default to get_setting() would make the
+//    page show one value while the cron obeys another. The map wins at run
+//    time, so a disagreeing caller is dead code at best and a lie at worst.
+$defaults = bk_settings_defaults();
+$switches = bk_settings_boolean_keys();
+foreach (array_keys($defaults) as $key) {
+    if (!in_array($key, $known, true)) {
+        $problems[] = sprintf('bk_settings_defaults() zná %s, ale bk_settings_keys() ne', $key);
+    }
+}
+foreach ($switches as $key) {
+    if (!in_array($defaults[$key] ?? null, ['0', '1'], true)) {
+        $problems[] = sprintf('přepínač %s nemá ve výchozích hodnotách 0 nebo 1', $key);
+    }
+}
+$php_files = array_merge(glob($root . '/*.php') ?: [], glob($root . '/lib/*.php') ?: []);
+foreach ($php_files as $file) {
+    $src = (string)file_get_contents($file);
+    preg_match_all("/get_setting\(\s*'([a-z0-9_]+)'\s*,\s*(?:'([^']*)'|([0-9.]+))\s*\)/", $src, $calls, PREG_SET_ORDER);
+    foreach ($calls as $call) {
+        $key = $call[1];
+        // A quoted default fills group 2, a bare number (smtp_port, 587) group 3.
+        $given = isset($call[3]) && $call[3] !== '' ? $call[3] : $call[2];
+        if (array_key_exists($key, $defaults) && $given !== $defaults[$key]) {
+            $problems[] = sprintf(
+                '%s: get_setting(\'%s\', \'%s\') nesouhlasí s bk_settings_defaults() (\'%s\')',
+                basename($file), $key, $given, $defaults[$key]
+            );
+        }
+    }
+}
+
+// 5. The form's own switch defaults. settings.tsx shows a never-saved switch
+//    in its default state; if that disagreed with the server, the box would
+//    show "on" for a switch the cron treats as off.
+if (preg_match('/SWITCH_DEFAULTS[^=]*=\s*\{(.*?)\};/s', $tsx, $sm)) {
+    preg_match_all("/\b([a-z0-9_]+):\s*'([01])'/", $sm[1], $pairs, PREG_SET_ORDER);
+    $ui_switches = [];
+    foreach ($pairs as $pair) {
+        $ui_switches[$pair[1]] = $pair[2];
+    }
+    ksort($ui_switches);
+    $server_switches = array_intersect_key($defaults, array_flip($switches));
+    ksort($server_switches);
+    if ($ui_switches !== $server_switches) {
+        $problems[] = sprintf(
+            'SWITCH_DEFAULTS v settings.tsx (%s) nesouhlasí s přepínači serveru (%s)',
+            json_encode($ui_switches),
+            json_encode($server_switches)
+        );
+    }
+} else {
+    $problems[] = 'settings.tsx nemá SWITCH_DEFAULTS - formulář neví, jak ukázat nikdy neuložený přepínač';
+}
+
+// 6. One source of defaults. schema.sql seeded 31 rows a fresh install had
+//    and an upgraded one never got, and its smtp_port said 587 where the
+//    legacy form said 465. Neither the schema nor a migration seeds a
+//    setting; a default belongs in bk_settings_defaults(). A migration may
+//    keep its own bookkeeping through bk_setting_set() (which data fixes
+//    ran, say), so only a settings key written there counts as a seed.
+$seedable = array_merge($known, array_keys($defaults));
+foreach (['schema.sql', 'migrations.php'] as $file) {
+    $src = (string)file_get_contents($root . '/' . $file);
+    if (preg_match('/INSERT\s+(?:IGNORE\s+)?INTO\s+`?settings`?|bk_setting_add_if_absent\(/i', $src)) {
+        $problems[] = sprintf('%s zapisuje do settings - výchozí hodnota patří do bk_settings_defaults()', $file);
+    }
+    $set_calls = preg_match_all('/bk_setting_set\(/', $src);
+    preg_match_all('/bk_setting_set\(\s*\$\w+\s*,\s*\'([a-z0-9_]+)\'/', $src, $set_keys);
+    if ($set_calls !== count($set_keys[1])) {
+        $problems[] = sprintf('%s volá bk_setting_set() s klíčem, který není řetězec - nejde ověřit, že nezapisuje nastavení', $file);
+    }
+    foreach (array_unique(array_intersect($set_keys[1], $seedable)) as $key) {
+        $problems[] = sprintf('%s zapisuje nastavení %s - výchozí hodnota patří do bk_settings_defaults()', $file, $key);
+    }
+}
+
+// 7. A credential is a secret key. The settings form masks the list and the
+//    configuration export leaves it out (api.php export_config), so a new
+//    password, token or webhook key missing from it would sit in plain text
+//    in both. The name pattern the export used at run time is checked here:
+//    a key it matches is a secret or on the reviewed list below, of values
+//    the settings page shows in full and the backup keeps. The pattern took
+//    site_url and the Pushover user out of the backup. cron_key is shown in
+//    full too, but export_config subtracts it by name: it authorises
+//    node_api.php, cron.php?key= and agent registration.
+$shown_in_full = ['site_url', 'custom_logo_url', 'portal_url', 'pushover_user_key', 'cron_key'];
+foreach ($known as $key) {
+    if (preg_match('/(pass|secret|token|key|hash|credential|webhook|_url$|dsn)/i', $key)
+        && !in_array($key, $secrets, true) && !in_array($key, $shown_in_full, true)) {
+        $problems[] = sprintf('%s vypadá jako přihlašovací údaj, ale bk_settings_secret_keys() ho nezná'
+            . ' (veřejná hodnota patří na seznam $shown_in_full v tomto lintu)', $key);
+    }
+}
+foreach (array_diff($shown_in_full, array_diff($known, $secrets)) as $key) {
+    $problems[] = sprintf('$shown_in_full zná %s, ale ten není veřejný klíč nastavení', $key);
+}
+
+if ($problems) {
+    fwrite(STDERR, "Nastavení se rozchází mezi UI a serverem:\n\n");
+    foreach ($problems as $p) {
+        fwrite(STDERR, "  {$p}\n");
+    }
+    fwrite(STDERR, "\nDůsledek není chybová hláška, ale ticho: pole se zobrazí prázdné\n");
+    fwrite(STDERR, "a další uložení přepíše skutečnou hodnotu prázdnou.\n");
+    exit(1);
+}
+
+printf(
+    "Settings parity lint: %d klíčů na serveru, %d z nich používá React, seznam je jen jeden.\n",
+    count($known),
+    count($ui_keys)
+);
+exit(0);

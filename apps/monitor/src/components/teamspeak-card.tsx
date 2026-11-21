@@ -1,0 +1,269 @@
+import * as React from 'react';
+import { LastKnownNote } from '@/components/last-known-note';
+import { StatBlock } from '@/components/stat-block';
+import { Badge } from '@/components/ui/badge';
+import { Mic, Minus, Plug, IdCard, Users, Check, X } from 'lucide-react';
+import { useLanguage } from '@/context/language-context';
+import { cn } from '@/lib/utils';
+import { ErrorState, LoadingState } from '@/components/ui/states';
+
+interface Ts3Stages {
+  query?: {
+    ok?: boolean;
+    time_ms?: number | null;
+    authenticated?: boolean;
+    // true = answered error id=0, false = another id, null = not done (no full answer)
+    steps?: Record<string, boolean | null>;
+    // The id the login was answered with (null without an answer); only with credentials.
+    login_error?: number | null;
+  };
+  service?: {
+    clients_online?: number | null;
+    clients_max?: number | null;
+    slot_usage_pct?: number | null;
+    channel_count?: number | null;
+    active_channel_count?: number | null;
+    query_client_count?: number | null;
+    server_group_count?: number | null;
+    voice_activity?: Record<string, number> | null;
+  };
+  // ok null = not measured (the voice port is UDP).
+  ports?: Record<string, { ok?: boolean | null; port?: number }>;
+  license?: string | null;
+  version?: string | null;
+}
+
+/**
+ * Detail TeamSpeak serveru ze ServerQuery.
+ *
+ * The check collects far more than was ever displayed: slot usage,
+ * channels, voice activity, availability of all three ports, licence and version.
+ * Only the client counts made it into `details` - the rest ended in
+ * monitor_logs.check_stages, where nothing read it.
+ *
+ * Some fields require a ServerQuery login. Without it they stay empty
+ * and the card says why.
+ */
+export function TeamspeakCard({ monitorId, status }: { monitorId: number; status?: string }) {
+  const { t } = useLanguage();
+  const [stages, setStages] = React.useState<Ts3Stages | null | undefined>(undefined);
+  const [checkedAt, setCheckedAt] = React.useState<string | null>(null);
+  // A 500 said "not available yet, it will be saved at the next check".
+  const [failed, setFailed] = React.useState(false);
+  const [attempt, setAttempt] = React.useState(0);
+
+  React.useEffect(() => {
+    let active = true;
+    setFailed(false);
+    fetch(`/status/api.php?action=check_stages&monitor_id=${monitorId}`, { credentials: 'include' })
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then((d) => {
+        if (!active) return;
+        setStages(d?.stages ?? null);
+        setCheckedAt(typeof d?.checkedAt === 'string' ? d.checkedAt : null);
+      })
+      .catch(() => {
+        if (active) setFailed(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [monitorId, attempt]);
+
+  if (failed) {
+    return (
+      <div data-slot="well" className="bg-inset rounded-xl border border-border p-5">
+        <ErrorState
+          message={t('ts3.load_failed', 'Detail serveru se nepodařilo načíst.')}
+          onRetry={() => setAttempt((n) => n + 1)}
+        />
+      </div>
+    );
+  }
+
+  if (stages === undefined) {
+    return (
+      <div data-slot="well" className="bg-inset rounded-xl border border-border p-5">
+        <LoadingState label={t('ts3.loading', 'Načítám detail serveru…')} />
+      </div>
+    );
+  }
+
+  if (!stages) {
+    return (
+      <div data-slot="well" className="bg-inset rounded-xl border border-border p-5">
+        <p className="text-foreground text-sm font-semibold">
+          {t('ts3.none_title', 'Detail ze ServerQuery zatím není k dispozici')}
+        </p>
+        <p className="text-muted-foreground mt-1 text-xs">
+          {t('ts3.none_desc', 'Uloží se při nejbližší kontrole tohoto serveru.')}
+        </p>
+      </div>
+    );
+  }
+
+  const svc = stages.service ?? {};
+  const ports = stages.ports ?? {};
+  const authenticated = stages.query?.authenticated === true;
+  // The check records a login step only when credentials are configured, so a
+  // recorded step means they are set. Only error id 520 (invalid loginname or
+  // password) says they were wrong; any other id, or no answer, has a cause
+  // the card does not know.
+  const loginStep = stages.query?.steps?.login;
+  const loginRejected = loginStep === false && stages.query?.login_error === 520;
+  const loginFailed = (loginStep === false || loginStep === null) && !loginRejected;
+
+  const portLabels: Record<string, string> = {
+    voice: t('ts3.port_voice', 'Hlasový port'),
+    query: t('ts3.port_query', 'ServerQuery'),
+    filetransfer: t('ts3.port_filetransfer', 'Přenos souborů'),
+  };
+
+  const activity = svc.voice_activity ?? null;
+
+  // Labels are assembled explicitly, not via `t(\`ts3.activity_${key}\`)`:
+  // a dynamic key cannot be verified statically, so a missing translation would
+  // pass both the test and code review and surface only for an English user.
+  // The server sends exactly these four states (functions.php: voice_activity).
+  const activityLabels: Record<string, string> = {
+    talking: t('ts3.activity_talking', 'Mluví'),
+    away: t('ts3.activity_away', 'Pryč'),
+    muted: t('ts3.activity_muted', 'Ztlumeno'),
+    recording: t('ts3.activity_recording', 'Nahrává'),
+  };
+
+  return (
+    <div data-slot="well" className="bg-inset rounded-xl border border-border space-y-4 p-5">
+      <div className="flex flex-wrap items-center gap-3 border-b border-border pb-3">
+        <Mic className="text-muted-foreground size-5" aria-hidden="true" />
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">{t('ts3.title', 'TeamSpeak server')}</h3>
+          <LastKnownNote status={status} at={checkedAt} />
+          <p className="text-muted-foreground text-xs">
+            {stages.version
+              ? t('ts3.version', { version: stages.version }, `Verze ${stages.version}`)
+              : t('ts3.subtitle', 'Stav ze ServerQuery')}
+          </p>
+        </div>
+        {stages.license && (
+          <Badge variant="neutral" className="ml-auto">
+            <IdCard className="size-3" /> {stages.license}
+          </Badge>
+        )}
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        {/* Slots and channels ------------------------------------------- */}
+        <StatBlock
+          icon={Users}
+          label={t('ts3.slots', 'Obsazenost')}
+          value={svc.clients_online ?? null}
+          secondary={svc.clients_max != null ? `/ ${svc.clients_max}` : undefined}
+        >
+          {svc.slot_usage_pct != null && (
+            <div className="bg-muted mt-2 h-1.5 w-full overflow-hidden rounded-full">
+              <div
+                className={cn('h-full rounded-full', svc.slot_usage_pct >= 90 ? 'bg-down' : 'bg-primary')}
+                style={{ width: `${Math.min(100, svc.slot_usage_pct)}%` }}
+              />
+            </div>
+          )}
+          <div className="text-muted-foreground mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-2xs">
+            {svc.channel_count != null && (
+              <span>{t('ts3.channels', { count: svc.channel_count }, `${svc.channel_count} kanálů`)}</span>
+            )}
+            {svc.active_channel_count != null && (
+              <span>
+                {t('ts3.active_channels', { count: svc.active_channel_count }, `${svc.active_channel_count} aktivních`)}
+              </span>
+            )}
+            {/* Query clients are not people - hence subtracted from the count. */}
+            {svc.query_client_count != null && svc.query_client_count > 0 && (
+              <span>
+                {t('ts3.query_clients', { count: svc.query_client_count }, `${svc.query_client_count} query klientů`)}
+              </span>
+            )}
+          </div>
+        </StatBlock>
+
+        {/* Porty --------------------------------------------------------- */}
+        <StatBlock icon={Plug} label={t('ts3.ports', 'Dostupnost portů')}>
+          {Object.keys(ports).length === 0 ? (
+            <p className="text-muted-foreground mt-1 text-sm">—</p>
+          ) : (
+            <ul className="mt-1.5 space-y-1">
+              {Object.entries(ports).map(([key, info]) => (
+                <li key={key} className="flex items-center gap-2 text-xs">
+                  {/* null = not measured: the voice port is UDP, and a check cannot
+                      tell it apart from a closed one. A red cross called it closed. */}
+                  <span
+                    className={cn(
+                      'grid size-4 shrink-0 place-items-center rounded-full',
+                      info?.ok == null
+                        ? 'bg-secondary text-muted-foreground'
+                        : info.ok
+                          ? 'bg-up/15 text-up'
+                          : 'bg-down/15 text-down'
+                    )}
+                    title={info?.ok == null ? t('ts3.port_unmeasured', 'Neměří se') : undefined}
+                  >
+                    {info?.ok == null ? (
+                      <Minus className="size-2.5" />
+                    ) : info.ok ? (
+                      <Check className="size-2.5" />
+                    ) : (
+                      <X className="size-2.5" />
+                    )}
+                  </span>
+                  <span>{portLabels[key] ?? key}</span>
+                  {info?.port != null && <span className="text-muted-foreground ml-auto font-mono">{info.port}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </StatBlock>
+      </div>
+
+      {/* Aktivita v hlasu ------------------------------------------------- */}
+      {activity && Object.keys(activity).length > 0 && (
+        <div className="rounded-lg border border-border p-3">
+          <p className="text-muted-foreground mb-1.5 text-xs font-medium">
+            {t('ts3.voice_activity', 'Aktivita v hlasu')}
+          </p>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs">
+            {Object.entries(activity).map(([key, value]) => (
+              <span key={key}>
+                {activityLabels[key] ?? key}: <strong>{value}</strong>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!authenticated && loginRejected && (
+        <p className="text-warning text-2xs leading-relaxed">
+          {t(
+            'ts3.login_rejected',
+            'ServerQuery odmítl jméno a heslo z nastavení monitoru, server proto vrací jen základní údaje. Zkontrolujte je pro detail kanálů a aktivity.'
+          )}
+        </p>
+      )}
+      {!authenticated && loginFailed && (
+        <p className="text-warning text-2xs leading-relaxed">
+          {t('ts3.login_failed', 'Přihlášení k ServerQuery se nezdařilo, server proto vrací jen základní údaje.')}
+        </p>
+      )}
+      {!authenticated && loginStep === undefined && (
+        <p className="text-muted-foreground text-2xs leading-relaxed">
+          {t(
+            'ts3.no_auth',
+            'Bez přihlášení k ServerQuery vrací server jen základní údaje. Doplňte jméno a heslo v nastavení monitoru pro detail kanálů a aktivity.'
+          )}
+        </p>
+      )}
+    </div>
+  );
+}

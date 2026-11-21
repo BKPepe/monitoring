@@ -1,0 +1,57 @@
+version: 2
+
+# One grouped pull request per entry, on the first day of each month, with
+# every update of that entry in it. Single-dependency pull requests every
+# Monday made a commit each, more than the releases themselves. Security
+# fixes are not grouped and still come at once. The weekly npm-update.yml
+# workflow, which did the same job a second time, is gone.
+updates:
+  # npm: the root workspace (apps/site, apps/worker, apps/monitor)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps"
+    groups:
+      npm:
+        patterns:
+          - "*"
+
+  # apps/status CDN libs (ECharts, FontAwesome, QRCode) - bump PR requires
+  # updating the matching BK_CDN_* constant in functions.php. The manifest
+  # names the versions the CDN URLs load; ECharts stays on 5.x (see the
+  # comment above the constants), so a 5.x fix opens a PR and 6 does not.
+  # An entry of its own: apps/monitor is on ECharts 6, and the ignore below
+  # must not hold it back.
+  - package-ecosystem: "npm"
+    directory: "/apps/status"
+    schedule:
+      interval: "monthly"
+    ignore:
+      - dependency-name: "echarts"
+        versions: [">=6"]
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps(status)"
+    groups:
+      status-cdn:
+        patterns:
+          - "*"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    labels:
+      - "ci"
+    commit-message:
+      prefix: "ci"
+    groups:
+      github-actions:
+        patterns:
+          - "*"

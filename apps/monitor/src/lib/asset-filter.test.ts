@@ -1,0 +1,101 @@
+import { describe, expect, it } from 'vitest';
+import {
+  orderByStatusChange,
+  filterAssets,
+  parseStatusFilter,
+  parseTypeFilter,
+  type AssetStatus,
+} from './asset-filter';
+
+const asset = (name: string, status: AssetStatus, hostname?: string) => ({ name, status, hostname });
+
+const inventory = [
+  asset('Router - Praha', 'up', 'turris'),
+  asset('BloodKings.eu', 'up', 'https://bloodkings.eu'),
+  asset('Minecraft', 'down', 'mc.bloodkings.eu'),
+  asset('Donald', 'warning', 'donald.bloodkings.eu'),
+];
+
+describe('parseStatusFilter', () => {
+  it('accepts every status the API reports', () => {
+    // 'unknown' = an agent-side check whose agent went silent; cron writes it,
+    // so the URL filter and the inventory must both accept it.
+    for (const s of ['up', 'down', 'warning', 'paused', 'maintenance', 'unknown'] as const) {
+      expect(parseStatusFilter(s)).toBe(s);
+    }
+  });
+
+  // A typo in the URL must not be taken for a real status: it would match no
+  // device and show an empty inventory as if that were the truth.
+  it('treats an unknown or missing value as no filter', () => {
+    expect(parseStatusFilter('offline')).toBeNull();
+    expect(parseStatusFilter('')).toBeNull();
+    expect(parseStatusFilter(null)).toBeNull();
+    expect(parseStatusFilter(undefined)).toBeNull();
+  });
+});
+
+describe('filterAssets', () => {
+  it('returns null when nothing is filtered, so the caller shows the full tree', () => {
+    expect(filterAssets(inventory, {})).toBeNull();
+    expect(filterAssets(inventory, { query: '   ', status: null })).toBeNull();
+  });
+
+  it('filters by status alone', () => {
+    expect(filterAssets(inventory, { status: 'up' })?.map((a) => a.name)).toEqual(['Router - Praha', 'BloodKings.eu']);
+    expect(filterAssets(inventory, { status: 'down' })?.map((a) => a.name)).toEqual(['Minecraft']);
+  });
+
+  it('filters by text over name and hostname', () => {
+    expect(filterAssets(inventory, { query: 'praha' })?.map((a) => a.name)).toEqual(['Router - Praha']);
+    expect(filterAssets(inventory, { query: 'mc.bloodkings' })?.map((a) => a.name)).toEqual(['Minecraft']);
+  });
+
+  it('combines both instead of letting one override the other', () => {
+    expect(filterAssets(inventory, { query: 'bloodkings', status: 'up' })?.map((a) => a.name)).toEqual([
+      'BloodKings.eu',
+    ]);
+    // The text matches a device, but not one in that state - an empty result
+    // here is correct, unlike the empty result a bogus status would produce.
+    expect(filterAssets(inventory, { query: 'praha', status: 'down' })).toEqual([]);
+  });
+
+  it('survives an asset without a hostname', () => {
+    const noHost = [{ name: 'Bez hostname', status: 'up' as AssetStatus, hostname: null }];
+    expect(filterAssets(noHost, { query: 'bez' })?.length).toBe(1);
+    expect(filterAssets(noHost, { query: 'jine' })?.length).toBe(0);
+  });
+});
+
+describe('orderByStatusChange', () => {
+  const since = (a: { since: number | null }) => a.since;
+
+  it('puts the most recent change first', () => {
+    const rows = [{ since: 3600 }, { since: 60 }, { since: 86400 }];
+    expect(orderByStatusChange(rows, since).map((r) => r.since)).toEqual([60, 3600, 86400]);
+  });
+
+  it('sends a device with no known time to the end, not to a random place', () => {
+    const rows = [{ since: null }, { since: 120 }, { since: null }, { since: 30 }];
+    expect(orderByStatusChange(rows, since).map((r) => r.since)).toEqual([30, 120, null, null]);
+  });
+
+  it('does not mutate the list it was given', () => {
+    const rows = [{ since: 10 }, { since: 5 }];
+    orderByStatusChange(rows, since);
+    expect(rows.map((r) => r.since)).toEqual([10, 5]);
+  });
+});
+
+describe('parseTypeFilter', () => {
+  it('přijme typ, na který přesměrovává zrušená stránka Služby (5.8)', () => {
+    expect(parseTypeFilter('agent_service')).toBe('agent_service');
+    expect(parseTypeFilter(' OpenWrt ')).toBe('openwrt');
+  });
+
+  it('překlep není filtr - prázdný seznam by lhal', () => {
+    expect(parseTypeFilter('agent-service')).toBeNull();
+    expect(parseTypeFilter('')).toBeNull();
+    expect(parseTypeFilter(null)).toBeNull();
+  });
+});

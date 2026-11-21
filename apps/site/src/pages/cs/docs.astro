@@ -1,0 +1,377 @@
+---
+import Layout from '../../layouts/Layout.astro';
+import DocsNav from '../../components/DocsNav.astro';
+import InstallServer from '../../components/InstallServer.astro';
+
+const groups = [
+  {
+    title: 'Začínáme',
+    links: [
+      { href: '#quickstart', label: 'Rychlý start' },
+      { href: '#requirements', label: 'Požadavky' },
+      { href: '#architecture', label: 'Architektura' },
+    ],
+  },
+  {
+    title: 'Centrální Server',
+    links: [
+      { href: '#server-config', label: 'Konfigurace databáze' },
+      { href: '#server-env', label: 'Klíče a tokeny' },
+      { href: '#server-status', label: 'Status stránky' },
+    ],
+  },
+  {
+    title: 'Spolehlivost',
+    links: [
+      { href: '#heartbeat', label: 'Heartbeat monitory' },
+      { href: '#watchdog', label: 'Hlídač sběru dat' },
+    ],
+  },
+  {
+    title: 'Agenti',
+    links: [
+      { href: '#agent-install', label: 'Registrace agenta' },
+      { href: '#agent-config', label: 'Konfigurace intervalu' },
+      { href: '#agent-trouble', label: 'Řešení potíží' },
+    ],
+  },
+];
+---
+
+<Layout title="Dokumentace | Blood Kings Monitoring" description="Oficiální dokumentace k instalaci, konfiguraci a správě Blood Kings Monitoring a monitorovacích agentů.">
+  <div class="docs-layout-container container">
+    <DocsNav groups={groups} label="Na této stránce" />
+
+    <!-- Docs Content Area -->
+    <div class="docs-main-content" data-copy="Kopírovat" data-copied="Zkopírováno" data-copy-failed="Kopírování selhalo">
+      <header class="docs-head">
+        <h1>Dokumentace</h1>
+        <p class="docs-intro">Instalace serveru, přidání monitorů a připojení agentů.</p>
+      </header>
+      <!-- Section 1: jediný návod k instalaci (components/InstallServer.astro), stejný jako /cs/download/#server. -->
+      <section id="quickstart" class="docs-section">
+        <span class="badge badge-accent">Příručka</span>
+        <h2>Rychlý start</h2>
+        <p>Takhle nainstalujete centrální server na běžný PHP webhosting. Je to stejný návod jako na <a href="/cs/download/#server">stránce ke stažení</a>.</p>
+        <InstallServer lang="cs" />
+
+        <h3>Pak: první monitor</h3>
+        <p>V aplikaci otevřete <strong>Infrastruktura → Přidat nový monitor</strong>. Hlídat můžete weby (HTTP/HTTPS), TCP porty, servery Minecraft, TeamSpeak a Discord, servery a routery OpenWrt s agentem, nebo <a href="#heartbeat">heartbeaty</a> úloh, které se hlásí samy. Starší PHP administrace (<code>admin.php</code>) je převážně česky; přehled na <code>/app</code> mluví česky i anglicky.</p>
+      </section>
+
+      <!-- Section 2 -->
+      <section id="requirements" class="docs-section">
+        <hr class="docs-divider" />
+        <h2>Systémové požadavky</h2>
+        <p>Centrální server je čisté PHP a běží na běžném sdíleném webhostingu, VPS stačí také. Co musí hosting nabízet, je první krok <a href="#quickstart">Rychlého startu</a>.</p>
+
+        <h4>Centrální Server:</h4>
+        <ul>
+          <li><strong>Místo na disku:</strong> aplikace a databáze MySQL/MariaDB, která roste s historií kontrol</li>
+          <li><strong>Software:</strong> PHP 8.2+ (CI běží na 8.4), Apache s <code>.htaccess</code> a <code>mod_rewrite</code> a MySQL nebo MariaDB. Server běží bez Dockeru; možnost Dockeru má jen Python agent.</li>
+        </ul>
+
+        <h4>Vzdálený Agent:</h4>
+        <ul>
+          <li><strong>OS:</strong> Linux (libovolná distribuce s Bashem, nebo s Pythonem 3), Windows 10/11/Server, OpenWrt/Turris OS, Raspberry Pi OS</li>
+          <li><strong>Síť:</strong> odchozí HTTPS (port 443) k centrálnímu serveru; nic příchozího</li>
+        </ul>
+      </section>
+
+      <!-- Section 3 -->
+      <section id="architecture" class="docs-section">
+        <hr class="docs-divider" />
+        <h2>Architektura systému</h2>
+        <p>Blood Kings Monitoring spojuje aktivní kontroly, které spouští server, a hlášení, která mu posílají agenti.</p>
+
+        <div class="architecture-diagram card">
+          <div class="arch-block">
+            <strong>Vzdálený Agent</strong>
+            <span>(Linux, OpenWrt, Windows, Docker)</span>
+            <span class="arrow">↓ HTTPS POST (Metrics)</span>
+          </div>
+          <div class="arch-block highlight">
+            <strong>Centrální Server</strong>
+            <span>(PHP / MySQL nebo MariaDB)</span>
+            <span class="arrow">↓ JSON API</span>
+          </div>
+          <div class="arch-block">
+            <strong>Veřejná Status Stránka</strong>
+            <span>(aplikace na /app/public)</span>
+          </div>
+        </div>
+
+        <p>
+          <strong>Pasivní monitoring (Agenti):</strong> Agenta na hlídaném stroji spouští cron (nebo Plánovač úloh): na OpenWrt každou minutu, jinde standardně každých 5 minut. Každý běh přečte lokální data (CPU, RAM, disky, síť) a zasílají je pomocí HTTPS POST požadavků na centrální server. Tento přístup nevyžaduje otevírání žádných příchozích portů na monitorovaných serverech.
+        </p>
+        <p>
+          <strong>Aktivní monitoring (Pinger):</strong> Cron centrálního serveru kontroluje cíle přímo: požadavky HTTP/HTTPS (s volitelným klíčovým slovem a expirací certifikátu) a TCP spojení. ICMP ping ani kontroly UDP neumí; „ping“ je TCP spojení.
+        </p>
+      </section>
+
+      <!-- Central Server Sekce. Samotné připojení je napsané jednou, v Rychlém startu. -->
+      <section id="server-config" class="docs-section">
+        <hr class="docs-divider" />
+        <h2>Konfigurace Databáze Serveru</h2>
+        <p>Server se k MySQL nebo MariaDB připojuje přes PDO. Připojení zapíše do <code>status/config.php</code> instalátor na <code>/app/setup</code> (4. krok <a href="#quickstart">Rychlého startu</a>, kde je i ruční cesta). Ostatní konstanty vysvětluje <code>config.sample.php</code>; nejčastěji se mění časové pásmo, které pak sdílí PHP i databázové spojení:</p>
+        <div class="docs-code-wrapper">
+          <pre tabindex="0"><code>define('TIMEZONE', 'Europe/Prague');</code></pre>
+        </div>
+      </section>
+
+      <section id="server-env" class="docs-section">
+        <hr class="docs-divider" />
+        <h2>Klíče a tokeny</h2>
+        <p>Tři volitelné klíče. Každý se čte jako konstanta v <code>config.php</code> (velkými písmeny), pak jako proměnná prostředí a pak z <strong>Nastavení</strong> aplikace; platí první nalezený.</p>
+        <ul>
+          <li><code>CRON_KEY</code>: klíč, který <code>cron.php</code> chce při volání přes HTTP (<code>?key=...</code>). Dokud je prázdný, spustí sběr dat kdokoli, kdo zná adresu; cron z příkazové řádky klíč nepotřebuje. Instalátor dá každé nové instalaci vlastní.</li>
+          <li><code>AGENT_REGISTRATION_TOKEN</code>: dovolí agentům pro Bash a OpenWrt, aby se zaregistrovali sami (<code>--register</code>). Dokud je prázdný, server místo něj přijme <code>CRON_KEY</code>.</li>
+          <li><code>METRICS_TOKEN</code>: bearer token pro endpoint Promethea <code>metrics.php</code>. Dokud je prázdný, endpoint je vypnutý.</li>
+        </ul>
+        <div class="docs-code-wrapper">
+          <pre tabindex="0"><code>define('CRON_KEY', 'dlouhy-nahodny-retezec');</code></pre>
+        </div>
+      </section>
+
+      <section id="server-status" class="docs-section">
+        <hr class="docs-divider" />
+        <h2>Veřejné Status Stránky</h2>
+        <p>Status stránky založíte v aplikaci v části <strong>Status Stránky</strong>: každá má vlastní název, adresu (<code>/app/public?page=…</code>) a výběr monitorů a dá se před veřejností skrýt. Návštěvníci se tam mohou přihlásit k e-mailům o incidentech. SVG odznak veřejného stavu nebo jednoho monitoru (<code>api.php?action=badge&amp;monitor_id=…</code>) lze vložit kamkoli.</p>
+      </section>
+      <!-- Agent Sekce -->
+      <section id="heartbeat" class="docs-section">
+        <hr class="docs-divider" />
+        <h2>Heartbeat monitory</h2>
+        <p>Aktivní kontrola umí jen to, na co dosáhne ze sítě. Záloha, která se spustí ve tři ráno a tiše selže, je pro ni neviditelná - není co pingnout. Heartbeat obrací směr: úloha se hlásí sama a monitor spadne ve chvíli, kdy se neozve.</p>
+        <p>Založte monitor typu <strong>Heartbeat</strong>, nastavte, jak často se má úloha ozvat, a na její konec přidejte adresu, kterou dostanete:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>curl -fsS -m 10 "https://vas-server/status/heartbeat.php?token=VAS_TOKEN"</code></pre>
+        </div>
+        <p>Když úloha selže, ať to řekne rovnou - monitor pak spadne hned, ne až po vypršení intervalu:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>curl -fsS -m 10 "https://vas-server/status/heartbeat.php?token=VAS_TOKEN&amp;status=fail&amp;msg=tar%20skoncil%20kodem%202"</code></pre>
+        </div>
+        <p>Monitor, který ještě nikdy nedostal signál, hlásí <strong>neznámý stav</strong>, ne výpadek. Nic neselhalo - jen o něm zatím nic nevíme, a upozornění na výpadek, který se nestal, je svého druhu lež.</p>
+        <p>Token je jediné, co endpoint autorizuje. Nepouštějte ho do sdílených logů: kdo ho má, může se hlásit za vás a monitor bude svítit zeleně, i když záloha dávno neběží.</p>
+      </section>
+
+      <section id="watchdog" class="docs-section">
+        <hr class="docs-divider" />
+        <h2>Hlídač: kdo hlídá sběr dat</h2>
+        <p>Všechno sbírá jediná cron úloha. Když umře, aplikace se nerozbije - dál zobrazuje poslední známé stavy a vypadá naprosto zdravě. Ze všech způsobů, jak může monitoring selhat, je tenhle nejhorší, protože o sobě nedá vědět.</p>
+        <p>Server proto zaznamenává každý dokončený běh a vystavuje ho:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>curl -s "https://vas-server/status/api.php?action=collection_health"</code></pre>
+        </div>
+        <p>Odpověď má <code>stale: true</code>, jakmile je poslední běh starší než nastavený limit - a také tehdy, když cron neběžel ještě ani jednou, protože „žádná data" není totéž co „vše v pořádku".</p>
+        <p>Ten endpoint kontroluje Cloudflare Worker každých pět minut. Běží mimo hlídaný server záměrně: hlídač na stejném stroji umře spolu s tím, co hlídá.</p>
+        <p>Worker v release ZIPu není: leží v <code>apps/worker</code> v repozitáři a nasadíte ho do vlastního účtu Cloudflare. Bez cíle hlídá bloodkings.eu, server autora, takže mu nejdřív dejte ten svůj:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>cd apps/worker &amp;&amp; npx wrangler deploy
+npx wrangler secret put WATCHDOG_TARGET_URL   # https://vas-server/status/api.php?action=collection_health</code></pre>
+        </div>
+        <p>Stačí mu jednou nastavit Discord webhook a ozve se sám:</p>
+        <div class="docs-code-wrapper">
+          <pre><code>cd apps/worker &amp;&amp; npx wrangler secret put WATCHDOG_DISCORD_WEBHOOK</code></pre>
+        </div>
+        <p>Bez toho hlídač kontroluje dál, ale umí jen logovat - a přizná to na <code>/api/watchdog</code>, místo aby jen budil dojem, že něco hlídá.</p>
+      </section>
+
+      <section id="agent-install" class="docs-section">
+        <hr class="docs-divider" />
+        <h2>Instalace a Registrace Agenta</h2>
+        <p>Agenti jsou samostatné skripty pro Bash, Python, PowerShell a routery s OpenWrt. Postup pro každou platformu je na <a href="/cs/download/#agents">stránce ke stažení</a>: tytéž kroky, které aplikace vypíše při přidání monitoru, tam s vaší adresou a klíčem.</p>
+        <p>Pro víc strojů se agenti pro Bash a OpenWrt umí zaregistrovat sami registračním tokenem (viz <a href="#server-env">Klíče a tokeny</a>). Oba argumenty jsou poziční a druhý je <code>agent_api.php</code> vašeho serveru:</p>
+        <div class="docs-code-wrapper">
+          <pre tabindex="0"><code>/opt/bk-agent/agent.sh --register YOUR_REGISTRATION_TOKEN https://YOUR-DOMAIN/status/agent_api.php</code></pre>
+        </div>
+        <p>Bez adresy se agent registruje proti výchozímu <code>localhost</code>. Klíč, který dostane, uloží do <code>agent.cfg</code> vedle skriptu (na routeru do <code>agent_openwrt.cfg</code>). Agenti pro Python a PowerShell registrační příkaz nemají: <code>API_URL</code> a <code>AGENT_KEY</code> z nastavení monitoru berou z <code>agent.cfg</code>. <a href="/cs/download/#agent-register">Víc o registraci</a>.</p>
+      </section>
+
+      <section id="agent-config" class="docs-section">
+        <hr class="docs-divider" />
+        <h2>Intervaly Agenta a Vzdálené Akce</h2>
+        <p>Agenty spouští cron: na serverech každých 5 minut, na OpenWrt routerech každou minutu. Na OpenWrt routerech lze zapnout opt-in HMAC podepsané Vzdálené akce nastavením <code>REMOTE_ACTIONS_ENABLED=1</code> v <code>agent_openwrt.cfg</code> vedle skriptu.</p>
+      </section>
+
+      <section id="agent-trouble" class="docs-section">
+        <hr class="docs-divider" />
+        <h2>Řešení Problémů s Agenty</h2>
+        <p>Pokud agent přestane hlásit data, zkontrolujte odchozí přístup na port 443, pak ho spusťte ručně a přečtěte jeho log (leží vedle skriptu):</p>
+        <div class="docs-code-wrapper">
+          <pre tabindex="0"><code>/opt/bk-agent/agent.sh --verbose
+tail -n 50 /opt/bk-agent/agent.log</code></pre>
+        </div>
+        <p>Stejné kontroly pro OpenWrt, Windows a Docker jsou na <a href="/cs/download/#agent-trouble">stránce ke stažení</a>.</p>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    import { addCopyButtons } from '../../lib/copy-code';
+
+    const docs = document.querySelector<HTMLElement>('.docs-main-content');
+    if (docs) {
+      const { copy = 'Copy', copied = 'Copied', copyFailed = 'Copy failed' } = docs.dataset;
+      addCopyButtons(docs, '.docs-code-wrapper', { copy, copied, failed: copyFailed });
+    }
+  </script>
+</Layout>
+
+<style>
+  .docs-layout-container {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    gap: 4rem;
+    padding-top: 4rem;
+    padding-bottom: 6rem;
+  }
+
+  /* Content styles */
+  .docs-main-content {
+    display: flex;
+    flex-direction: column;
+    gap: 4rem;
+  }
+
+  .docs-head h1 {
+    font-size: var(--text-4xl);
+    font-weight: 700;
+  }
+
+  .docs-intro {
+    margin-top: 0.75rem;
+    font-size: var(--text-lg);
+  }
+
+  .docs-section h2 {
+    font-size: 2rem;
+    font-weight: 800;
+    margin-top: 0.5rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .docs-section h3 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-top: 2rem;
+    margin-bottom: 1rem;
+  }
+
+  .docs-section h4 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    margin-top: 1.5rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .docs-section p {
+    font-size: 1rem;
+    margin-bottom: 1.2rem;
+  }
+
+  .docs-section ul {
+    margin-bottom: 1.5rem;
+    padding-left: 1.5rem;
+  }
+
+  .docs-section li {
+    margin-bottom: 0.5rem;
+    color: var(--text-mid);
+  }
+
+  .docs-divider {
+    border: 0;
+    height: 1px;
+    background: var(--border);
+    margin-bottom: 4rem;
+  }
+
+  /* Code wraps. The <pre> scrolls, not the wrapper: the copy button
+     (lib/copy-code.ts) sits in the wrapper and must not scroll away with a
+     long command. Dark in both themes, like every code block. */
+  .docs-code-wrapper {
+    position: relative;
+    background: var(--surface-inset);
+    border: 1px solid var(--border);
+    padding: 1.2rem;
+    border-radius: var(--radius-sm);
+    margin: 1rem 0;
+  }
+
+  /* Room for the copy button; this scoped padding would otherwise beat the
+     layered .has-copy rule in global.css. */
+  .docs-code-wrapper:global(.has-copy) {
+    padding-top: 2.75rem;
+  }
+
+  .docs-code-wrapper pre {
+    overflow-x: auto;
+  }
+
+  .docs-code-wrapper pre:focus-visible {
+    outline: 2px solid var(--brand-500);
+    outline-offset: 2px;
+  }
+
+  .docs-code-wrapper code {
+    color: var(--code-text);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+  }
+
+  /* Diagram styles */
+  .architecture-diagram {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    padding: 2rem;
+    align-items: center;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    margin: 1.5rem 0;
+  }
+
+  .arch-block {
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    padding: 1rem 2rem;
+    border-radius: var(--radius-sm);
+    text-align: center;
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .arch-block strong {
+    font-size: 0.95rem;
+    color: var(--text-hi);
+  }
+
+  .arch-block span {
+    font-size: 0.8rem;
+    color: var(--text-low);
+  }
+
+  .arch-block.highlight {
+    border-color: var(--brand-500);
+    background: rgba(176,0,32,0.02);
+  }
+
+  .arrow {
+    display: block;
+    margin-top: 1rem;
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--brand-500);
+    font-weight: 600;
+  }
+
+  /* Below 992 px DocsNav swaps the sidebar for an "On this page" menu. */
+  @media (max-width: 992px) {
+    .docs-layout-container {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 2rem;
+    }
+  }
+</style>

@@ -1,0 +1,93 @@
+/**
+ * Which end of a metric is the bad end.
+ *
+ * Percentiles only mean something once this is known. For latency the tail
+ * that matters is p95 - the slow end. For signal strength in dBm it is the
+ * exact opposite: p95 is the BEST five percent and the number that hurts is
+ * p5. Labelling both "the worse end" turns a useful statistic into a lie, and
+ * that is what the LTE signal detail did.
+ */
+export type BetterDirection = 'higher' | 'lower' | 'neutral';
+
+/** More is better: signal, free memory, battery, available randomness. */
+const HIGHER_IS_BETTER = new Set([
+  'lte_rsrp',
+  'lte_rsrq',
+  'lte_sinr',
+  'lte_rssi',
+  'lte_uptime',
+  'entropy',
+  'ups_battery_pct',
+  'ram_free_mb',
+]);
+
+/** Less is better: load, latency, saturation, errors. */
+const LOWER_IS_BETTER = new Set([
+  'response_time',
+  'cpu',
+  'cpu_steal',
+  'ram',
+  'swap',
+  'hdd',
+  'inode_usage',
+  'iowait',
+  'load1',
+  'load5',
+  'load15',
+  'temperature_c',
+  'conntrack',
+  'conntrack_count',
+  'tcp_retrans',
+  'net_errors',
+  'wan_latency_ms',
+  'dns_latency_ms',
+  'fw_dropped',
+  'zombie_count',
+  'ts_process_cpu',
+  'ts_process_ram',
+  // Wi-Fi per band (agent 0.1.7). Noise is in negative dBm, where the lower
+  // number is the quieter channel, so it belongs here and not with the signals.
+  'wifi_noise_24g',
+  'wifi_noise_5g',
+  'wifi_noise_6g',
+  'wifi_busy_24g',
+  'wifi_busy_5g',
+  'wifi_busy_6g',
+  'wifi_busy_other_24g',
+  'wifi_busy_other_5g',
+  'wifi_busy_other_6g',
+  'wifi_weak_clients',
+  'wifi_wpa2_clients',
+  'wifi_6e_unserved',
+  // WAN path and the agent itself (agent 0.1.7).
+  'cpu_core_max',
+  'cpu_core_max_softirq',
+  'wan_errors',
+  'wan_drops',
+  'wan_ring_drops',
+  'conntrack_drops',
+  'wan_link_flaps',
+  'agent_run_ms',
+  // Agent 0.1.9: what one run costs the router's CPU.
+  'agent_prev_cpu_ms',
+  // Stored as an absolute value, so zero is the good end whichever way the clock is off.
+  'clock_skew_s',
+  // Agent 0.1.13: the WAN port's own error and drop counters.
+  'wan_rx_overrun',
+  'wan_rx_discard',
+  'wan_crc_errors',
+  'wan_mac_rx_errors',
+  'wan_refill_errors',
+  'wan_oversize',
+]);
+
+/**
+ * @returns 'neutral' for everything whose direction is a matter of context -
+ *   traffic, connected clients, players. More of those is not by itself good
+ *   or bad, and pretending otherwise would colour a busy evening as a fault.
+ */
+export function betterDirection(metricKey: string): BetterDirection {
+  if (HIGHER_IS_BETTER.has(metricKey)) return 'higher';
+  if (LOWER_IS_BETTER.has(metricKey)) return 'lower';
+  return 'neutral';
+}

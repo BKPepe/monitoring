@@ -1,0 +1,57 @@
+<!--
+  Source of public/og-image.png (1200x630, the size Open Graph and X cards use).
+  Layout.astro has pointed at /og-image.png since the start, but the file never
+  existed, so every shared link rendered without a preview. Regenerate with:
+    node -e "require('sharp')('apps/site/src/assets/og-image.svg').png().toFile('apps/site/public/og-image.png')"
+  No numbers on purpose: a picture that lives in caches for months cannot
+  carry a live status.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <radialGradient id="glow" cx="82%" cy="18%" r="70%">
+      <stop offset="0%" stop-color="#e5383b" stop-opacity="0.32" />
+      <stop offset="100%" stop-color="#e5383b" stop-opacity="0" />
+    </radialGradient>
+    <linearGradient id="rule" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#e5383b" />
+      <stop offset="100%" stop-color="#ff6b6b" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="630" fill="#0b0d10" />
+  <rect width="1200" height="630" fill="url(#glow)" />
+
+  <!-- Faint grid, echoing the globe on the homepage. -->
+  <g stroke="#1f232a" stroke-width="1">
+    <path d="M0 126H1200M0 252H1200M0 378H1200M0 504H1200" />
+    <path d="M200 0V630M400 0V630M600 0V630M800 0V630M1000 0V630" />
+  </g>
+
+  <!-- Agents pushing to one server: the architecture, not a measurement. -->
+  <g fill="none" stroke="#e5383b" stroke-width="2" stroke-linecap="round" opacity="0.8">
+    <path d="M930 150 Q990 230 1010 315" stroke-dasharray="6 10" />
+    <path d="M1110 180 Q1060 240 1010 315" stroke-dasharray="6 10" />
+    <path d="M880 330 Q945 318 1010 315" stroke-dasharray="6 10" />
+    <path d="M940 470 Q985 395 1010 315" stroke-dasharray="6 10" />
+    <path d="M1120 450 Q1060 390 1010 315" stroke-dasharray="6 10" />
+  </g>
+  <g fill="#ff6b6b">
+    <circle cx="930" cy="150" r="7" />
+    <circle cx="1110" cy="180" r="7" />
+    <circle cx="880" cy="330" r="7" />
+    <circle cx="940" cy="470" r="7" />
+    <circle cx="1120" cy="450" r="7" />
+  </g>
+  <circle cx="1010" cy="315" r="30" fill="#15181d" stroke="#e5383b" stroke-width="3" />
+  <circle cx="1010" cy="315" r="9" fill="#e5383b" />
+
+  <g font-family="Helvetica Neue, Helvetica, Arial, sans-serif">
+    <text x="80" y="118" fill="#e5383b" font-size="26" font-weight="700" letter-spacing="4">OPEN SOURCE · SELF-HOSTED</text>
+    <text x="80" y="236" fill="#f4f4f5" font-size="84" font-weight="800">Blood Kings</text>
+    <text x="80" y="330" fill="#f4f4f5" font-size="84" font-weight="800">Monitoring</text>
+    <rect x="80" y="368" width="120" height="6" rx="3" fill="url(#rule)" />
+    <text x="80" y="438" fill="#a1a1aa" font-size="32">Uptime checks, server and router agents,</text>
+    <text x="80" y="482" fill="#a1a1aa" font-size="32">public status pages and alerts.</text>
+    <text x="80" y="566" fill="#71717a" font-size="26">monitoring.bloodkings.eu</text>
+  </g>
+</svg>

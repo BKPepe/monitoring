@@ -1,0 +1,128 @@
+import { LastKnownNote } from '@/components/last-known-note';
+import { StatBlock } from '@/components/stat-block';
+import { Gamepad2, Users, Gauge, MessageSquare } from 'lucide-react';
+import { useLanguage } from '@/context/language-context';
+
+/**
+ * Detail Minecraft serveru.
+ *
+ * MOTD, version, player list and TPS were collected on every check, yet
+ * none of it showed in the app - the only thing one could learn about the server
+ * byla odezva.
+ *
+ * Only RCON can return TPS. When unconfigured, the values stay empty
+ * and the card says why, instead of pretending a smooth run.
+ */
+export function MinecraftCard({
+  d,
+  status,
+  since,
+}: {
+  d: Record<string, any>;
+  status?: string;
+  since?: string | null;
+}) {
+  const { t } = useLanguage();
+
+  const online = typeof d.players_online === 'number' ? d.players_online : null;
+  const max = typeof d.players_max === 'number' ? d.players_max : null;
+  const list: string[] = Array.isArray(d.players_list)
+    ? d.players_list.filter((p: unknown) => typeof p === 'string')
+    : [];
+
+  const tps = [
+    { key: '1m', label: t('mc.tps_1m', '1 min'), value: d.tps_1m },
+    { key: '5m', label: t('mc.tps_5m', '5 min'), value: d.tps_5m },
+    { key: '15m', label: t('mc.tps_15m', '15 min'), value: d.tps_15m },
+  ];
+  const hasTps = tps.some((x) => typeof x.value === 'number');
+
+  // 20 TPS is the ceiling; lower means the server cannot tick on time.
+  const tpsTone = (v: number) => (v >= 19.5 ? 'text-up' : v >= 18 ? 'text-warning' : 'text-down');
+
+  const fill = online != null && max != null && max > 0 ? (online / max) * 100 : null;
+
+  return (
+    <div data-slot="well" className="bg-inset rounded-xl border border-border space-y-4 p-5">
+      <div className="flex items-center gap-3 border-b border-border pb-3">
+        <Gamepad2 className="text-muted-foreground size-5" aria-hidden="true" />
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold">{t('mc.title', 'Minecraft server')}</h3>
+          <p className="text-muted-foreground text-xs">
+            {d.version
+              ? t('mc.version', { version: d.version }, `Verze ${d.version}`)
+              : t('mc.subtitle', 'Stav serveru')}
+          </p>
+          <LastKnownNote status={status} at={since} />
+        </div>
+      </div>
+
+      {d.motd && (
+        <StatBlock icon={MessageSquare} label="MOTD">
+          <p className="mt-1 font-mono text-sm">{d.motd}</p>
+        </StatBlock>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        {/* Players -------------------------------------------------------- */}
+        <StatBlock
+          icon={Users}
+          label={t('mc.players', 'Hráči')}
+          value={online}
+          secondary={max != null ? `/ ${max}` : undefined}
+        >
+          {fill != null && (
+            <div className="bg-muted mt-2 h-1.5 w-full overflow-hidden rounded-full">
+              <div className="bg-primary h-full rounded-full" style={{ width: `${Math.min(100, fill)}%` }} />
+            </div>
+          )}
+          {list.length > 0 ? (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {list.map((p) => (
+                <span key={p} className="bg-secondary/50 rounded-md px-2 py-0.5 text-xs">
+                  {p}
+                </span>
+              ))}
+            </div>
+          ) : online === 0 ? (
+            <p className="text-muted-foreground mt-2 text-2xs">{t('mc.nobody', 'Nikdo není připojen')}</p>
+          ) : (
+            online != null && (
+              // The server reports a count but no name list - common on servers
+              // with a hidden player list.
+              <p className="text-muted-foreground mt-2 text-2xs">
+                {t('mc.list_hidden', 'Server jmenný seznam hráčů neposkytuje')}
+              </p>
+            )
+          )}
+        </StatBlock>
+
+        {/* TPS ---------------------------------------------------------- */}
+        <StatBlock icon={Gauge} label={t('mc.tps', 'TPS (tiků za sekundu)')}>
+          {hasTps ? (
+            <div className="mt-1.5 flex gap-4">
+              {tps.map((x) => (
+                <div key={x.key}>
+                  <p className="text-muted-foreground text-2xs">{x.label}</p>
+                  <p className={`font-mono text-lg font-bold ${typeof x.value === 'number' ? tpsTone(x.value) : ''}`}>
+                    {typeof x.value === 'number' ? x.value.toFixed(1) : '—'}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <>
+              <p className="text-muted-foreground mt-1 text-sm">—</p>
+              <p className="text-muted-foreground mt-1 text-2xs leading-relaxed">
+                {t(
+                  'mc.tps_needs_rcon',
+                  'TPS umí vrátit jen RCON. Doplňte RCON port a heslo v nastavení monitoru a hodnoty se začnou sbírat.'
+                )}
+              </p>
+            </>
+          )}
+        </StatBlock>
+      </div>
+    </div>
+  );
+}

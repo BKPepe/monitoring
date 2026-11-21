@@ -1,0 +1,44 @@
+# Bezpečnostní a cache hlavičky pro Cloudflare Pages.
+# Soubor se kopíruje do dist/ a Pages ho aplikuje na odpovídající cesty.
+#
+# Content-Security-Policy generuje Astro do <meta> (viz astro.config.mjs).
+# Tady jsou jen hlavičky, které v <meta> tagu prohlížeč ignoruje, a ty,
+# které s CSP nesouvisí.
+
+# frame-ancestors works only in a header, never in the <meta> policy, where
+# Chrome logs an error instead. This policy holds nothing else, so it adds
+# the framing rule and changes nothing the meta policy allows or blocks.
+/*
+  Content-Security-Policy: frame-ancestors 'none'
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Resource-Policy: same-origin
+
+# The pages.dev copies (production and every preview) stay out of search
+# results, so only monitoring.bloodkings.eu is indexed. Pages joins repeated
+# headers with a comma, which is why /* no longer sends "index, follow" (the
+# default anyway): the two would read "index, follow, noindex".
+https://:project.pages.dev/*
+  X-Robots-Tag: noindex
+
+https://:version.:project.pages.dev/*
+  X-Robots-Tag: noindex
+
+# RFC 9116: text/plain with charset utf-8 (src/pages/.well-known/security.txt.ts).
+/.well-known/security.txt
+  Content-Type: text/plain; charset=utf-8
+
+# Astro hashuje názvy buildovaných assetů, takže je lze cachovat natrvalo.
+/_astro/*
+  Cache-Control: public, max-age=31536000, immutable
+  Cross-Origin-Resource-Policy: same-origin
+
+# Fonty jsou také hashované a musí přežít revalidaci beze změny.
+/_astro/*.woff2
+  Cache-Control: public, max-age=31536000, immutable
+  Content-Type: font/woff2
+

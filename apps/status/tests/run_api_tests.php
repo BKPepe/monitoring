@@ -1,0 +1,11559 @@
+<?php
+/**
+ * Integration tests of api.php against a real database and real HTTP.
+ *
+ * Running (requires MySQL/MariaDB and the PHP CLI):
+ *   BK_TEST_DB_NAME=bk_test BK_TEST_DB_USER=root BK_TEST_DB_PASS=root \
+ *     php apps/status/tests/run_api_tests.php
+ *
+ * Why this way: api.php is a monolith that loads its own config, opens
+ * PDO and prints JSON directly. Extracting functions from it like the
+ * other suites do is not possible. At the same time it is exactly the
+ * queries and column names where this project kept tripping (the Prometheus
+ * token wrote setting_key/setting_value instead of key_name/key_value and
+ * the endpoint returned 500; daily_uptime referenced a variable that no
+ * longer existed). Only really calling the endpoint reveals such bugs.
+ *
+ * The test therefore builds its own database from schema.sql, fills it with
+ * known data, starts `php -S` over apps/status and talks to it via HTTP.
+ */
+
+require_once __DIR__ . '/assert_helpers.php';
+
+$db_host = getenv('BK_TEST_DB_HOST') ?: '127.0.0.1';
+$db_port = (int)(getenv('BK_TEST_DB_PORT') ?: 3306);
+// An empty BK_TEST_DB_NAME is a typo in the caller's environment, never a wish
+// to run against the default database: falling back to 'bk_test' would drop a
+// database the caller did not name, and several suites in parallel would then
+// share one and destroy each other. It ends the run instead.
+$db_name_env = getenv('BK_TEST_DB_NAME');
+if ($db_name_env !== false && trim($db_name_env) === '') {
+    fwrite(STDERR, "BK_TEST_DB_NAME je prázdné - jméno testovací databáze musí být uvedené. Testy neproběhly.\n");
+    exit(1);
+}
+$db_name = $db_name_env !== false ? trim($db_name_env) : 'bk_test';
+$db_user = getenv('BK_TEST_DB_USER') ?: 'root';
+$db_pass = getenv('BK_TEST_DB_PASS') ?: '';
+$port = (int)(getenv('BK_TEST_PORT') ?: 8123);
+$root = realpath(__DIR__ . '/..');
+
+// The suite writes fixture rows that the application then reads, so it has to
+// keep the application's time: config.php below defines TIMEZONE =
+// 'Europe/Prague' and db.php puts the application's SESSION on that clock.
+// Without the same two settings here the fixtures would be written with the
+// database server's zone (UTC in the container) and every "three minutes ago"
+// row would land two hours away from where the application looks for it.
+date_default_timezone_set('Europe/Prague');
+
+// --- 1. Database ----------------------------------------------------------
+try {
+    $pdo = new PDO("mysql:host={$db_host};port={$db_port};charset=utf8mb4", $db_user, $db_pass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+} catch (PDOException $e) {
+    // Not a skip: this suite IS the gate over api.php, and a run that never
+    // reached the database verified nothing. Exiting 0 here made CI green on
+    // zero checks - louder and red is the only honest answer.
+    fwrite(STDERR, "MySQL není dostupná ({$e->getMessage()}) - integrační testy NEPROBĚHLY.\n");
+    fwrite(STDERR, "Spusť databázi (kontejner bk-test-mysql) nebo oprav BK_TEST_DB_* a zkus to znovu.\n");
+    exit(1);
+}
+// The same way db.php does it, or fixtures and api.php would disagree on any
+// time from the other side of a DST switch. Copies in the test namespace:
+// bootstrap.php brings db.php into this process further down, and a second
+// declaration of bk_db_clock() would be fatal.
+$clock_ns = bk_test_load_pinned($root . '/db.php', ['bk_db_clock', 'bk_db_clock_sync']);
+($clock_ns . 'bk_db_clock_sync')($pdo, date_default_timezone_get());
+
+$pdo->exec("DROP DATABASE IF EXISTS `{$db_name}`");
+$pdo->exec("CREATE DATABASE `{$db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+$pdo->exec("USE `{$db_name}`");
+
+// schema.sql runs statement by statement - PDO::exec handles multiple
+// queries at once only sometimes and an error would stay invisible.
+$schema = file_get_contents($root . '/schema.sql');
+$schema = preg_replace('/^\s*--.*$/m', '', $schema);
+foreach (array_filter(array_map('trim', explode(";\n", $schema))) as $sql) {
+    if ($sql === '') {
+        continue;
+    }
+    try {
+        $pdo->exec($sql);
+    } catch (PDOException $e) {
+        // The INSERT sequences with sample data do not matter for the tests.
+        if (!str_contains($e->getMessage(), 'Duplicate')) {
+            fwrite(STDERR, "schema.sql: " . substr($e->getMessage(), 0, 120) . "\n");
+        }
+    }
+}
+
+// --- 2. Known test data ---------------------------------------------------
+// A website with a measured latency and SSL, an agent WITHOUT measured
+// metrics. The latter is here on purpose: most regressions in this project
+// were about an unmeasured value showing up as zero.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, port, status, category)
+            VALUES (1, 'Testovací web', 'web', 'https://example.com', 443, 'up', 'Weby')");
+$pdo->exec("INSERT INTO monitors (id, name, type, target, port, status, category)
+            VALUES (2, 'Router bez metrik', 'openwrt', '10.0.0.1', NULL, 'up', 'Síť')");
+$pdo->exec("UPDATE monitors SET last_details = '" . json_encode([
+    'ssl_days_remaining' => 42,
+    'ssl_issuer' => 'Test CA',
+]) . "' WHERE id = 1");
+
+/**
+ * The website's checks that the SLA of section 4 reads: ten 'up' rows a
+ * minute apart up to NOW() and one 'down' row 30 minutes back. From 00:00 to
+ * 00:30 that 'down' row is yesterday's; the pinned block after the digest
+ * runs this at 00:15.
+ */
+function bk_test_seed_sla_logs(PDO $pdo, int $monitor_id): void {
+    $ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+                          VALUES (?, ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+    for ($i = 0; $i < 10; $i++) {
+        $ins->execute([$monitor_id, 'up', 120, $i]);
+    }
+    $ins->execute([$monitor_id, 'down', null, 30]);
+}
+
+/**
+ * $seconds before $now, but not before Monday 00:00 of $iso_week ('o-\WW'),
+ * as a DATETIME value. Half an hour before 00:15 on a Monday is last week.
+ */
+function bk_test_back_in_week(string $iso_week, int $now, int $seconds): string {
+    return date('Y-m-d H:i:s', max($now - $seconds, (int)strtotime($iso_week)));
+}
+
+bk_test_seed_sla_logs($pdo, 1);
+// The agent reports it is alive but measured no metrics - the response must hold null.
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at)
+            VALUES (2, NULL, NULL, NULL, NOW())");
+
+// --- 3. config.php for the test instance ----------------------------------
+$config_path = $root . '/config.php';
+$config_backup = file_exists($config_path) ? file_get_contents($config_path) : null;
+// The X-BK-Test-DB-Down header points one request at a closed port on
+// 127.0.0.1: the database-down path is tested without stopping the shared
+// MySQL container other suites may be using. It exists only in this generated
+// file, never in a real config.php.
+file_put_contents($config_path, "<?php\n"
+    . "ini_set('display_errors', 1);\n"
+    . "error_reporting(E_ALL);\n"
+    . "if (session_status() === PHP_SESSION_NONE && !headers_sent()) { @session_start(); }\n"
+    . "\$bk_test_db_down = isset(\$_SERVER['HTTP_X_BK_TEST_DB_DOWN']);\n"
+    . "define('DB_DRIVER', 'mysql');\n"
+    . "define('DB_HOST', \$bk_test_db_down ? '127.0.0.1' : " . var_export($db_host, true) . ");\n"
+    . "define('DB_PORT', \$bk_test_db_down ? 1 : {$db_port});\n"
+    . "define('DB_NAME', " . var_export($db_name, true) . ");\n"
+    . "define('DB_USER', " . var_export($db_user, true) . ");\n"
+    . "define('DB_PASS', " . var_export($db_pass, true) . ");\n"
+    . "define('TIMEZONE', 'Europe/Prague');\n"
+    . "date_default_timezone_set(TIMEZONE);\n");
+
+// --- 4. The built-in PHP server -------------------------------------------
+// Its stderr is the error log of every request (error_log() writes there), so
+// a check can read what one request logged: from the size before it. The
+// migration checks read what db.php and migrations.php logged.
+$server_log = (string)tempnam(sys_get_temp_dir(), 'bk_test_log');
+$server = proc_open(
+    sprintf('php -S 127.0.0.1:%d -t %s', $port, escapeshellarg($root)),
+    [1 => ['file', '/dev/null', 'w'], 2 => ['file', $server_log, 'a']],
+    $pipes
+);
+
+/** The migration lines the server has logged so far ("[db] migration ..." and the version). */
+$migration_log = function () use ($server_log): array {
+    return array_values(preg_grep('/\[db\] (migration|schema_version)/', file($server_log, FILE_IGNORE_NEW_LINES) ?: []) ?: []);
+};
+
+$cleanup = function () use ($server, $config_path, $config_backup, $server_log) {
+    if (is_resource($server)) {
+        proc_terminate($server);
+        proc_close($server);
+    }
+    @unlink($server_log);
+    // config.php belongs to the developer, not the test - restored to its original state.
+    if ($config_backup !== null) {
+        file_put_contents($config_path, $config_backup);
+    } elseif (file_exists($config_path)) {
+        unlink($config_path);
+    }
+};
+register_shutdown_function($cleanup);
+
+// The server takes a moment to start; wait for the first successful connection.
+$base = "http://127.0.0.1:{$port}";
+for ($i = 0; $i < 50; $i++) {
+    if (@fsockopen('127.0.0.1', $port, $errno, $errstr, 0.2)) {
+        break;
+    }
+    usleep(100000);
+}
+
+/** Calls an endpoint and returns [status code, decoded JSON, raw body]. */
+function api_get(string $base, string $query): array {
+    $ch = curl_init($base . '/api.php?' . $query);
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15]);
+    $body = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    return [$code, json_decode((string)$body, true), (string)$body];
+}
+
+/** The cookie jar keeps the PHP session between requests (admin login). */
+$cookie_jar = tempnam(sys_get_temp_dir(), 'bk_test_cookies');
+register_shutdown_function(function () use ($cookie_jar) {
+    if ($cookie_jar && file_exists($cookie_jar)) {
+        unlink($cookie_jar);
+    }
+});
+
+/** POST with a JSON body; shares the session via the cookie jar. */
+function api_post(string $base, string $query, array $payload, string $jar, ?string $csrf = null): array {
+    // Since 2026-08-17 the server enforces a CSRF token on all writes - the
+    // tests send it in the header just like the real client. Captured at
+    // login (see $GLOBALS['bk_test_csrf'] at action=login). An explicit '' =
+    // do not send (tests verifying the server refuses without a token).
+    $headers = ['Content-Type: application/json'];
+    $token = $csrf ?? ($GLOBALS['bk_test_csrf'] ?? '');
+    if ($token !== '') {
+        $headers[] = 'X-CSRF-Token: ' . $token;
+    }
+    $ch = curl_init($base . '/api.php?' . $query);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_COOKIEJAR => $jar,
+        CURLOPT_COOKIEFILE => $jar,
+        CURLOPT_TIMEOUT => 15,
+    ]);
+    $body = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    return [$code, json_decode((string)$body, true), (string)$body];
+}
+
+/**
+ * A signal to heartbeat.php - a different script from api.php, hence its own
+ * helper. No login: the token is all the endpoint authorises.
+ */
+function hb_ping(string $base, string $token, string $extra = ''): array {
+    $url = $base . '/heartbeat.php?token=' . rawurlencode($token) . ($extra !== '' ? '&' . $extra : '');
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15]);
+    $body = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    return [$code, json_decode((string)$body, true), (string)$body];
+}
+
+/** GET with a session - for endpoints returning more to the logged-in. */
+function api_get_auth(string $base, string $query, string $jar): array {
+    $ch = curl_init($base . '/api.php?' . $query);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_COOKIEJAR => $jar,
+        CURLOPT_COOKIEFILE => $jar,
+        CURLOPT_TIMEOUT => 15,
+    ]);
+    $body = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    return [$code, json_decode((string)$body, true), (string)$body];
+}
+
+// No known default password. schema.sql used to create "admin" with a
+// password printed in the public repository; now a fresh install has no
+// account at all and the first administrator comes from the setup step, with
+// a password only the installer knows. The suite installs itself the same way,
+// with a password generated for this run.
+check('schema.sql nezakládá žádný účet (žádné výchozí heslo)', (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn(), 0);
+// Nor a setting: every default comes from bk_settings_defaults(), which a
+// fresh and an upgraded install share.
+check('schema.sql nezapíše žádné nastavení', (int)$pdo->query("SELECT COUNT(*) FROM settings")->fetchColumn(), 0);
+[, $fresh_session] = api_get($base, 'action=session');
+check('čerstvá instalace hlásí installed=false', $fresh_session['installed'] ?? 'chybí', false);
+// schema.sql stores no schema_version, so that first request ran every
+// migration over a fresh schema: each one found its change already there,
+// none failed for real, and the version was stored.
+$schema_version_src = preg_match("/BK_SCHEMA_VERSION',\s*'([0-9a-z]+)'/", (string)file_get_contents($root . '/db.php'), $sv_m) ? $sv_m[1] : null;
+check('čerstvá instalace: migrace doběhnou bez chyby a uloží verzi schématu',
+    [$pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn(), $migration_log()],
+    [$schema_version_src, []]);
+// W2-12: the login page draws a button only for a provider with a client ID.
+check('bez OAuth klienta session nenabízí žádného poskytovatele', $fresh_session['oauthProviders'] ?? 'chybí', []);
+$pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('oauth_github_client_id', 'Iv1.example') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+[, $oauth_session] = api_get($base, 'action=session');
+check('s GitHub client ID nabídne session jen GitHub (klíč, ne ID)', $oauth_session['oauthProviders'] ?? 'chybí', ['github']);
+check_true('client ID samo session neprozradí', !str_contains(json_encode($oauth_session), 'Iv1.example'));
+$pdo->exec("DELETE FROM settings WHERE key_name = 'oauth_github_client_id'");
+$bk_test_admin_password = 'Test-' . bin2hex(random_bytes(8));
+$setup_jar = tempnam(sys_get_temp_dir(), 'bk_setup0');
+[$code, $fresh_setup] = api_post($base, 'action=setup', [
+    'username' => 'admin', 'email' => 'admin@bloodkings.eu', 'password' => $bk_test_admin_password,
+], $setup_jar, '');
+check('průvodce instalací založí prvního admina', $code, 200);
+check('a je to účet 1', $fresh_setup['id'] ?? null, 1);
+// The wizard signs the new admin in; that session must be able to write. It
+// had no CSRF token, so the first save in the app ended on 403.
+[, $setup_session] = api_get_auth($base, 'action=session', $setup_jar);
+check_true('po instalaci má relace CSRF token a setup ho vrací',
+    ($setup_session['csrfToken'] ?? '') !== '' && ($setup_session['csrfToken'] ?? null) === ($fresh_setup['csrfToken'] ?? false));
+// A write that passes the CSRF gate and then refuses its input (400, nothing
+// stored) - 403 would be the gate.
+[$code] = api_post($base, 'action=save_settings', ['settings' => 'x'], $setup_jar, (string)($fresh_setup['csrfToken'] ?? ''));
+check('a první zápis nového admina projde branou CSRF (400 za vstup, ne 403)', $code, 400);
+@unlink($setup_jar);
+
+// Monitor data belongs to the accounts assigned to it, so almost every read
+// below needs a session. The admin logs in first; the tests that check what an
+// anonymous caller or a plain user gets call without this jar on purpose.
+[$code, $login] = api_post($base, 'action=login', [
+    'username' => 'admin',
+    'password' => $bk_test_admin_password,
+], $cookie_jar);
+$logged_in = $code === 200 && !empty($login['success']);
+check_true('přihlášení admina projde', $logged_in);
+// The CSRF token for all further writes - the same source as the real client.
+$GLOBALS['bk_test_csrf'] = (string)($login['csrfToken'] ?? '');
+check_true('login vrací CSRF token', $GLOBALS['bk_test_csrf'] !== '');
+
+// =======================================================================
+// 1. monitors - the backbone endpoint, called by every app page
+// =======================================================================
+[$code, $data, $raw] = api_get_auth($base, 'action=monitors', $cookie_jar);
+check('monitors vrací HTTP 200', $code, 200);
+check_true('monitors vrací pole monitorů', isset($data['monitors']) && is_array($data['monitors']));
+
+$by_id = [];
+foreach (($data['monitors'] ?? []) as $m) {
+    $by_id[$m['id']] = $m;
+}
+check_true('web monitor je v odpovědi', isset($by_id[1]));
+check_true('agent monitor je v odpovědi', isset($by_id[2]));
+
+// The heart of the honesty rule: unmeasured metrics are null, not zero.
+// array_key_exists, not ?? - the ?? operator treats NULL as missing and
+// would trip up a test for null.
+$agent = $by_id[2] ?? [];
+foreach (['cpu' => 'CPU', 'ram' => 'RAM', 'hdd' => 'disk'] as $key => $label) {
+    check_true("klíč {$key} je v odpovědi přítomen", array_key_exists($key, $agent));
+    check("nezměřené {$label} je null, ne 0", $agent[$key] ?? null, null);
+    check_false("nezměřené {$label} není nula", ($agent[$key] ?? null) === 0 || ($agent[$key] ?? null) === 0.0);
+}
+check('naměřená odezva se vrací', (int)($by_id[1]['responseMs'] ?? 0), 120);
+// R56: an OS nobody reported is null; it fell back to the monitor's type,
+// so a page said "OS: web" or "OS: openwrt".
+check('nenahlášený OS je null, ne typ monitoru',
+    [array_key_exists('os', $by_id[1] ?? []), $by_id[1]['os'] ?? 'chybí', $by_id[2]['os'] ?? 'chybí'], [true, 'chybí', 'chybí']);
+
+// Anonymous access must not see the network topology.
+check_true(
+    'anonymní odpověď neobsahuje wan_ipv4',
+    !str_contains($raw, 'wan_ipv4') && !str_contains($raw, 'wireguard_peers')
+);
+
+// Announced maintenance is public (the legacy page prints it in a banner), but
+// the description may leave ONLY while the flag is on - a stale description of
+// a past window is an internal note, not a public announcement.
+check_true('monitor nese klíč maintenance', array_key_exists('maintenance', $by_id[1] ?? []));
+check_false('bez údržby je maintenance false', ($by_id[1]['maintenance'] ?? null) === true);
+check('bez údržby se popis nevrací', $by_id[1]['maintenanceDescription'] ?? null, null);
+
+$pdo->exec("UPDATE monitors SET maintenance = 1, maintenance_description = 'Výměna disku', maintenance_end = '2030-01-02 03:00:00' WHERE id = 1");
+[, $mnt_data] = api_get($base, 'action=monitors');
+$mnt_by_id = [];
+foreach (($mnt_data['monitors'] ?? []) as $m) {
+    $mnt_by_id[$m['id']] = $m;
+}
+check_true('zapnutá údržba je v anonymní odpovědi', ($mnt_by_id[1]['maintenance'] ?? null) === true);
+check('popis údržby je veřejný, dokud běží', $mnt_by_id[1]['maintenanceDescription'] ?? null, 'Výměna disku');
+// With the server's offset (R221): a bare time was read in the visitor's zone.
+check_true('konec údržby je veřejný, dokud běží, s posunem serveru',
+    preg_match('/^2030-01-02T03:00:00[+-]\d\d:\d\d$/', (string)($mnt_by_id[1]['maintenanceEnd'] ?? '')) === 1);
+
+// Switching the flag off hides the description again even though it stayed in the DB.
+$pdo->exec("UPDATE monitors SET maintenance = 0 WHERE id = 1");
+[, $mnt_data2] = api_get($base, 'action=monitors');
+$mnt_row2 = null;
+foreach (($mnt_data2['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 1) $mnt_row2 = $m;
+}
+check('po vypnutí údržby je popis zase skrytý', $mnt_row2['maintenanceDescription'] ?? null, null);
+$pdo->exec("UPDATE monitors SET maintenance_description = NULL, maintenance_end = NULL WHERE id = 1");
+
+// A monitor that is down has no uptime - it has an outage duration.
+// uptimeSeconds used to be 0 for a down monitor ("uptime 0 s"), which the
+// dashboard printed as if the service had just come back.
+// PHP-side timestamps: api.php reads the column with strtotime() in PHP's
+// timezone, and the container's NOW() is not necessarily in the same zone.
+$dn_stmt = $pdo->prepare("UPDATE monitors SET status = 'down', last_status_change = ? WHERE id = 1");
+$dn_stmt->execute([date('Y-m-d H:i:s', time() - 7200)]);
+[, $dn_data] = api_get_auth($base, 'action=monitors', $cookie_jar);
+$dn_row = null;
+foreach (($dn_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 1) $dn_row = $m;
+}
+check_true('výpadek: klíč uptimeSeconds je přítomen', is_array($dn_row) && array_key_exists('uptimeSeconds', $dn_row));
+// array_key_exists, not ?? - ?? would turn the null under test into the fallback.
+check_true('výpadek: uptimeSeconds je null, ne 0', is_array($dn_row) && array_key_exists('uptimeSeconds', $dn_row) && $dn_row['uptimeSeconds'] === null);
+// The magnitude is checked against the API's own lastStatusChange (ISO with
+// offset, so strtotime() is timezone-safe) - the test's DB session and the
+// app's PHP do not share a timezone, so "2 hours ago" is not comparable.
+$dn_since = $dn_row['sinceStatusChangeSeconds'] ?? null;
+$dn_expected = !empty($dn_row['lastStatusChange']) ? time() - strtotime((string)$dn_row['lastStatusChange']) : null;
+check_true('výpadek: sinceStatusChangeSeconds je celé číslo', is_int($dn_since) && $dn_since > 0);
+check_true('výpadek: sinceStatusChangeSeconds sedí na lastStatusChange', $dn_expected !== null && $dn_since !== null && abs($dn_since - $dn_expected) <= 5);
+check_true('bez agenta je agentSilent null (nikdy nehlásil)', array_key_exists('agentSilent', $dn_row) && $dn_row['agentSilent'] === null);
+
+// agent_offline_timeout = 0 means "detection off" (cron honours it), so there
+// is no verdict to hand out - an agent that reported a second ago must not be
+// reported as silent.
+$ag_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('agent_offline_timeout', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+$pdo->exec("UPDATE monitors SET last_details = '" . json_encode(['agent_last_seen' => time() - 60]) . "' WHERE id = 2");
+$ag_set->execute(['0']);
+[, $ag_data] = api_get_auth($base, 'action=monitors', $cookie_jar);
+$ag_row = null;
+foreach (($ag_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 2) $ag_row = $m;
+}
+check_true('vypnutá detekce: agentSilent je null, ne true', array_key_exists('agentSilent', $ag_row ?? []) && $ag_row['agentSilent'] === null);
+$ag_set->execute(['50']);
+[, $ag_data] = api_get_auth($base, 'action=monitors', $cookie_jar);
+foreach (($ag_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 2) $ag_row = $m;
+}
+check('čerstvý agent mlčící není', $ag_row['agentSilent'] ?? 'chybí', false);
+$pdo->exec("UPDATE monitors SET last_details = '" . json_encode(['agent_last_seen' => time() - 7200]) . "' WHERE id = 2");
+[, $ag_data] = api_get_auth($base, 'action=monitors', $cookie_jar);
+foreach (($ag_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 2) $ag_row = $m;
+}
+check('agent po dvou hodinách mlčí', $ag_row['agentSilent'] ?? 'chybí', true);
+check_true('a výpadek sběru ho jmenuje', in_array('agent_silent', array_column($ag_row['collectionIssues'] ?? [], 'type'), true));
+// The collection banner (and the daily reminder) used to read 0 as "every
+// agent is silent", while agentSilent in the same row said "no verdict".
+$ag_set->execute(['0']);
+[, $ag_data] = api_get_auth($base, 'action=monitors', $cookie_jar);
+foreach (($ag_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 2) $ag_row = $m;
+}
+check('vypnutá detekce: dvě hodiny ticha nejsou mlčení ani výpadek sběru',
+    [array_key_exists('agentSilent', $ag_row ?? []) ? $ag_row['agentSilent'] : 'chybí',
+        in_array('agent_silent', array_column($ag_row['collectionIssues'] ?? [], 'type'), true)],
+    [null, false]);
+$ag_set->execute(['50']);
+$pdo->exec("UPDATE monitors SET last_details = NULL WHERE id = 2");
+
+// A recovery is an OK check whose immediately preceding check failed. The
+// events list mixes older outages in, so the frontend cannot tell from row
+// order - the server marks the row it can actually prove.
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+            VALUES (2, 'down', NULL, DATE_SUB(NOW(), INTERVAL 4 MINUTE))");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+            VALUES (2, 'up', 5, DATE_SUB(NOW(), INTERVAL 3 MINUTE))");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+            VALUES (2, 'up', 6, DATE_SUB(NOW(), INTERVAL 2 MINUTE))");
+[$ev_code, $ev_data] = api_get_auth($base, 'action=events&monitor_id=2&limit=200', $cookie_jar);
+check('events vrací 200', $ev_code, 200);
+$ev_rows = $ev_data['events'] ?? [];
+check_true('events vrací tři řádky monitoru', count($ev_rows) === 3);
+
+// Řádek "co se změnilo" se nedá uhodnout ze seznamu: ten drží nejnovější
+// kontroly plus nejnovější výpadky, takže samotný přechod v něm často není.
+// Server proto vrací ten řádek přímo, přišpendlený na last_status_change.
+$pdo->exec("UPDATE monitors SET status = 'up', last_status_change = DATE_SUB(NOW(), INTERVAL 3 MINUTE) WHERE id = 2");
+[, $sc_data] = api_get_auth($base, 'action=events&monitor_id=2&limit=200', $cookie_jar);
+check_true('events vrací statusChange', array_key_exists('statusChange', $sc_data));
+check('a je to ta kontrola, která stav změnila', $sc_data['statusChange']['status'] ?? null, 'up');
+check_true(
+    'zná i stav, ze kterého se přešlo',
+    ($sc_data['statusChange']['fromStatus'] ?? null) === 'down'
+);
+// Bez zaznamenané změny se nic nevymýšlí.
+$pdo->exec("UPDATE monitors SET last_status_change = DATE_SUB(NOW(), INTERVAL 40 DAY) WHERE id = 2");
+[, $sc_none] = api_get_auth($base, 'action=events&monitor_id=2&limit=200', $cookie_jar);
+check_true(
+    'bez odpovídajícího řádku zůstává statusChange null',
+    array_key_exists('statusChange', $sc_none) && $sc_none['statusChange'] === null
+);
+// Newest first: [0] běžná OK kontrola, [1] obnovení, [2] výpadek.
+check('nejnovější OK kontrola není obnovení', $ev_rows[0]['isRecovery'] ?? 'chybí', false);
+check('OK kontrola hned po výpadku je obnovení', $ev_rows[1]['isRecovery'] ?? 'chybí', true);
+check('výpadek sám obnovením není', $ev_rows[2]['isRecovery'] ?? 'chybí', false);
+// R292: the log of every monitor promised recoveries and marked none - the
+// fresh tail is contiguous by id, so each monitor's rows in it are its own
+// consecutive checks, interleaved with another monitor's or not.
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+            VALUES (1, 'up', 7, DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
+[, $evf_data] = api_get_auth($base, 'action=events&limit=10', $cookie_jar);
+$evf_rec = [];
+foreach ($evf_data['events'] ?? [] as $e) {
+    if ((int)($e['monitorId'] ?? 0) === 2) {
+        $evf_rec[] = [$e['rawStatus'] ?? null, $e['isRecovery'] ?? null];
+    }
+}
+check('protokol všech monitorů označí obnovení po monitoru', $evf_rec, [['up', false], ['up', true], ['down', false]]);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 1 AND checked_at > DATE_SUB(NOW(), INTERVAL 90 SECOND) AND response_time = 7");
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 2");
+$dn_stmt = $pdo->prepare("UPDATE monitors SET status = 'up', last_status_change = ? WHERE id = 1");
+$dn_stmt->execute([date('Y-m-d H:i:s', time() - 1800)]);
+[, $up_data] = api_get_auth($base, 'action=monitors', $cookie_jar);
+foreach (($up_data['monitors'] ?? []) as $m) {
+    if ((int)$m['id'] === 1) $dn_row = $m;
+}
+check_true('běží: uptimeSeconds je celé číslo', is_int($dn_row['uptimeSeconds'] ?? null) && $dn_row['uptimeSeconds'] > 0);
+check('běží: uptimeSeconds = doba od změny stavu', $dn_row['uptimeSeconds'] ?? null, $dn_row['sinceStatusChangeSeconds'] ?? 'chybí');
+
+// ui_config carries portalUrl for the public page footer - the key must exist
+// even when empty, so the frontend can tell "unset" from "old server without the field".
+[$code, $uicfg] = api_get($base, 'action=ui_config');
+check('ui_config vrací HTTP 200', $code, 200);
+check_true('ui_config nese portalUrl', array_key_exists('portalUrl', $uicfg ?? []));
+
+// uptime_windows: four windows in one query. Monitor 1 has seeded up and down
+// measurements (must land between 0 and 100), monitor 2 has not a single log -
+// it must not appear in the response at all (the frontend turns absence into a dash, not 100 %).
+[$code, $uw] = api_get_auth($base, 'action=uptime_windows', $cookie_jar);
+check('uptime_windows vrací HTTP 200', $code, 200);
+$uw_m1 = $uw['windows']['1'] ?? ($uw['windows'][1] ?? null);
+check_true('uptime_windows zná monitor 1', is_array($uw_m1));
+foreach (['d1', 'd7', 'd30', 'd90'] as $uw_key) {
+    check_true("okno {$uw_key} existuje", array_key_exists($uw_key, $uw_m1 ?? []));
+}
+check_true('d1 je mezi 0 a 100 (up i down v seedu)', is_numeric($uw_m1['d1'] ?? null) && $uw_m1['d1'] > 0 && $uw_m1['d1'] < 100);
+check_true('monitor bez logů v oknech není', !isset($uw['windows']['2']) && !isset($uw['windows'][2]));
+
+// daily_uptime carries avgMs for the latency sparkline - an average of real
+// answers only (the down row with a NULL latency must not drag it down).
+[, $du] = api_get_auth($base, 'action=daily_uptime&days=7', $cookie_jar);
+$du_days = $du['series']['1'] ?? ($du['series'][1] ?? []);
+$du_has_120 = false;
+$du_has_key = false;
+foreach ($du_days as $du_day) {
+    if (array_key_exists('avgMs', $du_day)) $du_has_key = true;
+    if (($du_day['avgMs'] ?? null) === 120) $du_has_120 = true;
+}
+check_true('daily_uptime dny nesou klíč avgMs', $du_has_key);
+check_true('den s měřeními má avgMs 120', $du_has_120);
+
+// badge: embeddable SVG. An unknown monitor is 404, not an invented green badge.
+[$code, , $bdg_raw] = api_get($base, 'action=badge');
+check('badge (flotila) vrací HTTP 200', $code, 200);
+check_true('badge je SVG', str_contains($bdg_raw, '<svg'));
+$bdg_name = $pdo->query("SELECT name FROM monitors WHERE id = 1")->fetchColumn();
+[$code, , $bdg_raw1] = api_get($base, 'action=badge&monitor_id=1');
+check('badge monitoru vrací HTTP 200', $code, 200);
+check_true('badge nese jméno monitoru', str_contains($bdg_raw1, htmlspecialchars((string)$bdg_name, ENT_QUOTES)));
+// R8: a stopped collector left this badge green in someone else's README.
+$bdg_at = fn (string $ran): string => (function () use ($pdo, $ran, $base): string {
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('last_cron_run', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")->execute([$ran]);
+    [, , $svg] = api_get($base, 'action=badge&monitor_id=1');
+    return (string)$svg;
+})();
+$bdg_saved = $pdo->query("SELECT status, maintenance, last_checked FROM monitors WHERE id = 1")->fetch();
+$bdg_saved_ran = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'last_cron_run'")->fetchColumn();
+$pdo->exec("UPDATE monitors SET status = 'up', maintenance = 0, last_checked = NOW() WHERE id = 1");
+check_true('odznak se sběrem v chodu říká online', str_contains($bdg_at(date('Y-m-d H:i:s')), '>online<'));
+$bdg_stale = $bdg_at(date('Y-m-d H:i:s', time() - 6 * 3600));
+check_true('odznak se zastaveným sběrem říká neznámý, ne online', str_contains($bdg_stale, 'neznámý') && !str_contains($bdg_stale, '>online<'));
+$pdo->exec("UPDATE monitors SET status = 'down' WHERE id = 1");
+check_true('výpadek odznak ukáže i se zastaveným sběrem', str_contains($bdg_at(date('Y-m-d H:i:s', time() - 6 * 3600)), 'výpadek'));
+$pdo->exec("UPDATE monitors SET status = 'warning' WHERE id = 1");
+check_true('zhoršený stav zůstane zhoršený', str_contains($bdg_at(date('Y-m-d H:i:s')), 'zhoršeno'));
+$pdo->prepare("UPDATE monitors SET status = ?, maintenance = ?, last_checked = ? WHERE id = 1")->execute([$bdg_saved['status'], $bdg_saved['maintenance'], $bdg_saved['last_checked']]);
+if ($bdg_saved_ran === false) {
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'last_cron_run'");
+} else {
+    $bdg_at((string)$bdg_saved_ran);
+}
+[$code] = api_get($base, 'action=badge&monitor_id=99999');
+check('badge neexistujícího monitoru je 404', $code, 404);
+
+// type=uptime: monitor 1 has measurements (must return a percentage), monitor 2
+// has not a single log - "no data", never an invented percentage.
+[$code, , $bdg_up] = api_get($base, 'action=badge&monitor_id=1&type=uptime');
+check('uptime badge vrací HTTP 200', $code, 200);
+check_true('uptime badge nese procenta', (bool)preg_match('/\d+\.\d{2} %/', $bdg_up));
+// Monitor 2 is the home router, off the public page (W1-G3): the badge is
+// asked for with the admin's session, the anonymous 404 is checked later.
+[, , $bdg_nodata] = api_get_auth($base, 'action=badge&monitor_id=2&type=uptime', $cookie_jar);
+check_true('bez měření říká "bez dat"', str_contains($bdg_nodata, 'bez dat'));
+
+// badge.php is a deprecated alias - old README embeds must keep working
+// via a 302 to action=badge with the parameters preserved.
+$ch_alias = curl_init($base . '/badge.php?id=1&type=uptime');
+curl_setopt_array($ch_alias, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 10]);
+curl_exec($ch_alias);
+$alias_code = (int)curl_getinfo($ch_alias, CURLINFO_RESPONSE_CODE);
+$alias_loc = (string)curl_getinfo($ch_alias, CURLINFO_REDIRECT_URL);
+curl_close($ch_alias);
+check('badge.php přesměrovává', $alias_code, 302);
+check_true('alias míří na action=badge s parametry', str_contains($alias_loc, 'action=badge') && str_contains($alias_loc, 'monitor_id=1') && str_contains($alias_loc, 'type=uptime'));
+
+// widget.php is one too (D4): its HTML card headlined the 30-day
+// availability, so an old embed gets that badge.
+[$wdg_code, $wdg_head, $wdg_body] = bk_raw_request($base . '/widget.php?id=1');
+check('widget.php přesměruje na odznak dostupnosti monitoru', [
+    $wdg_code, preg_match('/^location:\s*(\S+)/mi', $wdg_head, $wdg_m) ? $wdg_m[1] : null, $wdg_body,
+], [302, 'api.php?action=badge&monitor_id=1&type=uptime', '']);
+
+// =======================================================================
+// 2. public_status - the basis of the public page and the widget
+// =======================================================================
+[$code, $data] = api_get($base, 'action=public_status');
+check('public_status vrací HTTP 200', $code, 200);
+check_true('public_status zná počet monitorů', isset($data['totalMonitors']));
+// The web is on the public page, the home router is not (W1-G3).
+check('veřejný public_status počítá jen web, router ne', (int)($data['totalMonitors'] ?? 0), 1);
+[, $data_admin] = api_get_auth($base, 'action=public_status', $cookie_jar);
+check('v aplikaci admin počítá oba monitory', (int)($data_admin['totalMonitors'] ?? 0), 2);
+
+// =======================================================================
+// 3. dashboard_layout - the tile catalogue (new feature, previously untested)
+// =======================================================================
+[$code, $data] = api_get_auth($base, 'action=dashboard_layout', $cookie_jar);
+check('dashboard_layout vrací HTTP 200', $code, 200);
+check_true('katalog je pole', isset($data['catalog']) && is_array($data['catalog']));
+
+$panels = array_filter($data['catalog'] ?? [], fn($c) => ($c['kind'] ?? '') === 'panel');
+check_true('katalog nabízí panely dashboardu', count($panels) >= 5);
+// A panel the catalogue leaves out disappears for good from any saved layout.
+check_true('katalog nabízí karty routerů a serverů', in_array('devices', array_column($panels, 'key'), true));
+
+// A metric without a single sample must not be offered as available - the user
+// would enable a tile that stays forever empty.
+foreach (($data['catalog'] ?? []) as $entry) {
+    if (($entry['kind'] ?? '') === 'metric' && ($entry['key'] ?? '') === 'metric_cpu') {
+        check('metrika bez vzorků není available', $entry['available'], false);
+    }
+}
+
+// =======================================================================
+// 4. websites_overview - the SLA windows for the websites page
+// =======================================================================
+// The 7-day window reads every day but today from uptime_daily, which cron's
+// time rollup writes every ten minutes. Between 00:00 and 00:30 the seed's
+// 'down' row is yesterday's, and without that rollup it was in no window at
+// all: the run that started at 00:14 Prague time got 100. So the rollup runs
+// first, in a PHP that loads the app the way cron.php does.
+$ro_out = [];
+exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('require ' . var_export($root . '/bootstrap.php', true) . ';'
+    . ' echo json_encode(bk_rollup_daily_uptime_time($pdo, 2));') . ' 2>&1', $ro_out, $ro_rc);
+check_true('časový souhrn dnů proběhl jako v cronu (' . implode(' ', $ro_out) . ')', $ro_rc === 0 && (int)end($ro_out) > 0);
+[$code, $data] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
+check('websites_overview vrací HTTP 200', $code, 200);
+check_true('vrací mapu monitorů', isset($data['monitors']) && is_array($data['monitors']));
+
+$sla = $data['monitors'][1] ?? $data['monitors']['1'] ?? null;
+check_true('web má spočítané SLA za 7 dní', $sla !== null && $sla['sla7'] !== null);
+// In time, not in rows (W1-B1): the rows are one minute apart, so the 'down'
+// row 30 minutes ago stands for 2.5 minutes (the cap), the nine up minutes
+// after it for nine; the 18 minutes between them nobody measured. That is
+// 78-82 % depending on how long after the insert the request runs. The row
+// ratio (10 up / 11) was 90.9 % and a lost 'down' would be 100 %.
+check_true(
+    'SLA počítá výpadek v čase, ne v řádcích (dostal ' . json_encode($sla['sla7'] ?? null) . ')',
+    $sla !== null && $sla['sla7'] !== null && $sla['sla7'] > 75 && $sla['sla7'] < 85
+);
+
+$sla_agent = $data['monitors'][2] ?? $data['monitors']['2'] ?? null;
+check('monitor bez logů nemá vymyšlené SLA', $sla_agent, null);
+
+// R324: before the first rollup the long window holds today's checks only,
+// and its coverage started at 0, which the page read as "rok".
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES (9324, 'R324', 'web', 'https://r324.example.test', 'up', 'Test')");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (9324, 'up', 90, NOW() - INTERVAL 2 MINUTE), (9324, 'up', 90, NOW() - INTERVAL 1 MINUTE)");
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'websites_overview_cache'");
+    [, $lt_data] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
+    $lt_sla = $lt_data['monitors'][9324] ?? $lt_data['monitors']['9324'] ?? [];
+    check('dlouhé okno bez denního souhrnu pokrývá jeden den, ne rok ani 0', $lt_sla['longTermDays'] ?? 'chybí', 1);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9324");
+    $pdo->exec("DELETE FROM monitors WHERE id = 9324");
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'websites_overview_cache'");
+}
+
+// =======================================================================
+// 5. Authorisation - mutating operations must not be reachable without login
+// =======================================================================
+foreach ([
+    'incident_action' => 'akce nad incidentem',
+    'create_incident' => 'založení incidentu',
+    'save_settings' => 'uložení nastavení',
+    'test_notification' => 'testovací notifikace',
+] as $action => $label) {
+    $ch = curl_init($base . '/api.php?action=' . $action);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => '{}',
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 15,
+    ]);
+    curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    check_true("{$label} bez přihlášení je odmítnuto (dostal {$code})", in_array($code, [401, 403], true));
+}
+
+// =======================================================================
+// 6. An unknown action and missing parameters must not crash the endpoint
+// =======================================================================
+[$code, , $raw] = api_get($base, 'action=neexistujici_akce_xyz');
+check_true('neznámá akce nekončí chybou serveru', $code < 500);
+check_true('odpověď neobsahuje fatální chybu', !str_contains($raw, 'Fatal error'));
+
+[$code, , $raw] = api_get_auth($base, 'action=sla_report&days=999999', $cookie_jar);
+check_true('nesmyslný rozsah SLA nekončí chybou serveru', $code < 500);
+check_true('SLA report neobsahuje fatální chybu', !str_contains($raw, 'Fatal error'));
+
+// Values pinned to the seed - they hold equivalence across the rewrite of the
+// 3-queries-per-monitor loop into batched queries (see sla_report in api.php).
+[, $sla_pin] = api_get_auth($base, 'action=sla_report&days=30', $cookie_jar);
+$sla_by_id = [];
+foreach (($sla_pin['monitors'] ?? []) as $sm) { $sla_by_id[(int)$sm['id']] = $sm; }
+check('p50 monitoru 1 je 120 ms', $sla_by_id[1]['p50Ms'] ?? null, 120);
+check('p99 monitoru 1 je 120 ms', $sla_by_id[1]['p99Ms'] ?? null, 120);
+check_true('poslední výpadek monitoru 1 je vyřešený', ($sla_by_id[1]['lastOutage']['resolved'] ?? null) === true);
+// array_key_exists, not ?? - the ?? operator treats NULL as a missing value.
+check_true('monitor bez logů má p50 null, ne nulu', array_key_exists('p50Ms', $sla_by_id[2]) && $sla_by_id[2]['p50Ms'] === null);
+check_true('a uptime null, ne 100', array_key_exists('uptimePercent', $sla_by_id[2]) && $sla_by_id[2]['uptimePercent'] === null);
+// R27: no measurement is no outage figure, and the total sums what was measured.
+check_true('a výpadek null, ne nula minut', array_key_exists('outageMinutes', $sla_by_id[2]) && $sla_by_id[2]['outageMinutes'] === null);
+// R159: over 7 and 30 days the "max" was the highest hourly or daily average.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status) VALUES (9159, 'R159', 'vps', 'r159.example.test', 'up')");
+$r159_ins = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at) VALUES (9159, ?, 40, 50, NOW() - INTERVAL 2 DAY + INTERVAL ? MINUTE)");
+for ($i = 0; $i < 30; $i++) {
+    $r159_ins->execute([$i === 10 ? 100 : 10, $i]);
+}
+foreach (['7d', '30d'] as $r159_period) {
+    [$r159_code, $r159] = api_get_auth($base, "action=metrics_history&monitor_id=9159&period={$r159_period}", $cookie_jar);
+    // The strict MySQL default (ONLY_FULL_GROUP_BY) refused both queries: 500.
+    check("historie za {$r159_period} odpoví", $r159_code, 200);
+    check("max za {$r159_period} je nejvyšší měření, ne nejvyšší průměr", (float)($r159['cpu_max'] ?? -1), 100.0);
+}
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 9159");
+$pdo->exec("DELETE FROM monitors WHERE id = 9159");
+
+// R252: a 7-day report took its MTTR from an outage 25 days back.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, created_at) VALUES (9252, 'R252', 'web', 'https://r252.example.test', 'up', NOW() - INTERVAL 40 DAY)");
+$r252_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES (9252, ?, NOW() - INTERVAL ? MINUTE)");
+foreach ([[36001, 'up'], [36000, 'down'], [35990, 'down'], [35980, 'up'], [60, 'up']] as [$r252_ago, $r252_st]) {
+    $r252_ins->execute([$r252_st, $r252_ago]);
+}
+$r252_mttr = function (int $days) use ($base, $cookie_jar) {
+    [, $rep] = api_get_auth($base, 'action=sla_report&days=' . $days, $cookie_jar);
+    $row = array_values(array_filter($rep['monitors'] ?? [], fn ($m) => (int)$m['id'] === 9252))[0] ?? [];
+    return array_key_exists('mttrSec', $row) ? $row['mttrSec'] : 'chybí';
+};
+check('MTTR týdenního reportu není z výpadku před 25 dny', $r252_mttr(7), null);
+check('a 30denní report ho má', $r252_mttr(30), 1200);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9252");
+$pdo->exec("DELETE FROM monitors WHERE id = 9252");
+check('celkový výpadek sčítá jen změřené', $sla_pin['totalOutageMinutes'] ?? 'chybí', array_sum(array_filter(array_column($sla_pin['monitors'], 'outageMinutes'), fn ($v) => $v !== null)));
+
+// =======================================================================
+// =======================================================================
+// 7. WRITE ENDPOINTS
+//
+// This part exists because save_monitor turned out to use a $preset_id that
+// was never assigned - every monitor save silently erased its preset.
+// Read tests cannot see such a bug; only saving and reading back
+// can catch it.
+// =======================================================================
+
+
+// The write guard end-to-end: a write without a token must fail with 403 before
+// touching anything, and a GET on a POST-only action with 405. Without this the
+// whole CSRF protection would be dead code nobody ever enforced.
+[$wg_code, $wg_data] = api_post($base, 'action=create_incident', ['title' => 'CSRF test'], $cookie_jar, '');
+check('zápis bez CSRF tokenu je 403', $wg_code, 403);
+check_true('a hláška mluví o CSRF', str_contains((string)($wg_data['error'] ?? ''), 'CSRF'));
+[$wg_code2] = api_get_auth($base, 'action=send_digest&period=weekly', $cookie_jar);
+check('GET na POST-only akci je 405', $wg_code2, 405);
+[$wg_code3, $wg_unknown] = api_get($base, 'action=neexistujici_akce');
+check('neznámá akce je 400, ne tichých 200', $wg_code3, 400);
+check_true('a nese klíč error', isset($wg_unknown['error']));
+
+// Sign-out from the app: POST only, it ends the session the legacy admin page
+// shares, and it leaves a trace in the audit log like that page's sign-out.
+$jar_lo = tempnam(sys_get_temp_dir(), 'bk_test_lo');
+[$lo_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password], $jar_lo, '');
+check('druhá relace admina se přihlásí', $lo_login, 200);
+[$lo_get] = api_get_auth($base, 'action=logout', $jar_lo);
+check('odhlášení přes GET se odmítne', $lo_get, 405);
+// The client drops its cookie on any logout answer, so the jar alone cannot
+// prove the server ended the session. The old session id is replayed directly.
+$lo_sid = null;
+foreach (file($jar_lo) ?: [] as $lo_line) {
+    $lo_line = trim($lo_line);
+    if (str_starts_with($lo_line, '#HttpOnly_')) {
+        $lo_line = substr($lo_line, strlen('#HttpOnly_'));
+    } elseif ($lo_line === '' || $lo_line[0] === '#') {
+        continue;
+    }
+    $lo_parts = explode("\t", $lo_line);
+    if (count($lo_parts) >= 7 && $lo_parts[5] === 'PHPSESSID') {
+        $lo_sid = $lo_parts[6];
+    }
+}
+$lo_replay = function (string $sid) use ($base): array {
+    $ch = curl_init($base . '/api.php?action=session');
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15, CURLOPT_COOKIE => 'PHPSESSID=' . $sid]);
+    $body = (string)curl_exec($ch);
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), json_decode($body, true)];
+};
+check_true('relace má ID, které jde přehrát', is_string($lo_sid) && $lo_sid !== '');
+[, $lo_replay_before] = $lo_replay((string)$lo_sid);
+check('přehrané ID je před odhlášením přihlášené', $lo_replay_before['authenticated'] ?? null, true);
+$lo_before = (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'logout'")->fetchColumn();
+[$lo_code, $lo_res] = api_post($base, 'action=logout', [], $jar_lo, '');
+check('odhlášení projde', $lo_code, 200);
+check('a server ho potvrdí', $lo_res['success'] ?? null, true);
+[$lo_replay_code, $lo_replay_after] = $lo_replay((string)$lo_sid);
+check('staré ID relace po odhlášení odpoví', $lo_replay_code, 200);
+check('staré ID relace už nikoho nepřihlásí', $lo_replay_after['authenticated'] ?? null, false);
+check('odhlášení se zapíše do auditu', (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'logout'")->fetchColumn(), $lo_before + 1);
+check('záznam nese odhlášený účet', $pdo->query("SELECT actor_username FROM audit_log WHERE action = 'logout' ORDER BY id DESC LIMIT 1")->fetchColumn(), 'admin');
+[, $lo_main] = api_get_auth($base, 'action=session', $cookie_jar);
+check_true('jiná relace téhož admina zůstane přihlášená', !empty($lo_main['authenticated']));
+@unlink($jar_lo);
+
+// CORS: a response to a foreign Origin must not carry Allow-Origin (anyone
+// could read credentialed responses otherwise); the own origin gets it.
+$cors_probe = function (string $origin) use ($base): string {
+    $ch = curl_init($base . '/api.php?action=public_status');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HEADER => true,
+        CURLOPT_HTTPHEADER => ['Origin: ' . $origin],
+        CURLOPT_TIMEOUT => 10,
+    ]);
+    $resp = (string)curl_exec($ch);
+    curl_close($ch);
+    return $resp;
+};
+check_false('cizí Origin nedostane Allow-Origin', stripos($cors_probe('https://evil.example'), 'Access-Control-Allow-Origin') !== false);
+// $base, not a fixed port: a run on a scratch copy (BK_TEST_PORT) has another origin.
+check_true('vlastní Origin Allow-Origin dostane', stripos($cors_probe($base), 'Access-Control-Allow-Origin: ' . $base) !== false);
+
+// save_user/delete_user: do 2026-08-17 v api.php neexistovaly - React je
+// called them, got 400 "unknown action" and user management from the app did not work.
+[$su_code, $su_res] = api_post($base, 'action=save_user', ['username' => 'audit_tester', 'email' => 'audit@example.com', 'role' => 'user', 'password' => 'TesterHeslo123!'], $cookie_jar);
+check('save_user vytvoří účet', $su_code, 200);
+$su_new_id = (int)($su_res['id'] ?? 0);
+check_true('vrací id nového účtu', $su_new_id > 0);
+api_post($base, 'action=save_user', ['id' => $su_new_id, 'username' => 'audit_tester', 'email' => 'audit2@example.com', 'role' => 'user'], $cookie_jar);
+$su_mail_stmt = $pdo->prepare("SELECT email FROM users WHERE id = ?");
+$su_mail_stmt->execute([$su_new_id]);
+check('úprava e-mailu se skutečně uloží', $su_mail_stmt->fetchColumn(), 'audit2@example.com');
+[$sd_code] = api_post($base, 'action=delete_user', ['id' => 1], $cookie_jar);
+check('vlastní přihlášený účet smazat nejde', $sd_code, 400);
+
+// Roles: a regular account (role user) must not reach admin writes; its own profile works.
+$jar3 = tempnam(sys_get_temp_dir(), 'bk_test_c3');
+[$u3_code, $u3_login] = api_post($base, 'action=login', ['username' => 'audit_tester', 'password' => 'TesterHeslo123!'], $jar3, '');
+check_true('tester se přihlásí', $u3_code === 200 && !empty($u3_login['success']));
+$u3_csrf = (string)($u3_login['csrfToken'] ?? '');
+[$ri_code] = api_post($base, 'action=create_incident', ['title' => 'nesmí projít'], $jar3, $u3_csrf);
+check('běžný uživatel nezaloží incident', $ri_code, 403);
+[$rp_code] = api_post($base, 'action=save_preset', ['name' => 'nesmí projít'], $jar3, $u3_csrf);
+check('běžný uživatel neuloží preset', $rp_code, 403);
+// Muting a router recommendation silences a finding for EVERYBODY who can see
+// the router, so it is an admin decision (CORE 3.9) - the CSRF token alone
+// must not be enough.
+[$rm3_code] = api_post($base, 'action=router_recommendation_mute',
+    ['monitor_id' => 2, 'key' => 'fs_nearly_full:m:x', 'muted' => true], $jar3, $u3_csrf);
+check('běžný uživatel neztlumí doporučení routeru', $rm3_code, 403);
+[$mp3_code] = api_get_auth($base, 'action=my_profile', $jar3);
+check('vlastní profil běžnému uživateli funguje', $mp3_code, 200);
+
+// The maintenance switch and five admin reads were gated on login alone: a
+// 'user' account could silence every alert by putting the monitors into
+// maintenance, and download every user's e-mail and phone, the delivery log
+// and the configuration export.
+$rtm_before = (int)$pdo->query("SELECT maintenance FROM monitors WHERE id = 1")->fetchColumn();
+[$rtm_code] = api_post($base, 'action=toggle_maintenance', ['monitor_ids' => [1], 'maintenance' => !$rtm_before], $jar3, $u3_csrf);
+check('běžný uživatel nepřepne údržbu', $rtm_code, 403);
+check('údržba monitoru zůstala, jak byla', (int)$pdo->query("SELECT maintenance FROM monitors WHERE id = 1")->fetchColumn(), $rtm_before);
+foreach ([
+    'users' => 'action=users',
+    'notification_log' => 'action=notification_log&monitor_id=1',
+    // Filtry ani souhrn nejsou jiná dvířka do téže tabulky - adresáti jsou
+    // osobní údaj bez ohledu na to, jak se na ně někdo zeptá.
+    'notification_log se souhrnem' => 'action=notification_log&summary=1&kind=alert&ok=0',
+    'export_config' => 'action=export_config',
+    'audit_logs' => 'action=audit_logs',
+    // Even masked, it says who is not being reached.
+    'notification_health' => 'action=notification_health',
+    // An excerpt of config.php.
+    'site_health' => 'action=site_health',
+    // Every monitor's SLA, incidents and router findings in one page.
+    'digest_preview' => 'action=digest_preview&period=weekly',
+] as $ra_name => $ra_query) {
+    [$ra_code] = api_get_auth($base, $ra_query, $jar3);
+    check("běžný uživatel nedostane {$ra_name}", $ra_code, 403);
+}
+
+// Every admin action stops a 'user' account at one gate, bk_require_admin(),
+// with one answer, writes and reads alike - it used to be 33 copies with three
+// different messages. The account carries a valid CSRF token, so a write
+// reaches the role check instead of the CSRF guard.
+$ag_denied = 'Přístup odepřen — vyžadována role administrátora.';
+foreach ([
+    'save_monitor', 'delete_monitor', 'archive_monitor', 'unarchive_monitor',
+    'import_discovered_service', 'upload_logo', 'trigger_remote_action',
+    'convert_to_agent_check', 'clear_monitor_history', 'redetect_location',
+    'toggle_maintenance', 'test_notification', 'save_settings',
+    'generate_metrics_token', 'incident_action', 'create_incident',
+    'save_preset', 'delete_preset', 'save_status_page',
+    'delete_status_page', 'send_digest', 'save_user', 'delete_user',
+    'router_recommendation_mute', 'wan_settings_save', 'delete_public_subscriber',
+    'save_annotation', 'delete_annotation',
+] as $ag_action) {
+    [$ag_code, $ag_body] = api_post($base, "action={$ag_action}", [], $jar3, $u3_csrf);
+    check("běžný uživatel neprojde zápisem {$ag_action}", $ag_code, 403);
+    check("a {$ag_action} odpoví jednou hláškou", $ag_body['error'] ?? null, $ag_denied);
+}
+$ag_reads = [
+    'heartbeat_info' => 'action=heartbeat_info&monitor_id=1',
+    'agent_install_info' => 'action=agent_install_info&monitor_id=2',
+    'discovered_services' => 'action=discovered_services',
+    'get_settings' => 'action=get_settings',
+    'notification_log' => 'action=notification_log',
+    'site_health' => 'action=site_health',
+    'notification_health' => 'action=notification_health',
+    'export_config' => 'action=export_config',
+    'user_audit_log' => 'action=user_audit_log',
+    'public_subscribers' => 'action=public_subscribers',
+];
+foreach ($ag_reads + [
+    'users' => 'action=users',
+    'audit_logs' => 'action=audit_logs',
+    'metrics_history celé flotily' => 'action=metrics_history&period=24h',
+] as $ag_name => $ag_query) {
+    [$ag_code, $ag_body] = api_get_auth($base, $ag_query, $jar3);
+    check("běžný uživatel neprojde čtením {$ag_name}", $ag_code, 403);
+    check("a {$ag_name} odpoví jednou hláškou", $ag_body['error'] ?? null, $ag_denied);
+}
+// An anonymous caller gets the same 403 from an admin read. A write never
+// reaches the gate anonymously - the CSRF guard answers first.
+foreach ($ag_reads as $ag_name => $ag_query) {
+    [$ag_code, $ag_body] = api_get($base, $ag_query);
+    check("anonym neprojde čtením {$ag_name}", $ag_code, 403);
+    check("a anonymovi {$ag_name} odpoví toutéž hláškou", $ag_body['error'] ?? null, $ag_denied);
+}
+// These ask for a login first, so an anonymous caller gets 401 there.
+foreach ([
+    'users' => 'action=users',
+    'audit_logs' => 'action=audit_logs',
+    'metrics_history celé flotily' => 'action=metrics_history&period=24h',
+    'my_profile' => 'action=my_profile',
+    'get_subscriptions' => 'action=get_subscriptions',
+] as $ag_name => $ag_query) {
+    [$ag_code, $ag_body] = api_get($base, $ag_query);
+    check("anonym bez přihlášení nedostane {$ag_name}", $ag_code, 401);
+    check("a {$ag_name} mu odpoví hláškou přihlášení", $ag_body['error'] ?? null, 'Unauthorized');
+}
+// install_cron belongs to the installer, which answers before this gate: on a
+// finished install anyone but an administrator gets its lock, not a 403.
+[$ag_code, $ag_body] = api_get_auth($base, 'action=install_cron', $jar3);
+check('běžný uživatel nedostane cron řádek, jen zámek instalátoru', [$ag_code, $ag_body['error'] ?? null], [409, 'installer_locked']);
+
+// A monitor that is not assigned answers exactly like one that does not exist.
+foreach ([
+    'process_top' => 'action=process_top&monitor_id=1',
+    'interface_traffic_daily' => 'action=interface_traffic_daily&monitor_id=1',
+    'export_csv' => 'action=export_csv&monitor_id=1',
+] as $ra_name => $ra_query) {
+    [$ra_code] = api_get_auth($base, $ra_query, $jar3);
+    check("nepřiřazený monitor v {$ra_name} vrací 404", $ra_code, 404);
+}
+// Chart series keep their old answer for a missing monitor (200, empty points,
+// an error text); an unassigned monitor must get exactly that answer.
+[, , $ra_missing_series] = api_get_auth($base, 'action=metric_series&monitor_id=999999&metric=response_time&period=24h', $jar3);
+[, , $ra_foreign_series] = api_get_auth($base, 'action=metric_series&monitor_id=1&metric=response_time&period=24h', $jar3);
+check('graf nepřiřazeného monitoru vypadá jako neexistující monitor', $ra_foreign_series, $ra_missing_series);
+
+// --- Monitors belong to users ------------------------------------------------
+// A user sees only the monitors assigned to them (several users may share one),
+// an admin sees every monitor, and the public view is the same status for
+// everyone with no host internals.
+$ma_details_before = $pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn();
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode([
+    'version' => '1.2.3',
+    'top_cpu_processes' => [['name' => 'tajny-proces', 'cpu' => 91.0, 'ram_mb' => 12]],
+    'wan_l3_device' => 'pppoe-wan',
+])]);
+[$ma_save_code] = api_post($base, 'action=save_user', ['id' => $su_new_id, 'username' => 'audit_tester', 'email' => 'audit2@example.com', 'role' => 'user', 'monitorIds' => [1, 999999]], $cookie_jar);
+check('admin přiřadí uživateli monitor', $ma_save_code, 200);
+$ma_users_of = function () use ($base, $cookie_jar, $su_new_id): ?array {
+    [, $list] = api_get_auth($base, 'action=users', $cookie_jar);
+    foreach ($list['users'] ?? [] as $u) {
+        if ((int)$u['id'] === $su_new_id) {
+            return $u['monitorIds'] ?? null;
+        }
+    }
+    return null;
+};
+check('uloží se jen existující monitor', $ma_users_of(), [1]);
+
+[, $ma_admin] = api_get_auth($base, 'action=monitors', $cookie_jar);
+$ma_all_ids = array_map(fn($m) => (int)$m['id'], $ma_admin['monitors'] ?? []);
+check_true('admin vidí víc monitorů než jeden', count($ma_all_ids) > 1);
+[$ma_user_code, $ma_user] = api_get_auth($base, 'action=monitors', $jar3);
+check('uživatel dostane seznam', $ma_user_code, 200);
+check('uživatel vidí jen přiřazený monitor', array_map(fn($m) => (int)$m['id'], $ma_user['monitors'] ?? []), [1]);
+
+// The public view is the public set (W1-G3). The router is put on it for the
+// checks below, so the public projection is still verified on a router's
+// details: an owner may publish one, and it must not leak then either.
+$pdo->exec("UPDATE monitors SET is_public = 1 WHERE id = 2");
+[, $ma_admin_pub] = api_get_auth($base, 'action=monitors', $cookie_jar);
+$ma_public_ids = array_map(fn($m) => (int)$m['id'], array_values(array_filter($ma_admin_pub['monitors'] ?? [], fn($m) => ($m['isPublic'] ?? null) === true)));
+check_true('veřejná sada má web i zveřejněný router', in_array(1, $ma_public_ids, true) && in_array(2, $ma_public_ids, true));
+[, $ma_user_public] = api_get_auth($base, 'action=monitors&scope=public', $jar3);
+check('veřejný pohled ukáže uživateli celou veřejnou sadu', count($ma_user_public['monitors'] ?? []), count($ma_public_ids));
+[, $ma_anon, $ma_anon_raw] = api_get($base, 'action=monitors');
+check('anonym dostane veřejný pohled na veřejnou sadu', count($ma_anon['monitors'] ?? []), count($ma_public_ids));
+check_false('veřejný pohled neukáže názvy procesů', str_contains($ma_anon_raw, 'tajny-proces'));
+check_false('veřejný pohled neukáže názvy rozhraní', str_contains($ma_anon_raw, 'pppoe-wan'));
+$ma_anon_router = null;
+foreach ($ma_anon['monitors'] ?? [] as $m) {
+    if ((int)$m['id'] === 2) { $ma_anon_router = $m; }
+}
+check('veřejný pohled nechá verzi, kterou karta ukazuje', $ma_anon_router['details']['version'] ?? null, '1.2.3');
+check_true('veřejný pohled neukáže cíle monitorů', array_key_exists('target', $ma_anon_router ?? []) && $ma_anon_router['target'] === null);
+[, , $ma_admin_raw] = api_get_auth($base, 'action=monitors', $cookie_jar);
+check_true('admin procesy v aplikaci vidí', str_contains($ma_admin_raw, 'tajny-proces'));
+
+[, $ma_own] = api_get_auth($base, 'action=metric_series&monitor_id=1&metric=response_time&period=24h', $jar3);
+check_false('přiřazený monitor se uživateli otevře', isset($ma_own['error']));
+[, , $ma_other_raw] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=cpu&period=24h', $jar3);
+[, , $ma_missing_raw] = api_get_auth($base, 'action=metric_series&monitor_id=999999&metric=cpu&period=24h', $jar3);
+check('cizí monitor zůstane zavřený i po přiřazení jiného', $ma_other_raw, $ma_missing_raw);
+[$ma_other_pt] = api_get_auth($base, 'action=process_top&monitor_id=2', $jar3);
+check('procesy cizího monitoru uživatel nedostane', $ma_other_pt, 404);
+[$ma_anon_series] = api_get($base, 'action=metric_series&monitor_id=1&metric=response_time&period=24h');
+check('anonym grafy monitoru nedostane', $ma_anon_series, 401);
+[, $ma_user_du] = api_get_auth($base, 'action=daily_uptime&days=7', $jar3);
+check_true('denní dostupnost uživatele nese jeho monitor', isset($ma_user_du['series']['1']) || isset($ma_user_du['series'][1]));
+check_false('denní dostupnost uživatele nenese cizí monitor', isset($ma_user_du['series']['2']) || isset($ma_user_du['series'][2]));
+// Both sides are checked, so an empty list or a renamed key cannot pass as private.
+[, $ma_admin_ev] = api_get_auth($base, 'action=events&monitor_id=1&limit=50', $cookie_jar);
+check_true(
+    'admin u událostí cíl kontroly vidí',
+    array_filter($ma_admin_ev['events'] ?? [], fn($e) => ($e['target'] ?? null) === 'https://example.com') !== []
+);
+[$ma_anon_ev_code, $ma_anon_ev] = api_get($base, 'action=events&monitor_id=1&limit=50');
+check('anonym dostane veřejné události', $ma_anon_ev_code, 200);
+check_true('veřejné události nejsou prázdné', count($ma_anon_ev['events'] ?? []) > 0);
+check_true(
+    'veřejné události nenesou cíl kontroly',
+    array_filter($ma_anon_ev['events'] ?? [], fn($e) => !array_key_exists('target', $e) || $e['target'] !== null) === []
+);
+[$ma_anon_dl] = api_get($base, 'action=dashboard_layout');
+check('anonym rozložení dashboardu nedostane', $ma_anon_dl, 401);
+
+// --- What leaked around the lists: pages, summaries, texts -----------------
+$page_get = function (string $path, ?string $jar = null) use ($base): array {
+    $ch = curl_init($base . $path);
+    $opts = [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30];
+    if ($jar !== null) {
+        $opts[CURLOPT_COOKIEFILE] = $jar;
+        $opts[CURLOPT_COOKIEJAR] = $jar;
+    }
+    curl_setopt_array($ch, $opts);
+    $body = (string)curl_exec($ch);
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), $body];
+};
+
+// The legacy status page printed every target, port and resolved address.
+[$ix_code, $ix_anon] = $page_get('/index.php');
+check('stará status stránka se anonymovi načte', $ix_code, 200);
+check_false('a nespadne ani nehlásí nedefinovanou proměnnou', str_contains($ix_anon, 'Fatal error') || str_contains($ix_anon, 'Undefined variable'));
+check_false('anonym na staré stránce nevidí cíl webu', str_contains($ix_anon, 'example.com'));
+check_false('anonym na staré stránce nevidí adresu routeru', str_contains($ix_anon, '10.0.0.1'));
+check_false('anonym na staré stránce nevidí procesy', str_contains($ix_anon, 'tajny-proces'));
+[, $ix_admin] = $page_get('/index.php', $cookie_jar);
+check_true('admin cíl webu na staré stránce vidí', str_contains($ix_admin, 'example.com'));
+
+// Enrichment borrowed processes from another monitor on the same machine.
+$ma_before = $pdo->query("SELECT id, asset_id, agent_key FROM monitors WHERE id IN (1, 2)")->fetchAll();
+$pdo->exec("INSERT INTO assets (name) VALUES ('Sdílený stroj')");
+$ma_asset = (int)$pdo->lastInsertId();
+$pdo->prepare("UPDATE monitors SET asset_id = ? WHERE id IN (1, 2)")->execute([$ma_asset]);
+$pdo->exec("UPDATE monitors SET agent_key = 'test-sibling-key' WHERE id = 2");
+[$mp_user_code, $mp_user] = $page_get('/monitor.php?id=1', $jar3);
+check('přiřazený monitor se uživateli otevře i na staré stránce', $mp_user_code, 200);
+check_false('detail nepřevezme procesy z cizího monitoru na stejném stroji', str_contains($mp_user, 'tajny-proces'));
+[, $mp_admin] = $page_get('/monitor.php?id=1', $cookie_jar);
+check_true('admin procesy agenta na stejném stroji v detailu vidí', str_contains($mp_admin, 'tajny-proces'));
+$ma_restore = $pdo->prepare("UPDATE monitors SET asset_id = ?, agent_key = ? WHERE id = ?");
+foreach ($ma_before as $row) {
+    $ma_restore->execute([$row['asset_id'], $row['agent_key'], (int)$row['id']]);
+}
+$pdo->prepare("DELETE FROM assets WHERE id = ?")->execute([$ma_asset]);
+
+// Incident updates carried the check reason and the operator's name.
+$pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('Výpadek: Router bez metrik', 'major', 'investigating', 2)");
+$pi_id = (int)$pdo->lastInsertId();
+$pi_upd = $pdo->prepare("INSERT INTO incident_updates (incident_id, status, message) VALUES (?, 'investigating', ?)");
+$pi_upd->execute([$pi_id, 'Automaticky detekován výpadek. Důvod: Chybí běžící proces: tajny-proces']);
+$pi_upd->execute([$pi_id, 'Incident převzal: operator-jmeno']);
+$pi_upd->execute([$pi_id, '[operator-jmeno] Měníme zdroj']);
+[, , $pi_anon_raw] = api_get($base, 'action=incidents&scope=public');
+check_true('veřejná aktualizace nese text poznámky', str_contains($pi_anon_raw, 'Měníme zdroj'));
+check_false('veřejná aktualizace nenese důvod kontroly', str_contains($pi_anon_raw, 'tajny-proces'));
+check_false('veřejná aktualizace nejmenuje operátora', str_contains($pi_anon_raw, 'operator-jmeno'));
+[, , $pi_admin_raw] = api_get_auth($base, 'action=incidents', $cookie_jar);
+check_true('admin vidí, kdo incident převzal', str_contains($pi_admin_raw, 'operator-jmeno'));
+$pdo->prepare("DELETE FROM incident_updates WHERE incident_id = ?")->execute([$pi_id]);
+$pdo->prepare("DELETE FROM incidents WHERE id = ?")->execute([$pi_id]);
+
+// An outage whose incident gets closed while the monitor is still down. Closing
+// the record used to leave the outage on the page with no incident behind it:
+// no notes, no acknowledge, nothing for the escalation to find - and its
+// duration restarted with every check, because cron writes a 'down' log each
+// cycle and the card read the newest one.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, last_status_change)
+            VALUES (96, 'Router s trvajícím výpadkem', 'openwrt', '10.0.0.96', 'down', 'Síť', DATE_SUB(NOW(), INTERVAL 3 HOUR))");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES (96, 'down', 'Agent routeru neodpovídá', DATE_SUB(NOW(), INTERVAL 3 HOUR))");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES (96, 'down', 'Agent routeru neodpovídá', NOW())");
+$pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('Výpadek: Router s trvajícím výpadkem', 'major', 'investigating', 96)");
+$oi_id = (int)$pdo->lastInsertId();
+
+$oi_find = function (array $payload): ?array {
+    foreach ($payload['incidents'] ?? [] as $row) {
+        if ((int)($row['monitor_id'] ?? 0) === 96) {
+            return $row;
+        }
+    }
+    return null;
+};
+
+[, $oi_list] = api_get_auth($base, 'action=incidents', $cookie_jar);
+$oi_row = $oi_find($oi_list);
+check_true('trvající výpadek je v seznamu', $oi_row !== null);
+$oi_start = $oi_row !== null ? DateTime::createFromFormat('d.m.Y H:i:s', (string)$oi_row['started_at']) : false;
+check_true(
+    'začátek výpadku je pád monitoru, ne poslední kontrola',
+    $oi_start !== false && (time() - $oi_start->getTimestamp()) > 7000
+);
+// R275: the duration goes out in seconds; it was Czech text in the wrong
+// forms ("1 dní, 2 hodin") that an English page printed as it came.
+// R55: a check that stored no reason got a made-up one, in Czech only.
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES (96, 'down', NULL, NOW())");
+[, $oi_noreason] = api_get_auth($base, 'action=incidents', $cookie_jar);
+$oi_nr = $oi_find($oi_noreason);
+check('výpadek bez zaznamenaného důvodu má důvod null, ne vymyšlený',
+    is_array($oi_nr) && array_key_exists('reason', $oi_nr) ? $oi_nr['reason'] : 'chybí', null);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 96 AND error_message IS NULL");
+check_true('délka výpadku je v sekundách, ne český text',
+    is_int($oi_row['duration_secs'] ?? null) && $oi_row['duration_secs'] > 10000 && !array_key_exists('duration_text', $oi_row ?? []));
+
+[$oi_res_code, $oi_res] = api_post($base, 'action=incident_action', ['id' => $oi_id, 'op' => 'resolve'], $cookie_jar);
+check('incident trvajícího výpadku jde uzavřít', $oi_res_code, 200);
+check_true('uzavření řekne, že monitor je pořád nedostupný', !empty($oi_res['monitorStillDown']));
+
+[, $oi_list2] = api_get_auth($base, 'action=incidents', $cookie_jar);
+$oi_row2 = $oi_find($oi_list2);
+check_true('výpadek zůstane v seznamu i po uzavření incidentu', $oi_row2 !== null);
+check_true('a zůstane bez otevřeného incidentu', $oi_row2 !== null && $oi_row2['incidentId'] === null);
+
+[$oi_new_code, $oi_new] = api_post(
+    $base,
+    'action=create_incident',
+    ['title' => 'Výpadek: Router s trvajícím výpadkem', 'impact' => 'major', 'monitorId' => 96],
+    $cookie_jar
+);
+check('k trvajícímu výpadku jde incident otevřít znovu', $oi_new_code, 200);
+[, $oi_list3] = api_get_auth($base, 'action=incidents', $cookie_jar);
+$oi_row3 = $oi_find($oi_list3);
+check_true(
+    'a karta výpadku na něj zase odkazuje',
+    $oi_row3 !== null && (int)$oi_row3['incidentId'] === (int)($oi_new['id'] ?? 0)
+);
+
+[$oi_dup_code] = api_post(
+    $base,
+    'action=create_incident',
+    ['title' => 'Druhý incident', 'monitorId' => 96],
+    $cookie_jar
+);
+check('druhý otevřený incident k témuž monitoru neprojde', $oi_dup_code, 409);
+[$oi_missing_code] = api_post(
+    $base,
+    'action=create_incident',
+    ['title' => 'Incident bez monitoru', 'monitorId' => 999999],
+    $cookie_jar
+);
+check('incident k neexistujícímu monitoru neprojde', $oi_missing_code, 404);
+
+$pdo->exec("DELETE FROM incident_updates WHERE incident_id IN (SELECT id FROM incidents WHERE monitor_id = 96)");
+$pdo->exec("DELETE FROM incidents WHERE monitor_id = 96");
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 96");
+$pdo->exec("DELETE FROM monitors WHERE id = 96");
+// The explicit id moved the counter to 97, so the next monitor created without
+// an id took 97 and the archive fixture below collided with it. InnoDB lowers a
+// counter set below the highest id to that id + 1 - back to where it was.
+$pdo->exec("ALTER TABLE monitors AUTO_INCREMENT = 1");
+
+// A failure text named the host it could not resolve.
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at) VALUES (1, 'down', NULL, 'cURL chyba: Could not resolve host: tajny-host.internal', DATE_SUB(NOW(), INTERVAL 5 SECOND))");
+$pr_log = (int)$pdo->lastInsertId();
+[, , $pr_anon_raw] = api_get($base, 'action=events&monitor_id=1&limit=50');
+check_false('veřejná událost nejmenuje hostitele z chyby', str_contains($pr_anon_raw, 'tajny-host'));
+check_true('ale řekne, že selhal překlad adresy', str_contains($pr_anon_raw, 'Adresu se nepodařilo přeložit'));
+[, , $pr_admin_raw] = api_get_auth($base, 'action=events&monitor_id=1&limit=50', $cookie_jar);
+check_true('admin celou chybu vidí', str_contains($pr_admin_raw, 'tajny-host'));
+$pdo->prepare("DELETE FROM monitor_logs WHERE id = ?")->execute([$pr_log]);
+
+// The dashboard summary counted the whole fleet for a user.
+[, $ps_user] = api_get_auth($base, 'action=public_status', $jar3);
+check('souhrn v aplikaci počítá jen přiřazené monitory', $ps_user['totalMonitors'] ?? null, 1);
+check_false('uzly v aplikaci uživatele nenesou cizí monitor', in_array('Router bez metrik', array_column($ps_user['nodes'] ?? [], 'name'), true));
+[, $ps_user_pub] = api_get_auth($base, 'action=public_status&scope=public', $jar3);
+check('veřejný souhrn počítá veřejnou sadu', $ps_user_pub['totalMonitors'] ?? null, count($ma_public_ids));
+[, $ps_anon] = api_get($base, 'action=public_status');
+check('anonym dostane souhrn veřejné sady', $ps_anon['totalMonitors'] ?? null, count($ma_public_ids));
+check_true('a v uzlech i zveřejněný router', in_array('Router bez metrik', array_column($ps_anon['nodes'] ?? [], 'name'), true));
+// Back to the type's default: the router is off the public page again.
+$pdo->exec("UPDATE monitors SET is_public = NULL WHERE id = 2");
+
+// Admin-only diagnostics checked only for a login.
+[$hl_user_code] = $page_get('/health.php?format=json', $jar3);
+check('diagnostika schématu běžnému uživateli zůstane zavřená', $hl_user_code, 403);
+// The browser view, not only ?format=json: it used to end in a fatal error at
+// the <head> (a constant of functions.php, which health.php does not load).
+[$hl_code, $hl_html] = $page_get('/health.php', $cookie_jar);
+check('health.php v prohlížeči se vykreslí celá, s výsledky kontrol', [
+    $hl_code, str_starts_with($hl_html, '<!DOCTYPE html>'), str_contains($hl_html, 'DB connection'),
+    str_contains($hl_html, 'kontrol prošlo'), str_contains($hl_html, '</html>'), str_contains($hl_html, 'Fatal error'),
+], [200, true, true, true, true, false]);
+check_true('a nic si nebere odjinud, musí se otevřít, i když zbytek webu nejde',
+    !preg_match('~<(?:link[^>]+rel="stylesheet"|script)~i', $hl_html));
+[$hl_code, $hl_html] = $page_get('/health.php');
+check('bez přihlášení nic neukáže', [$hl_code, str_contains($hl_html, 'DB connection')], [403, false]);
+
+// Signing in happens in /app (D1): a legacy page asked for without a session
+// sends the visitor to /app/setup, as api.php's loginUrl does, not admin.php.
+foreach (['/monitor.php?id=1' => 'detail monitoru', '/index.php?view=metric&monitor=1&metric=cpu' => 'detail metriky'] as $lg_path => $lg_label) {
+    [$lg_code, $lg_head] = bk_raw_request($base . $lg_path);
+    check("{$lg_label} bez přihlášení vede na přihlášení v /app", [$lg_code, preg_match('/^location:\s*\/app\/setup\s*$/mi', $lg_head)], [302, 1]);
+}
+
+// The role lived in the session: a demoted or deleted admin kept every right.
+[$da_code] = api_post($base, 'action=save_user', ['username' => 'druhy_admin', 'email' => 'druhy@example.com', 'role' => 'admin', 'password' => 'DruhyAdmin123!'], $cookie_jar);
+check('admin založí druhého admina', $da_code, 200);
+$da_id = (int)$pdo->query("SELECT id FROM users WHERE username = 'druhy_admin'")->fetchColumn();
+$jar4 = tempnam(sys_get_temp_dir(), 'bk_test_c4');
+[$da_login] = api_post($base, 'action=login', ['username' => 'druhy_admin', 'password' => 'DruhyAdmin123!'], $jar4, '');
+check('druhý admin se přihlásí', $da_login, 200);
+[$da_users_code] = api_get_auth($base, 'action=users', $jar4);
+check('jako admin seznam účtů dostane', $da_users_code, 200);
+api_post($base, 'action=save_user', ['id' => $da_id, 'username' => 'druhy_admin', 'email' => 'druhy@example.com', 'role' => 'user', 'monitorIds' => []], $cookie_jar);
+[$da_users_after] = api_get_auth($base, 'action=users', $jar4);
+check('sesazený admin ve staré relaci práva ztratí', $da_users_after, 403);
+[, $da_mon] = api_get_auth($base, 'action=monitors', $jar4);
+check('a z monitorů v aplikaci nevidí nic', $da_mon['monitors'] ?? null, []);
+api_post($base, 'action=delete_user', ['id' => $da_id], $cookie_jar);
+[, $da_session] = api_get_auth($base, 'action=session', $jar4);
+check_false('smazaný účet je ve staré relaci odhlášený', !empty($da_session['authenticated']));
+@unlink($jar4);
+
+// R158: nobody can appoint an admin without an admin, so the last one keeps the
+// role. The others step aside for the test, leaving the one signed in here.
+$la_row = $pdo->query("SELECT id, username, email FROM users WHERE username = 'admin'")->fetch();
+$la_id = (int)$la_row['id'];
+$la_others = array_map('intval', $pdo->query("SELECT id FROM users WHERE role = 'admin' AND id != {$la_id}")->fetchAll(PDO::FETCH_COLUMN));
+if ($la_others) {
+    $pdo->exec("UPDATE users SET role = 'user' WHERE id IN (" . implode(',', $la_others) . ')');
+}
+$la_demote = ['id' => $la_id, 'username' => $la_row['username'], 'email' => $la_row['email'], 'role' => 'user'];
+$la_role = fn (): string => (string)$pdo->query("SELECT role FROM users WHERE id = {$la_id}")->fetchColumn();
+[$la_code, $la_res] = api_post($base, 'action=save_user', $la_demote, $cookie_jar);
+check('poslední admin o roli nepřijde', [$la_code, $la_role()], [409, 'admin']);
+check_true('a odpověď řekne proč', str_contains((string)($la_res['error'] ?? ''), 'poslední administrátor'));
+[$la_keep] = api_post($base, 'action=save_user', array_merge($la_demote, ['role' => 'admin']), $cookie_jar);
+check('poslední admin si dál upraví vlastní údaje', $la_keep, 200);
+[, $la_second] = api_post($base, 'action=save_user', ['username' => 'nahradni_admin', 'email' => 'nahradni@example.com', 'role' => 'admin', 'password' => 'NahradniAdmin123!'], $cookie_jar);
+[$la_with_second] = api_post($base, 'action=save_user', $la_demote, $cookie_jar);
+check('s druhým adminem může odejít', [$la_with_second, $la_role()], [200, 'user']);
+$pdo->exec("UPDATE users SET role = 'admin' WHERE id = {$la_id}");
+$pdo->prepare("DELETE FROM users WHERE id = ?")->execute([(int)($la_second['id'] ?? 0)]);
+if ($la_others) {
+    $pdo->exec("UPDATE users SET role = 'admin' WHERE id IN (" . implode(',', $la_others) . ')');
+}
+
+api_post($base, 'action=save_user', ['id' => $su_new_id, 'username' => 'audit_tester', 'email' => 'audit2@example.com', 'role' => 'user'], $cookie_jar);
+check('uložení bez seznamu monitorů přiřazení nesmaže', $ma_users_of(), [1]);
+api_post($base, 'action=save_user', ['id' => $su_new_id, 'username' => 'audit_tester', 'email' => 'audit2@example.com', 'role' => 'user', 'monitorIds' => []], $cookie_jar);
+check('prázdný seznam přiřazení zruší', $ma_users_of(), []);
+[, $ma_user_none] = api_get_auth($base, 'action=monitors', $jar3);
+check('uživatel bez přiřazení nevidí v aplikaci nic', $ma_user_none['monitors'] ?? null, []);
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([$ma_details_before === false ? null : $ma_details_before]);
+@unlink($jar3);
+
+[$du_code] = api_post($base, 'action=delete_user', ['id' => $su_new_id], $cookie_jar);
+check('delete_user účet skutečně smaže', $du_code, 200);
+$su_gone_stmt = $pdo->prepare("SELECT COUNT(*) FROM users WHERE id = ?");
+$su_gone_stmt->execute([$su_new_id]);
+check('řádek v DB zmizel', (int)$su_gone_stmt->fetchColumn(), 0);
+
+if ($logged_in) {
+    // --- Preset ---------------------------------------------------------
+    [$code, $res] = api_post($base, 'action=save_preset', [
+        'name' => 'Testovací preset',
+        'serviceType' => 'web',
+        'metrics' => ['ssl_card', 'headers'],
+        'cpuThreshold' => 70,
+        'ramThreshold' => '',
+        'hddThreshold' => 0,
+    ], $cookie_jar);
+    check('save_preset vrací 200', $code, 200);
+    $preset_id = (int)($res['id'] ?? 0);
+    check_true('preset dostal id', $preset_id > 0);
+
+    [$code, $plist] = api_get_auth($base, 'action=presets', $cookie_jar);
+    $saved_preset = null;
+    foreach (($plist['presets'] ?? []) as $p) {
+        if ((int)$p['id'] === $preset_id) {
+            $saved_preset = $p;
+        }
+    }
+    check_true('preset je vidět v seznamu', $saved_preset !== null);
+    check('preset si drží vybrané metriky', $saved_preset['metrics'] ?? null, ['ssl_card', 'headers']);
+    check('vyplněný práh se uloží', $saved_preset['cpuThreshold'] ?? 'chybí', 70);
+    // An empty field means "the preset does not govern this threshold" - it is not a zero.
+    check_true('prázdný práh zůstává null', array_key_exists('ramThreshold', $saved_preset) && $saved_preset['ramThreshold'] === null);
+    check('nulový práh se uloží jako nula', $saved_preset['hddThreshold'] ?? 'chybí', 0);
+
+    // --- Monitor: the preset and slowdown thresholds must survive a save ----
+    [$code, $res] = api_post($base, 'action=save_monitor', [
+        'name' => 'Zápisový test',
+        'type' => 'web',
+        'target' => 'https://example.com',
+        'category' => 'Testy',
+        'preset_id' => $preset_id,
+        'latency_threshold_ms' => 750,
+        'latency_threshold_mins' => 3,
+    ], $cookie_jar);
+    check('save_monitor vrací 200', $code, 200);
+    $new_monitor_id = (int)($res['id'] ?? 0);
+    // R218: a window that ends before it starts never applied and was saved.
+    [$mw_code, $mw_res] = api_post($base, 'action=save_monitor', [
+        'name' => 'Obrácené okno', 'type' => 'web', 'target' => 'https://example.com', 'category' => 'Testy',
+        'maintenance' => 1, 'maintenance_start' => '2030-01-02 10:00:00', 'maintenance_end' => '2030-01-02 08:00:00',
+    ], $cookie_jar);
+    check('save_monitor s obráceným oknem údržby je 400 a nic neuloží',
+        [$mw_code, (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE name = 'Obrácené okno'")->fetchColumn()], [400, 0]);
+    check_true('a řekne proč', str_contains((string)($mw_res['error'] ?? ''), 'Konec údržby'));
+    check_true('monitor dostal id', $new_monitor_id > 0);
+
+    [$code, $mlist] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    $saved_monitor = null;
+    foreach (($mlist['monitors'] ?? []) as $m) {
+        if ((int)$m['id'] === $new_monitor_id) {
+            $saved_monitor = $m;
+        }
+    }
+    check_true('nový monitor je v seznamu', $saved_monitor !== null);
+    // Exactly this was the bug: the preset was lost on every save.
+    check('preset zůstane přiřazený', $saved_monitor['presetId'] ?? 'chybí', $preset_id);
+    check('práh zpomalení se uloží', $saved_monitor['latencyThresholdMs'] ?? 'chybí', 750);
+    check('okno zpomalení se uloží', $saved_monitor['latencyThresholdMins'] ?? 'chybí', 3);
+
+    // An edit must not knock out the other settings.
+    [$code] = api_post($base, 'action=save_monitor', [
+        'id' => $new_monitor_id,
+        'name' => 'Zápisový test (upraveno)',
+        'type' => 'web',
+        'target' => 'https://example.com',
+        'category' => 'Testy',
+        'preset_id' => $preset_id,
+        'latency_threshold_ms' => 750,
+        'latency_threshold_mins' => 3,
+    ], $cookie_jar);
+    check('úprava monitoru vrací 200', $code, 200);
+
+    [, $mlist2] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    $edited = null;
+    foreach (($mlist2['monitors'] ?? []) as $m) {
+        if ((int)$m['id'] === $new_monitor_id) {
+            $edited = $m;
+        }
+    }
+    check('přejmenování se projeví', $edited['name'] ?? 'chybí', 'Zápisový test (upraveno)');
+    check('preset přežil i úpravu', $edited['presetId'] ?? 'chybí', $preset_id);
+
+    // Disabling the alert: an empty value = null, not zero.
+    api_post($base, 'action=save_monitor', [
+        'id' => $new_monitor_id,
+        'name' => 'Zápisový test (upraveno)',
+        'type' => 'web',
+        'target' => 'https://example.com',
+        'category' => 'Testy',
+        'latency_threshold_ms' => '',
+    ], $cookie_jar);
+    [, $mlist3] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    foreach (($mlist3['monitors'] ?? []) as $m) {
+        if ((int)$m['id'] === $new_monitor_id) {
+            check_true('vypnuté upozornění je null, ne 0', array_key_exists('latencyThresholdMs', $m) && $m['latencyThresholdMs'] === null);
+        }
+    }
+
+    // --- Status pages ----------------------------------------------------
+    [$code, $sp] = api_post($base, 'action=save_status_page', [
+        'title' => 'Veřejný přehled',
+        'isPublic' => true,
+        'monitorIds' => [$new_monitor_id],
+    ], $cookie_jar);
+    check('save_status_page vrací 200', $code, 200);
+    check('slug se odvodí bez diakritiky', $sp['slug'] ?? 'chybí', 'verejny-prehled');
+
+    // A second page with the same slug must end in an intelligible error,
+    // not a crash on the database index.
+    [$code, $dup] = api_post($base, 'action=save_status_page', [
+        'title' => 'Jiný název',
+        'slug' => 'verejny-prehled',
+    ], $cookie_jar);
+    check('duplicitní slug vrací 400', $code, 400);
+    check_true('duplicita má srozumitelnou hlášku', !empty($dup['error']));
+
+    // A hidden page must not be visible to the unauthenticated.
+    api_post($base, 'action=save_status_page', [
+        'title' => 'Interní',
+        'slug' => 'interni',
+        'isPublic' => false,
+    ], $cookie_jar);
+    [, $anon_pages] = api_get($base, 'action=status_pages');
+    $anon_slugs = array_column($anon_pages['pages'] ?? [], 'slug');
+    check_false('skrytá stránka není vidět anonymně', in_array('interni', $anon_slugs, true));
+    check_true('veřejná stránka vidět je', in_array('verejny-prehled', $anon_slugs, true));
+
+    // --- One page by slug (the public page in React) --------------------
+    //
+    // Skryta stranka musi byt pro anonyma K NEROZEZNANI od neexistujici:
+    // stejny kod, stejne telo. Kdyby se lisily, existence skrytych stranek
+    // by sla zjistit zkousenim adres.
+    [$code, $sp_pub] = api_get($base, 'action=status_page&slug=verejny-prehled');
+    check('veřejná stránka podle slugu vrací 200', $code, 200);
+    check('a nese titulek', $sp_pub['title'] ?? null, 'Veřejný přehled');
+
+    [$code_hidden, , $raw_hidden] = api_get($base, 'action=status_page&slug=interni');
+    [$code_missing, , $raw_missing] = api_get($base, 'action=status_page&slug=neexistuje');
+    check('skrytá stránka vrací anonymovi 404', $code_hidden, 404);
+    check('neexistující slug vrací 404', $code_missing, 404);
+    check('a obě odpovědi jsou k nerozeznání', $raw_hidden, $raw_missing);
+
+    // Prihlaseny admin skrytou stranku vidi.
+    [$code, $sp_admin] = api_get_auth($base, 'action=status_page&slug=interni', $cookie_jar);
+    check('admin skrytou stránku vidí', $code, 200);
+    check('včetně titulku', $sp_admin['title'] ?? null, 'Interní');
+
+    [$code] = api_get($base, 'action=status_page');
+    check('chybějící slug vrací 400', $code, 400);
+
+    // A failed query is not a missing page: its 404 made /app/public say
+    // "Stránka nenalezena", noindex the page and judge the whole fleet.
+    $pdo->exec("RENAME TABLE status_pages TO status_pages_sp");
+    try {
+        [$code_sp_fail, $sp_fail, $raw_sp_fail] = api_get($base, 'action=status_page&slug=verejny-prehled');
+    } finally {
+        $pdo->exec("RENAME TABLE status_pages_sp TO status_pages");
+    }
+    check_true("selhaný dotaz status_page: 5xx, ne 404 (dostal {$code_sp_fail})", $code_sp_fail >= 500 && $code_sp_fail < 600);
+    check('a kód chyby status_page_unavailable', $sp_fail['error'] ?? null, 'status_page_unavailable');
+    check_false('a netvrdí, že stránka neexistuje', str_contains($raw_sp_fail, 'nenalezena'));
+    check_false('a nic neprozradí', str_contains($raw_sp_fail, 'SQLSTATE') || str_contains($raw_sp_fail, 'status_pages'));
+    [$code] = api_get($base, 'action=status_page&slug=verejny-prehled');
+    check('po obnovení tabulky stránka zase odpovídá', $code, 200);
+
+    // --- Status page display options ------------------------------------
+    //
+    // NULL in the database = "show everything". A page created before this
+    // option must not change, so defaults are filled at read time and tested
+    // before anything else.
+    [, $sp_default] = api_get($base, 'action=status_page&slug=verejny-prehled');
+    check('stránka bez voleb dostane výchozí showRegions', $sp_default['displayOptions']['showRegions'] ?? null, true);
+    check('a detailLevel full', $sp_default['displayOptions']['detailLevel'] ?? null, 'full');
+
+    [$code] = api_post($base, 'action=save_status_page', [
+        'id' => 0,
+        'title' => 'Jen stavy',
+        'slug' => 'jen-stavy',
+        'isPublic' => true,
+        'displayOptions' => [
+            'showRegions' => false,
+            'showEvents' => false,
+            'showIncidents' => true,
+            'showUptime' => true,
+            'detailLevel' => 'status',
+        ],
+    ], $cookie_jar);
+    check('stránka s volbami se uloží', $code, 200);
+
+    [, $sp_opts] = api_get($base, 'action=status_page&slug=jen-stavy');
+    check('vypnuté sekce se vrátí vypnuté', $sp_opts['displayOptions']['showRegions'] ?? null, false);
+    check('showEvents taky', $sp_opts['displayOptions']['showEvents'] ?? null, false);
+    check('zapnuté zůstávají zapnuté', $sp_opts['displayOptions']['showIncidents'] ?? null, true);
+    check('detailLevel status se drží', $sp_opts['displayOptions']['detailLevel'] ?? null, 'status');
+
+    // An unknown key must not be stored - only the whitelist reaches the database.
+    api_post($base, 'action=save_status_page', [
+        'id' => 0,
+        'title' => 'Podvržená',
+        'slug' => 'podvrzena',
+        'isPublic' => true,
+        'displayOptions' => ['showRegions' => false, 'evil' => '<script>'],
+    ], $cookie_jar);
+    [, $sp_evil, $raw_evil] = api_get($base, 'action=status_page&slug=podvrzena');
+    check_false('neznámý klíč se nevrací', str_contains($raw_evil, 'evil'));
+    check('známý klíč z téhož požadavku ano', $sp_evil['displayOptions']['showRegions'] ?? null, false);
+
+    // --- Export konfigurace ---------------------------------------------
+    // cpanel_stats.php authenticates by ?key= alone - the stored URL is a credential.
+    $cp_url_before = $pdo->query("SELECT cpanel_stats_url FROM monitors WHERE id = 1")->fetchColumn();
+    $pdo->exec("UPDATE monitors SET cpanel_stats_url = 'https://hosting.example/status/cpanel_stats.php?key=tajny-klic-123' WHERE id = 1");
+    $exp_rows = ['site_url' => 'https://export.example', 'pushover_user_key' => 'u-export-test',
+        'discord_webhook_url' => 'https://discord.example/api/webhooks/1/tajny-webhook',
+        'dashboard_insights_cache_cs' => '{"export":"cache"}', 'ip_loc_export_test' => 'Praha',
+        'cron_key' => 'cron-export-tajny-klic'];
+    $exp_before = $pdo->query("SELECT key_name, key_value FROM settings WHERE key_name IN ('" . implode("','", array_keys($exp_rows)) . "')")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $exp_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+    foreach ($exp_rows as $exp_k => $exp_v) {
+        $exp_set->execute([$exp_k, $exp_v]);
+    }
+    [$code, , $raw_export] = api_get_auth($base, 'action=export_config', $cookie_jar);
+    $pdo->exec("DELETE FROM settings WHERE key_name IN ('" . implode("','", array_keys($exp_rows)) . "')");
+    foreach ($exp_before as $exp_k => $exp_v) {
+        $exp_set->execute([$exp_k, $exp_v]);
+    }
+    check_false('export nevydá webhook ani runtime řádky (cache, místo uzlu)',
+        str_contains($raw_export, 'tajny-webhook') || str_contains($raw_export, 'dashboard_insights_cache_cs') || str_contains($raw_export, 'ip_loc_export_test'));
+    $pdo->prepare("UPDATE monitors SET cpanel_stats_url = ? WHERE id = 1")->execute([$cp_url_before === false ? null : $cp_url_before]);
+    check_false('export nevydá klíč z adresy cPanel statistik', str_contains($raw_export, 'tajny-klic-123'));
+    check_true('adresa cPanel statistik v exportu zůstane', str_contains($raw_export, 'hosting.example'));
+    check('export vrací 200', $code, 200);
+    $export = json_decode($raw_export, true);
+    check_true('export je platný JSON', is_array($export));
+    check_true('export obsahuje monitory', !empty($export['monitors']));
+    check_true('export obsahuje nastavení', isset($export['settings']));
+
+    // A secret in a downloadable file is an instant leak. One rule decides it
+    // with the form's masking: the settings keys minus the secret ones. A
+    // name pattern decided it before, dropping site_url and pushover_user_key
+    // and keeping caches, per-user layouts and per-node location rows.
+    // db.php comes into this process further down; copies in the test namespace.
+    $exp_ns = bk_test_load_pinned($root . '/db.php', ['bk_settings_keys', 'bk_settings_secret_keys']);
+    $exp_keys = array_keys($export['settings'] ?? []);
+    check('export neobsahuje tajemství ani webhooky',
+        array_values(array_intersect($exp_keys, ($exp_ns . 'bk_settings_secret_keys')())), []);
+    check('export nese jen klíče nastavení',
+        array_values(array_diff($exp_keys, ($exp_ns . 'bk_settings_keys')())), []);
+    check('adresa webu a uživatel Pushoveru v exportu jsou',
+        [$export['settings']['site_url'] ?? 'chybí', $export['settings']['pushover_user_key'] ?? 'chybí'],
+        ['https://export.example', 'u-export-test']);
+    // The cron key is shown in full on the form, yet it authorises
+    // node_api.php, cron.php?key= and agent registration: never in the file.
+    check('export nenese cron klíč, ač ho formulář ukazuje celý',
+        [array_key_exists('cron_key', $export['settings'] ?? []), str_contains($raw_export, 'cron-export-tajny-klic')], [false, false]);
+    check_false('export neobsahuje klíče agentů', str_contains($raw_export, 'agent_key'));
+    check_false('export neobsahuje hesla ServerQuery', str_contains($raw_export, 'sq_password'));
+
+    // Without login the export must not pass at all.
+    [$anon_code] = api_get($base, 'action=export_config');
+    check_true('export bez přihlášení je odmítnut', in_array($anon_code, [401, 403], true));
+
+    // --- Cleanup ---------------------------------------------------------
+    [$code] = api_post($base, 'action=delete_preset', ['id' => $preset_id], $cookie_jar);
+    check('smazání presetu vrací 200', $code, 200);
+
+    [, $mlist4] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    foreach (($mlist4['monitors'] ?? []) as $m) {
+        if ((int)$m['id'] === $new_monitor_id) {
+            // Deleting a preset must not break the monitor - it just returns to its own.
+            check_true('monitor po smazání presetu zůstává', array_key_exists('presetId', $m) && $m['presetId'] === null);
+        }
+    }
+}
+
+// =======================================================================
+// 7b. assetId is the monitor's asset, or null - never the monitor's own id
+// =======================================================================
+//
+// A monitor without an asset came back with its own id as assetId, and the
+// edit form posted that back as asset_id: onto whichever device owns that
+// asset id, or into a foreign-key 500. A self-registered agent was such a
+// monitor - registration gave it no asset.
+if (!empty($cookie_jar)) {
+    $pdo->exec("INSERT INTO monitors (name, type, target, status, category) VALUES ('Bez zařízení (test)', 'web', 'https://example.com/r142', 'up', 'Weby')");
+    $r142_id = (int)$pdo->lastInsertId();
+    $pdo->exec("INSERT INTO assets (name) VALUES ('Zařízení bez agenta (test)')");
+    $r142_asset = (int)$pdo->lastInsertId();
+    $pdo->prepare("INSERT INTO monitors (name, type, target, status, category, asset_id) VALUES ('Privátní web (test)', 'web', 'http://r142-test.internal', 'down', 'Weby', ?)")
+        ->execute([$r142_asset]);
+    $r142_priv = (int)$pdo->lastInsertId();
+    $r142_reg_id = 0;
+    $r142_reg_asset = null;
+    $r142_anon_id = 0;
+    $r142_anon_asset = null;
+    try {
+        $r142_row = function (int $id) use ($base, $cookie_jar): array {
+            [, $list] = api_get_auth($base, 'action=monitors', $cookie_jar);
+            foreach (($list['monitors'] ?? []) as $m) {
+                if ((int)$m['id'] === $id) {
+                    return $m;
+                }
+            }
+            return [];
+        };
+        $r142_mon = $r142_row($r142_id);
+        check_true('monitor bez zařízení má assetId null, ne vlastní id', array_key_exists('assetId', $r142_mon) && $r142_mon['assetId'] === null);
+
+        // The form posts back what it read; null keeps the monitor where it was.
+        [$code] = api_post($base, 'action=save_monitor', [
+            'id' => $r142_id, 'name' => 'Bez zařízení (test)', 'type' => 'web',
+            'target' => 'https://example.com/r142', 'asset_id' => $r142_mon['assetId'] ?? null,
+        ], $cookie_jar);
+        check('uložení monitoru bez zařízení projde', $code, 200);
+        check_true('a zařízení mu nepřibude', $pdo->query("SELECT asset_id FROM monitors WHERE id = {$r142_id}")->fetchColumn() === null);
+
+        [$code, $r142_bad] = api_post($base, 'action=save_monitor', [
+            'id' => $r142_id, 'name' => 'Bez zařízení (test)', 'type' => 'web',
+            'target' => 'https://example.com/r142', 'asset_id' => 987654,
+        ], $cookie_jar);
+        check('neexistující zařízení je 400, ne 500', $code, 400);
+        check_true('a hláška ho jmenuje', str_contains((string)($r142_bad['error'] ?? ''), '987654'));
+
+        // The convert offer needs an agent on the device; without one the
+        // conversion is refused, so it is not offered.
+        check_false('bez agenta se převod na kontrolu agentem nenabízí', !empty($r142_row($r142_priv)['unreachableTarget']));
+        $pdo->prepare("INSERT INTO monitors (name, type, target, status, category, asset_id) VALUES ('Agent zařízení (test)', 'vps', '', 'up', 'Servery', ?)")
+            ->execute([$r142_asset]);
+        check_true('s agentem na zařízení se nabídne', !empty($r142_row($r142_priv)['unreachableTarget']));
+
+        // Registration gives the agent its own asset, as save_monitor does.
+        $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('agent_registration_token', 'r142-test-token')
+                    ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+        [$code, , $r142_body] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode([
+            'action' => 'register', 'token' => 'r142-test-token', 'hostname' => 'r142-test.example.com', 'agent_type' => 'vps',
+        ]));
+        check('registrace agenta projde', $code, 200);
+        $r142_reg_id = (int)(json_decode($r142_body, true)['monitor_id'] ?? 0);
+        $r142_reg_asset = $pdo->query("SELECT asset_id FROM monitors WHERE id = {$r142_reg_id}")->fetchColumn();
+        check_true('registrovaný agent dostane vlastní zařízení', $r142_reg_id > 0 && $r142_reg_asset !== null && $r142_reg_asset !== false
+            && (int)$pdo->query('SELECT COUNT(*) FROM assets WHERE id = ' . (int)$r142_reg_asset)->fetchColumn() === 1);
+
+        // The agents send `hostname`; no agent version ever sent `name`, so
+        // it is not read and a registration without hostname gets the
+        // dated default name.
+        [$code, , $r142_anon_body] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode([
+            'action' => 'register', 'token' => 'r142-test-token', 'name' => 'r142-name-only', 'agent_type' => 'vps',
+        ]));
+        $r142_anon_id = (int)(json_decode($r142_anon_body, true)['monitor_id'] ?? 0);
+        $r142_anon_asset = $pdo->query("SELECT asset_id FROM monitors WHERE id = {$r142_anon_id}")->fetchColumn();
+        check('registrace bez hostname projde', $code, 200);
+        check_true('a agent dostane výchozí jméno, klíč name se nečte',
+            str_starts_with((string)$pdo->query("SELECT name FROM monitors WHERE id = {$r142_anon_id}")->fetchColumn(), 'VPS Agent '));
+
+        // Asset and monitor are one transaction: a failed monitors INSERT
+        // left an empty device behind on every retry of --register.
+        $pdo->exec("CREATE TRIGGER r142_register_fail BEFORE INSERT ON monitors FOR EACH ROW
+                    BEGIN IF NEW.name = 'r142-fail.example.com' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'r142 test'; END IF; END");
+        [$code, , $r142_fail_body] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode([
+            'action' => 'register', 'token' => 'r142-test-token', 'hostname' => 'r142-fail.example.com', 'agent_type' => 'vps',
+        ]));
+        check('nezdařená registrace je 500', $code, 500);
+        check_true('a hlásí neúspěch', (json_decode($r142_fail_body, true)['success'] ?? null) === false);
+        check('a nenechá po sobě prázdné zařízení', (int)$pdo->query("SELECT COUNT(*) FROM assets WHERE name = 'r142-fail.example.com'")->fetchColumn(), 0);
+    } finally {
+        $pdo->exec("DROP TRIGGER IF EXISTS r142_register_fail");
+        $pdo->exec("DELETE FROM assets WHERE name = 'r142-fail.example.com'");
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'agent_registration_token'");
+        $pdo->prepare("DELETE FROM monitors WHERE id IN (?, ?, ?, ?) OR asset_id = ?")->execute([$r142_id, $r142_priv, $r142_reg_id, $r142_anon_id, $r142_asset]);
+        $pdo->prepare("DELETE FROM assets WHERE id IN (?, ?, ?)")->execute([$r142_asset, (int)$r142_reg_asset, (int)$r142_anon_asset]);
+    }
+}
+
+// =======================================================================
+// 7c. TeamSpeak's voice port lives in the target as host:voice_port (R344)
+// =======================================================================
+//
+// admin.php stores it so and check_teamspeak reads it so; the port column is
+// the ServerQuery port. /app had no voice port field and saved the bare host,
+// so re-saving a monitor made in admin.php lost its voice port.
+if (!empty($cookie_jar)) {
+    $ts_id = 0;
+    $ts_asset = null;
+    $ts_save = function (array $extra) use ($base, $cookie_jar, &$ts_id, &$ts_asset): array {
+        return api_post($base, 'action=save_monitor', $extra + [
+            'id' => $ts_id, 'name' => 'Hlasový port (test)', 'type' => 'teamspeak', 'port' => 10011, 'asset_id' => $ts_asset,
+        ], $cookie_jar);
+    };
+    $ts_row = function () use ($pdo, &$ts_id): array {
+        return $pdo->query("SELECT target, port FROM monitors WHERE id = " . (int)$ts_id)->fetch() ?: [];
+    };
+    try {
+        [$code, $ts_res] = $ts_save(['target' => 'ts.example.test', 'teamspeak_voice_port' => 9988]);
+        $ts_id = (int)($ts_res['id'] ?? 0);
+        $ts_asset = (int)$pdo->query("SELECT asset_id FROM monitors WHERE id = {$ts_id}")->fetchColumn() ?: null;
+        check('TS3 s hlasovým portem se uloží', $code, 200);
+        check('hlasový port je v cíli', $ts_row()['target'] ?? null, 'ts.example.test:9988');
+        check('ServerQuery port zůstane ve sloupci port', (int)($ts_row()['port'] ?? 0), 10011);
+
+        $ts_save(['target' => 'ts.example.test', 'teamspeak_voice_port' => '9989']);
+        check('úprava hlasového portu přepíše ten v cíli', $ts_row()['target'] ?? null, 'ts.example.test:9989');
+        $ts_save(['target' => 'ts.example.test:9989', 'teamspeak_voice_port' => 9990]);
+        check('port už poslaný v cíli se nahradí, nepřidá druhý', $ts_row()['target'] ?? null, 'ts.example.test:9990');
+        $ts_save(['target' => 'ts.example.test:9990']);
+        check('klient bez hlasového portu uloží cíl, jak ho poslal', $ts_row()['target'] ?? null, 'ts.example.test:9990');
+
+        [$code] = $ts_save(['target' => 'ts.example.test', 'teamspeak_voice_port' => 70000]);
+        check('hlasový port mimo rozsah je 400', $code, 400);
+        check('a cíl zůstane, jak byl', $ts_row()['target'] ?? null, 'ts.example.test:9990');
+
+        $ts_save(['target' => 'ts.example.test', 'teamspeak_voice_port' => null]);
+        check('prázdný hlasový port uloží holého hostitele (kontrola počítá s 9987)', $ts_row()['target'] ?? null, 'ts.example.test');
+        $ts_save(['type' => 'port', 'target' => 'ts.example.test', 'teamspeak_voice_port' => 9988]);
+        check('jiný typ hlasový port nečte', $ts_row()['target'] ?? null, 'ts.example.test');
+    } finally {
+        if ($ts_id > 0) {
+            $pdo->exec("DELETE FROM monitors WHERE id = {$ts_id}");
+        }
+        if ($ts_asset !== null) {
+            $pdo->exec("DELETE FROM assets WHERE id = {$ts_asset}");
+        }
+    }
+}
+
+// =======================================================================
+// 7d. A device lives as long as its monitors (D1)
+// =======================================================================
+//
+// Only admin.php could delete a device, by hand: every monitor deleted in
+// /app left its device behind, empty, for good. /app never shows a device's
+// name, so the device now goes with its last monitor - an archived one
+// still counts, so restoring it finds the device where it was.
+if (!empty($cookie_jar)) {
+    $as_monitors = [];
+    $as_assets = [];
+    $as_device = function (int $id) use ($pdo): ?int {
+        $asset = $pdo->query("SELECT asset_id FROM monitors WHERE id = {$id}")->fetchColumn();
+        return $asset === false || $asset === null ? null : (int)$asset;
+    };
+    $as_exists = fn (?int $asset): bool => $asset !== null
+        && (int)$pdo->query("SELECT COUNT(*) FROM assets WHERE id = {$asset}")->fetchColumn() === 1;
+    $as_new = function (string $name, ?int $asset = null) use ($base, $cookie_jar, &$as_monitors): int {
+        [, $res] = api_post($base, 'action=save_monitor', [
+            'id' => 0, 'name' => $name, 'type' => 'web', 'target' => 'https://example.com/as', 'asset_id' => $asset,
+        ], $cookie_jar);
+        $as_monitors[] = (int)($res['id'] ?? 0);
+        return (int)($res['id'] ?? 0);
+    };
+    try {
+        $as_one = $as_new('Jediný monitor zařízení (test)');
+        $as_assets[] = $as_one_asset = $as_device($as_one);
+        check_true('nový monitor dostane vlastní zařízení', $as_exists($as_one_asset));
+        [$code] = api_post($base, 'action=delete_monitor', ['id' => $as_one], $cookie_jar);
+        check('smazání monitoru projde', $code, 200);
+        check_false('jeho zařízení, už prázdné, zmizí s ním', $as_exists($as_one_asset));
+
+        $as_first = $as_new('První monitor sdíleného zařízení (test)');
+        $as_assets[] = $as_shared = $as_device($as_first);
+        $as_second = $as_new('Druhý monitor sdíleného zařízení (test)', $as_shared);
+        check('druhý monitor stojí na stejném zařízení', $as_device($as_second), $as_shared);
+        api_post($base, 'action=archive_monitor', ['id' => $as_second], $cookie_jar);
+        api_post($base, 'action=delete_monitor', ['id' => $as_first], $cookie_jar);
+        check_true('zařízení s archivovaným monitorem zůstává', $as_exists($as_shared));
+        check('a archivovaný monitor na něm stojí dál', $as_device($as_second), $as_shared);
+        api_post($base, 'action=delete_monitor', ['id' => $as_second], $cookie_jar);
+        check_false('smazáním posledního (i archivovaného) monitoru zařízení zmizí', $as_exists($as_shared));
+
+        // A monitor moved off its device leaves an empty one too.
+        $as_moved = $as_new('Přesouvaný monitor (test)');
+        $as_assets[] = $as_old = $as_device($as_moved);
+        [$code] = api_post($base, 'action=save_monitor', [
+            'id' => $as_moved, 'name' => 'Přesouvaný monitor (test)', 'type' => 'web',
+            'target' => 'https://example.com/as', 'asset_id' => $as_old, 'new_asset_name' => 'Nové zařízení (test)',
+        ], $cookie_jar);
+        $as_assets[] = $as_moved_to = $as_device($as_moved);
+        check('přesun na nové zařízení projde', $code, 200);
+        check_true('monitor stojí na novém zařízení', $as_moved_to !== null && $as_moved_to !== $as_old && $as_exists($as_moved_to));
+        check_false('a opuštěné prázdné zařízení zmizí', $as_exists($as_old));
+        [$code] = api_post($base, 'action=save_monitor', [
+            'id' => $as_moved, 'name' => 'Přesouvaný monitor (test)', 'type' => 'web',
+            'target' => 'https://example.com/as', 'asset_id' => $as_moved_to,
+        ], $cookie_jar);
+        check('uložení na stejném zařízení projde', $code, 200);
+        check_true('a zařízení zůstane', $as_exists($as_moved_to));
+        api_post($base, 'action=save_monitor', [
+            'id' => $as_moved, 'name' => 'Přesouvaný monitor (test)', 'type' => 'web',
+            'target' => 'https://example.com/as', 'asset_id' => null,
+        ], $cookie_jar);
+        check('odpojený monitor nemá zařízení', $as_device($as_moved), null);
+        check_false('a zařízení, od kterého se odpojil, zmizí', $as_exists($as_moved_to));
+
+        // A refused save creates no device either.
+        [$code] = api_post($base, 'action=save_monitor', [
+            'id' => 0, 'name' => '', 'type' => 'web', 'target' => 'https://example.com/as', 'new_asset_name' => 'Odmítnuté zařízení (test)',
+        ], $cookie_jar);
+        check('uložení bez názvu je 400', $code, 400);
+        check('a nové zařízení nevznikne', (int)$pdo->query("SELECT COUNT(*) FROM assets WHERE name = 'Odmítnuté zařízení (test)'")->fetchColumn(), 0);
+    } finally {
+        $as_monitors = array_values(array_filter($as_monitors));
+        if ($as_monitors) {
+            $pdo->exec('DELETE FROM monitors WHERE id IN (' . implode(',', $as_monitors) . ')');
+        }
+        $as_assets = array_values(array_filter($as_assets));
+        if ($as_assets) {
+            $pdo->exec('DELETE FROM assets WHERE id IN (' . implode(',', $as_assets) . ')');
+        }
+        $pdo->exec("DELETE FROM assets WHERE name = 'Odmítnuté zařízení (test)'");
+    }
+}
+
+// =======================================================================
+// 8. Heartbeat - the whole flow from creation through the signal to evaluation
+// =======================================================================
+//
+// The evaluation itself has database-free tests (run_tests.php). Here the
+// point is what can only be verified for real: that the token truly appears,
+// that a signal can be sent to it over HTTP, that it gets written, and above
+// all that it leaks to nobody unauthenticated.
+if (!empty($cookie_jar)) {
+    [$code, $hb_created] = api_post($base, 'action=save_monitor', [
+        'id' => 0,
+        'name' => 'Noční záloha (test)',
+        'type' => 'heartbeat',
+        // The target is deliberately not sent - a heartbeat has none.
+        'heartbeat_interval' => 3600,
+        'heartbeat_grace' => 300,
+    ], $cookie_jar);
+    check('heartbeat monitor jde založit bez cíle', $code, 200);
+    $hb_id = (int)($hb_created['id'] ?? 0);
+    check_true('heartbeat monitor dostal id', $hb_id > 0);
+
+    // The interval is the one thing a heartbeat makes no sense without.
+    [$code_bad] = api_post($base, 'action=save_monitor', [
+        'id' => 0,
+        'name' => 'Heartbeat bez intervalu',
+        'type' => 'heartbeat',
+    ], $cookie_jar);
+    check('heartbeat bez intervalu je odmítnut', $code_bad, 400);
+
+    if ($hb_id > 0) {
+        [$code, $info] = api_get_auth($base, 'action=heartbeat_info&monitor_id=' . $hb_id, $cookie_jar);
+        check('heartbeat_info vrací 200', $code, 200);
+        $hb_token = (string)($info['token'] ?? '');
+        check_true('token má tvar 48 hex znaků', (bool)preg_match('/^[0-9a-f]{48}$/', $hb_token));
+        check('nový heartbeat je unknown, ne down', $info['state'] ?? null, 'unknown');
+        // array_key_exists, not ?? - the operator would declare NULL a missing key
+        // and the test would pass even if the endpoint did not send the field at all.
+        check_true('bez signálu je čas posledního signálu null', array_key_exists('lastSignalAt', $info) && $info['lastSignalAt'] === null);
+        check('interval se uložil v sekundách', $info['intervalSecs'] ?? null, 3600);
+
+        // The token must not leave without login - whoever has it can send signals
+        // for us and the monitor glows green while the backup has long stopped.
+        [$anon_code] = api_get($base, 'action=heartbeat_info&monitor_id=' . $hb_id);
+        check_true('heartbeat_info bez přihlášení je odmítnut', in_array($anon_code, [401, 403], true));
+
+        // The token must not appear in the regular monitor list either.
+        [, $mon_list, $mon_raw] = api_get_auth($base, 'action=monitors', $cookie_jar);
+        check_true('token není v seznamu monitorů', $hb_token !== '' && !str_contains($mon_raw, $hb_token));
+
+        // The edit form saves interval and grace back, so the list has to carry
+        // them - without them it saved its own 60/5 minutes over the job's.
+        $hb_by_id = array_column($mon_list['monitors'] ?? [], null, 'id');
+        check('seznam pro admina nese interval heartbeatu v sekundách', $hb_by_id[$hb_id]['heartbeatIntervalSecs'] ?? null, 3600);
+        check('a toleranci v sekundách', $hb_by_id[$hb_id]['heartbeatGraceSecs'] ?? null, 300);
+        $hb_web = $hb_by_id[1] ?? [];
+        check_true('monitor jiného typu má interval null', array_key_exists('heartbeatIntervalSecs', $hb_web) && $hb_web['heartbeatIntervalSecs'] === null);
+
+        // --- The signal intake itself -----------------------------------
+        [$hb_code, $hb_res] = hb_ping($base, $hb_token);
+        check('signál s platným tokenem vrací 200', $hb_code, 200);
+        check_true('odpověď potvrzuje přijetí', ($hb_res['ok'] ?? false) === true);
+
+        [$code, $info2] = api_get_auth($base, 'action=heartbeat_info&monitor_id=' . $hb_id, $cookie_jar);
+        check_true('po signálu je znám čas posledního signálu', !empty($info2['lastSignalAt']));
+        check('po čerstvém signálu je stav up', $info2['state'] ?? null, 'up');
+        check('výsledek je ok', $info2['lastResult'] ?? null, 'ok');
+
+        // --- A reported failure -----------------------------------------
+        [$hb_code] = hb_ping($base, $hb_token, 'status=fail&msg=' . rawurlencode('tar skončil kódem 2'));
+        check('signál o selhání vrací 200', $hb_code, 200);
+
+        [, $info3] = api_get_auth($base, 'action=heartbeat_info&monitor_id=' . $hb_id, $cookie_jar);
+        check('ohlášené selhání sráží stav na down', $info3['state'] ?? null, 'down');
+        check('výsledek je fail', $info3['lastResult'] ?? null, 'fail');
+        check_true('zpráva od úlohy se uložila', str_contains((string)($info3['lastMessage'] ?? ''), 'tar'));
+
+        // --- An invalid token must reveal nothing -----------------------
+        [$bad_code] = hb_ping($base, str_repeat('a', 48));
+        check('neznámý token vrací 404', $bad_code, 404);
+        [$bad_code2] = hb_ping($base, 'nesmysl');
+        check('token špatného tvaru vrací taky 404', $bad_code2, 404);
+
+        // --- Token rotation ---------------------------------------------
+        // A new token stops every job's address, so a link must not do it.
+        $hb_stored = fn (): string => (string)$pdo->query("SELECT heartbeat_token FROM monitors WHERE id = {$hb_id}")->fetchColumn();
+        $hb_audits = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'heartbeat_token_regenerated' AND target_id = {$hb_id}")->fetchColumn();
+        [$rot_code] = api_get_auth($base, 'action=heartbeat_info&monitor_id=' . $hb_id . '&regenerate=1', $cookie_jar);
+        check('výměna tokenu přes GET se odmítne a token zůstane', [$rot_code, $hb_stored()], [405, $hb_token]);
+        [$rot_code] = api_post($base, 'action=heartbeat_info&monitor_id=' . $hb_id . '&regenerate=1', [], $cookie_jar, '');
+        check('výměna tokenu bez CSRF se odmítne a token zůstane', [$rot_code, $hb_stored()], [403, $hb_token]);
+        [$rot_code] = api_post($base, 'action=heartbeat_info&monitor_id=' . $hb_id . '&regenerate=1', [], $jar3);
+        check('běžný uživatel token nevymění', [in_array($rot_code, [401, 403], true), $hb_stored()], [true, $hb_token]);
+        [, $hb_plain] = api_post($base, 'action=heartbeat_info&monitor_id=' . $hb_id, [], $cookie_jar);
+        check('POST bez regenerate jen čte', [$hb_plain['token'] ?? null, $hb_audits()], [$hb_token, 0]);
+        [$rot_code, $info4] = api_post($base, 'action=heartbeat_info&monitor_id=' . $hb_id . '&regenerate=1', [], $cookie_jar);
+        check('výměna tokenu přes POST projde', $rot_code, 200);
+        check_true('regenerate vyrobí jiný token', ($info4['token'] ?? '') !== $hb_token);
+        check('a nový token vrátí i uloží', $info4['token'] ?? null, $hb_stored());
+        check('a zapíše se do auditu, s monitorem', [$hb_audits(),
+            $pdo->query("SELECT description FROM audit_log WHERE action = 'heartbeat_token_regenerated' AND target_id = {$hb_id}")->fetchColumn()],
+            [1, 'Noční záloha (test)']);
+        [$old_code] = hb_ping($base, $hb_token);
+        check('starý token po výměně přestane platit', $old_code, 404);
+
+        api_post($base, 'action=delete_monitor', ['id' => $hb_id], $cookie_jar);
+    }
+}
+
+// =======================================================================
+// 9. The RSS feed - a subscription instead of waiting for a visit
+// =======================================================================
+//
+// The feed is public, so it is tested without login. The last check matters
+// most: a hidden page must not hand out via RSS anything it will not show on
+// the web - otherwise guessing a slug would bypass visibility.
+// Without incidents the feed would be empty and the tests below would pass
+// even if items were never generated. One closed and one ongoing.
+$pdo->exec("INSERT INTO incidents (id, title, impact, status, monitor_id, created_at, resolved_at)
+            VALUES (901, 'Výpadek: Testovací web', 'major', 'resolved', 1,
+                    DATE_SUB(NOW(), INTERVAL 3 HOUR), DATE_SUB(NOW(), INTERVAL 2 HOUR))");
+$pdo->exec("INSERT INTO incidents (id, title, impact, status, monitor_id, created_at)
+            VALUES (902, 'Výpadek: Router bez metrik', 'critical', 'investigating', 2,
+                    DATE_SUB(NOW(), INTERVAL 20 MINUTE))");
+
+// The feed covers the public set (W1-G3); the router is put on it for the
+// item checks below and taken off again for the one that says it drops out.
+$pdo->exec("UPDATE monitors SET is_public = 1 WHERE id = 2");
+$rss_ch = curl_init($base . '/rss.php');
+curl_setopt_array($rss_ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15, CURLOPT_HEADER => true]);
+$rss_raw = (string)curl_exec($rss_ch);
+$pdo->exec("UPDATE monitors SET is_public = NULL WHERE id = 2");
+[, , $rss_hidden_body] = bk_raw_request($base . '/rss.php');
+check_false('incident routeru mimo veřejnou stránku v kanálu není', str_contains($rss_hidden_body, 'incident-902-opened'));
+check_true('incident webu v kanálu zůstává', str_contains($rss_hidden_body, 'incident-901-opened'));
+// Readers and caches keep the feed, so its links must not follow a forged
+// Host: they start at bk_link_origin(), here the server's own name.
+[, , $rss_forged_body] = bk_raw_request($base . '/rss.php', ['Host: evil.example']);
+check_true('podvržený Host se do odkazů v RSS nedostane',
+    str_contains($rss_forged_body, '<link>http://127.0.0.1') && !str_contains($rss_forged_body, 'evil.example'));
+$rss_code = (int)curl_getinfo($rss_ch, CURLINFO_RESPONSE_CODE);
+$rss_ctype = (string)curl_getinfo($rss_ch, CURLINFO_CONTENT_TYPE);
+$rss_body = substr($rss_raw, curl_getinfo($rss_ch, CURLINFO_HEADER_SIZE));
+
+check('RSS kanál vrací 200', $rss_code, 200);
+check_true('RSS má správný Content-Type', str_contains($rss_ctype, 'application/rss+xml'));
+
+// XML validity is verified by a parser, not substring search: an unescaped
+// character in a monitor name breaks the feed in a way `str_contains` misses.
+$prev_errors = libxml_use_internal_errors(true);
+$rss_xml = simplexml_load_string($rss_body);
+libxml_use_internal_errors($prev_errors);
+check_true('RSS je platné XML', $rss_xml !== false);
+if ($rss_xml !== false) {
+    check_true('kanál má titulek', isset($rss_xml->channel->title) && (string)$rss_xml->channel->title !== '');
+    check_true('kanál má odkaz na sebe (atom:self)', str_contains($rss_body, 'rel="self"'));
+    // The status page is /app/public; the legacy index.php goes with D1.
+    check('kanál odkazuje na stavovou stránku v /app', (string)$rss_xml->channel->link, $base . '/app/public');
+    $rss_item_links = [];
+    foreach ($rss_xml->channel->item as $item) {
+        $rss_item_links[] = (string)$item->link;
+    }
+    check('a položky na ni také', array_values(array_unique($rss_item_links)), [$base . '/app/public']);
+
+    $guids = [];
+    $titles = [];
+    $pub_dates = [];
+    foreach ($rss_xml->channel->item as $item) {
+        $guids[] = (string)$item->guid;
+        $titles[] = (string)$item->title;
+        $pub_dates[] = (string)$item->pubDate;
+    }
+
+    // Opening and resolution are two items with different guids. If the resolution
+    // were merely appended to the original item, the reader would never show it
+    // to the subscriber - a guid displayed once is not printed again.
+    check_true('uzavřený incident má položku o vzniku', in_array('incident-901-opened', $guids, true));
+    check_true('uzavřený incident má položku o vyřešení', in_array('incident-901-resolved', $guids, true));
+
+    // An ongoing incident has no resolution - deriving one from "now" would be
+    // an invented value about something that did not happen.
+    check_true('probíhající incident má položku o vzniku', in_array('incident-902-opened', $guids, true));
+    check_false('probíhající incident nemá vyřešení', in_array('incident-902-resolved', $guids, true));
+
+    check_true('název monitoru je v položce', str_contains($rss_body, 'Testovací web'));
+    check_true('každá položka má pubDate', count($pub_dates) === count($guids) && !in_array('', $pub_dates, true));
+
+    // Newest on top - readers take the order from the feed.
+    $first_ts = !empty($pub_dates) ? strtotime($pub_dates[0]) : 0;
+    $last_ts = !empty($pub_dates) ? strtotime(end($pub_dates)) : 0;
+    check_true('položky jsou od nejnovější', $first_ts >= $last_ts);
+    check_true('titulek rozlišuje výpadek a vyřešení', count(array_unique($titles)) === count($titles));
+}
+
+if (!empty($cookie_jar)) {
+    // A hidden page - an anonym must get 404 exactly like a nonexistent slug.
+    [$code] = api_post($base, 'action=save_status_page', [
+        'id' => 0,
+        'title' => 'Skrytá pro RSS',
+        'slug' => 'skryta-rss',
+        'isPublic' => false,
+        'monitorIds' => [1],
+    ], $cookie_jar);
+    check('skrytou stránku jde založit', $code, 200);
+
+    $hidden_ch = curl_init($base . '/rss.php?page=skryta-rss');
+    curl_setopt_array($hidden_ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15]);
+    $hidden_body = (string)curl_exec($hidden_ch);
+    $hidden_code = (int)curl_getinfo($hidden_ch, CURLINFO_RESPONSE_CODE);
+    check('RSS skryté stránky je pro anonyma 404', $hidden_code, 404);
+    check_true('RSS skryté stránky nevydá žádný kanál', !str_contains($hidden_body, '<rss'));
+
+    // And a public page must serve the feed, otherwise the test above would
+    // pass even with every slugged feed broken.
+    api_post($base, 'action=save_status_page', [
+        'id' => 0,
+        'title' => 'Veřejná pro RSS',
+        'slug' => 'verejna-rss',
+        'isPublic' => true,
+        'monitorIds' => [1],
+    ], $cookie_jar);
+
+    $pub_ch = curl_init($base . '/rss.php?page=verejna-rss');
+    curl_setopt_array($pub_ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 15]);
+    $pub_body = (string)curl_exec($pub_ch);
+    $pub_code = (int)curl_getinfo($pub_ch, CURLINFO_RESPONSE_CODE);
+    check('RSS veřejné stránky vrací 200', $pub_code, 200);
+    check_true('RSS veřejné stránky nese název stránky', str_contains($pub_body, 'Veřejná pro RSS'));
+    check_true('a odkazuje na tu stránku v /app', str_contains($pub_body, '<link>' . $base . '/app/public?page=verejna-rss</link>'));
+}
+
+// An install under a subdirectory links to the /app next to its /status.
+// The test server serves the root only, so the feed runs in a child. Its
+// Host is the server's own name, so bk_link_origin() takes it.
+$rss_sub_out = [];
+exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg('$_SERVER["SCRIPT_NAME"] = "/monitoring/status/rss.php";'
+    . '$_SERVER["HTTP_HOST"] = "example.test"; $_SERVER["SERVER_NAME"] = "example.test"; require ' . var_export($root . '/rss.php', true) . ';') . ' 2>&1', $rss_sub_out);
+check('instalace v podadresáři: kanál odkazuje na /app vedle svého /status',
+    preg_match('~<link>([^<]*)</link>~', implode("\n", $rss_sub_out), $rss_sub_m) ? $rss_sub_m[1] : implode("\n", $rss_sub_out),
+    'http://example.test/monitoring/app/public');
+
+// =======================================================================
+// 10. Escalation - the safety net for an alert nobody saw
+// =======================================================================
+//
+// The decision logic has database-free tests. This is about the full
+// mechanism: what really gets written to the database and above all what
+// does NOT when escalation has nowhere to go.
+require_once __DIR__ . '/../bootstrap.php';
+
+// Preset thresholds actually apply. bk_effective_threshold had tests but
+// NO production caller - the preset editor offered thresholds while the
+// alerts/tips/bands read only the monitor's value.
+$pdo->exec("INSERT INTO metric_presets (id, name, cpu_threshold) VALUES (77, 'Tvrdší CPU limit', 70)");
+$pdo->exec("UPDATE monitors SET preset_id = 77, cpu_threshold = 90, ram_threshold = 95 WHERE id = 2");
+$thr_row = $pdo->query("SELECT * FROM monitors WHERE id = 2")->fetch();
+$thr_eff = bk_monitor_thresholds($pdo, $thr_row);
+check('preset práh přebíjí hodnotu monitoru', $thr_eff['cpu'], 70);
+check('preset bez RAM prahu nechá hodnotu monitoru', $thr_eff['ram'], 95);
+$thr_eff_nopdo = bk_monitor_thresholds(null, $thr_row);
+check('bez PDO zůstává hodnota monitoru (žádný pád)', $thr_eff_nopdo['cpu'], 90);
+
+// And here end-to-end over HTTP: the chart band (metric_detail) must draw the
+// preset's limit - the very one agent_api actually alerts at.
+[, $thr_detail] = api_get_auth($base, 'action=metric_detail&monitor_id=2&metric=cpu', $cookie_jar);
+check('metric_detail kreslí pásmo podle presetu', $thr_detail['thresholds']['critical'] ?? null, 70);
+
+// "6 ms proti čemu a na čem?" - detail metriky musí umět pojmenovat cíl měření
+// i místo, odkud se měří. Neznámé zůstává null, nikdy vymyšlená lokalita.
+check('metric_detail vrací cíl měření', $thr_detail['monitor']['target'] ?? null, '10.0.0.1');
+check_true('práh warning je označený jako odvozený', ($thr_detail['thresholdsDerived']['warning'] ?? null) === true);
+
+// Predpoved zaplneni: cislo, ktere doted mel jen text insightu, takze odznak
+// "Plno za X dni" nemel co zobrazit. Chybejici predpoved = klic chybi, ne nula.
+$pdo->exec("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key = 'hdd'");
+for ($i = 13; $i >= 0; $i--) {
+    $day = date('Y-m-d', time() - $i * 86400);
+    $val = 60 + (13 - $i) * 2; // roste o dve procenta denne
+    $pdo->exec("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples)
+                VALUES (2, '{$day}', 'hdd', {$val}, {$val}, {$val}, 10)
+                ON DUPLICATE KEY UPDATE avg_val = VALUES(avg_val), min_val = VALUES(min_val), max_val = VALUES(max_val)");
+}
+[, $batch] = api_get_auth($base, 'action=metric_series_batch&monitor_id=2&period=24h', $cookie_jar);
+$hdd_series = $batch['series']['hdd'] ?? null;
+check_true('rostoucí disk dostane predikci zaplnění', is_array($hdd_series) && isset($hdd_series['daysToFull']));
+check_true('a je to kladný počet dní', ($hdd_series['daysToFull'] ?? 0) > 0 && ($hdd_series['daysToFull'] ?? 0) <= 90);
+$pdo->exec("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key = 'hdd'");
+[, $batch2] = api_get_auth($base, 'action=metric_series_batch&monitor_id=2&period=24h', $cookie_jar);
+check_true(
+    'bez růstu se predikce nevrací vůbec',
+    !array_key_exists('daysToFull', $batch2['series']['hdd'] ?? [])
+);
+check_true('a critical jako nastavený', ($thr_detail['thresholdsDerived']['critical'] ?? null) === false);
+check_true('klíč port je přítomen', array_key_exists('port', $thr_detail['monitor'] ?? []));
+check_true('klíč checkedFrom je přítomen', array_key_exists('checkedFrom', $thr_detail['monitor'] ?? []));
+// array_key_exists, ne ?? - ten by null pod testem zaměnil za fallback.
+check_true(
+    'bez zapsané lokality zůstává checkedFrom null',
+    array_key_exists('checkedFrom', $thr_detail['monitor'] ?? []) && $thr_detail['monitor']['checkedFrom'] === null
+);
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_from, checked_at)
+            VALUES (2, 'up', 5, 'Praha, CZ', NOW())");
+// Only the metrics the SERVER measures may claim a vantage point. CPU is
+// measured by the agent about its own machine; handing back cron's own label
+// would claim the router's processor was measured from the hosting.
+[, $cf_cpu] = api_get_auth($base, 'action=metric_detail&monitor_id=2&metric=cpu', $cookie_jar);
+check_true(
+    'u metriky od agenta zůstává checkedFrom null',
+    array_key_exists('checkedFrom', $cf_cpu['monitor'] ?? []) && $cf_cpu['monitor']['checkedFrom'] === null
+);
+[, $cf_detail] = api_get_auth($base, 'action=metric_detail&monitor_id=2&metric=response_time', $cookie_jar);
+check('u odezvy se lokalita vrátí', $cf_detail['monitor']['checkedFrom'] ?? null, 'Praha, CZ');
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 2");
+$pdo->exec("UPDATE monitors SET preset_id = NULL, cpu_threshold = 90, ram_threshold = 95 WHERE id = 2");
+$pdo->exec("DELETE FROM metric_presets WHERE id = 77");
+
+// bk_setting_set() replaces the hand-written settings upserts. The row must
+// be what those upserts stored, NULL and '' included, and get_setting() in
+// the same request must see it: before, it
+// answered the value read at the start of the request (a cron run with an
+// empty ip_loc_local looked the location up again for every monitor).
+$sw_row = function (string $key) use ($pdo) {
+    $stmt = $pdo->prepare("SELECT key_value FROM settings WHERE key_name = ?");
+    $stmt->execute([$key]);
+    $rows = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    return $rows === [] ? 'bez řádku' : $rows[0];
+};
+$sw_keys = ['bk_test_sw_old', 'bk_test_sw_new'];
+try {
+    $sw_old = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = ?");
+    $sw_same = [];
+    foreach (['stará', 'nová', '', null, '1', '{"at":1767225600,"data":{"a":"ě"}}', '🇨🇿 Praha, CZ'] as $sw_v) {
+        $sw_old->execute(['bk_test_sw_old', $sw_v, $sw_v]);
+        bk_setting_set($pdo, 'bk_test_sw_new', $sw_v);
+        $sw_same[] = [$sw_row('bk_test_sw_old'), $sw_row('bk_test_sw_new')];
+    }
+    check('zápis nastavení uloží totéž co ruční upsert, NULL i prázdný řetězec',
+        $sw_same, [['stará', 'stará'], ['nová', 'nová'], ['', ''], [null, null], ['1', '1'],
+            ['{"at":1767225600,"data":{"a":"ě"}}', '{"at":1767225600,"data":{"a":"ě"}}'], ['🇨🇿 Praha, CZ', '🇨🇿 Praha, CZ']]);
+    check('get_setting hned po zápisu vrátí novou hodnotu, ne tu ze začátku požadavku',
+        [get_setting('bk_test_sw_new', 'výchozí'), $GLOBALS['system_settings']['bk_test_sw_new'] ?? 'chybí'],
+        ['🇨🇿 Praha, CZ', '🇨🇿 Praha, CZ']);
+    bk_setting_set($pdo, 'bk_test_sw_new', null);
+    check('uložené NULL čte get_setting jako nenastavené (výchozí hodnota)',
+        [get_setting('bk_test_sw_new', 'výchozí'), array_key_exists('bk_test_sw_new', $GLOBALS['system_settings'])],
+        ['výchozí', true]);
+
+    // A write that fails throws and leaves the snapshot as it was.
+    $sw_dead = new class ('mysql:') extends PDO {
+        public function __construct(string $dsn) {}
+        public function prepare(string $query, array $options = []): PDOStatement|false {
+            throw new PDOException('zápis selhal');
+        }
+    };
+    bk_setting_set($pdo, 'bk_test_sw_new', 'uložená');
+    try {
+        bk_setting_set($sw_dead, 'bk_test_sw_new', 'neuložená');
+        $sw_threw = false;
+    } catch (PDOException $e) {
+        $sw_threw = true;
+    }
+    check('nepovedený zápis vyhodí výjimku a v paměti nechá uloženou hodnotu',
+        [$sw_threw, get_setting('bk_test_sw_new', 'výchozí'), $sw_row('bk_test_sw_new')], [true, 'uložená', 'uložená']);
+} finally {
+    $pdo->prepare("DELETE FROM settings WHERE key_name IN (?, ?)")->execute($sw_keys);
+    foreach ($sw_keys as $sw_k) {
+        unset($GLOBALS['system_settings'][$sw_k]);
+    }
+}
+
+// bk_kv_cache_get/put/clear: the five caches kept in settings, one envelope
+// ({at, data}), each with the lifetime BK_KV_CACHES gives it, and one clear.
+// They used to read, check and write their rows by hand, and the archive's
+// own list of keys had left health_cache_public out.
+$kv_rows = fn (): array => $pdo->query("SELECT key_name FROM settings
+    WHERE key_name LIKE 'findings%' OR key_name LIKE 'health%' OR key_name LIKE 'dashboard_insights%'
+       OR key_name LIKE 'regions%' OR key_name LIKE 'websites_overview%' OR key_name LIKE 'bk_test_kv%'
+    ORDER BY key_name")->fetchAll(PDO::FETCH_COLUMN);
+$kv_entry = fn (int $age, array $data): string => (string)json_encode(['at' => time() - $age, 'data' => $data]);
+try {
+    bk_kv_cache_clear($pdo);
+    bk_kv_cache_put($pdo, 'findings_summary_abc', ['total' => 3]);
+    $kv_put = bk_kv_cache_get('findings_summary_abc');
+    check('uložená položka cache se přečte i se svým časem',
+        [$kv_put['data'] ?? null, abs(($kv_put['at'] ?? 0) - time()) <= 10], [['total' => 3], true]);
+    // findings_summary_ lives 60 s, websites_overview_cache 600 s.
+    bk_setting_set($pdo, 'findings_summary_old', $kv_entry(60, ['total' => 1]));
+    // Ten seconds inside the limit: a loaded CI runner can lose a second or two
+    // between this write and the read below. The one at the limit only gets older.
+    bk_setting_set($pdo, 'findings_summary_young', $kv_entry(50, ['total' => 1]));
+    bk_setting_set($pdo, 'websites_overview_cache', $kv_entry(590, ['monitors' => []]));
+    check('položka stará jako životnost své cache se nepoužije, o trochu mladší ano',
+        [bk_kv_cache_get('findings_summary_old'), bk_kv_cache_get('findings_summary_young')['data'] ?? null,
+            bk_kv_cache_get('websites_overview_cache')['data'] ?? null],
+        [null, ['total' => 1], ['monitors' => []]]);
+    // An answer kept in an older shape is computed again, not served.
+    bk_setting_set($pdo, 'dashboard_insights_cache_cs', (string)json_encode(['at' => time(), 'v' => 2, 'insights' => [['text' => 'x']]]));
+    bk_setting_set($pdo, 'dashboard_insights_cache_en', '{nečitelné');
+    bk_setting_set($pdo, 'health_cache_public', $kv_entry(0, ['network' => ['score' => 80]]));
+    check('starý tvar, nečitelný JSON a data, která volající odmítne, cache nevrátí', [
+        bk_kv_cache_get('dashboard_insights_cache_cs'), bk_kv_cache_get('dashboard_insights_cache_en'),
+        bk_kv_cache_get('health_cache_public', fn (array $d): bool => is_array($d['network']['deductions'] ?? null)),
+    ], [null, null, null]);
+
+    // A key or prefix of no listed cache is a mistake in the caller, not a miss.
+    $kv_refused = [];
+    foreach ([
+        fn () => bk_kv_cache_get('bk_test_kv_jina'),
+        fn () => bk_kv_cache_put($pdo, 'bk_test_kv_jina', ['a' => 1]),
+        fn () => bk_kv_cache_clear($pdo, ['regions_']),
+    ] as $kv_call) {
+        try {
+            $kv_call();
+            $kv_refused[] = false;
+        } catch (InvalidArgumentException $e) {
+            $kv_refused[] = true;
+        }
+    }
+    check('klíč ani prefix mimo BK_KV_CACHES cache nepřijme', $kv_refused, [true, true, true]);
+
+    // One cache by its prefix, from the table and from this request's
+    // snapshot. '_' is a character of the prefix there, not LIKE's wildcard.
+    bk_setting_set($pdo, 'findingsXsummaryXabc', 'jiný klíč');
+    bk_setting_set($pdo, 'regions_cache_7d', $kv_entry(0, ['regions' => []]));
+    bk_kv_cache_clear($pdo, ['findings_summary_']);
+    check('smazání podle prefixu vezme jen tu jednu cache, z tabulky i z paměti', [
+        $kv_rows(), array_key_exists('findings_summary_young', $GLOBALS['system_settings']),
+        array_key_exists('regions_cache_7d', $GLOBALS['system_settings']),
+    ], [['dashboard_insights_cache_cs', 'dashboard_insights_cache_en', 'findingsXsummaryXabc', 'health_cache_public',
+        'regions_cache_7d', 'websites_overview_cache'], false, true]);
+    bk_kv_cache_clear($pdo);
+    check('smazání bez prefixu vezme všech pět cache a nic jiného',
+        [$kv_rows(), array_key_exists('health_cache_public', $GLOBALS['system_settings'])], [['findingsXsummaryXabc'], false]);
+
+    // A write that fails is logged, and the caller's answer goes out anyway.
+    $kv_dead = new class ('mysql:') extends PDO {
+        public function __construct(string $dsn) {}
+        public function prepare(string $query, array $options = []): PDOStatement|false {
+            throw new PDOException('zápis selhal');
+        }
+    };
+    $kv_log = (string)tempnam(sys_get_temp_dir(), 'bk_kv_log');
+    $kv_log_prev = ini_set('error_log', $kv_log);
+    bk_kv_cache_put($kv_dead, 'regions_cache_30d', ['regions' => []]);
+    ini_set('error_log', (string)$kv_log_prev);
+    check('nezapsaná cache se zaloguje, nevyhodí a nic nepředstírá', [
+        str_contains((string)file_get_contents($kv_log), '[cache] regions_cache_30d not stored: zápis selhal'),
+        bk_kv_cache_get('regions_cache_30d'),
+    ], [true, null]);
+    @unlink($kv_log);
+} finally {
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'findingsXsummaryXabc'");
+    unset($GLOBALS['system_settings']['findingsXsummaryXabc']);
+    bk_kv_cache_clear($pdo);
+}
+
+// =======================================================================
+// bk_monitor_create(): one way to create a monitor on every path - its
+// device in the same transaction, an agent_key, BK_DEFAULT_THRESHOLDS. Five
+// INSERTs had columns and defaults of their own: admin.php's import stored
+// RAM 90 and disk 95 (R240), and a failed or refused save elsewhere left an
+// empty device behind.
+// =======================================================================
+$mc_assets = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM assets")->fetchColumn();
+$mc_row = function (int $id) use ($pdo): array {
+    $stmt = $pdo->prepare("SELECT m.status, m.agent_key, m.cpu_threshold, m.ram_threshold, m.hdd_threshold, m.heartbeat_token,
+        m.asset_id, m.is_public, a.name AS asset_name FROM monitors m LEFT JOIN assets a ON a.id = m.asset_id WHERE m.id = ?");
+    $stmt->execute([$id]);
+    return $stmt->fetch() ?: [];
+};
+$mc_limits = fn (array $r): array => [(int)($r['cpu_threshold'] ?? -1), (int)($r['ram_threshold'] ?? -1), (int)($r['hdd_threshold'] ?? -1)];
+$mc_admin_post = function (array $form) use ($base, $cookie_jar): int {
+    $ch = curl_init($base . '/admin.php');
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30, CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => http_build_query($form + ['csrf_token' => $GLOBALS['bk_test_csrf']]),
+        CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_COOKIEJAR => $cookie_jar]);
+    curl_exec($ch);
+    return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+};
+$mc_setup = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'setup_completed'")->fetchColumn();
+try {
+    $mc_web = bk_monitor_create($pdo, ['name' => 'MC web', 'type' => 'web', 'target' => 'https://mc.example.org']);
+    $mc_r = $mc_row($mc_web['id']);
+    check('nový monitor: unknown, klíč agenta, výchozí prahy a vlastní zařízení pojmenované po sobě', [
+        $mc_r['status'] ?? null, (bool)preg_match('/^[0-9a-f]{32}$/', (string)($mc_r['agent_key'] ?? '')),
+        ($mc_r['agent_key'] ?? null) === $mc_web['agent_key'], $mc_limits($mc_r),
+        array_key_exists('heartbeat_token', $mc_r) ? $mc_r['heartbeat_token'] : 'chybí',
+        $mc_r['asset_name'] ?? null, (int)($mc_r['asset_id'] ?? 0) === $mc_web['asset_id'],
+    ], ['unknown', true, true, [90, 95, 90], null, 'MC web', true]);
+    $mc_hb = bk_monitor_create($pdo, ['name' => 'MC heartbeat', 'type' => 'heartbeat', 'target' => '', 'heartbeat_interval' => 3600, 'cpu_threshold' => 70],
+        $mc_web['asset_id']);
+    $mc_r = $mc_row($mc_hb['id']);
+    check('heartbeat dostane token, zadané zařízení se použije a zadaný práh platí', [
+        (bool)preg_match('/^[0-9a-f]{48}$/', (string)($mc_r['heartbeat_token'] ?? '')), $mc_hb['asset_id'], $mc_limits($mc_r),
+    ], [true, $mc_web['asset_id'], [70, 95, 90]]);
+    $mc_named = bk_monitor_create($pdo, ['name' => 'MC jméno', 'type' => 'web', 'target' => 'https://mc2.example.org'], null, 'MC zařízení');
+    check('nové zařízení může nést jiné jméno než monitor', $mc_row($mc_named['id'])['asset_name'] ?? null, 'MC zařízení');
+
+    $mc_before = $mc_assets();
+    try {
+        bk_monitor_create($pdo, ['name' => 'MC zlý sloupec', 'type' => 'web', 'name) VALUES (1); --' => 1]);
+        $mc_refused = false;
+    } catch (InvalidArgumentException $e) {
+        $mc_refused = true;
+    }
+    check('jméno sloupce mimo [a-z0-9_] se odmítne dřív, než se cokoli zapíše', [$mc_refused, $mc_assets() - $mc_before], [true, 0]);
+
+    // A failed monitors INSERT takes its new device back, and leaves no
+    // transaction open behind it.
+    $pdo->exec("CREATE TRIGGER mc_create_fail BEFORE INSERT ON monitors FOR EACH ROW
+                BEGIN IF NEW.name LIKE 'MC selže%' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'mc test'; END IF; END");
+    $pdo->exec("CREATE TRIGGER mc_update_fail BEFORE UPDATE ON monitors FOR EACH ROW
+                BEGIN IF NEW.name = 'MC selže úprava' THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'mc test'; END IF; END");
+    $mc_before = $mc_assets();
+    try {
+        bk_monitor_create($pdo, ['name' => 'MC selže', 'type' => 'web', 'target' => 'https://mc3.example.org']);
+        $mc_threw = false;
+    } catch (PDOException $e) {
+        $mc_threw = true;
+    }
+    check('nezdařený INSERT vyhodí výjimku a nové zařízení vezme zpět', [$mc_threw, $mc_assets() - $mc_before, $pdo->inTransaction()], [true, 0, false]);
+    // In the caller's transaction it is a part of that one.
+    $pdo->beginTransaction();
+    $mc_in = bk_monitor_create($pdo, ['name' => 'MC v transakci', 'type' => 'web', 'target' => 'https://mc4.example.org']);
+    $mc_open = $pdo->inTransaction();
+    $pdo->rollBack();
+    check('v transakci volajícího nic sám nepotvrdí', [
+        $mc_open, (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE id = {$mc_in['id']}")->fetchColumn(),
+        (int)$pdo->query("SELECT COUNT(*) FROM assets WHERE id = {$mc_in['asset_id']}")->fetchColumn(),
+    ], [true, 0, 0]);
+
+    // save_monitor: a refused save, a failed one and a failed edit leave no device behind.
+    $mc_before = $mc_assets();
+    [$mc_c1] = api_post($base, 'action=save_monitor', ['name' => 'MC heartbeat bez intervalu', 'type' => 'heartbeat', 'new_asset_name' => 'MC sirotek'], $cookie_jar);
+    [$mc_c2] = api_post($base, 'action=save_monitor', ['name' => 'MC selže přes API', 'type' => 'web', 'target' => 'https://mc5.example.org',
+        'new_asset_name' => 'MC sirotek'], $cookie_jar);
+    [$mc_c3] = api_post($base, 'action=save_monitor', ['id' => $mc_named['id'], 'name' => 'MC selže úprava', 'type' => 'web',
+        'target' => 'https://mc2.example.org', 'new_asset_name' => 'MC sirotek'], $cookie_jar);
+    check('odmítnuté, nezdařené i nezdařená úprava nenechají prázdné zařízení', [$mc_c1, $mc_c2, $mc_c3, $mc_assets() - $mc_before], [400, 500, 500, 0]);
+    [$mc_c4, $mc_saved] = api_post($base, 'action=save_monitor', ['name' => 'MC přes API', 'type' => 'web', 'target' => 'https://mc6.example.org',
+        'new_asset_name' => 'MC nové zařízení', 'is_public' => false], $cookie_jar);
+    $mc_r = $mc_row((int)($mc_saved['id'] ?? 0));
+    check('save_monitor: nové zařízení, výchozí prahy i přepínač jdou s řádkem', [$mc_c4, $mc_r['asset_name'] ?? null, $mc_limits($mc_r),
+        isset($mc_r['is_public']) ? (int)$mc_r['is_public'] : null], [200, 'MC nové zařízení', [90, 95, 90], 0]);
+    [$mc_c5] = api_post($base, 'action=save_monitor', ['id' => $mc_named['id'], 'name' => 'MC jméno', 'type' => 'web',
+        'target' => 'https://mc2.example.org', 'new_asset_name' => 'MC přesun'], $cookie_jar);
+    check('úprava s novým zařízením monitor do něj přesune', [$mc_c5, $mc_row($mc_named['id'])['asset_name'] ?? null], [200, 'MC přesun']);
+
+    // The discovery import without a discovering monitor: a device of its own.
+    [$mc_c6, $mc_imp] = api_post($base, 'action=import_discovered_service', ['name' => 'MC objevená služba', 'type' => 'web',
+        'target' => 'https://mc7.example.org'], $cookie_jar);
+    $mc_r = $mc_row((int)($mc_imp['id'] ?? 0));
+    check('import objevené služby: vlastní zařízení, výchozí prahy, assetId v odpovědi', [$mc_c6, $mc_r['asset_name'] ?? null, $mc_limits($mc_r),
+        (int)($mc_imp['assetId'] ?? 0) === (int)($mc_r['asset_id'] ?? -1)], [200, 'MC objevená služba', [90, 95, 90], true]);
+
+    // admin.php's import through its form: the limits are BK_DEFAULT_THRESHOLDS
+    // now (R240), and an import without a name makes no device.
+    $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('setup_completed', '1') ON DUPLICATE KEY UPDATE key_value = '1'");
+    $mc_c7 = $mc_admin_post(['action_import_service' => '1', 'service_name' => 'MC import z administrace', 'service_type' => 'port',
+        'service_port' => '8443', 'service_target' => 'mc8.example.org']);
+    $mc_r = $mc_row((int)$pdo->query("SELECT MAX(id) FROM monitors WHERE name = 'MC import z administrace'")->fetchColumn());
+    check('import v admin.php: RAM 95 a disk 90, ne prohozené, a vlastní zařízení', [$mc_c7, $mc_limits($mc_r), $mc_r['asset_name'] ?? null],
+        [200, [90, 95, 90], 'MC import z administrace']);
+    $mc_before = $mc_assets();
+    $mc_admin_post(['action_import_service' => '1', 'service_name' => '', 'service_type' => 'web']);
+    check('import v admin.php bez jména zařízení nezaloží', $mc_assets() - $mc_before, 0);
+} finally {
+    $pdo->exec("DROP TRIGGER IF EXISTS mc_create_fail");
+    $pdo->exec("DROP TRIGGER IF EXISTS mc_update_fail");
+    $mc_gone = $pdo->query("SELECT DISTINCT asset_id FROM monitors WHERE name LIKE 'MC %' AND asset_id IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
+    $pdo->exec("DELETE FROM monitors WHERE name LIKE 'MC %'");
+    $pdo->exec("DELETE FROM assets WHERE name LIKE 'MC %'");
+    // The digest of a later block lists the events by name.
+    $pdo->exec("DELETE FROM monitor_events WHERE monitor_name LIKE 'MC %'");
+    foreach ($mc_gone as $mc_asset) {
+        $pdo->prepare("DELETE FROM assets WHERE id = ? AND NOT EXISTS (SELECT 1 FROM monitors WHERE asset_id = ?)")->execute([$mc_asset, $mc_asset]);
+    }
+    if ($mc_setup === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'setup_completed'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'setup_completed'")->execute([$mc_setup]);
+    }
+}
+
+
+// Settings load once at startup into the `$system_settings` global (db.php)
+// and get_setting() reads from there. A database write alone therefore changes
+// nothing - fine in cron, which starts with fresh values, but the test changes
+// settings at runtime and must refresh the global itself.
+$set_setting = function (string $key, string $value) use ($pdo) {
+    $stmt = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+    $stmt->execute([$key, $value]);
+    $GLOBALS['system_settings'] = get_settings($pdo);
+};
+
+$pdo->exec("INSERT INTO incidents (id, title, impact, status, monitor_id, created_at)
+            VALUES (910, 'Výpadek: nepřevzatý', 'major', 'investigating', 1, DATE_SUB(NOW(), INTERVAL 40 MINUTE))");
+$pdo->exec("INSERT INTO incidents (id, title, impact, status, monitor_id, created_at, acknowledged_at, acknowledged_by)
+            VALUES (911, 'Výpadek: převzatý', 'major', 'investigating', 1, DATE_SUB(NOW(), INTERVAL 40 MINUTE), DATE_SUB(NOW(), INTERVAL 35 MINUTE), 'admin')");
+
+$esc_state = fn(int $id) => $pdo->query("SELECT escalated_at FROM incidents WHERE id = {$id}")->fetchColumn();
+
+// --- Disabled escalation does nothing ---
+$set_setting('escalation_enabled', '0');
+$res = bk_process_escalations($pdo);
+check('vypnutá eskalace nic nekontroluje', $res['checked'], 0);
+check_true('a nic neorazítkuje', $esc_state(910) === null);
+
+// --- Enabled, but without a channel ---
+// The stamp must not be set: the incident would look escalated and never speak
+// up once a channel was added. A silent failure exactly where the safety net
+// fungovat.
+$set_setting('escalation_enabled', '1');
+$set_setting('escalation_after_mins', '15');
+$set_setting('escalation_webhook_url', '');
+$res = bk_process_escalations($pdo);
+check_true('bez kanálu se incident započítá jako čekající', $res['skipped_no_channel'] >= 1);
+// R102: a stored 0 left the switch on and nothing ever overdue.
+$set_setting('escalation_after_mins', '0');
+$res = bk_process_escalations($pdo);
+check_true('uložená nula eskalaci tiše nevypne', $res['skipped_no_channel'] >= 1);
+$set_setting('escalation_after_mins', '15');
+foreach (['0', '', '-5', '1.5', 'hodina'] as $ea_bad) {
+    [$ea_code, $ea_res] = api_post($base, 'action=save_settings', ['settings' => ['escalation_after_mins' => $ea_bad]], $cookie_jar);
+    check("save_settings odmítne lhůtu '{$ea_bad}'", [$ea_code, $ea_res['invalidKeys'] ?? null, $pdo->query("SELECT key_value FROM settings WHERE key_name = 'escalation_after_mins'")->fetchColumn()],
+        [400, ['escalation_after_mins'], '15']);
+}
+check('bez kanálu se nic neodešle', $res['escalated'], 0);
+check_true('bez kanálu incident zůstává neorazítkovaný', $esc_state(910) === null);
+
+// R7: a failed lookup used to answer "Praha, CZ", and that went into every row.
+$loc_proxy = getenv('http_proxy');
+putenv('http_proxy=http://127.0.0.1:1');
+check('nedostupná geolokace nic nevymyslí', detect_server_location(), null);
+putenv($loc_proxy === false ? 'http_proxy' : "http_proxy={$loc_proxy}");
+$loc_asked = 0;
+$loc_ok = function () use (&$loc_asked): ?string {
+    $loc_asked++;
+    return '🇩🇪 Frankfurt, DE (Example)';
+};
+$loc_fail = function () use (&$loc_asked): ?string {
+    $loc_asked++;
+    return null;
+};
+bk_setting_set($pdo, 'cron_location', 'Ruční místo');
+bk_setting_set($pdo, 'ip_loc_local', '');
+check('ručně nastavená lokalita má přednost a nikoho se neptá', [bk_check_location($pdo, $loc_ok), $loc_asked], ['Ruční místo', 0]);
+bk_setting_set($pdo, 'cron_location', 'AUTO');
+bk_setting_set($pdo, 'ip_loc_local', '🇨🇿 Praha, CZ');
+check('dřív vymyšlená Praha se bere jako neznámá', [bk_known_hub_location(), bk_check_location($pdo, $loc_ok), $loc_asked, get_setting('ip_loc_local')],
+    ['', '🇩🇪 Frankfurt, DE (Example)', 1, '🇩🇪 Frankfurt, DE (Example)']);
+check('zjištěná lokalita se už znovu nezjišťuje', [bk_check_location($pdo, $loc_ok), $loc_asked], ['🇩🇪 Frankfurt, DE (Example)', 1]);
+bk_setting_set($pdo, 'ip_loc_local', '');
+check('selhání dá štítek, který regiony vynechávají, a nic neuloží', [bk_check_location($pdo, $loc_fail), get_setting('ip_loc_local', '')], ['Main Server', '']);
+$loc_asked = 0;
+check('selhání se v jednom běhu podruhé nezkouší', [bk_check_location($pdo, $loc_fail), $loc_asked], ['Main Server', 0]);
+bk_setting_set($pdo, 'cron_location', '');
+
+// --- A channel that refuses ---
+// A dead webhook used to get the stamp anyway: the incident never escalated
+// again, cron reported it escalated and no log showed the refusal. An unknown
+// action on our own test server answers 400, at once and every time.
+$esc_rows = fn(string $delivery) => (int)$pdo->query("SELECT COUNT(*) FROM notification_log
+    WHERE kind = 'escalation' AND channel = 'escalation_webhook' AND delivery = '{$delivery}'")->fetchColumn();
+$set_setting('escalation_webhook_url', $base . '/api.php?action=bk_eskalace_neexistuje');
+check_true('na eskalaci čekají aspoň dva incidenty', (int)$pdo->query("SELECT COUNT(*) FROM incidents
+    WHERE status != 'resolved' AND acknowledged_at IS NULL AND escalated_at IS NULL
+      AND created_at <= DATE_SUB(NOW(), INTERVAL 15 MINUTE)")->fetchColumn() >= 2);
+$res = bk_process_escalations($pdo);
+check('odmítnutá eskalace se nepočítá jako eskalovaná', $res['escalated'], 0);
+check('ale jako selhání, i s důvodem', [$res['failed'], $res['unknown'], $res['error']], [1, 0, 'HTTP 400']);
+// Incidents go by id, so the one refused is the RSS seed 902, not 910. The
+// log row names it, so a change of order fails here instead of making the
+// stamp check below look at an incident nobody tried.
+check('v protokolu je odmítnutý incident i důvod',
+    $pdo->query("SELECT subject, error_message FROM notification_log
+                 WHERE kind = 'escalation' AND delivery = 'failed'")->fetch(PDO::FETCH_NUM),
+    ['Výpadek: Router bez metrik', 'HTTP 400']);
+check_true('odmítnutý incident razítko nedostane', $esc_state(902) === null);
+// After the refusal the rest (910) wait for the next run instead of each
+// paying for the same dead URL.
+check('odmítnutí je v protokolu jednou za běh', $esc_rows('failed'), 1);
+check_true('zbylé incidenty počkají bez razítka na další běh', $esc_state(910) === null);
+// The log row is all that shows a dead escalation webhook in /app: the
+// delivery health reads its kind, otherwise only cron's output would say so.
+$esc_health = function () use ($base, $cookie_jar): array {
+    [$code, $nh] = api_get_auth($base, 'action=notification_health', $cookie_jar);
+    $p = array_values(array_filter($nh['problems'] ?? [], fn($p) => ($p['channel'] ?? '') === 'escalation_webhook'))[0] ?? [];
+    return [$code, $p['state'] ?? null, $p['lastReason'] ?? null];
+};
+check('odmítající eskalační webhook ukáže stav doručování i s důvodem', $esc_health(), [200, 'failed', 'HTTP 400']);
+
+// --- With a channel ---
+// The webhook targets our own test server: what is verified is the database
+// write, not delivery to Discord. It is also the retry of the refused run.
+$set_setting('escalation_webhook_url', $base . '/api.php?action=ui_config');
+$res = bk_process_escalations($pdo);
+// A specific incident is checked, not a sum: the database has more open
+// incidents (the RSS seed) and a count-based test would crack on every
+// test-data change.
+check_true('nepřevzatý incident eskaluje', $res['escalated'] >= 1);
+check_true('a dostane razítko', $esc_state(910) !== null);
+check_true('odmítnutý incident razítko dostane při dalším běhu', $esc_state(902) !== null);
+check_true('převzatý incident razítko nedostane', $esc_state(911) === null);
+check('bez selhání a bez nejistoty', [$res['failed'], $res['unknown']], [0, 0]);
+check_true('přijatá eskalace je v protokolu jako odeslaná', $esc_rows('sent') >= 1);
+
+// --- Repetition ---
+$res = bk_process_escalations($pdo);
+check('podruhé už se stejný incident neeskaluje', $res['escalated'], 0);
+
+// --- A channel that takes the message and never answers ---
+// The first one is stamped as `unknown`, since the endpoint may have posted
+// it. The run used to go on, so a stalled endpoint made every further due
+// incident sit out the timeout and get a stamp nobody confirmed. The fake
+// endpoint reads the request and hangs up without an answer: the same
+// verdict as a timeout after the body left, without the 5 s wait.
+$pdo->exec("INSERT INTO incidents (id, title, impact, status, monitor_id, created_at)
+            VALUES (912, 'Výpadek: bez odpovědi první', 'major', 'investigating', 1, DATE_SUB(NOW(), INTERVAL 30 MINUTE)),
+                   (913, 'Výpadek: bez odpovědi druhý', 'major', 'investigating', 1, DATE_SUB(NOW(), INTERVAL 30 MINUTE))");
+$esc_silent = proc_open([PHP_BINARY, __DIR__ . '/fixtures/webhook_no_answer_server.php'], [1 => ['pipe', 'w']], $esc_silent_pipes);
+$esc_silent_port = is_resource($esc_silent) ? (int)fgets($esc_silent_pipes[1]) : 0;
+check_true('webhook bez odpovědi naslouchá', $esc_silent_port > 0);
+try {
+    $set_setting('escalation_webhook_url', "http://127.0.0.1:{$esc_silent_port}/hook");
+    $res = bk_process_escalations($pdo);
+    check('bez odpovědi po odeslání se neví: ani eskalováno, ani selhání',
+        [$res['escalated'], $res['failed'], $res['unknown']], [0, 0, 1]);
+    check_true('nepotvrzený incident razítko dostane, aby neodcházel každou minutu', $esc_state(912) !== null);
+    check('nepotvrzené odeslání je v protokolu jednou za běh', $esc_rows('unknown'), 1);
+    check_true('zbylé incidenty na mlčící webhook nečekají a počkají na další běh', $esc_state(913) === null);
+    check('mlčící eskalační webhook ukáže stav doručování jako nepotvrzený', array_slice($esc_health(), 0, 2), [200, 'unknown']);
+} finally {
+    if (is_resource($esc_silent)) {
+        proc_terminate($esc_silent);
+        proc_close($esc_silent);
+    }
+}
+$set_setting('escalation_webhook_url', $base . '/api.php?action=ui_config');
+bk_process_escalations($pdo);
+check('počkaný incident odejde při dalším běhu, tentokrát potvrzeně',
+    $pdo->query("SELECT delivery FROM notification_log
+                 WHERE kind = 'escalation' AND subject = 'Výpadek: bez odpovědi druhý'")->fetchAll(PDO::FETCH_COLUMN),
+    ['sent']);
+check_true('a teprve pak dostane razítko', $esc_state(913) !== null);
+
+$set_setting('escalation_enabled', '0');
+$pdo->exec("DELETE FROM incidents WHERE id IN (912, 913)");
+// The section on the outgoing message log below counts the rows of monitor 1.
+$pdo->exec("DELETE FROM notification_log WHERE kind = 'escalation'");
+
+// =======================================================================
+// 11. Endpoints that were missing while calls to them silently fell through
+// =======================================================================
+//
+// api.php used to answer an unknown action with the default service overview
+// and a 200, so calling a nonexistent endpoint looked like success. These tests
+// guard both: that the guard rejects an unknown action and that the missing
+// endpoints really exist and do something.
+[$code, $unknown] = api_get($base, 'action=rozhodne_neexistujici_akce');
+check('neznámá akce vrací 400, ne tiché 200', $code, 400);
+check_true('a řekne, co je špatně', str_contains((string)($unknown['error'] ?? ''), 'Neznámá akce'));
+// bk_api_error() and bk_api_json() answer these now: over HTTP the body is
+// still exactly the bytes the http_response_code() + echo json_encode() pair sent.
+[$code, , $raw] = bk_raw_request($base . '/api.php?action=rozhodne_neexistujici_akce');
+check('chyba přes HTTP: bajty stejné jako dřív', [$code, $raw], [400, '{"error":"Neznámá akce „rozhodne_neexistujici_akce\\"."}']);
+[$code, , $raw] = bk_raw_request($base . '/api.php?action=incident_action');
+check('405 přes HTTP: bajty stejné jako dřív', [$code, $raw], [405, '{"error":"Vyžadován POST."}']);
+// These handlers checked the method once more themselves, login and forgot
+// password with bodies of their own. The guard at the top of api.php answers
+// every GET of them first, so those checks never ran and are gone.
+$m4_get = [];
+foreach (['login', 'update_profile', 'oauth_link_start', 'oauth_unlink', 'set_password', 'totp_setup', 'totp_confirm', 'totp_disable',
+    'totp_recovery_regenerate', 'forgot_password', 'setup'] as $m4_action) {
+    [$code, , $raw] = bk_raw_request($base . '/api.php?action=' . $m4_action);
+    if ([$code, $raw] !== [405, '{"error":"Vyžadován POST."}']) {
+        $m4_get[] = "{$m4_action}: {$code} {$raw}";
+    }
+}
+check('GET na akce, které si metodu hlídaly samy, odmítne už společná stráž', $m4_get, []);
+[$code, , $raw] = bk_raw_request($base . '/api.php?action=login', ['Content-Type: application/json'], '{"username":"nikdo_takovy","password":"x"}');
+check('špatné heslo přes HTTP: bajty stejné jako dřív', [$code, $raw], [401, '{"success":false,"message":"Invalid username or password."}']);
+$pdo->exec("DELETE FROM audit_log WHERE action = 'login_failed' AND actor_username = 'nikdo_takovy'");
+
+// An empty action still answers as action=portal_status (the game portal),
+// until the portal asks for it by name.
+[$code] = api_get($base, '');
+check('prázdná akce dál vrací přehled pro herní portál', $code, 200);
+
+// --- Export CSV ---------------------------------------------------------
+[$csv_anon_code] = api_get($base, 'action=export_csv&monitor_id=1');
+check('anonym export historie nedostane', $csv_anon_code, 401);
+$csv_ch = curl_init($base . '/api.php?action=export_csv&monitor_id=1');
+curl_setopt_array($csv_ch, [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_TIMEOUT => 15,
+    CURLOPT_HEADER => true,
+    CURLOPT_COOKIEFILE => $cookie_jar,
+]);
+$csv_raw = (string)curl_exec($csv_ch);
+$csv_code = (int)curl_getinfo($csv_ch, CURLINFO_RESPONSE_CODE);
+$csv_body = substr($csv_raw, curl_getinfo($csv_ch, CURLINFO_HEADER_SIZE));
+check('export CSV vrací 200', $csv_code, 200);
+check_true('CSV se posílá ke stažení', str_contains($csv_raw, 'text/csv') && str_contains($csv_raw, 'attachment'));
+check_true('CSV má hlavičku sloupců', str_contains($csv_body, 'Stav') && str_contains($csv_body, 'Odezva'));
+// The export is only for accounts that see the monitor, so the error texts go with it.
+check_true('export nese sloupec s chybami', str_contains($csv_body, 'Chybová hláška'));
+
+[$csv_missing_code] = api_get_auth($base, 'action=export_csv&monitor_id=999999', $cookie_jar);
+check('export neexistujícího monitoru vrací 404', $csv_missing_code, 404);
+
+// --- Chart annotations ---------------------------------------------------
+if (!empty($cookie_jar)) {
+    [$code, $ann] = api_post($base, 'action=save_annotation', [
+        'monitor_id' => 1,
+        'metric_key' => 'response_time',
+        'timestamp' => date('Y-m-d H:i:s'),
+        'note' => 'Nasazena nová verze',
+    ], $cookie_jar);
+    check('poznámka se uloží', $code, 200);
+    check_true('a vrátí své id', (int)($ann['id'] ?? 0) > 0);
+
+    // The metric_annotations table stayed empty for years precisely because the
+    // endpoint was missing and the note was silently dropped.
+    $ann_count = (int)$pdo->query("SELECT COUNT(*) FROM metric_annotations")->fetchColumn();
+    check_true('poznámka je opravdu v databázi', $ann_count > 0);
+
+    [$code] = api_post($base, 'action=save_annotation', [
+        'monitor_id' => 1,
+        'metric_key' => 'response_time',
+        'note' => '',
+    ], $cookie_jar);
+    check('poznámka bez textu je odmítnuta', $code, 400);
+
+    [$code, $ann_list] = api_get_auth($base, 'action=annotations&monitor_id=1&metric=response_time', $cookie_jar);
+    check('načtení poznámek vrací 200', $code, 200);
+    check_true('a obsahuje uloženou poznámku', str_contains(json_encode($ann_list, JSON_UNESCAPED_UNICODE), 'Nasazena nová verze'));
+
+    // Operational notes are not for the public.
+    [, $anon_ann] = api_get($base, 'action=annotations&monitor_id=1&metric=response_time');
+    check('anonym poznámky nevidí', $anon_ann['annotations'] ?? null, []);
+
+    [$anon_save_code] = api_post($base, 'action=save_annotation', [
+        'monitor_id' => 1, 'metric_key' => 'cpu', 'timestamp' => date('Y-m-d H:i:s'), 'note' => 'pokus',
+    ], tempnam(sys_get_temp_dir(), 'bk_anon'));
+    check('anonym poznámku neuloží', $anon_save_code, 403);
+
+    // Deleting a note. The whole point of the delete endpoint is that a wrong
+    // note can be taken back - a note is a claim, and a false claim next to a
+    // chart is worse than no note.
+    //
+    // The returned id has to be the note's own. It used to be read after
+    // bk_audit_log(), so lastInsertId() reported the audit row instead - which
+    // stayed invisible for as long as nobody used the id for anything.
+    $ann_del_id = (int)($ann['id'] ?? 0);
+    $ann_real_id = (int)$pdo->query("SELECT id FROM metric_annotations ORDER BY id DESC LIMIT 1")->fetchColumn();
+    check('uložení vrací id poznámky, ne cizího řádku', $ann_del_id, $ann_real_id);
+
+    // Authorisation, not just the CSRF guard: a logged-in non-admin carries a
+    // valid token, so this is the only probe that reaches the role check. An
+    // anonymous attempt is stopped one layer earlier and proves nothing about
+    // the role. The account is created here because the shared one from the
+    // user-management block above has been deleted by its own test by now.
+    $ann_pw_hash = password_hash('PoznamkyTest123!', PASSWORD_BCRYPT);
+    $pdo->prepare("INSERT INTO users (username, email, password_hash, role) VALUES ('ann_tester', 'ann@example.com', ?, 'user')")
+        ->execute([$ann_pw_hash]);
+    $ann_jar = tempnam(sys_get_temp_dir(), 'bk_test_ann');
+    [, $ann_login] = api_post($base, 'action=login', ['username' => 'ann_tester', 'password' => 'PoznamkyTest123!'], $ann_jar, '');
+    $ann_user_csrf = (string)($ann_login['csrfToken'] ?? '');
+    check_true('běžný uživatel se přihlásí (jinak by test roli nikdy neprověřil)', $ann_user_csrf !== '');
+    [$user_del_code] = api_post($base, 'action=delete_annotation', ['id' => $ann_del_id], $ann_jar, $ann_user_csrf);
+    check('běžný uživatel poznámku nesmaže', $user_del_code, 403);
+    [$user_save_code] = api_post($base, 'action=save_annotation', [
+        'monitor_id' => 1, 'metric_key' => 'cpu', 'timestamp' => date('Y-m-d H:i:s'), 'note' => 'nesmí projít',
+    ], $ann_jar, $ann_user_csrf);
+    check('běžný uživatel poznámku ani nezaloží', $user_save_code, 403);
+    @unlink($ann_jar);
+
+    [$anon_del_code] = api_post($base, 'action=delete_annotation', ['id' => $ann_del_id], tempnam(sys_get_temp_dir(), 'bk_anon'));
+    check('anonym poznámku nesmaže', $anon_del_code, 403);
+    check_true(
+        'a poznámka po všech pokusech pořád existuje',
+        (int)$pdo->query("SELECT COUNT(*) FROM metric_annotations WHERE id = {$ann_del_id}")->fetchColumn() === 1
+    );
+
+    // The account leaves no trace behind - a later test asserts the exact
+    // number of accounts, and a leftover here would fail it from a distance.
+    $pdo->exec("DELETE FROM users WHERE username = 'ann_tester'");
+
+    [$del_code] = api_post($base, 'action=delete_annotation', ['id' => $ann_del_id], $cookie_jar);
+    check('admin poznámku smaže', $del_code, 200);
+    check_true(
+        'a v databázi po ní nic nezůstalo',
+        (int)$pdo->query("SELECT COUNT(*) FROM metric_annotations WHERE id = {$ann_del_id}")->fetchColumn() === 0
+    );
+
+    [$del_missing_code] = api_post($base, 'action=delete_annotation', ['id' => 999999], $cookie_jar);
+    check('smazání neexistující poznámky vrací 404', $del_missing_code, 404);
+}
+
+// --- Metric heatmap (hour x day) -----------------------------------------
+//
+// The grid must be dense and honest: every one of the requested days, all 24
+// hours, and an hour with no sample stays null. A zero there would repaint a
+// sleeping agent as an idle server.
+[$hm_code, $hm] = api_get_auth($base, 'action=metric_heatmap&monitor_id=1&metric=response_time&days=3', $cookie_jar);
+check('metric_heatmap vrací 200', $hm_code, 200);
+check_true('vrací mřížku dní', is_array($hm['days'] ?? null));
+check('a přesně tolik dní, kolik se žádalo', count($hm['days'] ?? []), 3);
+if (!empty($hm['days'])) {
+    $hm_first = $hm['days'][0];
+    check('každý den má 24 hodin', count($hm_first['hours'] ?? []), 24);
+    check('a stejný počet údajů o vzorcích', count($hm_first['samples'] ?? []), 24);
+    check_true('den je datum ve tvaru YYYY-MM-DD', (bool)preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)($hm_first['day'] ?? '')));
+
+    // Honesty: an hour without measurements is null, never 0. Verified against
+    // the sample count, which is the server's own record of what it measured.
+    $hm_zero_faked = false;
+    foreach ($hm['days'] as $hm_day) {
+        foreach ($hm_day['hours'] as $hm_i => $hm_val) {
+            if (($hm_day['samples'][$hm_i] ?? 0) === 0 && $hm_val !== null) {
+                $hm_zero_faked = true;
+            }
+        }
+    }
+    check_false('hodina bez vzorků nemá vymyšlenou hodnotu', $hm_zero_faked);
+
+    $hm_days_seen = array_column($hm['days'], 'day');
+    check_true('dny jdou vzestupně a nic se neopakuje', $hm_days_seen === array_unique($hm_days_seen) && $hm_days_seen === (function ($d) { sort($d); return $d; })($hm_days_seen));
+}
+
+// The window is capped at the raw-sample retention - a longer request must not
+// silently answer with a shorter window pretending to be the requested one.
+[, $hm_cap] = api_get_auth($base, 'action=metric_heatmap&monitor_id=1&metric=response_time&days=365', $cookie_jar);
+check('delší okno než retence se ořízne na 30 dní', count($hm_cap['days'] ?? []), 30);
+
+[, $hm_unknown] = api_get_auth($base, 'action=metric_heatmap&monitor_id=1&metric=neexistujici_metrika', $cookie_jar);
+check_true('neznámá metrika se přizná chybou', ($hm_unknown['error'] ?? '') !== '' && ($hm_unknown['days'] ?? null) === []);
+
+// --- Correlations between metrics (metric_correlations) -------------------
+//
+// Its own monitor with a known shape: CPU rises, iowait rises with it, RAM
+// falls against it, and swap never moves. Deliberately not monitor 1 or 2 -
+// those carry fixtures other tests assert on, and adding rows there would
+// break them from a distance.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category)
+            VALUES (90, 'Korelační fixture', 'vps', '10.0.0.90', 'up', 'Test')");
+for ($i = 0; $i < 30; $i++) {
+    $cpu = 10 + $i * 2;
+    $iow = 5 + $i;            // rises with CPU - correlation near +1
+    $ram = 90 - $i * 2;       // falls against it - correlation near -1
+    // A weak positive one on purpose: with only |r| = 1 values in the fixture,
+    // ordering by strength and ordering by signed value look identical, and a
+    // test cannot tell a correct sort from a broken one.
+    $temp = 40 + $i * 0.4 + ($i % 6) * 6;   // r about +0.48
+    $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, iowait_pct, ram_usage, swap_usage, temperature_c, checked_at)
+                VALUES (90, {$cpu}, {$iow}, {$ram}, 0, {$temp}, DATE_SUB(NOW(), INTERVAL " . (30 - $i) . " MINUTE))");
+}
+
+[$corr_code, $corr] = api_get_auth($base, 'action=metric_correlations&monitor_id=90&metric=cpu&period=24h', $cookie_jar);
+check('metric_correlations vrací 200', $corr_code, 200);
+check('a počítá ze všech vzorků', $corr['samples'] ?? 0, 30);
+
+$by_key = [];
+foreach ($corr['correlations'] ?? [] as $c) {
+    $by_key[$c['key']] = $c;
+}
+check_true('metrika rostoucí s cílem má korelaci blízko +1', ($by_key['iowait']['r'] ?? 0) > 0.98);
+check_true('metrika klesající proti cíli má korelaci blízko -1', ($by_key['ram']['r'] ?? 0) < -0.98);
+
+// A metric below the top-N cut looked simply absent ("where is IPv4?"), so
+// all=1 has to return every comparison there is.
+[, $corr_all] = api_get_auth($base, 'action=metric_correlations&monitor_id=90&metric=cpu&period=24h&all=1', $cookie_jar);
+check_true(
+    'all=1 vrací víc než zkrácený seznam',
+    count($corr_all['correlations'] ?? []) >= count($corr['correlations'] ?? [])
+);
+check_true(
+    'a nezamlčí ani jednu porovnávanou metriku',
+    count($corr_all['correlations'] ?? []) === (int)($corr_all['total'] ?? -1)
+);
+
+// The rule that matters most here: a metric that never moved has no
+// correlation to report. A zero would claim the two are unrelated.
+check_true('neměnná metrika nemá koeficient', array_key_exists('swap', $by_key) && $by_key['swap']['r'] === null);
+check('a přizná, že je konstantní', $by_key['swap']['reason'] ?? '', 'constant');
+
+// Ordering is by strength in either direction, so the strongest relationship
+// is the first thing read - a strong negative one must not sink below a weak
+// positive one.
+$first = $corr['correlations'][0] ?? null;
+check_true('nejsilnější vztah je první', $first !== null && abs($first['r'] ?? 0) > 0.98);
+check_true('slabší kladná korelace se spočítá', ($by_key['temperature_c']['r'] ?? 0) > 0.3 && ($by_key['temperature_c']['r'] ?? 1) < 0.7);
+// The point of ordering by |r|: a strong negative relationship must outrank a
+// weak positive one, not sink below it.
+$pos_ram = array_search('ram', array_column($corr['correlations'], 'key'), true);
+$pos_temp = array_search('temperature_c', array_column($corr['correlations'], 'key'), true);
+check_true('silná záporná korelace je před slabou kladnou', $pos_ram !== false && $pos_temp !== false && $pos_ram < $pos_temp);
+$r_values = array_map(fn($c) => $c['r'] === null ? -1 : abs($c['r']), $corr['correlations'] ?? []);
+$r_sorted = $r_values;
+rsort($r_sorted);
+check_true('a pořadí je podle síly bez ohledu na znaménko', $r_values === $r_sorted);
+
+// The target must not be correlated with itself, nor with an alias reading
+// the same column - a guaranteed 1.0 that says nothing.
+check_false('cílová metrika není ve vlastním seznamu', array_key_exists('cpu', $by_key));
+
+[, $corr_rt] = api_get_auth($base, 'action=metric_correlations&monitor_id=90&metric=response_time', $cookie_jar);
+check_true(
+    'metrika mimo vps_metrics se odmítne s vysvětlením',
+    ($corr_rt['error'] ?? '') !== '' && ($corr_rt['correlations'] ?? null) === []
+);
+
+// A monitor whose agent never reported anything has no rows to correlate -
+// and must not invent a list of zeroes.
+[, $corr_empty] = api_get_auth($base, 'action=metric_correlations&monitor_id=1&metric=cpu', $cookie_jar);
+check('bez naměřených dat je seznam prázdný', $corr_empty['correlations'] ?? null, []);
+check('a přiznaný počet vzorků je nula', $corr_empty['samples'] ?? -1, 0);
+
+// The fixture leaves no trace - later tests count monitors and would fail
+// from a distance over a leftover row.
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 90");
+$pdo->exec("DELETE FROM monitors WHERE id = 90");
+
+// --- Alert subscriptions of the account ----------------------------------
+//
+// An administrator is always an alert recipient: without a user_subscriptions
+// row the monitor's own switch decides. The form showed that as 0, and saving
+// it after ticking one SMS box wrote email=0 for every listed monitor - outage
+// e-mails stopped without a word.
+$pdo->exec("DELETE FROM user_subscriptions WHERE user_id = 1");
+$gsub_wa_before = $pdo->query("SELECT whatsapp_notifications FROM users WHERE id = 1")->fetchColumn();
+$pdo->exec("UPDATE users SET whatsapp_notifications = 1 WHERE id = 1");
+[$gsub_code, $gsub] = api_get_auth($base, 'action=get_subscriptions', $cookie_jar);
+check('get_subscriptions vrací 200', $gsub_code, 200);
+$gsub_rows = $gsub['subscriptions'] ?? [];
+$gsub_by_id = array_column($gsub_rows, null, 'id');
+check('admin bez odběru vidí e-mail, který mu opravdu chodí', $gsub_by_id[1]['email'] ?? null, 1);
+check('a u druhého monitoru také', $gsub_by_id[2]['email'] ?? null, 1);
+check('SMS ukazuje přepínač monitoru', $gsub_by_id[1]['sms'] ?? null, 0);
+check('WhatsApp ukazuje přepínač profilu', $gsub_by_id[1]['whatsapp'] ?? null, 1);
+// The alert reads the rule the form shows, here on MySQL: bk_alert_audience()
+// gives the administrator exactly these channels for both monitors.
+$gsub_channels = fn (int $mid): array => array_intersect_key($gsub_by_id[$mid] ?? [], ['email' => 1, 'sms' => 1, 'whatsapp' => 1]);
+$gsub_aud = array_column(bk_alert_audience($pdo, [1, 2]), 'monitors', 'id')[1] ?? [];
+check('výstraha čte stejné kanály, jaké formulář ukazuje', [$gsub_aud[1] ?? null, $gsub_aud[2] ?? null],
+    [$gsub_channels(1), $gsub_channels(2)]);
+// A user hears about a monitor only with a subscription AND access to it.
+$pdo->prepare("INSERT INTO users (username, email, password_hash, role) VALUES ('aud_tester', 'aud@example.com', ?, 'user')")
+    ->execute([password_hash('PrijemciTest123!', PASSWORD_BCRYPT)]);
+$aud_uid = (int)$pdo->lastInsertId();
+$aud_hears = fn (): bool => in_array($aud_uid, array_column(bk_alert_audience($pdo, [1]), 'id'), true);
+$pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications) VALUES ({$aud_uid}, 1, 1)");
+check_false('odběr bez přístupu k monitoru: o výpadku nic', $aud_hears());
+$pdo->exec("INSERT INTO monitor_users (monitor_id, user_id) VALUES (1, {$aud_uid})");
+check_true('s přístupem ano', $aud_hears());
+$pdo->exec("DELETE FROM user_subscriptions WHERE user_id = {$aud_uid}");
+check_false('přístup bez odběru: nic', $aud_hears());
+$pdo->exec("DELETE FROM monitor_users WHERE user_id = {$aud_uid}");
+$pdo->exec("DELETE FROM users WHERE id = {$aud_uid}");
+// The card posts every row back with what it showed; only monitor 1 changes.
+$gsub_save = function (int $sms, int $shown_sms) use ($base, $cookie_jar, $gsub_rows): int {
+    $rows = array_map(fn (array $r): array => [
+        'shown' => ['email' => $r['email'], 'sms' => $r['id'] === 1 ? $shown_sms : $r['sms'], 'whatsapp' => $r['whatsapp']],
+    ] + ($r['id'] === 1 ? ['sms' => $sms] + $r : $r), $gsub_rows);
+    [$code] = api_post($base, 'action=save_subscriptions', ['subscriptions' => $rows], $cookie_jar);
+    return $code;
+};
+$gsub_stored = fn (): array => array_map(
+    fn (array $r): array => array_map(fn ($v) => $v === null ? null : (int)$v, $r),
+    $pdo->query("SELECT monitor_id, email_notifications, sms_notifications, whatsapp_notifications FROM user_subscriptions WHERE user_id = 1 ORDER BY monitor_id")->fetchAll(PDO::FETCH_NUM)
+);
+$gsub_wa_now = fn (): int => (int)$pdo->query("SELECT COALESCE(s.whatsapp_notifications, u.whatsapp_notifications) FROM users u
+                                               LEFT JOIN user_subscriptions s ON s.user_id = u.id AND s.monitor_id = 2 WHERE u.id = 1")->fetchColumn();
+// The profile form on the same page switches WhatsApp off while the card
+// stays loaded. Comparing with the no-row values at save time pinned
+// whatsapp=1 for every monitor.
+$pdo->exec("UPDATE users SET whatsapp_notifications = 0 WHERE id = 1");
+check('save_subscriptions vrací 200', $gsub_save(1, 0), 200);
+check('řádek vznikne jen u změněného monitoru a nese jen SMS', $gsub_stored(), [[1, null, 1, null]]);
+check('e-mail o výpadku druhého monitoru adminovi chodí dál',
+    (int)$pdo->query("SELECT COALESCE(s.email_notifications, m.email_notifications) FROM monitors m
+                      LEFT JOIN user_subscriptions s ON s.user_id = 1 AND s.monitor_id = m.id WHERE m.id = 2")->fetchColumn(), 1);
+check('WhatsApp vypnutý v profilu po načtení formuláře se nepřipne', $gsub_wa_now(), 0);
+$pdo->exec("UPDATE users SET whatsapp_notifications = 1 WHERE id = 1");
+check('a zapnutý zase chodí', $gsub_wa_now(), 1);
+$gsub_save(0, 1);
+check('návrat k výchozím hodnotám řádek zase zruší', $gsub_stored(), []);
+// A bundle from before "shown" posts none. A tab opened before the deploy
+// showed the stored row and 0 for a monitor without one, so its unticked
+// e-mail was not a choice. Taking the alerts of now as what it showed pinned
+// email=0 and whatsapp=0 for every monitor at its first save.
+$gsub_old_tab = array_map(fn (array $r): array => [
+    'id' => $r['id'], 'name' => $r['name'], 'email' => 0, 'sms' => $r['id'] === 1 ? 1 : 0, 'whatsapp' => 0,
+], $gsub_rows);
+api_post($base, 'action=save_subscriptions', ['subscriptions' => $gsub_old_tab], $cookie_jar);
+check('starý formulář bez „shown“ uloží jen zaškrtnutou SMS', $gsub_stored(), [[1, null, 1, null]]);
+check('a e-mail druhého monitoru po uložení starým formulářem chodí dál',
+    (int)$pdo->query("SELECT COALESCE(s.email_notifications, m.email_notifications) FROM monitors m
+                      LEFT JOIN user_subscriptions s ON s.user_id = 1 AND s.monitor_id = m.id WHERE m.id = 2")->fetchColumn(), 1);
+$pdo->exec("DELETE FROM user_subscriptions WHERE user_id = 1");
+// The same old bundle whose card loaded after the deploy shows the values of
+// now; posted back unchanged they still pin nothing.
+api_post($base, 'action=save_subscriptions', ['subscriptions' => $gsub_rows], $cookie_jar);
+check('nezměněný formulář bez „shown“ nic nepřipne', $gsub_stored(), []);
+// R209: an archived monitor is not in the form, and saving it deleted the
+// account's row for it, so alerts about it stopped once it was restored.
+$pdo->exec("INSERT INTO user_subscriptions (user_id, monitor_id, email_notifications, sms_notifications) VALUES (1, 2, 1, 1)");
+$pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE id = 2");
+api_post($base, 'action=save_subscriptions', ['subscriptions' => array_values(array_filter($gsub_rows, fn (array $r): bool => $r['id'] !== 2))], $cookie_jar);
+$pdo->exec("UPDATE monitors SET archived_at = NULL WHERE id = 2");
+check('uložení formuláře nesmaže odběr archivovaného monitoru', $gsub_stored(), [[2, 1, 1, 0]]);
+$pdo->exec("DELETE FROM user_subscriptions WHERE user_id = 1");
+$pdo->exec("DELETE FROM user_subscriptions WHERE user_id = 1");
+$pdo->prepare("UPDATE users SET whatsapp_notifications = ? WHERE id = 1")->execute([$gsub_wa_before]);
+
+// --- Public e-mail subscriptions -----------------------------------------
+//
+// Double opt-in end-to-end: sign-up stores a row (nothing confirmed), the
+// confirmation token flips it, the unsubscribe token deletes it. Tokens are
+// injected via SQL - the raw ones live only in e-mails the test cannot read.
+[$pss_code, $pss] = api_post($base, 'action=public_subscribe', ['email' => 'navstevnik@example.com', 'lang' => 'cs'], $cookie_jar, '');
+check('public_subscribe vrací 200', $pss_code, 200);
+// The response carries nothing beyond success. It used to report an
+// `emailSent` flag for honesty about delivery, but only a not-yet-subscribed
+// address triggers a send, so that flag identified subscribers whenever
+// sending failed (2026-08-23 audit). Delivery problems now go to the server
+// log, where they belong.
+check('odpověď je konstantní a nic neprozrazuje', $pss, ['success' => true]);
+$pss_row = $pdo->query("SELECT confirmed_at, confirm_token_hash, unsubscribe_token FROM public_subscribers WHERE email = 'navstevnik@example.com'")->fetch();
+check_true('řádek vznikl a čeká na potvrzení', $pss_row !== false && $pss_row['confirmed_at'] === null);
+check_true('potvrzovací token je hash, odhlašovací raw', strlen((string)$pss_row['confirm_token_hash']) === 64 && strlen((string)$pss_row['unsubscribe_token']) === 48);
+
+[$pse_code] = api_post($base, 'action=public_subscribe', ['email' => 'neni-email'], $cookie_jar, '');
+check('nevalidní adresa je 400', $pse_code, 400);
+
+// Potvrzení: vstříknutý známý token.
+$pdo->exec("UPDATE public_subscribers SET confirm_token_hash = '" . hash('sha256', 'test-confirm-token') . "' WHERE email = 'navstevnik@example.com'");
+[$psc_code] = api_post($base, 'action=public_subscribe_confirm', ['token' => 'test-confirm-token'], $cookie_jar, '');
+check('potvrzení projde', $psc_code, 200);
+check_true('a v DB je potvrzeno', $pdo->query("SELECT confirmed_at FROM public_subscribers WHERE email = 'navstevnik@example.com'")->fetchColumn() !== null);
+[$psc2_code] = api_post($base, 'action=public_subscribe_confirm', ['token' => 'test-confirm-token'], $cookie_jar, '');
+check('použitý potvrzovací token podruhé neprojde', $psc2_code, 400);
+
+// Already-confirmed address: the response must be INDISTINGUISHABLE from a
+// fresh signup, or it becomes a one-request membership oracle (2026-08-23
+// audit). The comparison is on the WHOLE body on purpose - an earlier fix
+// reported a fixed `emailSent:true` for the confirmed case, which merely
+// inverted the leak wherever sending fails (CI has no mail server, and it
+// caught exactly that). Comparing bodies holds in both environments.
+[$pss_fresh_code, $pss_fresh, $pss_fresh_raw] = api_post($base, 'action=public_subscribe', ['email' => 'cerstvy@example.com', 'lang' => 'cs'], $cookie_jar, '');
+check('nová adresa vrací 200', $pss_fresh_code, 200);
+[$pss2_code, $pss2, $pss2_raw] = api_post($base, 'action=public_subscribe', ['email' => 'navstevnik@example.com', 'lang' => 'cs'], $cookie_jar, '');
+check('opakované přihlášení je neutrálních 200', $pss2_code, 200);
+check(
+    'potvrzená adresa vrací bajtově stejnou odpověď jako čerstvá (žádný oracle)',
+    $pss2_raw,
+    $pss_fresh_raw
+);
+// No delivery signal may reach an anonymous caller at all: only the
+// not-yet-subscribed path attempts a send, so any such field identifies
+// membership as soon as sending breaks.
+check_false('odpověď nenese žádný příznak o odeslání', array_key_exists('emailSent', $pss2 ?? []));
+$pdo->exec("DELETE FROM public_subscribers WHERE email = 'cerstvy@example.com'");
+
+// Admin přehled + neutrální odhlášení.
+[, $psl] = api_get_auth($base, 'action=public_subscribers', $cookie_jar);
+check_true('admin vidí odběratele', count(array_filter($psl['subscribers'] ?? [], fn($r) => $r['email'] === 'navstevnik@example.com')) === 1);
+[$psl_code] = api_get($base, 'action=public_subscribers');
+check('anonym seznam nevidí', $psl_code, 403);
+
+$pdo->exec("UPDATE public_subscribers SET unsubscribe_token = '" . str_pad('testunsub', 48, 'x') . "' WHERE email = 'navstevnik@example.com'");
+[$psu_code] = api_post($base, 'action=public_unsubscribe', ['token' => str_pad('testunsub', 48, 'x')], $cookie_jar, '');
+check('odhlášení projde', $psu_code, 200);
+check('a řádek je pryč', (int)$pdo->query("SELECT COUNT(*) FROM public_subscribers WHERE email = 'navstevnik@example.com'")->fetchColumn(), 0);
+[$psu2_code] = api_post($base, 'action=public_unsubscribe', ['token' => str_pad('testunsub', 48, 'x')], $cookie_jar, '');
+check('odkaz ze starého mailu nikdy neukáže chybu', $psu2_code, 200);
+
+// Rate limit: pátý zápis z téže IP v hodině projde, šestý ne.
+$pdo->exec("DELETE FROM public_subscribers");
+for ($ps_i = 1; $ps_i <= 5; $ps_i++) {
+    api_post($base, 'action=public_subscribe', ['email' => "flood{$ps_i}@example.com"], $cookie_jar, '');
+}
+[$ps_flood_code] = api_post($base, 'action=public_subscribe', ['email' => 'flood6@example.com'], $cookie_jar, '');
+check('šesté přihlášení z téže IP za hodinu je 429', $ps_flood_code, 429);
+$pdo->exec("DELETE FROM public_subscribers");
+
+// --- Forgotten password --------------------------------------------------
+//
+// The response must be identical for existing and nonexistent e-mails, else the
+// form can probe who has an account.
+[$code, $fp1] = api_post($base, 'action=forgot_password', ['email' => 'urcite-neexistuje@example.com'], tempnam(sys_get_temp_dir(), 'bk_fp'));
+check('žádost o obnovu hesla vrací 200', $code, 200);
+[$code, $fp2] = api_post($base, 'action=forgot_password', ['email' => 'admin@bloodkings.eu'], tempnam(sys_get_temp_dir(), 'bk_fp2'));
+check('a pro existující účet vrací totéž', $code, 200);
+check('odpověď neprozradí, jestli účet existuje', $fp1['message'] ?? 'a', $fp2['message'] ?? 'b');
+
+// --- Instalace ----------------------------------------------------------
+// The suite's own setup created the first account at the start, so the users
+// table is not empty and a second install must refuse. It used to return 200
+// and create nothing.
+[$code, $su] = api_post($base, 'action=setup', [
+    'username' => 'druhy_admin', 'email' => 'druhy@example.com', 'password' => 'DostDlouheHeslo1',
+], tempnam(sys_get_temp_dir(), 'bk_setup'));
+check('setup do neprázdné instalace vrací 409', $code, 409);
+check_true('a vysvětlí proč', str_contains((string)($su['error'] ?? ''), 'Instalace už proběhla'));
+
+$user_count_after = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn();
+check('žádný účet navíc nevznikl', $user_count_after, 1);
+
+// --- Stav relace --------------------------------------------------------
+if (!empty($cookie_jar)) {
+    [, $sess] = api_get_auth($base, 'action=session', $cookie_jar);
+    check_true('session hlásí stav instalace', array_key_exists('installed', $sess) && $sess['installed'] === true);
+    // The e-mail used to come back hardcoded as admin@bloodkings.eu no matter
+    // who was logged in.
+    check_true('e-mail je z databáze, ne natvrdo', array_key_exists('email', $sess['user'] ?? []));
+}
+
+// --- The audit trail -----------------------------------------------------
+if (!empty($cookie_jar)) {
+    [$code, $audit] = api_get_auth($base, 'action=user_audit_log&limit=20', $cookie_jar);
+    check('auditní protokol vrací 200', $code, 200);
+    check_true('a je to pole záznamů', isset($audit['entries']) && is_array($audit['entries']));
+    // The admin login happened at the start of the tests, so the record must exist.
+    check_true('obsahuje přihlášení', str_contains(json_encode($audit, JSON_UNESCAPED_UNICODE), 'login_success'));
+
+    [$anon_audit_code] = api_get($base, 'action=user_audit_log');
+    check('anonym auditní protokol nedostane', $anon_audit_code, 403);
+}
+
+// =======================================================================
+// 12. The long-term metric series from the daily rollup
+// =======================================================================
+//
+// Raw vps_metrics is pruned after 30 days, so without the rollup "how did
+// disk usage grow over half a year" had no answer. The test writes data
+// older than a month - exactly what would no longer exist raw.
+// First the rollup itself: without it the test below would only verify reads
+// from a table nobody fills.
+$pdo->exec("DELETE FROM metrics_daily");
+// Both samples on ONE day, chosen from the DB's own clock. Offsets from NOW()
+// straddle midnight in the database's timezone for an hour every night: at
+// 01:20 UTC the "2 hours ago" row lands on the previous day, the aggregate has
+// one sample instead of two and the test fails with no code change. Seen in
+// this suite twice now, so the day is pinned instead of hoped for.
+$sample_day = $pdo->query("SELECT DATE(DATE_SUB(NOW(), INTERVAL 3 HOUR))")->fetchColumn();
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at)
+            VALUES (2, 10, 50, 70, TIMESTAMP('{$sample_day}', '00:10:00'))");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at)
+            VALUES (2, 90, 55, 71, TIMESTAMP('{$sample_day}', '00:20:00'))");
+
+$rolled_metrics = bk_rollup_daily_metrics($pdo, 2);
+check_true('agregace zapsala řádky', $rolled_metrics > 0);
+
+$stmt_cpu_row = $pdo->prepare("SELECT min_val, avg_val, max_val, samples FROM metrics_daily
+                               WHERE monitor_id = 2 AND metric_key = 'cpu' AND day = ?");
+$stmt_cpu_row->execute([$sample_day]);
+$cpu_row = $stmt_cpu_row->fetch();
+check_true('CPU má agregát za den vzorků', $cpu_row !== false);
+if ($cpu_row) {
+    // The average alone would hide the spike; hence min and max are stored too.
+    check('minimum sedí', (int)round($cpu_row['min_val']), 10);
+    check('maximum sedí', (int)round($cpu_row['max_val']), 90);
+    check('průměr sedí', (int)round($cpu_row['avg_val']), 50);
+    check('počet vzorků sedí', (int)$cpu_row['samples'], 2);
+}
+
+// A metric the agent does not report must not appear as zero.
+$swap_rows = (int)$pdo->query("SELECT COUNT(*) FROM metrics_daily WHERE metric_key = 'swap'")->fetchColumn();
+check('nezměřená metrika se neagreguje', $swap_rows, 0);
+
+// The 24 metrics of the router release ride along without a line of rollup
+// code - but only while their key is in the map AND the column exists. A
+// column added to the migration and forgotten in the map is invisible for a
+// month, until the raw rows are pruned and nothing can be recomputed.
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, wifi_noise_5g, wifi_busy_5g, wifi_6e_unserved, cpu_core_max, wan_errors, wan_link_flaps, agent_run_ms, clock_skew_s, checked_at)
+            VALUES (2, -92, 3.5, 1, 40, 4, 2, 4200, 3, TIMESTAMP('{$sample_day}', '00:30:00'))");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, wifi_noise_5g, wifi_busy_5g, wifi_6e_unserved, cpu_core_max, wan_errors, wan_link_flaps, agent_run_ms, clock_skew_s, checked_at)
+            VALUES (2, -86, 7.5, 0, 96, 6, 0, 4400, 1, TIMESTAMP('{$sample_day}', '00:40:00'))");
+bk_rollup_daily_metrics($pdo, 2);
+$router_daily = $pdo->prepare("SELECT metric_key, avg_val, max_val, samples FROM metrics_daily WHERE monitor_id = 2 AND day = ? AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g', 'wifi_6e_unserved', 'cpu_core_max', 'wan_errors', 'wan_link_flaps', 'agent_run_ms', 'clock_skew_s')");
+$router_daily->execute([$sample_day]);
+$router_rows = [];
+foreach ($router_daily->fetchAll() as $rr) {
+    $router_rows[$rr['metric_key']] = $rr;
+}
+check('metriky routeru se agregují pod svými klíči', count($router_rows), 8);
+check('nejhorší šum dne je vidět v maximu', (int)round((float)($router_rows['wifi_noise_5g']['max_val'] ?? 0)), -86);
+// A step metric's day is avg x samples: 5 x 2 = 10 errors, not "5".
+check('den krokové metriky je průměr × vzorky', [(float)($router_rows['wan_errors']['avg_val'] ?? 0) * (int)($router_rows['wan_errors']['samples'] ?? 0), (int)($router_rows['wan_errors']['samples'] ?? 0)], [10.0, 2]);
+// Three-valued: the daily average IS the share of samples on which the answer
+// was known, so 1 and 0 average to 0.5 - never "rounded to no".
+check('wifi_6e_unserved se průměruje jako podíl času', (float)($router_rows['wifi_6e_unserved']['avg_val'] ?? -1), 0.5);
+$pdo->exec("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g', 'wifi_6e_unserved', 'cpu_core_max', 'wan_errors', 'wan_link_flaps', 'agent_run_ms', 'clock_skew_s')");
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2 AND checked_at IN (TIMESTAMP('{$sample_day}', '00:30:00'), TIMESTAMP('{$sample_day}', '00:40:00'))");
+
+// Agent 0.1.9: the CPU time of the previous run rides the same rollup. An
+// older agent's row is NULL and the day counts only measured runs - zeros in
+// the average would halve what the agent really costs.
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, agent_prev_cpu_ms, checked_at) VALUES
+            (2, 190, TIMESTAMP('{$sample_day}', '01:30:00')), (2, 250, TIMESTAMP('{$sample_day}', '01:40:00')),
+            (2, NULL, TIMESTAMP('{$sample_day}', '01:50:00'))");
+bk_rollup_daily_metrics($pdo, 2);
+$cpu_prev_day = $pdo->prepare("SELECT avg_val, max_val, samples FROM metrics_daily WHERE monitor_id = 2 AND day = ? AND metric_key = 'agent_prev_cpu_ms'");
+$cpu_prev_day->execute([$sample_day]);
+$cpu_prev_row = $cpu_prev_day->fetch() ?: [];
+check('CPU čas agenta se agreguje jen z naměřených běhů, NULL staršího agenta není nula',
+    [(float)($cpu_prev_row['avg_val'] ?? -1), (float)($cpu_prev_row['max_val'] ?? -1), (int)($cpu_prev_row['samples'] ?? -1)],
+    [220.0, 250.0, 2]);
+$pdo->exec("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key = 'agent_prev_cpu_ms'");
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2 AND checked_at IN (TIMESTAMP('{$sample_day}', '01:30:00'), TIMESTAMP('{$sample_day}', '01:40:00'), TIMESTAMP('{$sample_day}', '01:50:00'))");
+
+// A repeated run must neither duplicate nor double the counts.
+bk_rollup_daily_metrics($pdo, 2);
+$stmt_cpu_count = $pdo->prepare("SELECT COUNT(*) FROM metrics_daily
+                                 WHERE monitor_id = 2 AND metric_key = 'cpu' AND day = ?");
+$stmt_cpu_count->execute([$sample_day]);
+check('opakovaná agregace nezaloží druhý řádek', (int)$stmt_cpu_count->fetchColumn(), 1);
+
+$pdo->exec("DELETE FROM metrics_daily");
+for ($d = 400; $d >= 0; $d -= 20) {
+    $val = 40 + (400 - $d) / 20;   // pomalu rostoucí zaplnění disku
+    $pdo->exec("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples)
+                VALUES (2, DATE_SUB(CURDATE(), INTERVAL {$d} DAY), 'hdd', {$val}, {$val}, " . ($val + 5) . ", 1440)");
+}
+
+[$code, $year] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=hdd&period=1y', $cookie_jar);
+check('roční řada vrací 200', $code, 200);
+check_true('a nese body', !empty($year['points']));
+check('a přizná, že jde o denní průměry', $year['resolution'] ?? null, 'daily');
+check_true('k průměrům je min/max', !empty($year['dailyRange']) && array_key_exists('max', $year['dailyRange'][0]));
+
+// A year must not reach beyond a year - the chart would claim more history than exists.
+$oldest = $year['points'][0][0] ?? 0;
+check_true('nejstarší bod není starší než rok', $oldest >= time() - 366 * 86400);
+
+// Data older than the raw retention must not sneak into the short window.
+[, $day] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=hdd&period=24h', $cookie_jar);
+check_false('24h okno denní agregaci nepoužívá', ($day['resolution'] ?? null) === 'daily');
+
+// An empty rollup means an empty series, not invented numbers.
+$pdo->exec("DELETE FROM metrics_daily");
+[, $empty_year] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=hdd&period=1y', $cookie_jar);
+check('bez agregovaných dat je řada prázdná', $empty_year['points'] ?? null, []);
+
+// =======================================================================
+// 13. An agent report is stored as metrics
+// =======================================================================
+//
+// The only test verifying the whole path: the agent sends JSON, the API writes
+// it into columns and the chart then finds it. Right here 35 values used to
+// get lost - sent every minute, ending only in the latest details snapshot.
+$agent_key = $pdo->query("SELECT agent_key FROM monitors WHERE id = 2")->fetchColumn();
+if (!$agent_key) {
+    $agent_key = bin2hex(random_bytes(16));
+    $stmt_ak = $pdo->prepare("UPDATE monitors SET agent_key = ? WHERE id = 2");
+    $stmt_ak->execute([$agent_key]);
+}
+
+$agent_payload = [
+    'agent_key' => $agent_key,
+    'cpu' => 12.5, 'ram' => 44.0, 'hdd' => 61.0,
+    // Newly stored metrics across types: latency, signal quality, counters.
+    'wan_latency_ms' => 18.4,
+    'dns_latency_ms' => 7.2,
+    'lte_rsrq' => -11.5,
+    'lte_sinr' => 9.0,
+    'ups_battery_pct' => 97.0,
+    'conntrack_count' => 1234,
+    'ram_used_mb' => 812.5,
+    'tcp_retrans' => 500,
+    'fw_dropped' => 4200,
+    'dns_queries' => 9000,
+    // An unmeasured value - must stay NULL, not fall to zero.
+    'entropy' => null,
+    'oom_kills' => 'null',
+];
+
+// --- LTE backup alert (SIM / registration from the modem) ------------------
+//
+// The bug this guards: a HiLink modem's interface stays up with no SIM in it,
+// so the old `lte_up` flag showed a working backup for nine days and nothing
+// ever notified anyone. The verdict now comes from the modem's own report,
+// with a two-report debounce and a latch (one alert, one recovery).
+$post_agent = function (array $extra) use ($base, $agent_payload): int {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(array_merge($agent_payload, $extra), JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    curl_exec($ch);
+    return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+};
+// R157: a service imported on one router hid it on every other.
+$pdo->exec("INSERT INTO assets (id, name) VALUES (9571, 'R157 A'), (9572, 'R157 B')");
+$x157_found = json_encode(['discovered_services' => [['name' => 'kresd157', 'port' => 53, 'type' => 'dns', 'confidence' => 90]]]);
+$pdo->prepare("INSERT INTO monitors (id, name, type, target, status, asset_id, last_details) VALUES
+    (9571, 'R157 router A', 'openwrt', 'a.example.test', 'up', 9571, ?), (9572, 'R157 router B', 'openwrt', 'b.example.test', 'up', 9572, ?)")
+    ->execute([$x157_found, $x157_found]);
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, asset_id) VALUES (9573, 'kresd157', 'port', 'a.example.test', 'up', 9571)");
+[, $x157] = api_get_auth($base, 'action=discovered_services', $cookie_jar);
+$x157_sources = array_values(array_map(fn ($s) => (int)$s['sourceMonitorId'], array_filter($x157['services'] ?? [], fn ($s) => $s['name'] === 'kresd157')));
+check('služba hlídaná na routeru A se routeru B pořád nabídne, routeru A už ne', $x157_sources, [9572]);
+$pdo->exec("DELETE FROM monitors WHERE id IN (9571, 9572, 9573)");
+$pdo->exec("DELETE FROM assets WHERE id IN (9571, 9572)");
+
+// R330: a process list went into last_details as sent, and monitor.php
+// printed its numbers raw.
+check('hlášení se zlým seznamem procesů projde', $post_agent(['top_cpu_processes' => [
+    ['name' => '<img src=x onerror=alert(1)>', 'cpu' => '<script>bk330()</script>', 'ram_mb' => 5, 'extra' => 'pryč'],
+    'jen text', ['cpu' => 3], ['name' => str_repeat('a', 100), 'cpu' => 2.5],
+]]), 200);
+$x330 = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true)['top_cpu_processes'] ?? null;
+check('uloží se jen jméno a dvě čísla', $x330, [
+    ['name' => '<img src=x onerror=alert(1)>', 'cpu' => null, 'ram_mb' => 5],
+    ['name' => str_repeat('a', 64), 'cpu' => 2.5, 'ram_mb' => null],
+]);
+$x330_ch = curl_init($base . '/monitor.php?id=2');
+curl_setopt_array($x330_ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_TIMEOUT => 20]);
+$x330_page = (string)curl_exec($x330_ch);
+check_true('monitor.php proces vypíše escapovaný', str_contains($x330_page, '&lt;img src=x onerror=alert(1)&gt;') && !str_contains($x330_page, '<img src=x'));
+check_true('monitor.php nevypíše skript z čísla', !str_contains($x330_page, 'bk330()'));
+// The report also stored them as process samples; later tests count those.
+$pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2 AND (name LIKE '<img%' OR name LIKE 'aaaa%')");
+
+// R163: monitors.port is the ServerQuery port; the agent's counts pair by the voice port.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, port, status, agent_key) VALUES (9163, 'R163 TS', 'teamspeak', 'ts163.example.test', 10011, 'up', 'k163-agent-key')");
+$x163_post = function (string $target) use ($pdo, $base): ?int {
+    $pdo->prepare("UPDATE monitors SET target = ?, last_details = NULL WHERE id = 9163")->execute([$target]);
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_TIMEOUT => 20,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_POSTFIELDS => json_encode(['agent_key' => 'k163-agent-key', 'cpu' => 5.0, 'teamspeak_servers' => [
+            ['port' => 9987, 'clients_online' => 5, 'clients_max' => 32, 'name' => 'Výchozí'],
+            ['port' => 8200, 'clients_online' => 2, 'clients_max' => 16, 'name' => 'Jiný port'],
+        ]])]);
+    curl_exec($ch);
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 9163")->fetchColumn(), true)['ts3_clients_online'] ?? null;
+};
+check('cíl bez portu páruje výchozí hlasový port, ne port ServerQuery', $x163_post('ts163.example.test'), 5);
+check('cíl s portem páruje ten hlasový port', $x163_post('ts163.example.test:8200'), 2);
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 9163");
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9163");
+$pdo->exec("DELETE FROM monitors WHERE id = 9163");
+
+// R164: comm keeps 15 characters, so a longer watched name was always missing.
+$x164_saved = $pdo->query("SELECT monitored_processes FROM monitors WHERE id = 2")->fetchColumn();
+$pdo->exec("UPDATE monitors SET monitored_processes = 'systemd-resolved, sshd' WHERE id = 2");
+$x164_missing = function (array $running) use ($pdo, $post_agent): ?array {
+    $post_agent(['processes' => $running]);
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true)['missing_processes'] ?? null;
+};
+check('dlouhé jméno procesu se najde podle 15 znaků z comm', $x164_missing(['sshd', 'systemd-resolve']), []);
+check('chybějící proces se pořád ohlásí', $x164_missing(['systemd-resolve']), ['sshd']);
+// Back up, and without the outage that check wrote: later tests read the logs.
+$x164_missing(['sshd', 'systemd-resolve']);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 2 AND error_message LIKE 'Chybí běžící proces%'");
+$pdo->prepare("UPDATE monitors SET monitored_processes = ? WHERE id = 2")->execute([$x164_saved === false ? null : $x164_saved]);
+
+$lte_events = function (string $type) use ($pdo): int {
+    $st = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 2 AND event_type = ?");
+    $st->execute([$type]);
+    return (int)$st->fetchColumn();
+};
+$lte_details = function () use ($pdo): array {
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+};
+$lte_bad = ['lte_up' => true, 'lte_uptime' => 778603, 'lte_connected' => false, 'lte_sim_state' => 'no_sim', 'lte_conn_code' => 902, 'lte_sim_code' => 255];
+$lte_ok = ['lte_up' => true, 'lte_uptime' => 778700, 'lte_connected' => true, 'lte_sim_state' => 'ready', 'lte_conn_code' => 901, 'lte_sim_code' => 257];
+
+check('1. špatné hlášení agent přijme', $post_agent($lte_bad), 200);
+check('po jednom špatném hlášení se ještě nealertuje (debounce)', $lte_events('lte_backup_lost'), 0);
+$d = $lte_details();
+check('ale stav SIM je v details poctivě uložen', $d['lte_sim_state'] ?? null, 'no_sim');
+check('a rozhraní zůstává hlášeno jako up (to je ta past)', $d['lte_up'] ?? null, true);
+check('série špatných hlášení = 1', (int)($d['lte_backup_bad_streak'] ?? -1), 1);
+
+check('2. špatné hlášení agent přijme', $post_agent($lte_bad), 200);
+check('druhé špatné hlášení spustí alert', $lte_events('lte_backup_lost'), 1);
+check_true('latch je nastaven', !empty($lte_details()['lte_backup_alert_sent']));
+$lte_ev = $pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'lte_backup_lost' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('událost říká proč (SIM nenalezena)', str_contains((string)$lte_ev, 'SIM'));
+
+check('3. špatné hlášení agent přijme', $post_agent($lte_bad), 200);
+check('třetí špatné hlášení alert neopakuje (latch)', $lte_events('lte_backup_lost'), 1);
+
+// A round the modem says nothing: no verdict, so the latch must survive it.
+check('hlášení bez slova od modemu agent přijme', $post_agent(['lte_up' => true, 'lte_uptime' => 778800]), 200);
+check_true('bez verdiktu latch přežije (žádné falešné "obnoveno")', !empty($lte_details()['lte_backup_alert_sent']));
+check('a žádné obnovení se nehlásí', $lte_events('lte_backup_restored'), 0);
+
+check('dobré hlášení agent přijme', $post_agent($lte_ok), 200);
+check('obnovení zálohy se ohlásí jednou', $lte_events('lte_backup_restored'), 1);
+check_true('a latch se uvolní', empty($lte_details()['lte_backup_alert_sent']));
+check('série špatných se vynuluje', (int)($lte_details()['lte_backup_bad_streak'] ?? -1), 0);
+
+check('další dobré hlášení agent přijme', $post_agent($lte_ok), 200);
+check('obnovení se neopakuje', $lte_events('lte_backup_restored'), 1);
+
+// PIN state is a distinct reason, and carries the attempts left.
+check('hlášení s PINem agent přijme', $post_agent(['lte_up' => true, 'lte_connected' => false, 'lte_sim_state' => 'pin_required', 'lte_sim_pin_left' => 2]), 200);
+check('hlášení s PINem podruhé', $post_agent(['lte_up' => true, 'lte_connected' => false, 'lte_sim_state' => 'pin_required', 'lte_sim_pin_left' => 2]), 200);
+$lte_ev = $pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'lte_backup_lost' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('PIN alert nese důvod i zbývající pokusy', str_contains((string)$lte_ev, 'PIN') && str_contains((string)$lte_ev, '2'));
+// Leave the monitor healthy for the tests that follow.
+$post_agent($lte_ok);
+
+// --- Primary link (WAN) alert ------------------------------------------------
+//
+// Same debounce and latch as the LTE backup, two signals: wan_up (interface)
+// and wan_internet (one echo bound to the WAN device, agent 0.1.1+).
+$wan_bad = ['wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => false];
+$wan_ok = ['wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => true];
+check('WAN: 1. špatné hlášení agent přijme', $post_agent($wan_bad), 200);
+check('WAN: po jednom špatném hlášení se nealertuje (debounce)', $lte_events('wan_lost'), 0);
+$d = $lte_details();
+check_true('WAN: wan_internet=false je v details uloženo poctivě (false, ne 0 ani null)', array_key_exists('wan_internet', $d) && $d['wan_internet'] === false);
+check('WAN: 2. špatné hlášení agent přijme', $post_agent($wan_bad), 200);
+check('WAN: druhé špatné hlášení spustí alert', $lte_events('wan_lost'), 1);
+check_true('WAN: latch nastaven', !empty($lte_details()['wan_alert_sent']));
+$wan_ev = $pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'wan_lost' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('WAN: událost říká, že linka je nahoře, ale ping neprojde', str_contains((string)$wan_ev, 'ping'));
+check('WAN: 3. špatné hlášení agent přijme', $post_agent($wan_bad), 200);
+check('WAN: alert se neopakuje (latch)', $lte_events('wan_lost'), 1);
+check('WAN: hlášení bez WAN údajů agent přijme', $post_agent(['lte_up' => true]), 200);
+check_true('WAN: bez verdiktu latch přežije', !empty($lte_details()['wan_alert_sent']));
+check('WAN: dobré hlášení agent přijme', $post_agent($wan_ok), 200);
+check('WAN: obnovení se ohlásí jednou', $lte_events('wan_restored'), 1);
+check_true('WAN: latch se uvolní', empty($lte_details()['wan_alert_sent']));
+check('WAN: další dobré hlášení', $post_agent($wan_ok), 200);
+check('WAN: obnovení se neopakuje', $lte_events('wan_restored'), 1);
+// The interface being down is the other reason - and an older agent that
+// sends no wan_internet at all still gets the alert from wan_up alone.
+check('WAN: rozhraní dole (starý agent) 1×', $post_agent(['wan_up' => false, 'wan_proto' => 'dhcp']), 200);
+check('WAN: rozhraní dole 2×', $post_agent(['wan_up' => false, 'wan_proto' => 'dhcp']), 200);
+check('WAN: výpadek rozhraní alertuje', $lte_events('wan_lost'), 2);
+$wan_ev = $pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'wan_lost' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('WAN: důvod je vypnuté rozhraní', str_contains((string)$wan_ev, 'vypnuté'));
+check('WAN: starý agent hlásí rozhraní zpět', $post_agent(['wan_up' => true, 'wan_proto' => 'dhcp']), 200);
+check('WAN: obnovení i bez wan_internet', $lte_events('wan_restored'), 2);
+// An access point: no netifd interface called wan at all. Agents before
+// 0.1.1 sent wan_up=false for that - with no protocol and no echo it is no
+// verdict, not an outage.
+check('WAN: AP bez rozhraní wan (starý agent) 1×', $post_agent(['wan_up' => false]), 200);
+check('WAN: AP bez rozhraní wan 2×', $post_agent(['wan_up' => false]), 200);
+check('WAN: AP nespouští wan_lost', $lte_events('wan_lost'), 2);
+$post_agent($wan_ok);
+
+// --- Wi-Fi clients per band and their Wi-Fi 6E support -------------------------
+//
+// Only the total used to be stored, so "how many were on 2.4 GHz" had no answer
+// once the next report replaced the radio list. The server sums each band from
+// the radios; 6E support comes from agent 0.1.6+ and stays null when unknown.
+$wifi_before_id = (int)$pdo->query("SELECT COALESCE(MAX(id), 0) FROM vps_metrics")->fetchColumn();
+$wifi_ni = fn ($v) => $v === null ? null : (int)$v;
+$wifi_row = function () use ($pdo): array {
+    return $pdo->query("SELECT wifi_clients_24g, wifi_clients_5g, wifi_clients_6g, wifi_6e_capable_24g, wifi_6e_known_24g, wifi_6e_capable_5g, wifi_6e_known_5g FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetch() ?: [];
+};
+check('hlášení s rádii a podporou 6E agent přijme', $post_agent([
+    'wifi_clients_count' => 12,
+    'wifi_radios' => [
+        // `channel` decides whether the claimed band is believed: a disabled
+        // 0.1.6 radio prints "2.4GHz" with no channel and no clients, and its
+        // stale band must not land in a chart (sanitizer, D6).
+        ['radio' => 'wlan0', 'band' => '2.4GHz', 'channel' => 6, 'clients' => 7, 'clients_6ghz_capable' => 2, 'clients_caps_known' => 6],
+        ['radio' => 'wlan1', 'band' => '5GHz', 'channel' => 36, 'clients' => 4, 'clients_6ghz_capable' => 3, 'clients_caps_known' => 4],
+        ['radio' => 'wlan2', 'band' => '2.4GHz', 'channel' => 11, 'clients' => 1, 'clients_6ghz_capable' => null, 'clients_caps_known' => null],
+    ],
+]), 200);
+$w = $wifi_row();
+check('klienti na 2.4 GHz se sečtou přes obě rádia', $wifi_ni($w['wifi_clients_24g'] ?? null), 8);
+check('klienti na 5 GHz se uloží', $wifi_ni($w['wifi_clients_5g'] ?? null), 4);
+check_true('bez rádia na 6 GHz je počet neznámý, ne nula', array_key_exists('wifi_clients_6g', $w) && $w['wifi_clients_6g'] === null);
+check('na 2.4 GHz umí 6E dva klienti ze šesti známých', [$wifi_ni($w['wifi_6e_capable_24g']), $wifi_ni($w['wifi_6e_known_24g'])], [2, 6]);
+check('na 5 GHz umí 6E tři ze čtyř', [$wifi_ni($w['wifi_6e_capable_5g']), $wifi_ni($w['wifi_6e_known_5g'])], [3, 4]);
+check('hlášení staršího agenta bez podpory 6E agent přijme', $post_agent([
+    'wifi_radios' => [
+        ['radio' => 'wlan0', 'band' => '2.4GHz', 'channel' => 1, 'clients' => 5],
+        ['radio' => 'wlan1', 'band' => '6GHz', 'channel' => 37, 'clients' => 2],
+    ],
+]), 200);
+$w = $wifi_row();
+check('starší agent: pásma se přesto sečtou', [$wifi_ni($w['wifi_clients_24g']), $wifi_ni($w['wifi_clients_5g']), $wifi_ni($w['wifi_clients_6g'])], [5, null, 2]);
+check('starší agent: podpora 6E zůstane neznámá, ne nulová', [$w['wifi_6e_capable_24g'], $w['wifi_6e_known_24g']], [null, null]);
+// A radio that claims a band but has no channel is the shape a DISABLED 0.1.6
+// radio has. Believing it would draw yesterday's clients as today's.
+check('vypnuté rádio bez kanálu agent přijme', $post_agent([
+    'wifi_radios' => [['radio' => 'wlan0', 'band' => '2.4GHz', 'channel' => null, 'clients' => 3]],
+]), 200);
+$w = $wifi_row();
+check('vypnuté rádio (pásmo bez kanálu) se do pásem nepočítá', [$w['wifi_clients_24g'], $w['wifi_clients_5g'], $w['wifi_clients_6g']], [null, null, null]);
+[, $wifi_batch] = api_get_auth($base, 'action=metric_series_batch&monitor_id=2&period=24h', $cookie_jar);
+check_true('graf klientů na 2.4 GHz je v grafech routeru', count($wifi_batch['series']['wifi_clients_24g']['points'] ?? []) >= 2);
+[$wifi_s_code, $wifi_s] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=wifi_6e_capable_24g&period=24h', $cookie_jar);
+check('metric_series zná podporu 6E na 2.4 GHz', $wifi_s_code, 200);
+check_true('a vrátí změřenou hodnotu', in_array(2.0, array_map(fn ($p) => (float)$p[1], $wifi_s['points'] ?? []), true));
+$pdo->prepare("DELETE FROM vps_metrics WHERE monitor_id = 2 AND id > ?")->execute([$wifi_before_id]);
+
+// --- First report after a reboot: the load is not measured yet ---------------------
+//
+// Agents send cpu/ram/hdd as null on their first run and after a reboot. The
+// server answered 400, so a new router's first report ended in an error.
+check('hlášení s neznámým CPU, RAM a diskem agent přijme', $post_agent(['cpu' => null, 'ram' => null, 'hdd' => null]), 200);
+$null_row = $pdo->query("SELECT cpu_usage, ram_usage, hdd_usage FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetch() ?: [];
+check('neznámé hodnoty zůstanou NULL, ne nula', [$null_row['cpu_usage'] ?? 'chybí', $null_row['ram_usage'] ?? 'chybí', $null_row['hdd_usage'] ?? 'chybí'], ['chybí', 'chybí', 'chybí']);
+check_true('a řádek se opravdu uložil', array_key_exists('cpu_usage', $null_row) && $null_row['cpu_usage'] === null);
+check('hlášení bez klíče se dál odmítne', $post_agent(['agent_key' => '']), 400);
+// R59: an agent that sends no heavy-operation interval (agent.sh) got an
+// invented 24, and the device page printed "Kontrola 1× za 24h".
+$post_agent(['heavy_op_interval_hours' => null]);
+$hoi = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true);
+check('neposlaný interval těžkých operací zůstane neznámý, ne 24', is_array($hoi) ? ($hoi['heavy_op_interval_hours'] ?? null) : 'chybí', null);
+
+// --- Remote Action result: its own POST, one list of states -------------------------
+//
+// Every agent acknowledges an action with a separate POST without telemetry,
+// which takes only executed or failed. A second reader inside the full
+// report took any string as the state; no agent ever sent one there.
+$ra_post = fn (array $body): array => bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode($body, JSON_UNESCAPED_UNICODE));
+$ra_ids = [];
+$ra_action = function () use ($pdo, &$ra_ids): int {
+    $pdo->exec("INSERT INTO agent_actions (monitor_id, action_type, service_name, status) VALUES (2, 'restart_service', 'nginx', 'sent')");
+    return $ra_ids[] = (int)$pdo->lastInsertId();
+};
+$ra_row = fn (int $id): array => $pdo->query("SELECT status, result_message FROM agent_actions WHERE id = {$id}")->fetch() ?: [];
+try {
+    $ra_done = $ra_action();
+    [$ra_code] = $ra_post(['agent_key' => $agent_key, 'action_result' => ['action_id' => $ra_done, 'status' => 'executed', 'message' => "Služba 'nginx' restartována"]]);
+    check('potvrzení akce se uloží', [$ra_code, $ra_row($ra_done)], [200, ['status' => 'executed', 'result_message' => "Služba 'nginx' restartována"]]);
+    $ra_odd = $ra_action();
+    $ra_post(['agent_key' => $agent_key, 'action_result' => ['action_id' => $ra_odd, 'status' => 'owned', 'message' => 'x']]);
+    check('stav mimo executed a failed se uloží jako failed', $ra_row($ra_odd)['status'] ?? null, 'failed');
+    $ra_full = $ra_action();
+    check('plné hlášení s výsledkem akce agent přijme', $post_agent(['action_result' => ['action_id' => $ra_full, 'status' => 'owned']]), 200);
+    check('ale výsledek akce z něj nečte, ten chodí zvlášť', $ra_row($ra_full)['status'] ?? null, 'sent');
+    // Both mini-requests share one check of the key.
+    foreach (['action_result' => ['action_id' => $ra_done, 'status' => 'failed'], 'service_check_results' => []] as $ra_kind => $ra_value) {
+        [$ra_none] = $ra_post([$ra_kind => $ra_value]);
+        [$ra_unknown] = $ra_post(['agent_key' => 'neexistujici-klic', $ra_kind => $ra_value]);
+        check("{$ra_kind}: bez klíče 400, s neznámým klíčem 401", [$ra_none, $ra_unknown], [400, 401]);
+    }
+    check('odmítnuté potvrzení stav akce nezmění', $ra_row($ra_done)['status'] ?? null, 'executed');
+
+    // R111: an action whose type is no longer allowed stayed pending and, as
+    // the oldest, blocked every newer allowed one for good.
+    $ra_mon = $pdo->query("SELECT remote_actions_enabled, allowed_actions FROM monitors WHERE id = 2")->fetch();
+    try {
+        $pdo->exec("UPDATE monitors SET remote_actions_enabled = 1, allowed_actions = 'restart_service' WHERE id = 2");
+        $pdo->exec("INSERT INTO agent_actions (monitor_id, action_type, status) VALUES (2, 'reboot_router', 'pending')");
+        $ra_ids[] = $ra_old = (int)$pdo->lastInsertId();
+        $pdo->exec("INSERT INTO agent_actions (monitor_id, action_type, service_name, status) VALUES (2, 'restart_service', 'nginx', 'pending')");
+        $ra_ids[] = $ra_new = (int)$pdo->lastInsertId();
+        [, , $ra_body] = $ra_post($agent_payload);
+        $ra_sent = json_decode((string)$ra_body, true)['pending_action']['action_id'] ?? null;
+        check('zakázaná čekající akce selže s důvodem a novější povolená se odešle',
+            [$ra_row($ra_old)['status'] ?? null, str_contains((string)($ra_row($ra_old)['result_message'] ?? ''), 'není povolený'), $ra_sent, $ra_row($ra_new)['status'] ?? null],
+            ['failed', true, $ra_new, 'sent']);
+    } finally {
+        $pdo->prepare("UPDATE monitors SET remote_actions_enabled = ?, allowed_actions = ? WHERE id = 2")
+            ->execute([$ra_mon['remote_actions_enabled'] ?? 0, $ra_mon['allowed_actions'] ?? null]);
+    }
+} finally {
+    foreach ($ra_ids as $ra_id) {
+        $pdo->exec("DELETE FROM agent_actions WHERE id = {$ra_id}");
+    }
+}
+
+// --- Archive: a monitor gone for good ------------------------------------------------
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, agent_key) VALUES (97, 'Starý router', 'openwrt', 'Turris - domov', 'down', 'Síť', 'archive-test-key-97')");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES (97, 'down', 'Agent routeru neodpovídá', NOW())");
+$pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('Výpadek: Starý router', 'major', 'investigating', 97)");
+$arc_incident = (int)$pdo->lastInsertId();
+$pdo->exec("INSERT INTO agent_actions (monitor_id, action_type, status) VALUES (97, 'reboot_router', 'pending')");
+$arc_ids = fn (?array $list): array => array_map(fn ($m) => (int)$m['id'], $list['monitors'] ?? []);
+[, $arc_status_before] = api_get_auth($base, 'action=public_status', $cookie_jar);
+[, $arc_live_before] = api_get_auth($base, 'action=monitors', $cookie_jar);
+check_true('před archivací je monitor v seznamu', in_array(97, $arc_ids($arc_live_before), true));
+
+[$arc_code, $arc_res] = api_post($base, 'action=archive_monitor', ['id' => 97], $cookie_jar);
+check('admin monitor archivuje', $arc_code, 200);
+check_true('archivace zapíše čas', $pdo->query("SELECT archived_at FROM monitors WHERE id = 97")->fetchColumn() !== null);
+check('otevřený incident se při archivaci uzavře', $pdo->query("SELECT status FROM incidents WHERE id = {$arc_incident}")->fetchColumn(), 'resolved');
+check('a server řekne kolik jich uzavřel', $arc_res['incidentsClosed'] ?? null, 1);
+check('čekající vzdálená akce selže', $pdo->query("SELECT status FROM agent_actions WHERE monitor_id = 97")->fetchColumn(), 'failed');
+[$arc_again] = api_post($base, 'action=archive_monitor', ['id' => 97], $cookie_jar);
+check('archivovaný monitor znovu archivovat nejde', $arc_again, 409);
+[$arc_get] = api_get_auth($base, 'action=archive_monitor', $cookie_jar);
+check('archivace přes GET se odmítne', $arc_get, 405);
+
+[, $arc_live] = api_get_auth($base, 'action=monitors', $cookie_jar);
+check_false('archivovaný monitor zmizí ze seznamu', in_array(97, $arc_ids($arc_live), true));
+[, $arc_list] = api_get_auth($base, 'action=monitors&archived=1', $cookie_jar);
+check('archiv vypíše jen archivované monitory', $arc_ids($arc_list), [97]);
+check_true('i s časem archivace', !empty($arc_list['monitors'][0]['archivedAt'] ?? null));
+[, $arc_public] = api_get($base, 'action=monitors&scope=public&archived=1');
+check_false('veřejný pohled archiv neukáže', in_array(97, $arc_ids($arc_public), true));
+[, $arc_status] = api_get_auth($base, 'action=public_status', $cookie_jar);
+check('souhrn archivovaný monitor nepočítá', (int)($arc_status['totalMonitors'] ?? 0), (int)($arc_status_before['totalMonitors'] ?? 0) - 1);
+[, $arc_incidents] = api_get_auth($base, 'action=incidents', $cookie_jar);
+check_false('probíhající výpadky ho nevypíšou', in_array(97, array_map(fn ($i) => (int)($i['monitor_id'] ?? 0), $arc_incidents['incidents'] ?? []), true));
+[, $arc_windows] = api_get_auth($base, 'action=uptime_windows', $cookie_jar);
+check_false('dostupnost po oknech ho vynechá', isset($arc_windows['windows']['97']) || isset($arc_windows['windows'][97]));
+[$arc_history_code, $arc_history] = api_get_auth($base, 'action=events&monitor_id=97&limit=5', $cookie_jar);
+check('historie archivovaného monitoru zůstane čitelná', $arc_history_code, 200);
+check_true('a nese jeho záznamy', count($arc_history['events'] ?? []) > 0);
+
+[$arc_save] = api_post($base, 'action=save_monitor', ['id' => 97, 'name' => 'Přejmenovaný', 'type' => 'openwrt'], $cookie_jar);
+check('archivovaný monitor nejde upravit', $arc_save, 409);
+check('jméno zůstane', $pdo->query("SELECT name FROM monitors WHERE id = 97")->fetchColumn(), 'Starý router');
+[$arc_maint] = api_post($base, 'action=toggle_maintenance', ['monitor_ids' => [97], 'maintenance' => true], $cookie_jar);
+check('ani mu nejde zapnout údržbu', $arc_maint, 409);
+[$arc_info] = api_get_auth($base, 'action=agent_install_info&monitor_id=97', $cookie_jar);
+check('instalační údaje archivovaného monitoru se nevydají', $arc_info, 409);
+$arc_metrics_before = (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = 97")->fetchColumn();
+check('hlášení agenta archivovaného monitoru se odmítne', $post_agent(['agent_key' => 'archive-test-key-97']), 403);
+check('a nic se z něj neuloží', (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = 97")->fetchColumn(), $arc_metrics_before);
+$arc_action = (int)$pdo->query("SELECT id FROM agent_actions WHERE monitor_id = 97")->fetchColumn();
+[$arc_ack, , $arc_ack_body] = $ra_post(['agent_key' => 'archive-test-key-97', 'action_result' => ['action_id' => $arc_action, 'status' => 'executed']]);
+[$arc_sc, , $arc_sc_body] = $ra_post(['agent_key' => 'archive-test-key-97', 'service_check_results' => []]);
+check('potvrzení akce i výsledky služeb se odmítnou stejně', [$arc_ack, json_decode($arc_ack_body, true)['archived'] ?? null, $arc_sc, json_decode($arc_sc_body, true)['archived'] ?? null],
+    [403, true, 403, true]);
+check('a selhaná akce tak zůstane', $pdo->query("SELECT status FROM agent_actions WHERE id = {$arc_action}")->fetchColumn(), 'failed');
+
+[$arc_restore] = api_post($base, 'action=unarchive_monitor', ['id' => 97], $cookie_jar);
+check('admin monitor obnoví', $arc_restore, 200);
+[, $arc_live_after] = api_get_auth($base, 'action=monitors', $cookie_jar);
+check_true('obnovený monitor je zpět v seznamu', in_array(97, $arc_ids($arc_live_after), true));
+check('a jeho stav je neznámý do příští kontroly', $pdo->query("SELECT status FROM monitors WHERE id = 97")->fetchColumn(), 'unknown');
+check('hlášení obnoveného monitoru se zase uloží', $post_agent(['agent_key' => 'archive-test-key-97']), 200);
+check_true('archivace i obnovení jsou v auditu', (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action IN ('monitor_archived', 'monitor_restored') AND target_id = 97")->fetchColumn() === 2);
+$pdo->exec("DELETE FROM monitors WHERE id = 97");
+
+// --- Install details for an agent ------------------------------------------------------
+//
+// The app never showed the key, so an agent installed by its instructions
+// stopped at "AGENT_KEY is not set".
+[$ai_code, $ai] = api_get_auth($base, 'action=agent_install_info&monitor_id=2', $cookie_jar);
+check('admin dostane údaje pro instalaci agenta', $ai_code, 200);
+check('klíč je ten z databáze', $ai['agentKey'] ?? null, $pdo->query("SELECT agent_key FROM monitors WHERE id = 2")->fetchColumn());
+check_true('adresa API míří na agent_api.php', str_ends_with((string)($ai['apiUrl'] ?? ''), '/agent_api.php'));
+check_true('a nabídne skript routeru', str_ends_with((string)($ai['files']['openwrt'] ?? ''), '/agent_openwrt.sh'));
+check_true('čtení klíče se zapíše do auditu', (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'agent_key_viewed'")->fetchColumn() > 0);
+[$ai_anon] = api_get($base, 'action=agent_install_info&monitor_id=2');
+check('anonym klíč agenta nedostane', $ai_anon, 403);
+
+// --- Threshold hysteresis -----------------------------------------------------
+//
+// The CPU alert clears five points below the threshold, and a latch set under
+// a different threshold is stale. Default CPU threshold: 90.
+$thr_before = $lte_events('threshold_exceeded');
+$cpu_at = fn (float $cpu) => ['cpu' => $cpu, 'ram' => 10.0, 'hdd' => 10.0];
+check('hystereze: 95 % přijato', $post_agent($cpu_at(95)), 200);
+check('hystereze: překročení alertuje', $lte_events('threshold_exceeded'), $thr_before + 1);
+check('hystereze: 88 % přijato', $post_agent($cpu_at(88)), 200);
+check('hystereze: 95 % podruhé přijato', $post_agent($cpu_at(95)), 200);
+check('hystereze: kmitání kolem limitu (88 → 95) neposílá nový alert', $lte_events('threshold_exceeded'), $thr_before + 1);
+check('hystereze: 84 % přijato (pod pásmo)', $post_agent($cpu_at(84)), 200);
+check('hystereze: 95 % potřetí přijato', $post_agent($cpu_at(95)), 200);
+check('hystereze: po poklesu pod pásmo se překročení hlásí znovu', $lte_events('threshold_exceeded'), $thr_before + 2);
+if ($pdo->query("SHOW COLUMNS FROM monitors LIKE 'cpu_threshold'")->fetch()) {
+    // Latched at 95 with threshold 90; the admin raises the limit to 97.
+    // The original value is put back afterwards - later tests read it.
+    $thr_orig = $pdo->query("SELECT cpu_threshold FROM monitors WHERE id = 2")->fetchColumn();
+    $pdo->exec("UPDATE monitors SET cpu_threshold = 97 WHERE id = 2");
+    check('hystereze: 95 % po zvýšení limitu přijato', $post_agent($cpu_at(95)), 200);
+    check('hystereze: 98 % přijato', $post_agent($cpu_at(98)), 200);
+    check('hystereze: starý latch nepolyká překročení nového limitu', $lte_events('threshold_exceeded'), $thr_before + 3);
+    $pdo->prepare("UPDATE monitors SET cpu_threshold = ? WHERE id = 2")->execute([$thr_orig === false ? null : $thr_orig]);
+}
+$post_agent($cpu_at(12.5));
+
+// --- Traffic by link role (link_traffic) + the LTE throughput series -----------
+//
+// Roles come from the agent (wan_l3_device / lte_device); the daily totals per
+// interface are the existing table, the backup periods come from the wan_lost /
+// wan_restored events the WAN tests above produced.
+check('hlášení s rolemi linek a LTE rychlostí agent přijme', $post_agent(['wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => true, 'wan_l3_device' => 'eth0', 'lte_device' => 'wwan0', 'net_lte' => 123.4]), 200);
+$lte_row = $pdo->query("SELECT net_lte_kbps FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetch();
+check('LTE rychlost se uložila jako metrika', round((float)($lte_row['net_lte_kbps'] ?? -1), 1), 123.4);
+[$ls_code, $ls] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=net_lte&period=24h', $cookie_jar);
+check('metric_series zná net_lte', $ls_code, 200);
+check_true('a vrací body', count($ls['points'] ?? []) >= 1);
+
+$pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2");
+$pdo->exec("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total) VALUES
+    (2, 'eth0', CURDATE(), 1000, 2000),
+    (2, 'eth0', DATE_SUB(CURDATE(), INTERVAL 3 DAY), 10000, 20000),
+    (2, 'wwan0', CURDATE(), 300, 400),
+    (2, 'br-lan', CURDATE(), 99999, 99999)");
+[$lt_code, $lt] = api_get_auth($base, 'action=link_traffic&monitor_id=2', $cookie_jar);
+check('link_traffic vrací 200', $lt_code, 200);
+// Interface names and per-link traffic are for signed-in accounts only (owner's decision).
+[$lt_anon_code] = api_get($base, 'action=link_traffic&monitor_id=2');
+check('link_traffic bez přihlášení je odmítnut', $lt_anon_code, 401);
+check('primární linka je zařízení z wan_l3_device', $lt['primary']['iface'] ?? null, 'eth0');
+check('záloha je zařízení z lte_device', $lt['backup']['iface'] ?? null, 'wwan0');
+check('dnešní provoz primární linky (rx)', (float)($lt['primary']['today']['rx_bytes'] ?? -1), 1000.0);
+check('7 dní primární linky sečte i starší den (tx)', (float)($lt['primary']['7d']['tx_bytes'] ?? -1), 22000.0);
+check('dnešní provoz zálohy (tx)', (float)($lt['backup']['today']['tx_bytes'] ?? -1), 400.0);
+check('výpadky primární linky = dva z testů výše', count($lt['wan_down_periods'] ?? []), 2);
+check_true('primární linka teď neleží', ($lt['wan_down_now'] ?? null) === false);
+check_true('LAN se do rolí nepočítá, ale v seznamu rozhraní je', in_array('br-lan', $lt['interfaces'] ?? [], true) && ($lt['primary']['iface'] ?? '') !== 'br-lan');
+// A window with no rows at all is unknown, not "0 B transferred".
+$pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface = 'wwan0'");
+$pdo->exec("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total)
+            VALUES (2, 'wwan0', DATE_SUB(CURDATE(), INTERVAL 20 DAY), 500, 600)");
+[, $lt_gap] = api_get_auth($base, 'action=link_traffic&monitor_id=2', $cookie_jar);
+// `??` would turn the null we are asserting on into the fallback - the very
+// trap this project has a rule about.
+check_true('okno bez jediného měření je null, ne nula bajtů',
+    is_array($lt_gap['backup'] ?? null) && array_key_exists('today', $lt_gap['backup']) && $lt_gap['backup']['today'] === null);
+check('a okno, kde měření je, se spočítá', (float)($lt_gap['backup']['30d']['rx_bytes'] ?? -1), 500.0);
+// An agent before 0.1.3 sends no wan_l3_device: the primary side is unknown, not guessed.
+check('hlášení starého agenta bez rolí', $post_agent(['wan_up' => true, 'wan_proto' => 'dhcp']), 200);
+[, $lt_old] = api_get_auth($base, 'action=link_traffic&monitor_id=2', $cookie_jar);
+check_true('bez wan_l3_device je primární strana null', array_key_exists('primary', $lt_old) && $lt_old['primary'] === null);
+check_true('a seznam rozhraní zůstává', in_array('eth0', $lt_old['interfaces'] ?? [], true));
+[$lt404, ] = api_get_auth($base, 'action=link_traffic&monitor_id=999999', $cookie_jar);
+check('neexistující monitor = 404', $lt404, 404);
+$post_agent(['wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => true, 'wan_l3_device' => 'eth0', 'lte_device' => 'wwan0']);
+
+// An outage that started before the window and never ended. Its events fall
+// outside the query, so the whole period used to vanish and the answer was
+// "never on the backup" for a router sitting on the backup right now.
+$pdo->exec("DELETE FROM monitor_events WHERE monitor_id = 2 AND event_type IN ('wan_lost', 'wan_restored')");
+$pdo->exec("INSERT INTO monitor_events (monitor_id, monitor_name, monitor_type, event_type, description, occurred_at)
+            VALUES (2, 'Router bez metrik', 'openwrt', 'wan_lost', 'Výpadek před oknem', DATE_SUB(NOW(), INTERVAL 5 DAY))");
+[, $lt_open] = api_get_auth($base, 'action=link_traffic&monitor_id=2&days=2', $cookie_jar);
+check_true('výpadek z doby před oknem se neztratí', ($lt_open['wan_down_now'] ?? null) === true);
+check('a je z něj jedno běžící období', count($lt_open['wan_down_periods'] ?? []), 1);
+check_true('doba výpadku pokrývá celé okno', ($lt_open['wan_down_seconds'] ?? 0) >= 2 * 86400 - 120);
+$pdo->exec("DELETE FROM monitor_events WHERE monitor_id = 2 AND event_type IN ('wan_lost', 'wan_restored')");
+
+// --- One monitor of an asset must not answer for another -----------------
+//
+// `WHERE id = ? OR asset_id = ?` with a bare LIMIT 1 let MySQL return the
+// sibling with the lower id, so a chart could show a different monitor's data.
+$pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
+$pdo->exec("DELETE FROM assets WHERE id = 92");
+$pdo->exec("INSERT INTO assets (id, name) VALUES (92, 'Asset se dvěma monitory')");
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, asset_id, category)
+            VALUES (91, 'Sourozenec s nižším id', 'web', '10.0.0.91', 'up', 92, 'Test'),
+                   (92, 'Cílový monitor', 'vps', '10.0.0.92', 'up', 92, 'Test')");
+for ($i = 0; $i < 3; $i++) {
+    $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (92, 42, DATE_SUB(NOW(), INTERVAL " . ($i + 1) . " MINUTE))");
+}
+[$sib_code, $sib] = api_get_auth($base, 'action=metric_series&monitor_id=92&metric=cpu&period=24h', $cookie_jar);
+check('metric_series pro monitor se sourozencem vrací 200', $sib_code, 200);
+check('a vrátí měření cílového monitoru, ne sourozencova', count($sib['points'] ?? []), 3);
+[, $sib_detail] = api_get_auth($base, 'action=metric_detail&monitor_id=92&metric=cpu', $cookie_jar);
+check('metric_detail ukazuje ten správný monitor', $sib_detail['monitor']['name'] ?? null, 'Cílový monitor');
+[, $sib_corr] = api_get_auth($base, 'action=metric_correlations&monitor_id=92&metric=cpu&period=24h', $cookie_jar);
+check('metric_correlations počítá z jeho vzorků', $sib_corr['samples'] ?? 0, 3);
+// A counter's chip showed the lifetime total next to a chart of increments (R278).
+$pdo->exec("UPDATE vps_metrics SET fw_dropped = CASE WHEN checked_at < DATE_SUB(NOW(), INTERVAL 150 SECOND) THEN 999990
+    WHEN checked_at < DATE_SUB(NOW(), INTERVAL 90 SECOND) THEN 1000000 ELSE 1000040 END WHERE monitor_id = 92");
+[, $sib_detail] = api_get_auth($base, 'action=metric_detail&monitor_id=92&metric=cpu', $cookie_jar);
+$sib_fw = array_values(array_filter($sib_detail['related'] ?? [], fn ($r) => ($r['key'] ?? '') === 'fw_dropped'))[0] ?? [];
+check('čip čítače ukazuje poslední přírůstek jako graf, ne součet od startu', $sib_fw['latest'] ?? 'chybí', 40);
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 92");
+$pdo->exec("DELETE FROM monitors WHERE id IN (91, 92)");
+$pdo->exec("DELETE FROM assets WHERE id = 92");
+
+// R97: nothing stored opened the form with every section unticked.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, enabled_metrics) VALUES (9097, 'R97 web', 'web', 'https://r97.example.test', 'up', NULL), (9098, 'R97 vlastní', 'web', 'https://r98.example.test', 'up', '[\"headers\"]')");
+[, $r97_list] = api_get_auth($base, 'action=monitors', $cookie_jar);
+$r97 = array_column($r97_list['monitors'] ?? [], 'enabledMetrics', 'id');
+check('bez uložené sady přijde doporučená, ne prázdná', $r97[9097] ?? null, ['check_pipeline', 'response_breakdown', 'ssl_card']);
+check('uložená sada zůstává, jak je', $r97[9098] ?? null, ['headers']);
+$pdo->exec("DELETE FROM monitors WHERE id IN (9097, 9098)");
+
+// R39: a node's latency was its newest one in the current state, however old.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status) VALUES (9039, 'R39 uzel', 'vps', 'r39.example.test', 'up')");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (9039, 'up', 23, NOW() - INTERVAL 2 DAY)");
+$r39_latency = function () use ($base, $cookie_jar) {
+    [, $ps] = api_get_auth($base, 'action=public_status', $cookie_jar);
+    $node = array_values(array_filter($ps['nodes'] ?? [], fn ($n) => $n['name'] === 'R39 uzel'))[0] ?? null;
+    return $node === null ? 'chybí' : $node['latencyMs'];
+};
+check('uzel bez nedávné kontroly nemá starou latenci', $r39_latency(), null);
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (9039, 'up', 25, NOW())");
+check('čerstvá kontrola latenci má', $r39_latency(), 25);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9039");
+$pdo->exec("DELETE FROM monitors WHERE id = 9039");
+
+// R36: a list showed the last response ever measured and a silent agent's load.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status) VALUES (9360, 'R36', 'vps', 'r36.example.test', 'up')");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (9360, 'up', 42, NOW())");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at) VALUES (9360, 23.5, 40, 50, NOW())");
+$r36_row = function () use ($base, $cookie_jar): array {
+    [, $list] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    return array_values(array_filter($list['monitors'] ?? [], fn ($m) => (int)$m['id'] === 9360))[0] ?? [];
+};
+$r36 = $r36_row();
+check('běžící monitor: odezva a vytížení platí', [$r36['responseMs'] ?? null, $r36['cpu'] ?? null], [42, 23.5]);
+$pdo->exec("UPDATE monitors SET status = 'down' WHERE id = 9360");
+check('monitor ve výpadku nemá starou odezvu', $r36_row()['responseMs'], null);
+$pdo->prepare("UPDATE monitors SET status = 'up', last_details = ? WHERE id = 9360")->execute([json_encode(['agent_last_seen' => time() - 7 * 86400])]);
+$r36 = $r36_row();
+check('tichý agent nemá staré vytížení', [$r36['agentSilent'], $r36['cpu'], $r36['ram'], $r36['hdd']], [true, null, null, null]);
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 9360")->execute([json_encode(['agent_last_seen' => time() - 30])]);
+check('agent, který právě hlásí, vytížení má', $r36_row()['cpu'] ?? null, 23.5);
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 9360");
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9360");
+$pdo->exec("DELETE FROM monitors WHERE id = 9360");
+
+// R86: writes from /app left no trace, where admin.php's left both.
+$r86_audit = function (string $action) use ($pdo): array {
+    $stmt = $pdo->prepare("SELECT description, target_id FROM audit_log WHERE action = ? ORDER BY id DESC LIMIT 1");
+    $stmt->execute([$action]);
+    return $stmt->fetch() ?: [];
+};
+$r86_events = function (string $type, string $name) use ($pdo): int {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE event_type = ? AND monitor_name = ?");
+    $stmt->execute([$type, $name]);
+    return (int)$stmt->fetchColumn();
+};
+[$r86_code, $r86_new] = api_post($base, 'action=save_monitor', ['name' => 'R86 monitor', 'type' => 'web', 'target' => 'https://r86.example.test', 'category' => 'Testy'], $cookie_jar);
+$r86_id = (int)($r86_new['id'] ?? 0);
+check('audit: nový monitor', [$r86_code, $r86_audit('monitor_created')['description'] ?? null, (int)($r86_audit('monitor_created')['target_id'] ?? 0), $r86_events('monitor_added', 'R86 monitor')], [200, 'R86 monitor', $r86_id, 1]);
+api_post($base, 'action=save_monitor', ['id' => $r86_id, 'name' => 'R86 monitor', 'type' => 'web', 'target' => 'https://r86.example.test', 'category' => 'Testy'], $cookie_jar);
+check('audit: úprava monitoru', [$r86_audit('monitor_updated')['description'] ?? null, $r86_events('config_changed', 'R86 monitor')], ['R86 monitor', 1]);
+api_post($base, 'action=delete_monitor', ['id' => $r86_id], $cookie_jar);
+check('audit: smazání monitoru přežije jeho řádek', [$r86_audit('monitor_deleted')['description'] ?? null, (int)($r86_audit('monitor_deleted')['target_id'] ?? 0), $r86_events('monitor_removed', 'R86 monitor')], ['R86 monitor', $r86_id, 1]);
+$r86_title = get_setting('site_title', '');
+$r86_count = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'settings_updated'")->fetchColumn();
+$r86_before = $r86_count();
+api_post($base, 'action=save_settings', ['settings' => ['site_title' => 'R86 tajemství', 'smtp_pass' => 'R86-heslo']], $cookie_jar);
+$r86_changed = (string)($r86_audit('settings_updated')['description'] ?? '');
+check_true('audit: nastavení jmenuje klíče', str_contains($r86_changed, 'site_title') && $r86_count() === $r86_before + 1);
+check_true('audit: hodnoty do záznamu nejdou', !str_contains($r86_changed, 'tajemství') && !str_contains($r86_changed, 'R86-heslo'));
+api_post($base, 'action=save_settings', ['settings' => ['site_title' => 'R86 tajemství']], $cookie_jar);
+check('audit: uložení beze změny nic nezapíše', $r86_count(), $r86_before + 1);
+api_post($base, 'action=save_settings', ['settings' => ['site_title' => $r86_title, 'smtp_pass' => '']], $cookie_jar);
+[, $r86_token] = api_post($base, 'action=generate_metrics_token', [], $cookie_jar);
+check_true('audit: nový token bez tokenu v záznamu', isset($r86_audit('metrics_token_generated')['description']) && !str_contains((string)$r86_audit('metrics_token_generated')['description'], (string)($r86_token['metricsToken'] ?? 'x')));
+[, $r86_inc] = api_post($base, 'action=create_incident', ['title' => 'R86 incident'], $cookie_jar);
+check('audit: nový incident', [$r86_audit('incident_created')['description'] ?? null, (int)($r86_audit('incident_created')['target_id'] ?? 0)], ['R86 incident', (int)($r86_inc['id'] ?? -1)]);
+$pdo->exec("DELETE FROM incidents WHERE title = 'R86 incident'");
+
+// R172: an open incident fell off a list of the latest 50.
+$pdo->exec("INSERT INTO incidents (id, title, impact, status) VALUES (917200, 'R172 otevřený', 'minor', 'investigating')");
+$r172_ins = $pdo->prepare("INSERT INTO incidents (id, title, impact, status, resolved_at) VALUES (?, 'R172 uzavřený', 'minor', 'resolved', NOW())");
+for ($r172_i = 1; $r172_i <= 55; $r172_i++) {
+    $r172_ins->execute([917200 + $r172_i]);
+}
+[, $r172] = api_get_auth($base, 'action=incidents', $cookie_jar);
+$r172_ids = array_column($r172['manualIncidents'] ?? [], 'id');
+check_true('starý otevřený incident v seznamu zůstane', in_array(917200, $r172_ids, true));
+check('uzavřených je nejvýš 50', count(array_filter($r172['manualIncidents'] ?? [], fn ($i) => $i['status'] === 'resolved')) <= 50, true);
+$r172_sorted = $r172_ids;
+rsort($r172_sorted);
+check('seznam jde dál od nejnovějšího', $r172_ids, $r172_sorted);
+$pdo->exec("DELETE FROM incidents WHERE id BETWEEN 917200 AND 917255");
+
+// R13: a silent agent's 'unknown' read as "Obnovení provozu".
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status) VALUES (9130, 'R13', 'vps', 'r13.example.test', 'unknown')");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES (9130, 'up', NOW() - INTERVAL 3 HOUR), (9130, 'down', NOW() - INTERVAL 2 HOUR), (9130, 'up', NOW() - INTERVAL 90 MINUTE), (9130, 'unknown', NOW() - INTERVAL 1 HOUR), (9130, 'maintenance', NOW() - INTERVAL 30 MINUTE)");
+$tl_types = array_values(array_filter(array_column(bk_get_monitor_timeline($pdo, 9130, 1), 'event_type'), fn ($type) => str_starts_with($type, 'status_changed_')));
+$tl_types = array_values(array_unique($tl_types));
+sort($tl_types);
+check('časová osa: neznámý stav není obnovení', $tl_types, ['status_changed_down', 'status_changed_maintenance', 'status_changed_unknown', 'status_changed_up']);
+$pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9130");
+$pdo->exec("DELETE FROM monitors WHERE id = 9130");
+
+// R12: only a server known to be down fails availability.
+$ts_avail = function (string $status): array {
+    $health = bk_compute_health_score(build_teamspeak_health_areas(['id' => 1, 'type' => 'teamspeak'], $status, [], [], null));
+    return [$health['areas'][0]['status'], $health['score']];
+};
+check('TS: běžící server dostupnost splní', $ts_avail('up'), ['ok', 100]);
+check('TS: zhoršený server pořád odpovídá', $ts_avail('warning'), ['ok', 100]);
+check('TS: výpadek dostupnost nesplní', $ts_avail('down'), ['fail', 0]);
+foreach (['unknown', 'maintenance', 'paused', ''] as $ts_state) {
+    check("TS: stav '{$ts_state}' nemá skóre, ne nulu", $ts_avail($ts_state), ['na', null]);
+}
+
+// --- TeamSpeak's version area reads the number, not the build (R150) ------------
+// version_compare() takes "3.13.7 [Build: 1655727713]" for older than "3.13.7".
+$tv_area = function (string $latest, ?string $reported) use ($pdo): array {
+    $GLOBALS['system_settings']['ts3_latest_version'] = $latest;
+    $areas = build_teamspeak_health_areas(['id' => 1, 'type' => 'teamspeak'], 'up', $reported === null ? [] : ['version' => $reported], [], $pdo);
+    foreach ($areas as $area) {
+        if ($area['key'] === 'version') {
+            return [$area['status'], $area['score_pct']];
+        }
+    }
+    return [];
+};
+check('TS3: aktuální verze s číslem buildu', $tv_area('3.13.7', '3.13.7 [Build: 1655727713]'), ['ok', 100]);
+check('TS3: starší verze s číslem buildu', $tv_area('3.13.8', '3.13.7 [Build: 1655727713]'), ['warn', 70]);
+check('TS3: novější než zadaná', $tv_area('3.13.7', '3.13.10 [Build: 1]'), ['ok', 100]);
+check('TS3: číslo buildu i v nastavení', $tv_area('3.13.7 [Build: 1655727713]', '3.13.7'), ['ok', 100]);
+check('TS3: bez čísla verze se nehodnotí', $tv_area('3.13.7', 'neznámá'), ['na', 0]);
+check('TS3: bez hlášené verze se nehodnotí', $tv_area('3.13.7', null), ['na', 0]);
+unset($GLOBALS['system_settings']['ts3_latest_version']);
+
+// --- TeamSpeak's process and VPS areas score only a fresh agent report (R48) -----
+// A dead agent's last report kept "TeamSpeak proces" and "Výkon VPS" at ok.
+$ta_areas = function (array $agent): array {
+    $out = [];
+    foreach (build_teamspeak_health_areas(['id' => 1, 'type' => 'teamspeak'], 'up', [], $agent, null) as $area) {
+        if (in_array($area['key'], ['process', 'vps'], true)) {
+            $out[$area['key']] = $area['status'];
+        }
+    }
+    return $out;
+};
+$ta_agent = ['cpu' => 10, 'ram' => 20, 'ts3_process' => ['pid' => 7]];
+check('TS3: čerstvé hlášení agenta se hodnotí', $ta_areas($ta_agent + ['agent_last_seen' => time() - 60]), ['process' => 'ok', 'vps' => 'ok']);
+check('TS3: čerstvé půjčené od agenta stroje taky', $ta_areas($ta_agent + ['borrowed_agent_last_seen' => time() - 60]), ['process' => 'ok', 'vps' => 'ok']);
+check('TS3: hlášení staré hodinu se nehodnotí', $ta_areas($ta_agent + ['agent_last_seen' => time() - 3600]), ['process' => 'na', 'vps' => 'na']);
+check('TS3: proces chybí jen podle čerstvého hlášení', $ta_areas(['cpu' => 10, 'ram' => 20, 'agent_last_seen' => time() - 3600]), ['process' => 'na', 'vps' => 'na']);
+
+// --- A tip names who loaded the machine over the whole period (R147) ------------
+// The duration is in minutes, the tip's process history wants seconds: the window
+// came out 60× too short, and the tip fell back on who is busy this very minute.
+require_once $root . '/lang.php';
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 147");
+$pdo->exec("DELETE FROM process_samples WHERE monitor_id = 147");
+$pdo->exec("DELETE FROM monitors WHERE id = 147");
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, cpu_threshold) VALUES (147, 'R147 server', 'vps', 'server-r147', 'up', 'Test', 50)");
+// A sample every five minutes, as from a reporting agent: a gap ends the run.
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, checked_at) VALUES "
+    . implode(', ', array_map(fn ($m) => "(147, 99, 99, NOW() - INTERVAL {$m} MINUTE)", range(90, 0, -5))));
+$pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb) VALUES
+    (147, NOW() - INTERVAL 70 MINUTE, 'cpu', 'vinik-cpu', 1, 88, 10),
+    (147, NOW() - INTERVAL 70 MINUTE, 'ram', 'vinik-ram', 2, 1, 900)");
+$td_mon = $pdo->query("SELECT * FROM monitors WHERE id = 147")->fetch();
+$td_tips = implode(' | ', array_column(bk_get_knowledge_tips($td_mon, [
+    'cpu' => 99, 'ram' => 99,
+    'top_cpu_processes' => [['name' => 'snimek-cpu', 'cpu' => 10]],
+    'top_ram_processes' => [['name' => 'snimek-ram', 'ram_mb' => 10]],
+], [], 'up', null, $pdo), 'text'));
+check_true('tip CPU jmenuje viníka celého období', str_contains($td_tips, 'vinik-cpu') && !str_contains($td_tips, 'snimek-cpu'));
+check_true('tip RAM jmenuje viníka celého období', str_contains($td_tips, 'vinik-ram') && !str_contains($td_tips, 'snimek-ram'));
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 147");
+$pdo->exec("DELETE FROM process_samples WHERE monitor_id = 147");
+$pdo->exec("DELETE FROM monitors WHERE id = 147");
+
+// --- A day of only unknown rows has no health dot colour (R16) -------------------
+// A heartbeat that never pinged logs 'unknown' every minute; the dot said "up".
+$pdo->exec("DELETE FROM monitors WHERE id = 16016");
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES (16016, 'R16 heartbeat', 'heartbeat', 'r16', 'unknown', 'Test')");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+    (16016, 'unknown', NULL, NOW() - INTERVAL 2 DAY), (16016, 'unknown', NULL, NOW() - INTERVAL 2 DAY + INTERVAL 1 MINUTE),
+    (16016, 'unknown', NULL, NOW() - INTERVAL 1 DAY), (16016, 'up', 20, NOW() - INTERVAL 1 DAY + INTERVAL 1 MINUTE)");
+$hd_dots = array_slice(array_column(bk_get_30day_health_dots($pdo, 16016), 'status'), -3, 2);
+check('den jen s neznámým stavem je bez dat, den s kontrolou je v pořádku', $hd_dots, ['none', 'up']);
+$pdo->exec("DELETE FROM monitors WHERE id = 16016");
+
+// --- Borrowed agent data comes from the same asset only (R82) ---------------------
+// Two more lookups used to follow, by target address and for any agent reporting
+// ts3_process. They ordered by a column monitors does not have, so they never
+// ran; this holds the line if someone reaches for them again.
+$pdo->exec("DELETE FROM monitors WHERE id IN (148, 149, 150)");
+$pdo->exec("DELETE FROM assets WHERE id = 148");
+$pdo->exec("INSERT INTO assets (id, name) VALUES (148, 'R82 stroj')");
+$bd_agent = json_encode(['cpu' => 12, 'ts3_process' => ['pid' => 1], 'agent_last_seen' => 1790000000]);
+$pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, agent_key, last_details, asset_id) VALUES
+    (148, 'R82 agent', 'vps', 'r82.example.test', 'up', 'Test', 'r82-key', ?, 148)")->execute([$bd_agent]);
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, asset_id) VALUES
+    (149, 'R82 cizí TS', 'teamspeak', 'r82.example.test', 'up', 'Test', NULL),
+    (150, 'R82 TS na stroji', 'teamspeak', 'r82.example.test', 'up', 'Test', 148)");
+$bd_row = fn (int $id): array => $pdo->query("SELECT * FROM monitors WHERE id = {$id}")->fetch();
+$bd_foreign = [];
+bk_enrich_monitor_details($pdo, $bd_row(149), $bd_foreign, true);
+check('monitor bez stroje si od cizího agenta nic nepůjčí', $bd_foreign, []);
+$bd_own = [];
+bk_enrich_monitor_details($pdo, $bd_row(150), $bd_own, true);
+check('monitor na stejném stroji ano', [$bd_own['cpu'] ?? null, $bd_own['ts3_process'] ?? null], [12, ['pid' => 1]]);
+check('a s časem hlášení, ze kterého jsou (R48)', $bd_own['borrowed_agent_last_seen'] ?? null, 1790000000);
+$pdo->exec("DELETE FROM monitors WHERE id IN (148, 149, 150)");
+$pdo->exec("DELETE FROM assets WHERE id = 148");
+
+// --- A signed-in password prompt has the login's limit on guesses (R355) -----------
+// Only the login counted failures, so a stolen session could try the account's
+// password here for as long as it liked. Every prompt shares the one lockout.
+$pa_clear = fn () => $pdo->exec("DELETE FROM audit_log WHERE action = 'login_failed'");
+$pa_clear();
+$pa_prompts = [
+    ['oauth_link_start', ['provider' => 'github', 'password' => 'nespravne-heslo']],
+    ['update_profile', ['email' => 'jinam@example.com', 'phone' => '', 'oldPassword' => 'nespravne-heslo']],
+    ['update_profile', ['email' => 'admin@example.com', 'phone' => '', 'oldPassword' => 'nespravne-heslo', 'newPassword' => 'NoveHeslo123!']],
+    ['oauth_unlink', ['password' => 'nespravne-heslo']],
+    ['totp_disable', ['password' => 'nespravne-heslo']],
+];
+$pa_codes = [];
+foreach ($pa_prompts as [$pa_action, $pa_body]) {
+    [$pa_codes[]] = api_post($base, 'action=' . $pa_action, $pa_body, $cookie_jar);
+}
+check('každá výzva odmítne špatné heslo a započítá ho', [array_values(array_unique($pa_codes)),
+    (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'login_failed'")->fetchColumn()], [[400], 5]);
+[$pa_locked, $pa_res] = api_post($base, 'action=oauth_link_start', ['provider' => 'github', 'password' => $bk_test_admin_password], $cookie_jar);
+check('po pěti pokusech neprojde ani správné heslo', $pa_locked, 429);
+check_true('a odpověď řekne proč', str_contains((string)($pa_res['error'] ?? ''), 'Příliš mnoho'));
+[$pa_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password], tempnam(sys_get_temp_dir(), 'bk_test_pa'), '');
+check('zámek platí i pro přihlášení', $pa_login, 429);
+$pa_clear();
+[$pa_ok] = api_post($base, 'action=oauth_link_start', ['provider' => 'github', 'password' => $bk_test_admin_password], $cookie_jar);
+check('po uplynutí zámku správné heslo projde', $pa_ok, 200);
+$pa_rows = (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'login_failed'")->fetchColumn();
+check('správné heslo se nepočítá', $pa_rows, 0);
+
+// --- An agent's alerts wait for the end of a maintenance window (R161) ------------
+// A router rebooted on purpose used to page; what is still wrong after the window
+// has to be heard, and its latch was set inside it.
+$mw_clean = function () use ($pdo): void {
+    foreach (['notification_log', 'monitor_logs', 'monitor_events', 'vps_metrics', 'process_samples', 'metrics_daily'] as $mw_table) {
+        $pdo->exec("DELETE FROM {$mw_table} WHERE monitor_id = 161");
+    }
+    $pdo->exec("DELETE FROM monitors WHERE id = 161");
+};
+$mw_clean();
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, agent_key, maintenance)
+            VALUES (161, 'R161 router', 'openwrt', 'r161.test', 'maintenance', 'Test', 'r161-key', 1)");
+$mw_report = function (bool $wan_ok, float $cpu = 5.0) use ($base): int {
+    [$code] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode([
+        'agent_key' => 'r161-key', 'cpu' => $cpu, 'ram' => 30.0, 'hdd' => 40.0,
+        'wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => $wan_ok,
+    ]));
+    return $code;
+};
+$mw_window = fn (int $on) => $pdo->exec("UPDATE monitors SET maintenance = {$on}, status = '" . ($on ? 'maintenance' : 'up') . "' WHERE id = 161");
+$mw_any = fn (string $status): int => (int)$pdo->query("SELECT COUNT(*) FROM notification_log WHERE monitor_id = 161 AND status = '{$status}'")->fetchColumn();
+$mw_events = fn (string $type): int => (int)$pdo->query("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 161 AND event_type = '{$type}'")->fetchColumn();
+$mw_held = fn (): mixed => json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 161")->fetchColumn(), true)['maintenance_held'] ?? null;
+
+check('v okně: agent hlášení přijme', [$mw_report(false), $mw_report(false)], [200, 200]);
+check('v okně: událost na časové ose je, oznámení ne', [$mw_events('wan_lost'), $mw_any('wan_lost')], [1, 0]);
+check('v okně: výpadek WAN čeká', array_keys((array)$mw_held()), ['wan_lost']);
+$mw_window(0);
+$mw_report(false);
+check_true('po okně: co trvá, se oznámí', $mw_any('wan_lost') > 0);
+$mw_after = $mw_any('wan_lost');
+$mw_report(false);
+check('po okně: a jen jednou', $mw_any('wan_lost'), $mw_after);
+check('po okně: nic už nečeká', $mw_held(), null);
+
+$mw_window(1);
+$mw_report(true);
+check('v okně: obnovení alertu z doby před oknem čeká', [$mw_any('wan_restored'), array_keys((array)$mw_held())], [0, ['wan_restored']]);
+$mw_window(0);
+$mw_report(true);
+check_true('po okně: a pak ho uzavře', $mw_any('wan_restored') > 0);
+
+$pdo->exec("DELETE FROM notification_log WHERE monitor_id = 161");
+$mw_window(1);
+$mw_report(false);
+$mw_report(false);
+$mw_report(true);
+check('v okně: výpadek, který v okně skončil, nikdo řešit nemusí', $mw_held(), []);
+$mw_window(0);
+$mw_report(true);
+check('po okně: nepřijde ani jedno z nich', [$mw_any('wan_lost'), $mw_any('wan_restored')], [0, 0]);
+
+$mw_window(1);
+$mw_report(true, 99.0);
+check('v okně: přetížení nikoho nebudí', $mw_any('vps_warning'), 0);
+$mw_window(0);
+$mw_report(true, 99.0);
+check_true('po okně: trvá-li, ozve se', $mw_any('vps_warning') > 0);
+$mw_clean();
+
+// --- An agent-side service in maintenance keeps cron's status ------------
+//
+// R141: the agent's result overwrote 'maintenance' with up/down, cron set it
+// back on its next run and announced the maintenance again - every minute,
+// with a DOWN alert in between while the service was stopped for the window.
+// The windows are real ones around now, so is_in_maintenance() decides by
+// their start and end, not by the flag alone.
+$sm_at = fn (int $offset): string => date('Y-m-d H:i:s', time() + $offset);
+$sm_cleanup = function () use ($pdo): void {
+    $pdo->exec("DELETE FROM incident_updates WHERE incident_id IN (SELECT id FROM incidents WHERE monitor_id IN (142, 144))");
+    $pdo->exec("DELETE FROM incidents WHERE monitor_id IN (142, 144)");
+    foreach (['notification_log', 'monitor_logs', 'monitor_events', 'vps_metrics', 'process_samples', 'metrics_daily'] as $sm_table) {
+        $pdo->exec("DELETE FROM {$sm_table} WHERE monitor_id IN (141, 142, 143, 144)");
+    }
+    $pdo->exec("DELETE FROM monitors WHERE id IN (141, 142, 143, 144)");
+    $pdo->exec("DELETE FROM assets WHERE id IN (141, 143)");
+};
+$sm_cleanup();
+$pdo->exec("INSERT INTO assets (id, name) VALUES (141, 'Router s kontrolou služby'), (143, 'Server s kontrolou služby')");
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, asset_id, category, agent_key)
+            VALUES (141, 'R141 router', 'openwrt', 'router-r141', 'up', 141, 'Test', 'r141-agent-key'),
+                   (143, 'R141 server', 'vps', 'server-r141', 'up', 143, 'Test', 'r141-server-key')");
+$pdo->prepare("INSERT INTO monitors (id, name, type, target, port, status, asset_id, category, maintenance, maintenance_start, maintenance_end)
+               VALUES (142, 'R141 kresd', 'agent_service', 'kresd', 53, 'maintenance', 141, 'Test', 1, ?, ?)")
+    ->execute([$sm_at(-3600), $sm_at(3600)]);
+// The router's agent sends its results as service_check_results.
+$sm_post = function (bool $running) use ($base): array {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(['agent_key' => 'r141-agent-key', 'service_check_results' => [
+            ['monitor_id' => 142, 'running' => $running, 'detail' => $running ? '' : "Agent nehlásí proces 'kresd'."],
+        ]]),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    $body = (string)curl_exec($ch);
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), json_decode($body, true) ?: []];
+};
+// A server agent lists its processes and ports in the report itself.
+$sm_report = function (bool $running) use ($base): int {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(['agent_key' => 'r141-server-key', 'cpu' => 5.0, 'ram' => 30.0, 'hdd' => 40.0,
+            'processes' => $running ? ['sshd', 'nginx'] : ['sshd'], 'ports' => $running ? [22, 443] : [22]]),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    curl_exec($ch);
+    return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+};
+$sm_status = fn (int $id): ?string => ($v = $pdo->query("SELECT status FROM monitors WHERE id = {$id}")->fetchColumn()) === false ? null : (string)$v;
+$sm_agent_logs = fn (int $id): int => (int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE monitor_id = {$id} AND checked_from = 'Agent'")->fetchColumn();
+$sm_incidents = fn (int $id): array => $pdo->query("SELECT status FROM incidents WHERE monitor_id = {$id} ORDER BY id")->fetchAll(PDO::FETCH_COLUMN);
+try {
+    [$sm_code, $sm_body] = $sm_post(false);
+    check('údržba: agent_api výsledek přijme, ale nepočítá ho jako zapsaný', [$sm_code, $sm_body['applied'] ?? null], [200, 0]);
+    check('údržba: služba zastavená kvůli údržbě nepřepíše stav na down', $sm_status(142), 'maintenance');
+    check('údržba: a nevznikne z toho incident (DOWN alert se neposlal)', $sm_incidents(142), []);
+    $sm_post(true);
+    check('údržba: běžící služba stav taky nepřepíše, cron nemá co znovu ohlásit', $sm_status(142), 'maintenance');
+    check('údržba: výsledky z okna se do historie nezapíšou (okno zapisuje cron)', $sm_agent_logs(142), 0);
+    // The window has ended and the flag is still on, as until cron's next
+    // run clears it: the window decides, and the result is written again.
+    $pdo->prepare("UPDATE monitors SET maintenance_start = ?, maintenance_end = ? WHERE id = 142")->execute([$sm_at(-7200), $sm_at(-60)]);
+    [$sm_code, $sm_body] = $sm_post(true);
+    check('po skončeném okně se výsledek agenta zase zapíše', [$sm_code, $sm_body['applied'] ?? null, $sm_status(142), $sm_agent_logs(142)],
+        [200, 1, 'up', 1]);
+    check('konec údržby bez otevřeného incidentu je tichý', [$sm_incidents(142),
+        (int)$pdo->query("SELECT COUNT(*) FROM notification_log WHERE monitor_id = 142")->fetchColumn()], [[], 0]);
+
+    // The same through the report of a server agent. The service fails
+    // before its window starts: that outage is written and opens an incident.
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, port, status, asset_id, category, maintenance, maintenance_start, maintenance_end)
+                   VALUES (144, 'R141 nginx', 'agent_service', 'nginx', 443, 'up', 143, 'Test', 1, ?, ?)")
+        ->execute([$sm_at(3600), $sm_at(7200)]);
+    check('hlášení serverového agenta je přijato', $sm_report(false), 200);
+    check('výpadek před začátkem okna se zapíše a otevře incident', [$sm_status(144), $sm_agent_logs(144), $sm_incidents(144)],
+        ['down', 1, ['investigating']]);
+    // The window starts and cron writes 'maintenance' (done here by hand).
+    $pdo->prepare("UPDATE monitors SET status = 'maintenance', maintenance_start = ?, maintenance_end = ? WHERE id = 144")
+        ->execute([$sm_at(-3600), $sm_at(3600)]);
+    $sm_report(false);
+    $sm_report(true);
+    check('údržba: ani hlášení serverového agenta stav ani historii nepřepíše', [$sm_status(144), $sm_agent_logs(144)], ['maintenance', 1]);
+    // After the window the service runs: the incident opened before it is a
+    // real outage, and the recovery closes it, as cron does for its checks.
+    $pdo->prepare("UPDATE monitors SET maintenance_start = ?, maintenance_end = ? WHERE id = 144")->execute([$sm_at(-7200), $sm_at(-60)]);
+    $sm_report(true);
+    check('po okně se služba zapíše jako běžící', [$sm_status(144), $sm_agent_logs(144)], ['up', 2]);
+    check('a incident otevřený před oknem se uzavře', $sm_incidents(144), ['resolved']);
+} finally {
+    $sm_cleanup();
+}
+
+// --- cron's check loop, one monitor at a time (bk_cron_check_monitor) -----
+//
+// Nothing in a suite ran cron.php, so these used to be regexes over its
+// text: a rename broke them and wrong behaviour with the same text passed.
+// The loop body is a function now and runs here on the real database, with
+// the check and the sender replaced: $cm_check answers per attempt and
+// counts the attempts, $cm_notes records what would have been sent.
+require_once $root . '/lang.php';
+require_once $root . '/cron_check.php';
+$cm_ids = '950, 951, 952, 953, 954, 955, 956, 957, 958, 959, 961, 962, 963';
+$cm_cleanup = function () use ($pdo, $cm_ids): void {
+    $pdo->exec("DELETE FROM incident_updates WHERE incident_id IN (SELECT id FROM incidents WHERE monitor_id IN ({$cm_ids}))");
+    foreach (['incidents', 'notification_log', 'monitor_logs', 'monitor_events', 'vps_metrics'] as $cm_table) {
+        $pdo->exec("DELETE FROM {$cm_table} WHERE monitor_id IN ({$cm_ids})");
+    }
+    $pdo->exec("DELETE FROM monitors WHERE id IN ({$cm_ids})");
+    $pdo->exec("DELETE FROM assets WHERE id = 961");
+};
+$cm_cleanup();
+$cm_location = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'cron_location'")->fetchColumn();
+bk_setting_set($pdo, 'cron_location', 'Testovací cron');
+$cm_notes = [];
+$cm_notify = function (PDO $p, array $m, string $status, $message = '') use (&$cm_notes): void {
+    $cm_notes[] = [(int)$m['id'], $status];
+};
+$cm_calls = 0;
+/** A check that answers $answers[attempt]; it never touches the network. */
+$cm_check = function (array $answers) use (&$cm_calls): callable {
+    return function (array $m, int $attempt) use ($answers, &$cm_calls): ?array {
+        $cm_calls++;
+        return $answers[$attempt] ?? null;
+    };
+};
+$cm_run = function (int $id, ?callable $check, ?array $row = null, ?callable $notify = null) use ($pdo, $cm_notify, &$cm_notes, &$cm_calls): string {
+    $cm_notes = [];
+    $cm_calls = 0;
+    $row ??= $pdo->query("SELECT * FROM monitors WHERE id = {$id}")->fetch();
+    ob_start();
+    try {
+        bk_cron_check_monitor($pdo, $row, $check, $notify ?? $cm_notify);
+    } finally {
+        $out = (string)ob_get_clean();
+    }
+    return $out;
+};
+/** last_details as the agent writes them; null clears them. */
+$cm_set_details = function (int $id, ?array $details) use ($pdo): void {
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?")
+        ->execute([$details === null ? null : json_encode($details, JSON_UNESCAPED_UNICODE), $id]);
+};
+$cm_details = fn (int $id): array => json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = {$id}")->fetchColumn(), true) ?: [];
+$cm_status = fn (int $id): string => (string)$pdo->query("SELECT status FROM monitors WHERE id = {$id}")->fetchColumn();
+$cm_last_log = fn (int $id) => $pdo->query("SELECT status, response_time, error_message, checked_from, check_stages FROM monitor_logs WHERE monitor_id = {$id} ORDER BY id DESC LIMIT 1")->fetch();
+$cm_up = fn (?float $ms, array $extra = []): array => ['status' => 'up', 'response_time' => $ms, 'error' => null] + $extra;
+$cm_down = fn (string $error): array => ['status' => 'down', 'response_time' => null, 'error' => $error];
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, port, status, category) VALUES
+        (950, 'Cron port', 'port', 'cron-port.test', 8080, 'down', 'Test'),
+        (951, 'Cron hra', 'minecraft', 'cron-mc.test', 25565, 'up', 'Test'),
+        (952, 'Cron web', 'web', 'https://cron-web.test', 443, 'up', 'Test'),
+        (953, 'Cron hosting', 'web', 'https://cron-hosting.test', NULL, 'up', 'Test'),
+        (954, 'Cron DNS', 'dns', 'cron-dns.test', 53, 'up', 'Test')");
+
+    // The measured time reaches monitor_logs as whole ms, at least 1 (bk_response_ms).
+    $out = $cm_run(950, $cm_check([1 => $cm_up(0.4)]));
+    check('cron: odezva pod 1 ms se zapíše jako 1 ms, s místem cronu', $cm_last_log(950),
+        ['status' => 'up', 'response_time' => 1, 'error_message' => null, 'checked_from' => 'Testovací cron', 'check_stages' => null]);
+    check('cron: změna down -> up se ohlásí a stav se zapíše', [$cm_notes, $cm_status(950)], [[[950, 'up']], 'up']);
+    check_true('cron: a vypíše změnu do svého logu', str_contains($out, 'ZMĚNA STAVU -> UP'));
+    $cm_run(950, $cm_check([1 => $cm_up(null)]));
+    check('cron: neměřená odezva zůstane NULL', array_key_exists('response_time', $cm_last_log(950) ?: []) ? $cm_last_log(950)['response_time'] : 'chybí', null);
+    check('cron: řádek kontroly nese zdroj cron', $pdo->query("SELECT source FROM monitor_logs WHERE monitor_id = 950 ORDER BY id DESC LIMIT 1")->fetchColumn(), 'cron');
+    check('cron: beze změny stavu se nic neposílá', $cm_notes, []);
+
+    // One failed attempt is retried at once; a blip that passes the retry is up.
+    $cm_run(950, $cm_check([1 => $cm_down('Spojení odmítnuto'), 2 => $cm_up(12.0)]));
+    check('cron: neúspěch se hned zopakuje a druhý pokus platí', [$cm_calls, $cm_status(950), $cm_notes, $cm_last_log(950)['status'] ?? null],
+        [2, 'up', [], 'up']);
+    $cm_run(950, $cm_check([1 => $cm_down('Spojení odmítnuto'), 2 => $cm_down('Spojení odmítnuto')]));
+    check('cron: dva neúspěchy za sebou jsou výpadek', [$cm_calls, $cm_status(950), $cm_notes], [2, 'down', [[950, 'down']]]);
+    check('cron: v historii je chyba kontroly', $cm_last_log(950)['error_message'] ?? null, 'Spojení odmítnuto');
+
+    // The three fresh reads of last_details. First: the list cron read at
+    // the start of the run is minutes old, and an agent report since then
+    // says the agent is alive - no silence alert from the stale copy.
+    $pdo->exec("UPDATE monitors SET status = 'up', agent_key = 'cron-latch-key' WHERE id = 950");
+    $cm_set_details(950, ['agent_last_seen' => time() - 7200]);
+    $cm_stale = $pdo->query("SELECT * FROM monitors WHERE id = 950")->fetch();
+    $cm_set_details(950, ['agent_last_seen' => time() - 30, 'agent_note' => 'z hlášení']);
+    $cm_run(950, $cm_check([1 => $cm_up(5.0)]), $cm_stale);
+    check('cron: zastaralý seznam monitorů nehlásí mlčení agenta, který se mezitím ozval', $cm_notes, []);
+    check('cron: a nepřepíše novější detaily', $cm_details(950)['agent_note'] ?? null, 'z hlášení');
+
+    // The agent-silence latch is written once and survives the rest of the
+    // run: a stale copy written back re-sent the alert every minute.
+    $cm_set_details(950, ['agent_last_seen' => time() - 7200]);
+    $cm_run(950, $cm_check([1 => $cm_up(5.0)]));
+    check('cron: mlčící agent se ohlásí', $cm_notes, [[950, 'agent_offline']]);
+    $cm_run(950, $cm_check([1 => $cm_up(5.0)]));
+    check('cron: a podruhé už ne (pojistka přežila zápis detailů)', [$cm_notes, !empty($cm_details(950)['agent_alert_sent'])], [[], true]);
+    check('cron: událost odpojení je jedna', (int)$pdo->query("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 950 AND event_type = 'agent_disconnected'")->fetchColumn(), 1);
+    // R161: a machine switched off for maintenance is silent on purpose. If it
+    // still is when the window ends, that is news.
+    $pdo->exec("UPDATE monitors SET maintenance = 1 WHERE id = 950");
+    $cm_set_details(950, ['agent_last_seen' => time() - 7200, 'agent_alert_sent' => false]);
+    $cm_run(950, $cm_check([1 => $cm_up(5.0)]));
+    check_false('cron: mlčení agenta v údržbě nikoho nebudí', in_array('agent_offline', array_column($cm_notes, 1), true));
+    $pdo->exec("UPDATE monitors SET maintenance = 0 WHERE id = 950");
+    $cm_run(950, $cm_check([1 => $cm_up(5.0)]));
+    check_true('cron: mlčí-li i po údržbě, ohlásí se', in_array('agent_offline', array_column($cm_notes, 1), true));
+    $pdo->exec("UPDATE monitors SET agent_key = NULL, last_details = NULL WHERE id = 950");
+
+    // Second: a report lands while the check runs. Merged into, not undone.
+    $cm_mid_report = function (array $m, int $attempt) use ($cm_set_details, $cm_up): array {
+        $cm_set_details(951, ['agent_note' => 'během kontroly', 'ts3_clients_online' => 3]);
+        return $cm_up(20.0, ['players_online' => 4, 'players_max' => 20, 'version' => '1.21']);
+    };
+    $cm_run(951, $cm_mid_report);
+    $cm_d = $cm_details(951);
+    check('cron: hlášení agenta během kontroly zůstane ve sloučených detailech',
+        [$cm_d['agent_note'] ?? null, $cm_d['players_online'] ?? null, $cm_d['players_max'] ?? null], ['během kontroly', 4, 20]);
+    check_true('cron: a detaily nesou otisk verze cronu', isset($cm_d['cron_version']));
+    check('cron: počet hráčů jde do historie', (int)$pdo->query("SELECT ts_clients_online FROM vps_metrics WHERE monitor_id = 951 ORDER BY id DESC LIMIT 1")->fetchColumn(), 4);
+    // Third: the latency alert takes seconds to send and a report can land
+    // meanwhile. Only the latency latch goes onto a fresh read.
+    $pdo->exec("UPDATE monitors SET latency_threshold_ms = 100, latency_threshold_mins = 5, last_details = NULL WHERE id = 950");
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 950");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+        (950, 'up', 500, DATE_SUB(NOW(), INTERVAL 2 MINUTE)), (950, 'up', 450, DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
+    $cm_slow_notify = function (PDO $p, array $m, string $status, $message = '') use ($cm_set_details, $cm_notify): void {
+        $cm_notify($p, $m, $status, $message);
+        if ($status === 'latency_degraded') {
+            $cm_set_details(950, ['agent_note' => 'během alertu']);
+        }
+    };
+    $out = $cm_run(950, $cm_check([1 => $cm_up(480.0)]), null, $cm_slow_notify);
+    check('cron: trvale pomalá odezva se ohlásí', $cm_notes, [[950, 'latency_degraded']]);
+    check('cron: pojistka latence se zapíše na čerstvé detaily', [$cm_details(950)['agent_note'] ?? null, $cm_details(950)['latency_alert_sent'] ?? null],
+        ['během alertu', true]);
+    check_true('cron: a vypíše to', str_contains($out, 'ODEZVA -> DEGRADED'));
+    $cm_run(950, $cm_check([1 => $cm_up(480.0)]));
+    check('cron: zpomalení se neohlašuje znovu', $cm_notes, []);
+    // A remote probe's times are measured from elsewhere: they are not the
+    // window. Above, the rows without a source counted, as they always did.
+    $cm_set_details(950, null);
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 950");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, source) VALUES
+        (950, 'up', 500, DATE_SUB(NOW(), INTERVAL 2 MINUTE), 'probe'), (950, 'up', 450, DATE_SUB(NOW(), INTERVAL 1 MINUTE), 'probe')");
+    $cm_run(950, $cm_check([1 => $cm_up(480.0)]));
+    check('cron: pomalé odezvy sondy do okna latence nepatří (jediná kontrola cronu nestačí)', $cm_notes, []);
+    $pdo->exec("UPDATE monitors SET latency_threshold_ms = NULL WHERE id = 950");
+
+    // alert_confirm_failures = 2: a probe's 'down' is no check of cron's and
+    // does not start the streak; an old row without a source still does.
+    $cm_confirm = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'alert_confirm_failures'")->fetchColumn();
+    bk_setting_set($pdo, 'alert_confirm_failures', '2');
+    try {
+        $pdo->exec("UPDATE monitors SET status = 'up' WHERE id = 950");
+        $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 950");
+        $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, source) VALUES (950, 'down', 'Timeout ze sondy', 'probe')");
+        $out = $cm_run(950, $cm_check([1 => $cm_down('Spojení odmítnuto'), 2 => $cm_down('Spojení odmítnuto')]));
+        check('cron: down sondy výpadek nepotvrdí', [$cm_status(950), $cm_notes, str_contains($out, 'výpadek nepotvrzen (1/2)')], ['up', [], true]);
+        $cm_run(950, $cm_check([1 => $cm_down('Spojení odmítnuto'), 2 => $cm_down('Spojení odmítnuto')]));
+        check('cron: druhý neúspěch cronu ano', [$cm_status(950), $cm_notes], ['down', [[950, 'down']]]);
+        $pdo->exec("UPDATE monitors SET status = 'up' WHERE id = 950");
+        $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 950");
+        $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message) VALUES (950, 'down', 'Starý řádek')");
+        $cm_run(950, $cm_check([1 => $cm_down('Spojení odmítnuto'), 2 => $cm_down('Spojení odmítnuto')]));
+        check('cron: starý řádek bez zdroje se do řady počítá jako dřív', [$cm_status(950), $cm_notes], ['down', [[950, 'down']]]);
+    } finally {
+        if ($cm_confirm === false) {
+            $pdo->exec("DELETE FROM settings WHERE key_name = 'alert_confirm_failures'");
+            unset($GLOBALS['system_settings']['alert_confirm_failures']);
+        } else {
+            bk_setting_set($pdo, 'alert_confirm_failures', (string)$cm_confirm);
+        }
+    }
+
+    // Every other row the loop writes names its writer too: the maintenance
+    // window, a silent agent_service and a silent VPS agent are cron's, a
+    // heartbeat monitor's row is 'heartbeat'. Ids of their own, outside
+    // $cm_ids and cleared here, so 955-958 stay free for later cases.
+    $cm_src_ids = '964, 965, 966, 967';
+    $cm_src_clean = function () use ($pdo, $cm_src_ids): void {
+        foreach (['incidents', 'notification_log', 'monitor_logs', 'monitor_events'] as $cm_table) {
+            $pdo->exec("DELETE FROM {$cm_table} WHERE monitor_id IN ({$cm_src_ids})");
+        }
+        $pdo->exec("DELETE FROM monitors WHERE id IN ({$cm_src_ids})");
+    };
+    $cm_src_clean();
+    $cm_offline = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'agent_offline_timeout'")->fetchColumn();
+    bk_setting_set($pdo, 'agent_offline_timeout', '10');
+    try {
+        $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, maintenance, created_at, last_checked, heartbeat_interval, last_heartbeat) VALUES
+            (964, 'Cron údržba', 'web', 'https://cron-maint.test', 'up', 'Test', 1, NOW(), NULL, NULL, NULL),
+            (965, 'Cron služba agenta', 'agent_service', 'cron-svc.test', 'up', 'Test', 0, DATE_SUB(NOW(), INTERVAL 2 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY), NULL, NULL),
+            (966, 'Cron heartbeat', 'heartbeat', '', 'up', 'Test', 0, DATE_SUB(NOW(), INTERVAL 2 DAY), NULL, 60, DATE_SUB(NOW(), INTERVAL 2 HOUR)),
+            (967, 'Cron VPS', 'vps', 'cron-vps.test', 'up', 'Test', 0, DATE_SUB(NOW(), INTERVAL 2 DAY), DATE_SUB(NOW(), INTERVAL 2 DAY), NULL, NULL)");
+        foreach ([964, 965, 966, 967] as $cm_src_id) {
+            $cm_run($cm_src_id, $cm_check([]));
+        }
+        check('cron: údržba, mlčící služba agenta, heartbeat a mlčící VPS nesou svůj zdroj',
+            $pdo->query("SELECT monitor_id, CONCAT(status, ' ', source) FROM monitor_logs WHERE monitor_id IN (964, 965, 966, 967) ORDER BY monitor_id")->fetchAll(PDO::FETCH_KEY_PAIR),
+            [964 => 'maintenance cron', 965 => 'unknown cron', 966 => 'down heartbeat', 967 => 'down cron']);
+    } finally {
+        $cm_src_clean();
+        if ($cm_offline === false) {
+            $pdo->exec("DELETE FROM settings WHERE key_name = 'agent_offline_timeout'");
+            unset($GLOBALS['system_settings']['agent_offline_timeout']);
+        } else {
+            bk_setting_set($pdo, 'agent_offline_timeout', (string)$cm_offline);
+        }
+    }
+
+    // The agent fallback: a game server the hosting cannot reach is up when
+    // the agent on the same machine saw its port a few minutes ago.
+    $cm_set_details(951, ['agent_last_seen' => time() - 60, 'ports' => [22, 25565],
+        'ts3_clients_online' => 3]);
+    $cm_run(951, $cm_check([1 => $cm_down('Timeout'), 2 => $cm_down('Timeout')]));
+    $cm_d = $cm_details(951);
+    check('cron: záloha přes agenta drží hru nahoře a říká proč',
+        [$cm_status(951), $cm_last_log(951)['error_message'] ?? null, $cm_d['api_fallback'] ?? null, $cm_d['last_error'] ?? null, $cm_d['ports'] ?? null],
+        ['up', 'Kontrola selhala (Timeout), službu ale potvrdil agent na stejném stroji', true, 'Timeout', [22, 25565]]);
+    // ...never for a web: a site that serves no pages is down for visitors.
+    $cm_set_details(952, ['agent_last_seen' => time() - 60, 'ports' => [80, 443]]);
+    $cm_run(952, $cm_check([1 => $cm_down('HTTP 502'), 2 => $cm_down('HTTP 502')]));
+    check('cron: web záloha přes agenta nezachrání', [$cm_status(952), $cm_notes], ['down', [[952, 'down']]]);
+
+    // cPanel: a web monitor's cpanel_stats_url gives the exporter's figures,
+    // kept under cpanel_stats and as one metrics row. The web branch reaches
+    // the exporter over the network, so its two helpers get an answer here.
+    $cm_cp = ['status' => 'up', 'disk' => ['percent' => 41.5], 'memory' => ['percent' => 63.0], 'processes' => 12];
+    check('cron: cPanel detaily mají sedm klíčů exportéru', bk_cpanel_stats_details($cm_cp),
+        ['disk' => ['percent' => 41.5], 'memory' => ['percent' => 63.0], 'processes' => 12, 'database' => null, 'bandwidth' => null,
+            'postgresql' => null, 'cpu' => null]);
+    bk_cpanel_metrics_insert($pdo, 953, $cm_cp);
+    check('cron: a neměřené CPU je v historii NULL, ne nula',
+        array_map(fn ($v) => $v === null ? null : (float)$v,
+            $pdo->query("SELECT cpu_usage, ram_usage, hdd_usage FROM vps_metrics WHERE monitor_id = 953 ORDER BY id DESC LIMIT 1")->fetch()),
+        ['cpu_usage' => null, 'ram_usage' => 63.0, 'hdd_usage' => 41.5]);
+    // The whole shared server's load is not the website's CPU (R78), nor its
+    // RAM: the exporter's fallbacks stay in the details, labelled, not here.
+    bk_cpanel_metrics_insert($pdo, 953, ['disk' => ['percent' => 41.5], 'memory' => ['percent' => 70.0, 'source' => 'meminfo'],
+        'cpu' => ['percent' => 310.0, 'source' => 'loadavg']]);
+    check('cron: zátěž a RAM celého serveru nejsou v historii webu',
+        array_map(fn ($v) => $v === null ? null : (float)$v,
+            $pdo->query("SELECT cpu_usage, ram_usage, hdd_usage FROM vps_metrics WHERE monitor_id = 953 ORDER BY id DESC LIMIT 1")->fetch()),
+        ['cpu_usage' => null, 'ram_usage' => null, 'hdd_usage' => 41.5]);
+
+    // A type without an active check writes nothing to the history.
+    $out = $cm_run(954, null);
+    check('cron: typ bez aktivní kontroly nic nezapíše do historie', [(int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE monitor_id = 954")->fetchColumn(),
+        str_contains($out, "SKIP (typ 'dns'")], [0, true]);
+
+    // Both attempts of a web check carry the keyword: one function runs them.
+    $cm_web = ['type' => 'web', 'target' => $base . '/api.php?action=public_status', 'port' => null, 'timeout' => 5];
+    $cm_kw_missing = bk_cron_active_check($cm_web + ['body_keyword' => 'bk-slovo-ktere-tam-neni']);
+    check_true('cron: kontrola webu dostane klíčové slovo (chybí -> down)',
+        ($cm_kw_missing['status'] ?? null) === 'down' && str_contains((string)($cm_kw_missing['error'] ?? ''), 'bk-slovo-ktere-tam-neni'));
+    check('cron: a se slovem, které na stránce je, je web nahoře',
+        bk_cron_active_check($cm_web + ['body_keyword' => 'status'])['status'] ?? null, 'up');
+    // --- One writer of a check result (bk_apply_check_result) ---------------
+    // Every writer below goes through it: cron's active check, the window,
+    // the heartbeat, a silent agent, agent_service and an agent's report.
+    // The owner's rules of 30 Oct: unknown -> up and maintenance -> up are
+    // silent unless an incident is open; alert_confirm_failures holds active
+    // checks and agent_service, not a heartbeat or a silent agent; a router
+    // that goes quiet is one event, its monitor's 'down'.
+    $cm_confirm = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'alert_confirm_failures'")->fetchColumn();
+    $cm_incident = function (int $id) use ($pdo): void {
+        $pdo->prepare("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('Výpadek', 'major', 'investigating', ?)")->execute([$id]);
+    };
+    $cm_incidents = fn (int $id): array => $pdo->query("SELECT status FROM incidents WHERE monitor_id = {$id} ORDER BY id")->fetchAll(PDO::FETCH_COLUMN);
+    $cm_sent = fn (int $id): int => (int)$pdo->query("SELECT COUNT(*) FROM notification_log WHERE monitor_id = {$id}")->fetchColumn();
+    $cm_row = fn (int $id): array => $pdo->query("SELECT status, response_time, error_message, checked_from, source FROM monitor_logs WHERE monitor_id = {$id} ORDER BY id DESC LIMIT 1")->fetch() ?: [];
+    $cm_rows = fn (int $id): int => (int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE monitor_id = {$id}")->fetchColumn();
+    $cm_checked = fn (int $id): ?string => $pdo->query("SELECT last_checked FROM monitors WHERE id = {$id}")->fetchColumn() ?: null;
+    $cm_report = function (string $key, array $extra = []) use ($base): int {
+        [$code] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'],
+            (string)json_encode($extra + ['agent_key' => $key, 'cpu' => 5.0, 'ram' => 30.0, 'hdd' => 40.0]));
+        return $code;
+    };
+    $cm_service = function (bool $running) use ($base): array {
+        [$code, , $body] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], (string)json_encode([
+            'agent_key' => 'cm-router-key', 'service_check_results' => [['monitor_id' => 962, 'running' => $running,
+                'detail' => $running ? '' : "Agent nehlásí proces 'kresd'."]]]));
+        return [$code, json_decode((string)$body, true)['applied'] ?? null];
+    };
+    $pdo->exec("INSERT INTO assets (id, name) VALUES (961, 'Router se službou')");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, port, status, category, asset_id, agent_key) VALUES
+        (955, 'Nový port', 'port', 'cron-new.test', 8081, 'unknown', 'Test', NULL, NULL),
+        (956, 'Záloha', 'heartbeat', '', NULL, 'unknown', 'Test', NULL, NULL),
+        (957, 'Server, který zmlkl', 'vps', 'cron-vps.test', NULL, 'up', 'Test', NULL, 'cm-vps-key'),
+        (958, 'Port do údržby', 'port', 'cron-maint.test', 8082, 'maintenance', 'Test', NULL, NULL),
+        (959, 'Služba bez agenta', 'agent_service', 'mosquitto', 1883, 'up', 'Test', NULL, NULL),
+        (961, 'Router', 'openwrt', 'cm-router.test', NULL, 'up', 'Test', 961, 'cm-router-key'),
+        (962, 'Resolver', 'agent_service', 'kresd', 53, 'up', 'Test', 961, NULL),
+        (963, 'Server s procesy', 'vps', 'cm-server.test', NULL, 'unknown', 'Test', NULL, 'cm-server-key')");
+    try {
+        // unknown -> up: a new monitor's first check is no recovery (R160).
+        $out = $cm_run(955, $cm_check([1 => $cm_up(15.0)]));
+        check('zapisovatel: první kontrola nového monitoru je tichá', [$cm_status(955), $cm_notes, str_contains($out, 'bez notifikace')],
+            ['up', [], true]);
+        $pdo->exec("UPDATE monitors SET status = 'unknown' WHERE id = 955");
+        $cm_incident(955);
+        $cm_run(955, $cm_check([1 => $cm_up(15.0)]));
+        check('zapisovatel: s otevřeným incidentem je unknown -> up obnova a ohlásí se', $cm_notes, [[955, 'up']]);
+        // maintenance -> up: the end of a window is no recovery either.
+        $cm_run(958, $cm_check([1 => $cm_up(9.0)]));
+        check('zapisovatel: konec údržby bez incidentu je tichý', [$cm_status(958), $cm_notes], ['up', []]);
+        $pdo->exec("UPDATE monitors SET status = 'maintenance' WHERE id = 958");
+        $cm_incident(958);
+        $cm_run(958, $cm_check([1 => $cm_up(9.0)]));
+        check('zapisovatel: s incidentem otevřeným před oknem se konec údržby ohlásí', $cm_notes, [[958, 'up']]);
+
+        // Entering a window: cron's row, the switch, one notice, and the
+        // alert latches survive (last_details used to be set to NULL: R212).
+        $pdo->exec("UPDATE monitors SET status = 'up', maintenance = 1, maintenance_description = 'Výměna disku' WHERE id = 958");
+        $cm_set_details(958, ['wan_alert_sent' => true, 'latency_alert_sent' => true]);
+        $cm_run(958, $cm_check([1 => $cm_up(9.0)]));
+        check('zapisovatel: vstup do údržby se ohlásí jednou, bez kontroly', [$cm_status(958), $cm_notes, $cm_calls],
+            ['maintenance', [[958, 'maintenance']], 0]);
+        check('zapisovatel: řádek okna je cronu, bez odezvy', [$cm_row(958)['status'] ?? null, array_key_exists('response_time', $cm_row(958)) ? $cm_row(958)['response_time'] : 'chybí',
+            $cm_row(958)['error_message'] ?? null, $cm_row(958)['source'] ?? null], ['maintenance', null, 'Výměna disku', 'cron']);
+        check('zapisovatel: pojistky alertů vstup do údržby přežijí (R212)', $cm_details(958), ['wan_alert_sent' => true, 'latency_alert_sent' => true]);
+        $cm_run(958, $cm_check([1 => $cm_up(9.0)]));
+        check('zapisovatel: další minuta okna jen zapíše řádek', [$cm_notes, $cm_rows(958) >= 2], [[], true]);
+        $pdo->exec("UPDATE monitors SET maintenance = 0 WHERE id = 958");
+
+        bk_setting_set($pdo, 'alert_confirm_failures', '2');
+        // A heartbeat's grace is its tolerance: no confirmation on top, and
+        // its first signal is no recovery.
+        $pdo->prepare("UPDATE monitors SET heartbeat_interval = 3600, heartbeat_grace = 300, last_heartbeat = ? WHERE id = 956")
+            ->execute([date('Y-m-d H:i:s', time() - 60)]);
+        $cm_run(956, null);
+        check('heartbeat: první signál je tichý a řádek nese zdroj heartbeat',
+            [$cm_status(956), $cm_notes, $cm_row(956)['source'] ?? null, $cm_row(956)['checked_from'] ?? null], ['up', [], 'heartbeat', 'Heartbeat']);
+        $pdo->prepare("UPDATE monitors SET last_heartbeat = ? WHERE id = 956")->execute([date('Y-m-d H:i:s', time() - 7200)]);
+        $cm_run(956, null);
+        check('heartbeat: zmeškaný signál je výpadek hned, bez potvrzování', [$cm_status(956), $cm_notes], ['down', [[956, 'down']]]);
+
+        // A router or server that goes quiet is one event: its monitor's
+        // 'down', with no agent_offline beside it (R211) and no confirmation.
+        $pdo->exec("UPDATE monitors SET last_checked = '2026-10-01 12:00:00' WHERE id = 957");
+        $cm_set_details(957, ['agent_last_seen' => time() - 7200]);
+        $cm_run(957, null);
+        check('mlčící server: jedno oznámení (down), žádné agent_offline vedle', [$cm_status(957), $cm_notes], ['down', [[957, 'down']]]);
+        check('mlčící server: událost odpojení i pojistka zůstávají',
+            [(int)$pdo->query("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 957 AND event_type = 'agent_disconnected'")->fetchColumn(),
+                $cm_details(957)['agent_alert_sent'] ?? null], [1, true]);
+        check('mlčící server: řádek cronu a čas kontroly zůstane z posledního hlášení',
+            [$cm_row(957)['status'] ?? null, $cm_row(957)['source'] ?? null, $cm_checked(957)], ['down', 'cron', '2026-10-01 12:00:00']);
+        $cm_run(957, null);
+        check('mlčící server: a podruhé nic', $cm_notes, []);
+        // Down already (a missing process) when its agent goes quiet: the
+        // silence takes nothing down, so agent_offline is its one notice.
+        $cm_set_details(957, ['agent_last_seen' => time() - 7200]);
+        $cm_run(957, null);
+        check('server už dole: zmlknutí agenta se ohlásí jako agent_offline, bez druhého down', [$cm_status(957), $cm_notes],
+            ['down', [[957, 'agent_offline']]]);
+        // Quiet in a window: no agent_offline either, as the 'down' it
+        // stands for waits for the window's end and is the one notice then.
+        $pdo->exec("UPDATE monitors SET status = 'maintenance', maintenance = 1 WHERE id = 957");
+        $cm_set_details(957, ['agent_last_seen' => time() - 7200]);
+        $cm_run(957, null);
+        check('mlčící server v údržbě: nic se neohlásí, pojistka se nenastaví', [$cm_status(957), $cm_notes, $cm_details(957)['agent_alert_sent'] ?? null],
+            ['maintenance', [], null]);
+        $pdo->exec("UPDATE monitors SET maintenance = 0 WHERE id = 957");
+        $cm_run(957, null);
+        check('mlčící server po údržbě: jedno oznámení (down), žádné agent_offline', [$cm_status(957), $cm_notes], ['down', [[957, 'down']]]);
+
+        // An agent-side service with no fresh result is unknown: nobody is
+        // woken, and last_checked keeps the agent's last result.
+        $pdo->exec("UPDATE monitors SET last_checked = DATE_SUB(NOW(), INTERVAL 2 HOUR) WHERE id = 959");
+        $cm_959_checked = $cm_checked(959);
+        $cm_run(959, null);
+        check('služba bez výsledků: unknown potichu, řádek cronu, čas kontroly beze změny',
+            [$cm_status(959), $cm_notes, $cm_row(959)['source'] ?? null, $cm_row(959)['checked_from'] ?? null, $cm_checked(959)],
+            ['unknown', [], 'cron', 'Agent', $cm_959_checked]);
+
+        // agent_service results over the wire: alert_confirm_failures holds
+        // them too, and a notice really goes out and closes the incident.
+        check('agent_service: první neúspěch se zapíše, stav čeká na potvrzení', [$cm_service(false), $cm_status(962), $cm_row(962)['status'] ?? null,
+            $cm_row(962)['source'] ?? null, $cm_incidents(962)], [[200, 1], 'up', 'down', 'agent', []]);
+        $cm_service(false);
+        check('agent_service: druhý potvrdí výpadek a otevře incident', [$cm_status(962), $cm_incidents(962)], ['down', ['investigating']]);
+        // The agent went quiet meanwhile and cron set 'unknown' (R162): the
+        // service's return still closes the open incident.
+        $pdo->exec("UPDATE monitors SET status = 'unknown' WHERE id = 962");
+        $cm_service(true);
+        check('agent_service: návrat z unknown s otevřeným incidentem ho uzavře (R162)', [$cm_status(962), $cm_incidents(962)], ['up', ['resolved']]);
+        $pdo->exec("UPDATE monitors SET status = 'unknown' WHERE id = 962");
+        $cm_962_sent = $cm_sent(962);
+        $cm_service(true);
+        check('agent_service: bez incidentu je návrat z unknown tichý', [$cm_status(962), $cm_sent(962) - $cm_962_sent], ['up', 0]);
+
+        // An agent's report: its row says 'agent', its first 'up' is silent
+        // (R160), and a missing process is down at once, as it always was.
+        $cm_963_sent = $cm_sent(963);
+        check('hlášení agenta: první up je tiché a řádek nese zdroj agent', [$cm_report('cm-server-key'), $cm_status(963), $cm_row(963)['source'] ?? null,
+            $cm_sent(963) - $cm_963_sent, $cm_incidents(963)], [200, 'up', 'agent', 0, []]);
+        $pdo->exec("UPDATE monitors SET monitored_processes = 'nginx' WHERE id = 963");
+        $cm_report('cm-server-key', ['processes' => ['sshd']]);
+        check('hlášení agenta: chybějící proces je výpadek hned (bez potvrzování) a otevře incident',
+            [$cm_status(963), $cm_incidents(963)], ['down', ['investigating']]);
+        $pdo->exec("UPDATE monitors SET status = 'unknown' WHERE id = 963");
+        $cm_report('cm-server-key', ['processes' => ['sshd', 'nginx']]);
+        check('hlášení agenta: návrat z unknown s otevřeným incidentem ho uzavře', [$cm_status(963), $cm_incidents(963)], ['up', ['resolved']]);
+        // In a window the report's verdict is dropped and only its metrics
+        // are kept; cron announces the window, whoever comes first (R110).
+        $pdo->exec("UPDATE monitors SET maintenance = 1 WHERE id = 963");
+        $cm_963_rows = $cm_rows(963);
+        $cm_report('cm-server-key', ['cpu' => 42.0, 'processes' => ['sshd']]);
+        check('hlášení agenta v údržbě: stav ani historie se nemění, metriky ano',
+            [$cm_status(963), $cm_rows(963) - $cm_963_rows, $cm_details(963)['cpu'] ?? null, $cm_incidents(963)], ['up', 0, 42, ['resolved']]);
+        $cm_run(963, null);
+        check('hlášení agenta v údržbě: údržbu ohlásí cron, jednou', [$cm_status(963), $cm_notes], ['maintenance', [[963, 'maintenance']]]);
+    } finally {
+        if ($cm_confirm === false) {
+            $pdo->exec("DELETE FROM settings WHERE key_name = 'alert_confirm_failures'");
+            unset($GLOBALS['system_settings']['alert_confirm_failures']);
+        } else {
+            bk_setting_set($pdo, 'alert_confirm_failures', (string)$cm_confirm);
+        }
+    }
+
+    // One monitor's failure stays its own (bk_cron_check_all). An uncaught
+    // exception used to end the whole script: nothing after it was checked,
+    // no later step ran and the run looked like a dead cron.
+    $pdo->exec("UPDATE monitors SET agent_key = NULL, status = 'down', last_details = NULL, last_checked = NULL WHERE id IN (950, 952, 953)");
+    $ca_rows = fn (): array => $pdo->query("SELECT * FROM monitors WHERE id IN (950, 952, 953) ORDER BY id")->fetchAll();
+    $ca_up = $cm_up(5.0);
+    $ca_log = tempnam(sys_get_temp_dir(), 'bk_test_cron_log');
+    $ca_log_was = ini_set('error_log', $ca_log);
+    try {
+        // The monitor in the middle fails with its transaction still open.
+        $cm_notes = [];
+        ob_start();
+        $ca_failed = bk_cron_check_all($pdo, $ca_rows(), function (array $m) use ($pdo, $ca_up): array {
+            if ((int)$m['id'] === 952) {
+                $pdo->beginTransaction();
+                $pdo->exec("UPDATE monitors SET name = 'nedokončený zápis' WHERE id = 952");
+                throw new RuntimeException('neočekávaná chyba kontroly');
+            }
+            return $ca_up;
+        }, $cm_notify);
+        $ca_out = (string)ob_get_clean();
+        check('cron: selhání jednoho monitoru vrátí jeho id', $ca_failed, [952]);
+        check('cron: monitory kolem něj se zkontrolují', [$cm_status(950), $cm_status(953), $cm_notes], ['up', 'up', [[950, 'up'], [953, 'up']]]);
+        $ca_stuck = $pdo->query("SELECT name, status, last_checked FROM monitors WHERE id = 952")->fetch();
+        check('cron: jeho nedokončený zápis se vrátí a kontrola se nepřipíše', $ca_stuck, ['name' => 'Cron web', 'status' => 'down', 'last_checked' => null]);
+        check('cron: další monitor nepíše do jeho transakce', $pdo->inTransaction(), false);
+        check_true('cron: výstup běhu selhání jmenuje', str_contains($ca_out, 'kontrola monitoru #952 selhala'));
+        $ca_logged = (string)file_get_contents($ca_log);
+        check_true('cron: do logu jde důvod', str_contains($ca_logged, 'Kontrola monitoru 952 selhala: RuntimeException: neočekávaná chyba kontroly'));
+
+        // A programming error is no Exception, and it must not end the run either.
+        ob_start();
+        $ca_failed = bk_cron_check_all($pdo, $ca_rows(), function (array $m): array {
+            throw new TypeError('špatný typ');
+        }, $cm_notify);
+        ob_end_clean();
+        check('cron: ani chyba programu běh neukončí, selžou jen zasažené', $ca_failed, [950, 952, 953]);
+    } finally {
+        ini_set('error_log', $ca_log_was === false ? '' : $ca_log_was);
+        @unlink($ca_log);
+    }
+    // Whether the run may tell the watchdog that data is being collected.
+    check('cron: otisk běhu se píše, když prošel aspoň jeden monitor, a v prázdné instalaci', [
+        bk_cron_run_collected(3, 0), bk_cron_run_collected(3, 2), bk_cron_run_collected(0, 0),
+    ], [true, true, true]);
+    check('cron: běh, ve kterém neprošel žádný, se za běh nepočítá', bk_cron_run_collected(3, 3), false);
+} finally {
+    if ($cm_location === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'cron_location'");
+        unset($GLOBALS['system_settings']['cron_location']);
+    } else {
+        bk_setting_set($pdo, 'cron_location', (string)$cm_location);
+    }
+    $cm_cleanup();
+}
+
+// --- last_details is a 64 KB TEXT column ----------------------------------
+//
+// Twelve pass-through lists of ~6.6 KB each (every one under the 8 KB
+// per-key cap) add up to ~80 KB. That used to fail the UPDATE and, because
+// the next report merged onto the same blob, every report after it.
+$fat = [];
+for ($i = 0; $i < 12; $i++) {
+    $fat["bulk_list_$i"] = array_fill(0, 200, str_repeat('x', 30));
+}
+check('tlusté hlášení agent přijme', $post_agent($fat), 200);
+$raw = (string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn();
+check_true('details zůstaly validní JSON', json_decode($raw, true) !== null);
+check_true('details se vešly do sloupce (<= 60 000 B)', strlen($raw) <= 60000 && strlen($raw) > 0);
+$d = $lte_details();
+check_true('skalární hodnoty přežily ořez (cpu z hlášení)', isset($d['cpu']));
+check('a další hlášení po něm projde', $post_agent($wan_ok), 200);
+// The lists are ballast of this case only. Left in place, the ~50 KB that
+// survived the trim would decide what a much later report of the same router
+// has to shed, so a later "nothing was dropped" check would test them.
+$fat_d = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode(array_diff_key($fat_d, $fat))]);
+
+// The listening ports end up in last_details and on admin.php, so only port
+// numbers may get there; a list with markup in it used to be stored as sent.
+check('hlášení s nesmysly mezi porty agent přijme', $post_agent(['ports' => [443, '<img src=x onerror=alert(1)>', '22', 0, 70000, 443]]), 200);
+check('uloží se jen čísla portů 1-65535, každé jednou', $lte_details()['ports'] ?? null, [22, 443]);
+// admin.php escapes the list as well, and a row stored before the fix has only
+// that. A string where the page expects the process list must not stop it.
+// The page has an install gate (see setup_completed further down), passed
+// for this one request.
+$pt_d = $lte_details();
+$pt_setup = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'setup_completed'")->fetchColumn();
+$pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('setup_completed', '1') ON DUPLICATE KEY UPDATE key_value = '1'");
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")
+    ->execute([json_encode(['ports' => ['<img src=x onerror=alert(1)>', 22], 'processes' => 'x'] + $pt_d)]);
+$pt_ch = curl_init($base . '/admin.php');
+curl_setopt_array($pt_ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30,
+    CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_COOKIEJAR => $cookie_jar]);
+$pt_admin = (string)curl_exec($pt_ch);
+check('administrace se starým řádkem s kódem v portech se načte', (int)curl_getinfo($pt_ch, CURLINFO_RESPONSE_CODE), 200);
+check_true('kód z portů vypíše jako text (seznam monitorů ' . (str_contains($pt_admin, 'monitor-bulk-cb') ? 'je' : 'chybí')
+    . ', řádek Porty ' . (str_contains($pt_admin, 'Porty:') ? 'je' : 'chybí') . ')',
+    str_contains($pt_admin, '&lt;img src=x onerror=alert(1)&gt;') && !str_contains($pt_admin, '<img src=x onerror'));
+check_true('řetězec místo seznamu procesů stránku nezastaví', str_contains($pt_admin, '</html>'));
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($pt_d)]);
+if ($pt_setup === false) {
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'setup_completed'");
+} else {
+    $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'setup_completed'")->execute([$pt_setup]);
+}
+
+$ch_agent = curl_init($base . '/agent_api.php');
+curl_setopt_array($ch_agent, [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_POST => true,
+    CURLOPT_POSTFIELDS => json_encode($agent_payload, JSON_UNESCAPED_UNICODE),
+    CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+    CURLOPT_TIMEOUT => 20,
+]);
+$agent_body = (string)curl_exec($ch_agent);
+$agent_code = (int)curl_getinfo($ch_agent, CURLINFO_RESPONSE_CODE);
+check('hlášení agenta je přijato', $agent_code, 200);
+
+$saved = $pdo->query("SELECT * FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetch();
+check_true('vznikl řádek s metrikami', $saved !== false);
+if ($saved) {
+    check('latence WAN se uložila', round((float)$saved['wan_latency_ms'], 1), 18.4);
+    check('latence DNS se uložila', round((float)$saved['dns_latency_ms'], 1), 7.2);
+    check('záporná hodnota signálu se uložila', round((float)$saved['lte_rsrq'], 1), -11.5);
+    check('baterie UPS se uložila', (int)round((float)$saved['ups_battery_pct']), 97);
+    check('conntrack se uložil', (int)$saved['conntrack_count'], 1234);
+    check('obsazená paměť se uložila', round((float)$saved['ram_used_mb'], 1), 812.5);
+    check('počítadlo TCP retransmisí se uložilo', (int)$saved['tcp_retrans'], 500);
+
+    // The core rule: what the agent did not send is NULL. A zero would claim
+    // measured zero entropy, which is something else entirely.
+    check_true('neposlaná entropie je NULL', $saved['entropy_avail'] === null);
+    check_true('řetězec "null" od agenta je taky NULL', $saved['oom_kills'] === null);
+    check_true('nezmíněná metrika je NULL', $saved['sqm_dropped'] === null);
+}
+
+// --- Counters draw as deltas in the chart --------------------------------
+//
+// A cumulative kernel value would only give a rising ramp.
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+foreach ([[100, 5], [150, 4], [220, 3], [60, 2], [90, 1]] as [$val, $mins_ago]) {
+    $pdo->exec("INSERT INTO vps_metrics (monitor_id, tcp_retrans, checked_at)
+                VALUES (2, {$val}, DATE_SUB(NOW(), INTERVAL {$mins_ago} MINUTE))");
+}
+
+[, $ctr] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=tcp_retrans&period=24h', $cookie_jar);
+$ctr_values = array_map(fn($p) => $p[1], $ctr['points'] ?? []);
+// 100→150→220 gives deltas of 50 and 70; then the value drops to 60 (counter
+// reset after a reboot) - that point is skipped rather than producing a negative
+// spike or a false zero. Then 60→90, i.e. 30.
+// JSON returns whole numbers as int, not float - hence integer expectations.
+check('počítadlo se kreslí jako přírůstek', $ctr_values, [50, 70, 30]);
+check_true('popisek přizná, že jde o přírůstek', str_contains((string)($ctr['label'] ?? ''), 'přírůstek'));
+
+// An instantaneous metric must not be converted to deltas.
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 30, DATE_SUB(NOW(), INTERVAL 2 MINUTE))");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 80, DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
+[, $gauge] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=cpu&period=24h', $cookie_jar);
+check('okamžitá metrika se kreslí tak, jak byla naměřena', array_map(fn($p) => $p[1], $gauge['points'] ?? []), [30, 80]);
+
+// --- Data collection health ----------------------------------------------
+//
+// An external watchdog polls the endpoint, so it must be reachable without
+// login and must not claim all is well when cron never ran.
+[$code, $health] = api_get($base, 'action=collection_health');
+check('collection_health je veřejný a vrací 200', $code, 200);
+check_true('obsahuje příznak stale', array_key_exists('stale', $health ?? []));
+check_true('bez běhu cronu je lastRunAt null', array_key_exists('lastRunAt', $health ?? []) && $health['lastRunAt'] === null);
+check('bez běhu cronu je stale true, ne false', $health['stale'] ?? null, true);
+check_true('bez běhu cronu se nehlásí stáří', array_key_exists('ageSecs', $health ?? []) && $health['ageSecs'] === null);
+
+// --- Metric detail (Level 3) --------------------------------------------
+//
+// The period window used to be computed by two identical ternary expressions
+// and two of the values came out wrong: `15m` returned an hour and `6h`
+// returned twenty-four. The label in the UI therefore claimed something other
+// than the chart showed. This is tested against real data, because no
+// response-shape check can catch that kind of bug.
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+foreach ([5, 30, 200, 2000] as $ago) {
+    $pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at)
+                VALUES (2, 50, DATE_SUB(NOW(), INTERVAL {$ago} MINUTE))");
+}
+
+[, $m15] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=cpu&period=15m', $cookie_jar);
+check('15m vrátí jen měření za posledních 15 minut', count($m15['points'] ?? []), 1);
+
+[, $m6h] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=cpu&period=6h', $cookie_jar);
+check('6h vrátí měření za šest hodin, ne za den', count($m6h['points'] ?? []), 3);
+
+// The oldest point is 2000 minutes back, i.e. more than a day - it does not
+// belong in the 24h window but does in the weekly one. That is what proves the
+// window actually moves.
+[, $m24h] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=cpu&period=24h', $cookie_jar);
+check('24h nechá venku měření starší než den', count($m24h['points'] ?? []), 3);
+
+[, $m7d] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=cpu&period=7d', $cookie_jar);
+check('7d vrátí i to nejstarší', count($m7d['points'] ?? []), 4);
+
+// The comparison curve in the chart is the same window shifted one period
+// back, so `previous=1` must return exactly the points the current window
+// leaves out. If the two shared even one point, the overlaid curves would
+// claim two different measurements happened at the same moment.
+[, $prev24] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=cpu&period=24h&previous=1', $cookie_jar);
+check('previous=1 vrátí předchozí okno (jen měření staré 2000 minut)', count($prev24['points'] ?? []), 1);
+check_true(
+    'a nesdílí s aktuálním oknem ani jeden bod',
+    empty(array_intersect(array_column($m24h['points'] ?? [], 0), array_column($prev24['points'] ?? [], 0)))
+);
+// All four measurements fall inside the week, so the week before it is empty.
+// That is what proves the offset really is one whole period.
+[, $prev7d] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=cpu&period=7d&previous=1', $cookie_jar);
+check('previous=1 pro týden sahá do předminulého týdne', count($prev7d['points'] ?? []), 0);
+
+// Context for the metric detail page.
+[$code, $detail] = api_get_auth($base, 'action=metric_detail&monitor_id=2&metric=cpu', $cookie_jar);
+check('metric_detail vrací 200', $code, 200);
+check('a ví, o který monitor jde', $detail['monitor']['name'] ?? null, 'Router bez metrik');
+check('a jak se metrika jmenuje', isset($detail['metric']['label']), true);
+check_true('prahy jsou v odpovědi vždy', array_key_exists('thresholds', $detail ?? []));
+// The schema gives a monitor a default cpu_threshold of 90, so a band SHOULD
+// be drawn. The warning zone sits 15 points below critical - as in the legacy page.
+check('kritická mez jde z prahu monitoru', $detail['thresholds']['critical'], 90);
+check('varovné pásmo je 15 bodů pod ní', $detail['thresholds']['warning'], 75);
+
+// A metric with no configurable threshold gets no band - a coloured zone would
+// pretend a limit nobody ever defined.
+// Beware `?? 'missing'`: null would fall through it and the test would report
+// success even if the field were absent entirely. Hence array_key_exists and
+// direct access.
+[, $no_thr] = api_get_auth($base, 'action=metric_detail&monitor_id=2&metric=load1', $cookie_jar);
+check_true('metrika bez prahu má pole thresholds', array_key_exists('critical', $no_thr['thresholds'] ?? []));
+check('a pásmo nekreslí', $no_thr['thresholds']['critical'], null);
+
+// Related metrics only where the monitor actually reports them. Monitor 2 has
+// only cpu_usage filled in, so the list must be empty (cpu is the one shown).
+check('nenabízí proklik do metrik bez dat', $detail['related'] ?? null, []);
+
+[$code] = api_get_auth($base, 'action=metric_detail&monitor_id=2&metric=neexistujici', $cookie_jar);
+check('neznámá metrika vrací 404, ne prázdnou stránku', $code, 404);
+
+[$code] = api_get_auth($base, 'action=metric_detail&monitor_id=99999&metric=cpu', $cookie_jar);
+check('neznámý monitor vrací 404', $code, 404);
+
+// --- Process history: what was running when the metric spiked -----------
+//
+// The agents have sent these rankings every minute for a long time, but they
+// only ever landed in last_details where the next report overwrote them. The
+// chart could show that CPU hit 90 % at 19:40 and never what caused it.
+$pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb)
+            VALUES (2, DATE_SUB(NOW(), INTERVAL 3 MINUTE), 'cpu', 'hostapd', 1234, 87.5, 12.5)");
+$pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb)
+            VALUES (2, DATE_SUB(NOW(), INTERVAL 3 MINUTE), 'cpu', 'kresd', 2345, 12.0, NULL)");
+// Outside the window - must not appear in the answer.
+$pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb)
+            VALUES (2, DATE_SUB(NOW(), INTERVAL 5 HOUR), 'cpu', 'davno-pryc', 999, 99.0, 1.0)");
+
+$now_ts = time();
+[$code, $ph] = api_get_auth($base, 'action=process_history&monitor_id=2&kind=cpu&at=' . $now_ts . '&radius=10', $cookie_jar);
+check('process_history vrací 200', $code, 200);
+// Process names and PIDs are for signed-in accounts only (owner's decision).
+[$ph_anon_code] = api_get($base, 'action=process_history&monitor_id=2&kind=cpu&at=' . $now_ts . '&radius=10');
+check('process_history bez přihlášení je odmítnut', $ph_anon_code, 401);
+check('vrátí jen procesy z okna', count($ph['samples'] ?? []), 2);
+check('nejvyšší je první', $ph['samples'][0]['name'] ?? null, 'hostapd');
+check('a se svou hodnotou CPU', $ph['samples'][0]['cpuPct'] ?? null, 87.5);
+
+// An unmeasured dimension stays null. A zero would claim "measured, the process
+// used nothing" - different from "the agent did not report it for this one".
+$kresd = null;
+foreach ($ph['samples'] as $sample) {
+    if ($sample['name'] === 'kresd') { $kresd = $sample; }
+}
+check_true('proces bez údaje o paměti je v odpovědi', $kresd !== null);
+check('a paměť má null, ne nulu', $kresd['ramMb'], null);
+
+check_true('odpověď přiznává, jestli je sběr zapnutý', array_key_exists('enabled', $ph ?? []));
+check('bez prořezání je pruned false', $ph['pruned'] ?? null, false);
+
+// An empty window is not the same as collection turned off - the client must tell them apart.
+[, $ph_empty] = api_get_auth($base, 'action=process_history&monitor_id=2&kind=cpu&at=' . ($now_ts - 86400 * 3) . '&radius=5', $cookie_jar);
+check('okno bez záznamů vrátí prázdno, ne chybu', $ph_empty['samples'] ?? null, []);
+check('a pořád hlásí, že sběr běží', $ph_empty['enabled'] ?? null, true);
+// R120: "pruned" came only from the rows returned, so an empty window of a
+// thinned stretch said "nothing ran" instead of "only peaks were kept".
+$ph_set = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('process_history_peak_after_days', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+$ph_set->execute(['2']);
+[, $ph_thin] = api_get_auth($base, 'action=process_history&monitor_id=2&kind=cpu&at=' . ($now_ts - 86400 * 3) . '&radius=5', $cookie_jar);
+[, $ph_recent] = api_get_auth($base, 'action=process_history&monitor_id=2&kind=cpu&at=' . $now_ts . '&radius=10', $cookie_jar);
+check('prázdné okno ve prořezané době je pruned, čerstvé ne', [$ph_thin['samples'] ?? null, $ph_thin['pruned'] ?? null, $ph_recent['pruned'] ?? null], [[], true, false]);
+$ph_set->execute(['0']);
+
+[$code] = api_get_auth($base, 'action=process_history&monitor_id=2&kind=cpu', $cookie_jar);
+check('bez času vrací 400, ne prázdný seznam', $code, 400);
+
+// --- Executive summary: how long, and because of what --------------------
+//
+// The summary used to say "X is online. No current issues detected." and
+// nothing else - true, but it fit on the page without telling you anything the
+// rest of it did not. A threshold breach is only meaningful with a duration
+// ("above 85 % for 18 minutes", not "at 91 % right now") and with the process
+// behind it, and both are computable from data we already store.
+// R199: a gap in the measurements was counted as time above the threshold,
+// and a NULL ended the run as if it were below it.
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+$dab_ins = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, ram_usage, hdd_usage, checked_at) VALUES (2, ?, 40, 50, NOW() - INTERVAL ? MINUTE)");
+foreach ([[95, 0], [null, 1], [95, 2], [95, 4], [95, 180], [95, 182], [20, 184]] as [$dab_cpu, $dab_ago]) {
+    $dab_ins->execute([$dab_cpu, $dab_ago]);
+}
+check('doba nad prahem skončí na mezeře v měření, ne na řádku bez hodnoty', bk_metric_duration_above($pdo, 2, 'cpu_usage', 90.0), 4);
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+$dab_ins->execute([95, 60]);
+check('poslední měření je hodinu staré: dobu nad prahem nikdo nezná', bk_metric_duration_above($pdo, 2, 'cpu_usage', 90.0), null);
+
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+$pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
+
+// Ten minutes above the threshold, below it before.
+for ($i = 14; $i >= 0; $i--) {
+    $val = $i <= 10 ? 91 : 20;
+    $st = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at)
+                         VALUES (2, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+    $st->execute([$val, $i]);
+}
+
+$pressure = bk_metric_pressure($pdo, 2, 'cpu_usage', 85.0);
+check_true('tlak nad prahem se rozpozná', $pressure !== null);
+check('a trvá deset minut, ne patnáct', $pressure['minutes'], 10);
+check('aktuální hodnota sedí', $pressure['current'], 91.0);
+
+// A value below the threshold is not pressure, even if a spike came before.
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 30, NOW())");
+check('po poklesu se tlak nehlásí', bk_metric_pressure($pdo, 2, 'cpu_usage', 85.0), null);
+
+// A single measurement is not a duration.
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 99, NOW())");
+check('jeden vzorek se nevydává za trvání', bk_metric_pressure($pdo, 2, 'cpu_usage', 85.0), null);
+
+// The column name goes into SQL, so only list members may pass.
+check('neznámý sloupec se odmítne', bk_metric_pressure($pdo, 2, 'cpu_usage; DROP TABLE monitors', 85.0), null);
+
+// --- Knowledge tips: the threshold comes from the monitor's settings ------
+//
+// Tips had hardcoded thresholds (CPU 80/50) while the chart bands and the
+// Executive Summary follow monitors.cpu_threshold. Anyone who raised theirs
+// to 95 still got a critical tip at 81 % - three opinions on "too high".
+require_once $root . '/lang.php';
+
+$details_85 = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61.0, 'ram_mb' => 8.0]]];
+
+// Threshold 95: 85 % sits below it, no critical tip may appear.
+$mon_high = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 95];
+$tips_high = bk_get_knowledge_tips($mon_high, $details_85, [], 'up', [], $pdo);
+$crit_high = array_filter($tips_high, fn($t) => $t['severity'] === 'critical');
+check('s prahem 95 se při 85 % nekřičí', count($crit_high), 0);
+
+// Threshold 80: the same measurement sits above it.
+$mon_low = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 80];
+$tips_low = bk_get_knowledge_tips($mon_low, $details_85, [], 'up', [], $pdo);
+$crit_low = array_filter($tips_low, fn($t) => $t['severity'] === 'critical');
+check_true('s prahem 80 kritický tip vznikne', count($crit_low) > 0);
+
+// And it names the culprit - the sentence exists for that.
+$text = implode(' ', array_column($crit_low, 'text'));
+check_true('a jmenuje viníka', str_contains($text, 'hostapd'));
+
+// Without a configured threshold the original behaviour (80/50) stays, so
+// nothing shifts under anyone's feet.
+$mon_none = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt'];
+$tips_none = bk_get_knowledge_tips($mon_none, $details_85, [], 'up', [], $pdo);
+check_true('bez prahu platí původní 80', count(array_filter($tips_none, fn($t) => $t['severity'] === 'critical')) > 0);
+
+// R15: "DNS dotazů: 0" stood for a count nobody measured.
+$dns_details = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'dnsmasq', 'cpu' => 72.0, 'ram_mb' => 4.0]]];
+$dns_tips = fn (array $extra): string => implode(' | ', array_column(bk_get_knowledge_tips($mon_high, $dns_details + $extra, [], 'up', [], $pdo), 'text'));
+check_true('tip pro dnsmasq bez změřeného počtu dotazů žádný počet nevymyslí',
+    str_contains($dns_tips([]), 'dnsmasq') && !str_contains($dns_tips([]), 'DNS dotazů'));
+check_true('změřený počet dotazů tip uvede', str_contains($dns_tips(['dns_queries' => 9000]), 'DNS dotazů: 9000'));
+// R47: "Wi-Fi klientů: 0" when no radio reported a count.
+$hostapd_tips = fn (array $extra): string => implode(' | ', array_column(bk_get_knowledge_tips($mon_high, $details_85 + $extra, [], 'up', [], $pdo), 'text'));
+check_true('tip pro hostapd bez nahlášeného počtu klientů žádný počet nevymyslí',
+    str_contains($hostapd_tips(['wifi_radios' => [['band' => '5GHz', 'clients' => null]]]), 'hostapd')
+    && !str_contains($hostapd_tips(['wifi_radios' => [['band' => '5GHz', 'clients' => null]]]), 'Wi-Fi klientů'));
+check_true('nahlášený počet tip sečte', str_contains($hostapd_tips(['wifi_radios' => [['clients' => 3], ['clients' => null], ['clients' => '2']]]), 'Wi-Fi klientů: 5'));
+// R261: the SSL tip had its own 14/30 days instead of ssl_alert_days, and
+// called an expired certificate "brzy expiruje".
+$ssl_mon = ['id' => 2, 'name' => 'W', 'status' => 'up', 'type' => 'web'];
+$ssl_tip = function (int $days, string $alert_days) use ($ssl_mon, $pdo): string {
+    $GLOBALS['system_settings']['ssl_alert_days'] = $alert_days;
+    // null enabled metrics = every area on; [] would switch the SSL card off.
+    $tips = bk_get_knowledge_tips($ssl_mon, [], ['tls' => ['ok' => true, 'cert' => ['days_remaining' => $days]]], 'up', null, $pdo);
+    unset($GLOBALS['system_settings']['ssl_alert_days']);
+    $ssl = array_values(array_filter($tips, fn ($t) => str_contains((string)$t['text'], 'ertifikát')));
+    return $ssl ? $ssl[0]['severity'] . ':' . (str_contains((string)$ssl[0]['text'], 'vypršel') ? 'expired' : 'expiring') : 'none';
+};
+check('tip SSL se řídí nastavením ssl_alert_days a prošlý certifikát nazve prošlým',
+    [$ssl_tip(20, '21'), $ssl_tip(20, '7'), $ssl_tip(40, '14'), $ssl_tip(0, '14'), $ssl_tip(-3, '14')],
+    ['critical:expiring', 'none', 'none', 'critical:expired', 'critical:expired']);
+
+// R260: WireGuard's counters are totals since the tunnel came up, not
+// "Průchod", and a tunnel without them read "RX 0 MB / TX 0 MB".
+$wg_details = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'wireguard', 'cpu' => 70.0, 'ram_mb' => 2.0]]];
+$wg_tips = fn (array $extra): string => implode(' | ', array_column(bk_get_knowledge_tips($mon_high, $wg_details + $extra, [], 'up', [], $pdo), 'text'));
+check_true('tip pro WireGuard bez čítačů žádné MB nevymyslí',
+    str_contains($wg_tips(['wireguard_peers' => [['rx_bytes' => null]]]), 'WireGuard') && !str_contains($wg_tips(['wireguard_peers' => [['rx_bytes' => null]]]), 'MB'));
+check_true('s čítači řekne, že jde o přenos od spuštění, ne průchod',
+    str_contains($wg_tips(['wireguard_peers' => [['rx_bytes' => 10485760, 'tx_bytes' => 5242880]]]), 'Přeneseno od spuštění tunelů: RX 10 MB / TX 5 MB')
+    && !str_contains($wg_tips(['wireguard_peers' => [['rx_bytes' => 10485760, 'tx_bytes' => 5242880]]]), 'Průchod'));
+
+// --- Knowledge tips: the threshold comes from the monitor's settings ------
+//
+// Tips had hardcoded thresholds (CPU 80/50) while the chart bands and the
+// Executive Summary follow monitors.cpu_threshold. Anyone who raised theirs
+// to 95 still got a critical tip at 81 % - three opinions on "too high".
+require_once $root . '/lang.php';
+
+$details_85 = ['cpu' => 85, 'top_cpu_processes' => [['name' => 'hostapd', 'cpu' => 61.0, 'ram_mb' => 8.0]]];
+
+// Threshold 95: 85 % sits below it, no critical tip may appear.
+$mon_high = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 95];
+$tips_high = bk_get_knowledge_tips($mon_high, $details_85, [], 'up', [], $pdo);
+check('s prahem 95 se při 85 % nekřičí', count(array_filter($tips_high, fn($t) => $t['severity'] === 'critical')), 0);
+
+// Threshold 80: the same measurement sits above it.
+$mon_low = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 80];
+$tips_low = bk_get_knowledge_tips($mon_low, $details_85, [], 'up', [], $pdo);
+$crit_low = array_filter($tips_low, fn($t) => $t['severity'] === 'critical');
+check_true('s prahem 80 kritický tip vznikne', count($crit_low) > 0);
+check_true('a jmenuje viníka', str_contains(implode(' ', array_column($crit_low, 'text')), 'hostapd'));
+
+// Without a configured threshold the original behaviour (80/50) stays.
+$mon_none = ['id' => 2, 'name' => 'R', 'status' => 'up', 'type' => 'openwrt'];
+$tips_none = bk_get_knowledge_tips($mon_none, $details_85, [], 'up', [], $pdo);
+check_true('bez prahu platí původní 80', count(array_filter($tips_none, fn($t) => $t['severity'] === 'critical')) > 0);
+
+// The summary must not contradict itself in one breath.
+//
+// The first version said "No current problems detected." immediately followed
+// by "CPU has been at 91 % for 18 min." - the calm sentence was assembled
+// before the pressure was even computed. Caught on a demo with real data, not by reasoning.
+// The summary composes sentences via t(), so without the dictionary it dies
+// on an undefined function - the same trap cron.php and agent_api.php already took.
+require_once $root . '/lang.php';
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+for ($i = 12; $i >= 0; $i--) {
+    $st = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at)
+                         VALUES (2, 91, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+    $st->execute([$i]);
+}
+$mon = ['id' => 2, 'name' => 'Router', 'status' => 'up', 'type' => 'openwrt', 'cpu_threshold' => 85];
+$text = bk_build_executive_summary($mon, null, [], [], [], $pdo, []);
+check_true('shrnutí hlásí tlak', str_contains($text, '91'));
+check_false('a netvrdí zároveň, že je klid', str_contains($text, 'Žádné aktuální problémy'));
+
+// Without pressure that sentence MUST appear, or the summary would stay silent.
+$pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = 2");
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, cpu_usage, checked_at) VALUES (2, 10, NOW())");
+$calm = bk_build_executive_summary($mon, null, [], [], [], $pdo, []);
+check_true('bez tlaku se přizná klid', str_contains($calm, 'Žádné aktuální problémy'));
+// W2-2: the asset page's sentence leaves the concern and the all-clear to the findings list below it.
+$tip = [['severity' => 'critical', 'text' => 'Disk je plný.']];
+check_true('souhrn pro e-mail a starou stránku jmenuje hlavní starost', str_contains(bk_build_executive_summary($mon, null, $tip, [], [], $pdo, []), 'Disk je plný.'));
+$only_state = bk_build_executive_summary($mon, null, $tip, [], [], $pdo, [], false);
+check_false('statusSentence starost neopakuje (je hned pod ním v nálezech)', str_contains($only_state, 'Disk je plný.'));
+check_false('a ani netvrdí klid, ten řekne seznam nálezů', str_contains($only_state, 'Žádné aktuální problémy'));
+check_true('stav v něm zůstane', $only_state !== '' && str_contains($only_state, 'Router'));
+
+$pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
+$pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, cpu_pct, ram_mb)
+            VALUES (2, DATE_SUB(NOW(), INTERVAL 5 MINUTE), 'cpu', 'hostapd', 61.0, 12.0)");
+$pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, cpu_pct, ram_mb)
+            VALUES (2, DATE_SUB(NOW(), INTERVAL 5 MINUTE), 'cpu', 'kresd', 8.0, 30.0)");
+
+$top = bk_top_process_in_window($pdo, 2, time() - 600, time(), 'cpu');
+check('viník se najde', $top['name'] ?? null, 'hostapd');
+check('i s hodnotou', $top['cpu'] ?? null, 61.0);
+
+// Outside the window nothing is invented - process history is young and an
+// older spike simply cannot be explained.
+check('mimo okno se nehádá', bk_top_process_in_window($pdo, 2, time() - 86400 * 5, time() - 86400 * 4, 'cpu'), null);
+
+// --- Set password from an invite token -----------------------------------
+//
+// The React page /app/set-password posts here. The token is consumed on first
+// success, and an invalid token gets the same answer as an expired one.
+$invite_token = bin2hex(random_bytes(24));
+$pdo->prepare("UPDATE users SET password_reset_token_hash = ?, password_reset_expires = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE id = 1")
+    ->execute([hash('sha256', $invite_token)]);
+
+[$code] = api_post($base, 'action=set_password', ['token' => $invite_token, 'password' => 'kratke'], $cookie_jar);
+check('krátké heslo vrací 400', $code, 400);
+
+[$code] = api_post($base, 'action=set_password', ['token' => 'neexistujici-token', 'password' => 'NoveHeslo123!'], $cookie_jar);
+check('cizí token vrací 400', $code, 400);
+
+[$code, $sp_ok] = api_post($base, 'action=set_password', ['token' => $invite_token, 'password' => 'NoveHeslo123!'], $cookie_jar);
+check('platný token nastaví heslo', $code, 200);
+check_true('a hlásí úspěch', !empty($sp_ok['success']));
+
+// The token was consumed - a second use must fail.
+[$code] = api_post($base, 'action=set_password', ['token' => $invite_token, 'password' => 'JineHeslo123!'], $cookie_jar);
+check('spotřebovaný token vrací 400', $code, 400);
+
+// And the new password can log in (into a new session, so the admin's stays intact).
+$login_jar2 = tempnam(sys_get_temp_dir(), 'bk_test_c2');
+[$code, $relog] = api_post($base, 'action=login', ['username' => 'admin', 'password' => 'NoveHeslo123!'], $login_jar2);
+check_true('nové heslo funguje pro přihlášení', $code === 200 && !empty($relog['success']));
+// Vratit puvodni heslo, dalsi testy s nim pocitaji.
+$pdo->prepare("UPDATE users SET password_hash = ? WHERE id = 1")
+    ->execute([password_hash($bk_test_admin_password, PASSWORD_BCRYPT)]);
+@unlink($login_jar2);
+
+// --- update_profile: the e-mail asks for the password ---------------------
+//
+// A password reset goes to this address, so a stolen session that could change
+// it could take the account.
+$up_row = $pdo->query("SELECT email, phone, sms_notifications, whatsapp_notifications, email_lang FROM users WHERE id = 1")->fetch();
+$up_email = fn (): string => (string)$pdo->query("SELECT email FROM users WHERE id = 1")->fetchColumn();
+$up_audits = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'email_changed' AND target_id = 1")->fetchColumn();
+$up_was = $up_row['email'];
+$up_audits_was = $up_audits();
+[$code] = api_post($base, 'action=update_profile', ['email' => 'unos@example.test'], $cookie_jar);
+check('změna e-mailu bez hesla neprojde', [$code, $up_email()], [400, $up_was]);
+[$code] = api_post($base, 'action=update_profile', ['email' => 'unos@example.test', 'oldPassword' => 'spatne-heslo'], $cookie_jar);
+check('se špatným heslem taky ne', [$code, $up_email()], [400, $up_was]);
+[$code] = api_post($base, 'action=update_profile', ['email' => $up_was, 'phone' => '+420111222333'], $cookie_jar);
+check('stejný e-mail heslo nechce, ostatní se uloží',
+    [$code, $pdo->query("SELECT phone FROM users WHERE id = 1")->fetchColumn(), $up_audits()], [200, '+420111222333', $up_audits_was]);
+[$code] = api_post($base, 'action=update_profile', ['email' => 'novy@example.test', 'oldPassword' => $bk_test_admin_password], $cookie_jar);
+check('se správným heslem se e-mail změní a zapíše do auditu', [$code, $up_email(), $up_audits()], [200, 'novy@example.test', $up_audits_was + 1]);
+$pdo->prepare("UPDATE users SET email = ?, phone = ?, sms_notifications = ?, whatsapp_notifications = ?, email_lang = ? WHERE id = 1")
+    ->execute(array_values($up_row));
+
+// --- TOTP enrollment ------------------------------------------------------
+//
+// Two steps: the secret lives in the session until a code proves the QR
+// scanned. The test computes a real code with the same bk_totp_calculate the
+// server verifies with.
+// A second session of the same account starts its own setup first, as a tab
+// left open would.
+$ts_jar = tempnam(sys_get_temp_dir(), 'bk_test_ts');
+[, $ts_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password], $ts_jar, '');
+$ts_csrf = (string)($ts_login['csrfToken'] ?? '');
+[, $ts_other] = api_post($base, 'action=totp_setup', [], $ts_jar, $ts_csrf);
+// R208: the label read a session key nothing sets, so every account was
+// "…:admin" in the authenticator. Renamed for the call, so "admin" cannot pass.
+$pdo->exec("UPDATE users SET username = 'pepa_r208' WHERE id = 1");
+[$code, $ts] = api_post($base, 'action=totp_setup', [], $cookie_jar);
+$pdo->exec("UPDATE users SET username = 'admin' WHERE id = 1");
+check('totp_setup vrací 200', $code, 200);
+check_true('a secret', !empty($ts['secret']));
+check_true('a otpauth URI', str_starts_with($ts['otpauthUri'] ?? '', 'otpauth://totp/'));
+check_true('štítek v aplikaci nese jméno účtu', str_contains((string)($ts['otpauthUri'] ?? ''), ':pepa_r208?secret='));
+
+// A wrong code must not enable 2FA.
+[$code] = api_post($base, 'action=totp_confirm', ['code' => '000000', 'password' => $bk_test_admin_password], $cookie_jar);
+check('špatný kód vrací 400', $code, 400);
+$totp_row = $pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn();
+check('a 2FA zůstává vypnuté', (int)$totp_row, 0);
+
+// The right code computed from the same secret.
+$valid_code = bk_totp_calculate($ts['secret'], (int)floor(time() / 30));
+// Not without the password: a stolen session must not put its own authenticator on.
+foreach (['bez hesla' => [], 'se špatným heslem' => ['password' => 'spatne-heslo']] as $ts_how => $ts_extra) {
+    [$code] = api_post($base, 'action=totp_confirm', ['code' => $valid_code] + $ts_extra, $cookie_jar);
+    check("správný kód {$ts_how} 2FA nezapne", [$code, (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn()], [400, 0]);
+}
+[$code, $tc] = api_post($base, 'action=totp_confirm', ['code' => $valid_code, 'password' => $bk_test_admin_password], $cookie_jar);
+check('správný kód 2FA zapne', $code, 200);
+check('v databázi je zapnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
+
+// With 2FA on nothing replaces it, password or not: only totp_disable leads there.
+$ts_state = fn (): array => [
+    $pdo->query("SELECT totp_secret FROM users WHERE id = 1")->fetchColumn(),
+    $pdo->query("SELECT GROUP_CONCAT(code_hash ORDER BY id) FROM totp_recovery_codes WHERE user_id = 1")->fetchColumn(),
+];
+$ts_before = $ts_state();
+[$code] = api_post($base, 'action=totp_setup', [], $cookie_jar);
+check('při zapnutém 2FA nové nastavení nezačne', $code, 409);
+[$code, $ts_answer] = api_post($base, 'action=totp_confirm', [
+    'code' => bk_totp_calculate($ts_other['secret'] ?? '', (int)floor(time() / 30)),
+    'password' => $bk_test_admin_password,
+], $ts_jar, $ts_csrf);
+check('ani nastavení rozdělané v druhém okně ho nepřepíše', [$code, isset($ts_answer['recoveryCodes'])], [409, false]);
+check('secret i záložní kódy zůstanou', $ts_state(), $ts_before);
+@unlink($ts_jar);
+
+// --- Recovery codes ----------------------------------------------------
+// Enabling 2FA hands out ten one-time codes exactly once; only hashes
+// are stored. A code signs the user in IN PLACE of the TOTP code when
+// the phone is gone - and is consumed by doing so.
+$rc = $tc['recoveryCodes'] ?? [];
+check('potvrzení vrací 10 záložních kódů', count($rc), 10);
+check_true('kódy mají tvar xxxxx-xxxxx', (bool)preg_match('/^[a-z2-9]{5}-[a-z2-9]{5}$/', $rc[0] ?? ''));
+check('v DB je 10 hashů, ne kódy', (int)$pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE user_id = 1 AND used_at IS NULL")->fetchColumn(), 10);
+check_true('plaintext kód v DB není', $pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE code_hash = " . $pdo->quote(str_replace('-', '', $rc[0])))->fetchColumn() == 0);
+
+[, $mp_rc] = api_get_auth($base, 'action=my_profile', $cookie_jar);
+check('profil hlásí 10 zbývajících kódů', $mp_rc['totpRecoveryRemaining'] ?? null, 10);
+
+// Sign-in with a recovery code instead of the TOTP code (separate jar,
+// the admin session must stay intact).
+$rc_jar = tempnam(sys_get_temp_dir(), 'bk_test_rc');
+[$code, $rc_login] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[0]], $rc_jar, '');
+check('záložní kód přihlásí', $code, 200);
+check('a odpověď říká, kolik kódů zbývá', $rc_login['recoveryCodesRemaining'] ?? null, 9);
+
+// Strictly single use: the same code a second time must fail.
+[$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[0]], $rc_jar, '');
+check('použitý kód podruhé nepřihlásí', $code, 401);
+@unlink($rc_jar);
+
+// Regeneration requires the password and invalidates the old set.
+$pa_clear();
+[$code] = api_post($base, 'action=totp_recovery_regenerate', ['password' => 'spatne-heslo'], $cookie_jar);
+check('regenerace se špatným heslem vrací 400', $code, 400);
+[$code, $rr] = api_post($base, 'action=totp_recovery_regenerate', ['password' => $bk_test_admin_password], $cookie_jar);
+check('se správným heslem vrací novou sadu', $code, 200);
+check('nová sada má zase 10 kódů', count($rr['recoveryCodes'] ?? []), 10);
+$rc_jar2 = tempnam(sys_get_temp_dir(), 'bk_test_rc2');
+[$code] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password, 'totp_code' => $rc[1]], $rc_jar2, '');
+check('starý kód po regeneraci neplatí', $code, 401);
+@unlink($rc_jar2);
+
+// Disabling without the password must fail - a stolen session must not quietly remove 2FA.
+[$code] = api_post($base, 'action=totp_disable', ['password' => 'spatne-heslo'], $cookie_jar);
+check('vypnutí se špatným heslem vrací 400', $code, 400);
+check('2FA drží', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 1);
+
+[$code] = api_post($base, 'action=totp_disable', ['password' => $bk_test_admin_password], $cookie_jar);
+check('se správným heslem se vypne', $code, 200);
+check('a v databázi je vypnuto', (int)$pdo->query("SELECT totp_enabled FROM users WHERE id = 1")->fetchColumn(), 0);
+// Codes without 2FA would be a sign-in backdoor - disabling removes them.
+check('vypnutí 2FA smaže i záložní kódy', (int)$pdo->query("SELECT COUNT(*) FROM totp_recovery_codes WHERE user_id = 1")->fetchColumn(), 0);
+
+// --- OAuth sign-in and 2FA ------------------------------------------------
+//
+// OAuth signed a linked account in at once in admin.php, so an account with
+// 2FA never gave the code its password sign-in asks for (R346), and every
+// sign-in ended in the legacy admin.php. The flow now runs in api.php
+// (oauth_start, oauth_callback) and ends in /app; admin.php only forwards the
+// provider's answer, so the callback URL the providers know still works.
+// The provider's round trip (code -> token -> account id over HTTPS) cannot
+// run here. Everything around it does: the start and its state, the stub,
+// the callback up to that request, and bk_oauth_finish(), what the callback
+// does with the identity, which a child PHP calls in a real session. The code
+// step of a pending session then runs over HTTP (action=login_2fa).
+$oa_secret = bk_totp_generate_secret();
+$oa_password = 'OauthHeslo123!';
+$oa_ins = $pdo->prepare("INSERT INTO users (username, email, role, password_hash, oauth_provider, oauth_id, totp_secret, totp_enabled)
+                         VALUES (?, ?, 'user', ?, 'github', ?, ?, ?)");
+$oa_ins->execute(['oauth_totp', 'oauth-totp@example.com', password_hash($oa_password, PASSWORD_BCRYPT), '9000001', $oa_secret, 1]);
+$oa_totp_id = (int)$pdo->lastInsertId();
+$oa_ins->execute(['oauth_plain', 'oauth-plain@example.com', password_hash($oa_password, PASSWORD_BCRYPT), '9000002', null, 0]);
+$oa_plain_id = (int)$pdo->lastInsertId();
+$oa_code = fn (): string => bk_totp_calculate($oa_secret, (int)floor(time() / 30));
+
+// bk_oauth_finish() in a child PHP that loads the app like a request to
+// $script does: where it sends the browser, what it left in the session, and
+// that session's id. $link links to that account instead, in a session signed
+// in as $as: the account that started the link unless a test says otherwise,
+// 0 = signed out.
+$oa_finish = function (string $oauth_id, ?int $link = null, ?int $as = null, string $script = '/status/api.php') use ($root): array {
+    $as ??= $link;
+    $php = 'require ' . var_export($root . '/bootstrap.php', true) . ';'
+        . '$_SERVER["SCRIPT_NAME"] = ' . var_export($script, true) . ';'
+        . ($as ? '$_SESSION["admin_logged_in"] = true; $_SESSION["admin_id"] = ' . $as . '; $_SESSION["admin_username"] = "linker";' : '')
+        . '$r = bk_oauth_finish($pdo, "github", ' . var_export($oauth_id, true) . ', ' . var_export($link, true) . ');'
+        . 'echo json_encode(["result" => $r, "session" => $_SESSION, "sid" => session_id()]);';
+    $out = [];
+    exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($php) . ' 2>&1', $out, $rc);
+    $res = json_decode((string)end($out), true);
+    return [$rc, is_array($res) ? $res : ['output' => implode(' ', $out)]];
+};
+// A cookie jar that carries the child's session to the server.
+$oa_jar = function (string $sid): string {
+    $file = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+    file_put_contents($file, "127.0.0.1\tFALSE\t/\tFALSE\t0\tPHPSESSID\t{$sid}\n");
+    return $file;
+};
+// A navigation in that session, redirects not followed: [HTTP code, Location].
+$oa_nav = function (string $path, string $jar) use ($base): array {
+    $ch = curl_init($base . '/' . $path);
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30, CURLOPT_HEADER => true,
+        CURLOPT_COOKIEFILE => $jar, CURLOPT_COOKIEJAR => $jar]);
+    $raw = (string)curl_exec($ch);
+    $head = substr($raw, 0, (int)curl_getinfo($ch, CURLINFO_HEADER_SIZE));
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), preg_match('/^Location:\s*(\S+)/mi', $head, $m) ? $m[1] : ''];
+};
+// admin.php in that session: [HTTP code, body, redirect target].
+$oa_admin = function (string $file, ?array $post = null) use ($base): array {
+    $ch = curl_init($base . '/admin.php');
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30,
+        CURLOPT_COOKIEFILE => $file, CURLOPT_COOKIEJAR => $file]);
+    if ($post !== null) {
+        curl_setopt_array($ch, [CURLOPT_POST => true, CURLOPT_POSTFIELDS => http_build_query($post)]);
+    }
+    $body = (string)curl_exec($ch);
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), $body, (string)curl_getinfo($ch, CURLINFO_REDIRECT_URL)];
+};
+$oa_csrf = fn (string $html): string => preg_match('/name="csrf_token" value="([0-9a-f]{64})"/', $html, $m) ? $m[1] : '';
+$oa_last_success = function (int $user_id) use ($pdo): ?string {
+    $stmt = $pdo->prepare("SELECT description FROM audit_log WHERE action = 'login_success' AND actor_user_id = ? ORDER BY id DESC LIMIT 1");
+    $stmt->execute([$user_id]);
+    $d = $stmt->fetchColumn();
+    return $d === false ? null : (string)$d;
+};
+$oa_fails = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'login_failed' AND actor_username = 'oauth_totp'")->fetchColumn();
+$oa_l2 = fn (string $jar, string $code): array => api_post($base, 'action=login_2fa', ['totp_code' => $code], $jar, '');
+
+// An account with 2FA: the provider stands in for the password only, and the
+// browser goes to the login page of /app, which asks for the code.
+[$oa_rc, $oa] = $oa_finish('9000001');
+check('OAuth účtu s 2FA vede na přihlášení v /app, ne do admin.php (' . ($oa['output'] ?? 'ok') . ')',
+    [$oa_rc, $oa['result'] ?? null], [0, '/app/setup']);
+check('session drží jen čekající účet, žádné přihlášení',
+    [(int)($oa['session']['pending_2fa_user_id'] ?? 0), $oa['session']['admin_logged_in'] ?? null, $oa['session']['admin_id'] ?? null],
+    [$oa_totp_id, null, null]);
+check('a audit žádné přihlášení nezapsal', $oa_last_success($oa_totp_id), null);
+$oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('API tu session nebere jako přihlášenou, ale řekne, že čeká na kód',
+    [$oa_sess['authenticated'] ?? null, $oa_sess['pending2fa'] ?? null], [false, true]);
+
+$pa_clear();
+[$code, $oa_api] = $oa_l2($oa_cj, '000000');
+check('špatný kód nepřihlásí', [$code, $oa_api['message'] ?? null], [401, 'Invalid 2FA code.']);
+check('a zapíše se jako login_failed, který počítá zámek', $oa_fails(), 1);
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('krok s kódem po špatném kódu trvá', [$oa_sess['authenticated'] ?? null, $oa_sess['pending2fa'] ?? null], [false, true]);
+[$code, $oa_api] = $oa_l2($oa_cj, $oa_code());
+check('správný kód přihlásí jako action=login',
+    [$code, $oa_api['authenticated'] ?? null, $oa_api['user']['username'] ?? null,
+        array_key_exists('recoveryCodesRemaining', $oa_api ?? []) ? $oa_api['recoveryCodesRemaining'] : 'chybí'],
+    [200, true, 'oauth_totp', null]);
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('pak je session přihlášená za ten účet a nic nečeká',
+    [$oa_sess['authenticated'] ?? null, $oa_sess['user']['username'] ?? null, $oa_sess['pending2fa'] ?? null], [true, 'oauth_totp', false]);
+check('audit říká, že první krok byl OAuth, ne heslo', $oa_last_success($oa_totp_id), 'Přes GitHub OAuth + 2FA');
+[$code] = $oa_l2($oa_cj, $oa_code());
+check('přihlášená session už žádný kód nečeká', $code, 401);
+@unlink($oa_cj);
+
+// A recovery code in place of the TOTP code, as after the password.
+$oa_recovery = bk_totp_generate_recovery_codes($pdo, $oa_totp_id);
+[, $oa] = $oa_finish('9000001');
+$oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
+[$code, $oa_api] = $oa_l2($oa_cj, $oa_recovery[0]);
+check('záložní kód po OAuth přihlásí a řekne, kolik jich zbývá',
+    [$code, $oa_api['authenticated'] ?? null, $oa_api['recoveryCodesRemaining'] ?? null], [200, true, 9]);
+check('a spotřebuje se', bk_totp_recovery_remaining($pdo, $oa_totp_id), 9);
+check('audit zaznamená použitý záložní kód',
+    (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'totp_recovery_used' AND actor_user_id = {$oa_totp_id}")->fetchColumn(), 1);
+@unlink($oa_cj);
+
+// The lockout of the code step holds after OAuth: five failures on the
+// account's name refuse even the right code.
+$oa_fail = $pdo->prepare("INSERT INTO audit_log (actor_username, action, description) VALUES ('oauth_totp', 'login_failed', 'test')");
+for ($i = 0; $i < 5; $i++) {
+    $oa_fail->execute();
+}
+[, $oa] = $oa_finish('9000001');
+$oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
+[$code] = $oa_l2($oa_cj, $oa_code());
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('zamčený účet nepřihlásí ani správný kód po OAuth', [$code, $oa_sess['authenticated'] ?? null], [429, false]);
+// The suite signs in from 127.0.0.1 throughout; these failures must not lock out what follows.
+$pdo->exec("DELETE FROM audit_log WHERE action = 'login_failed' AND actor_username = 'oauth_totp'");
+// A pending account that has dropped 2FA since starts again from its first step.
+$pdo->exec("UPDATE users SET totp_enabled = 0 WHERE id = {$oa_totp_id}");
+[$code] = $oa_l2($oa_cj, $oa_code());
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('účet, který mezitím 2FA vypnul, kód nepřihlásí a čekání skončí',
+    [$code, $oa_sess['authenticated'] ?? null, $oa_sess['pending2fa'] ?? null], [401, false, false]);
+$pdo->exec("UPDATE users SET totp_enabled = 1 WHERE id = {$oa_totp_id}");
+@unlink($oa_cj);
+
+// Without 2FA an OAuth identity signs in at once, as it always did, and the
+// browser opens the dashboard of /app.
+[$oa_rc, $oa] = $oa_finish('9000002');
+check('OAuth bez 2FA přihlásí hned a vede na /app/',
+    [$oa_rc, $oa['result'] ?? null, $oa['session']['admin_logged_in'] ?? null, (int)($oa['session']['admin_id'] ?? 0)],
+    [0, '/app/', true, $oa_plain_id]);
+check_false('a nic nečeká na kód', isset($oa['session']['pending_2fa_user_id']));
+$oa_cj = $oa_jar((string)($oa['sid'] ?? ''));
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('server tu session bere jako přihlášenou',
+    [$oa_sess['authenticated'] ?? null, $oa_sess['user']['username'] ?? null], [true, 'oauth_plain']);
+check('audit zapíše přihlášení přes OAuth', $oa_last_success($oa_plain_id), 'Přes GitHub OAuth');
+// /app reads its CSRF token from action=session, and nothing on the way from
+// the callback to /app answers with one: without a token in the session every
+// write of an OAuth sign-in failed, and a reload read null again.
+$oa_token = (string)($oa_sess['csrfToken'] ?? '');
+check_true('přihlášení přes OAuth nechá v session CSRF token a action=session ho vrátí',
+    (bool)preg_match('/^[0-9a-f]{64}$/', $oa_token) && $oa_token === ($oa['session']['csrf_token'] ?? null));
+[$code, $oa_api] = api_post($base, 'action=alerts_read_state', ['readUpToId' => 7], $oa_cj, $oa_token);
+check('a zápis s ním projde', [$code, $oa_api['success'] ?? null,
+    (int)$pdo->query("SELECT alerts_read_log_id FROM users WHERE id = {$oa_plain_id}")->fetchColumn()], [200, true, 7]);
+@unlink($oa_cj);
+
+// An identity no account has linked signs nobody in and says so on the login page.
+[, $oa] = $oa_finish('9000999');
+check('nepropojený OAuth účet nepřihlásí nikoho a /app řekne proč',
+    [$oa['result'] ?? null, $oa['session'] ?? null], ['/app/setup?oauth_error=not_linked&provider=github', []]);
+
+// A link writes the identity to the account that started it and opens the profile.
+[, $oa] = $oa_finish('9000777', $oa_plain_id);
+$oa_linked = $pdo->query("SELECT oauth_provider, oauth_id FROM users WHERE id = {$oa_plain_id}")->fetch();
+check('propojení zapíše identitu k účtu, který ho začal, a vede na profil',
+    [$oa['result'] ?? null, $oa_linked['oauth_provider'] ?? null, $oa_linked['oauth_id'] ?? null],
+    ['/app/profile?oauth=linked&provider=github', 'github', '9000777']);
+check('a audit ho zapíše',
+    (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'oauth_linked' AND target_id = {$oa_plain_id}")->fetchColumn(), 1);
+// The same identity again changes no row, which MySQL counts as 0: still a
+// link, not a missing account.
+[, $oa] = $oa_finish('9000777', $oa_plain_id);
+check('opakované propojení téže identity je pořád propojení', $oa['result'] ?? null, '/app/profile?oauth=linked&provider=github');
+// The account that started the link is not the one signed in any more:
+// another account's session, a signed-out one, or an account deleted after
+// bootstrap's sync, which the UPDATE finds no row of (the child sets the
+// session after bootstrap). Nothing is written or audited, and the reason
+// goes to the page this session can open. On a real callback a sign-in or a
+// sign-out has dropped the round trip already (state, below), and bootstrap
+// signs out a session whose account is gone: link_session on /app/setup.
+$oa_audits = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM audit_log WHERE action = 'oauth_linked'")->fetchColumn();
+$oa_audit_before = $oa_audits();
+$oa_gone = (int)$pdo->query("SELECT MAX(id) + 1000 FROM users")->fetchColumn();
+[, $oa_other] = $oa_finish('9000888', $oa_plain_id, $oa_totp_id);
+[, $oa_out] = $oa_finish('9000888', $oa_plain_id, 0);
+[, $oa_deleted] = $oa_finish('9000888', $oa_gone);
+check('propojení za jiný, odhlášený nebo smazaný účet odmítne a /app řekne proč',
+    [$oa_other['result'] ?? null, $oa_out['result'] ?? null, $oa_deleted['result'] ?? null],
+    ['/app/profile?oauth_error=link_session&provider=github', '/app/setup?oauth_error=link_session&provider=github',
+        '/app/profile?oauth_error=link_session&provider=github']);
+check('identita účtu zůstane a audit nic nezapíše',
+    [$pdo->query("SELECT oauth_id FROM users WHERE id = {$oa_plain_id}")->fetchColumn(),
+        (int)$pdo->query("SELECT COUNT(*) FROM users WHERE oauth_id = '9000888'")->fetchColumn(), $oa_audits()],
+    ['9000777', 0, $oa_audit_before]);
+
+// An install under a subdirectory has its /app next to its /status, and
+// every end of the callback goes there.
+$oa_sub = '/monitoring/status/api.php';
+check('instalace v podadresáři končí v /app vedle svého /status',
+    [$oa_finish('9000777', null, null, $oa_sub)[1]['result'] ?? null, $oa_finish('9000001', null, null, $oa_sub)[1]['result'] ?? null,
+        $oa_finish('9000999', null, null, $oa_sub)[1]['result'] ?? null, $oa_finish('9000777', $oa_plain_id, null, $oa_sub)[1]['result'] ?? null,
+        $oa_finish('9000777', $oa_plain_id, 0, $oa_sub)[1]['result'] ?? null],
+    ['/monitoring/app/', '/monitoring/app/setup', '/monitoring/app/setup?oauth_error=not_linked&provider=github',
+        '/monitoring/app/profile?oauth=linked&provider=github', '/monitoring/app/setup?oauth_error=link_session&provider=github']);
+
+// The start: a provider without a client ID, or one the server does not
+// know, goes back to /app with the reason instead of to an error page.
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+check('start u poskytovatele bez client ID vrátí /app s důvodem',
+    $oa_nav('api.php?action=oauth_start&provider=github', $oa_cj), [302, '/app/setup?oauth_error=unavailable&provider=github']);
+check('neznámý poskytovatel taky, bez jména',
+    $oa_nav('api.php?action=oauth_start&provider=nikdo', $oa_cj), [302, '/app/setup?oauth_error=unavailable']);
+check('propojení bez přihlášení vede na přihlášení a pak do profilu',
+    $oa_nav('api.php?action=oauth_start&provider=github&link=1', $oa_cj), [302, '/app/setup?next=%2Fprofile']);
+$pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('oauth_github_client_id', 'test-client') ON DUPLICATE KEY UPDATE key_value = 'test-client'");
+[$code, $oa_to] = $oa_nav('api.php?action=oauth_start&provider=github', $oa_cj);
+parse_str((string)parse_url($oa_to, PHP_URL_QUERY), $oa_q);
+check('start pošle prohlížeč na GitHub s callbackem na admin.php, jak ho poskytovatel zná',
+    [$code, strtok($oa_to, '?'), $oa_q['client_id'] ?? null, $oa_q['redirect_uri'] ?? null, $oa_q['response_type'] ?? null],
+    [302, 'https://github.com/login/oauth/authorize', 'test-client', $base . '/admin.php', 'code']);
+check_true('se stavem z 32 hex znaků', (bool)preg_match('/^[0-9a-f]{32}$/', (string)($oa_q['state'] ?? '')));
+// The callback: a state this session did not issue leaves its own one standing.
+check('callback s cizím stavem vrátí /app s důvodem state',
+    $oa_nav('api.php?action=oauth_callback&code=x&state=' . str_repeat('0', 32), $oa_cj),
+    [302, '/app/setup?oauth_error=state&provider=github']);
+check('zrušení u poskytovatele s platným stavem: /app řekne denied',
+    $oa_nav('api.php?action=oauth_callback&error=access_denied&state=' . ($oa_q['state'] ?? ''), $oa_cj),
+    [302, '/app/setup?oauth_error=denied&provider=github']);
+check('stav se spotřebuje, podruhé už neprojde',
+    $oa_nav('api.php?action=oauth_callback&error=access_denied&state=' . ($oa_q['state'] ?? ''), $oa_cj),
+    [302, '/app/setup?oauth_error=state']);
+// The provider's error goes to the log, and whoever holds a state writes it.
+[, $oa_to] = $oa_nav('api.php?action=oauth_start&provider=github', $oa_cj);
+parse_str((string)parse_url($oa_to, PHP_URL_QUERY), $oa_q);
+clearstatcache();
+$oa_log_from = (int)filesize($server_log);
+check('chyba poskytovatele se zapíše do logu, ale nový řádek v ní řádek nezaloží',
+    $oa_nav('api.php?action=oauth_callback&state=' . ($oa_q['state'] ?? '') . '&error='
+        . rawurlencode("x\n[api.php action=save_user] HTTP 500: podvrh"), $oa_cj),
+    [302, '/app/setup?oauth_error=provider&provider=github']);
+$oa_logged = (string)file_get_contents($server_log, false, null, $oa_log_from);
+check('v logu je opsaná v \xNN na řádku [oauth], podvržený řádek tam není',
+    [str_contains($oa_logged, '[oauth] github answered without a code: x\x0A[api.php action=save_user] HTTP 500: podvrh'),
+        (bool)preg_match('/^\[api\.php action=save_user\]/m', $oa_logged)],
+    [true, false]);
+@unlink($oa_cj);
+// A link started while signed in comes back to the profile.
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+[, $oa_in] = api_post($base, 'action=login', ['username' => 'oauth_plain', 'password' => $oa_password], $oa_cj, '');
+$oa_link = fn (array $body, string $csrf) => api_post($base, 'action=oauth_link_start', $body + ['provider' => 'github'], $oa_cj, $csrf);
+$pa_clear();
+// A linked provider signs in without the password, so a link needs it: a stolen
+// session must not add its own provider account. Nothing may start without it.
+check('starý odkaz na propojení vede na profil a k poskytovateli nepustí',
+    $oa_nav('api.php?action=oauth_start&provider=github&link=1', $oa_cj), [302, '/app/profile']);
+[$code] = $oa_nav('api.php?action=oauth_link_start', $oa_cj);
+check('propojení přes GET se odmítne', $code, 405);
+[$code] = $oa_link(['password' => $oa_password], '');
+check('bez CSRF tokenu se odmítne', $code, 403);
+foreach (['bez hesla' => [], 'se špatným heslem' => ['password' => 'spatne-heslo']] as $oa_how => $oa_extra) {
+    [$code, $oa_ans] = $oa_link($oa_extra, (string)($oa_in['csrfToken'] ?? ''));
+    check("propojení {$oa_how} se odmítne a adresu nevrátí", [$code, isset($oa_ans['url'])], [400, false]);
+}
+[$code, $oa_ans] = $oa_link(['password' => $oa_password], (string)($oa_in['csrfToken'] ?? ''));
+$oa_to = (string)($oa_ans['url'] ?? '');
+parse_str((string)parse_url($oa_to, PHP_URL_QUERY), $oa_q);
+check('propojení přihlášeného účtu s heslem jde ke GitHubu', [$code, strtok($oa_to, '?')], [200, 'https://github.com/login/oauth/authorize']);
+check('a jeho konec vede zpět na profil',
+    $oa_nav('api.php?action=oauth_callback&error=server_error&state=' . ($oa_q['state'] ?? ''), $oa_cj),
+    [302, '/app/profile?oauth_error=provider&provider=github']);
+// A sign-in ends the round trip the session had started: a link one account
+// began cannot finish after another account signed in in the same browser.
+[, $oa_ans] = $oa_link(['password' => $oa_password], (string)($oa_in['csrfToken'] ?? ''));
+parse_str((string)parse_url((string)($oa_ans['url'] ?? ''), PHP_URL_QUERY), $oa_q);
+[, $oa_in] = api_post($base, 'action=login', ['username' => 'admin', 'password' => $bk_test_admin_password], $oa_cj, '');
+check('přihlášení jiného účtu rozběhnuté propojení zahodí, jeho konec už neprojde',
+    [strlen((string)($oa_q['state'] ?? '')),
+        $oa_nav('api.php?action=oauth_callback&error=server_error&state=' . ($oa_q['state'] ?? ''), $oa_cj)],
+    [32, [302, '/app/setup?oauth_error=state']]);
+// A sign-out ends it too: the session is gone, so its answer is a state no
+// session issued, not link_session.
+[, $oa_ans] = $oa_link(['password' => $bk_test_admin_password], (string)($oa_in['csrfToken'] ?? ''));
+parse_str((string)parse_url((string)($oa_ans['url'] ?? ''), PHP_URL_QUERY), $oa_q);
+api_post($base, 'action=logout', [], $oa_cj, '');
+check('odhlášení rozběhnuté propojení zahodí, jeho konec skončí na state',
+    [strlen((string)($oa_q['state'] ?? '')),
+        $oa_nav('api.php?action=oauth_callback&error=server_error&state=' . ($oa_q['state'] ?? ''), $oa_cj)],
+    [32, [302, '/app/setup?oauth_error=state']]);
+@unlink($oa_cj);
+$pdo->exec("DELETE FROM settings WHERE key_name = 'oauth_github_client_id'");
+// A provider without a client ID ends the same way as a sign-in does, on the profile.
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+[, $oa_in] = api_post($base, 'action=login', ['username' => 'oauth_plain', 'password' => $oa_password], $oa_cj, '');
+[$code, $oa_ans] = api_post($base, 'action=oauth_link_start', ['provider' => 'github', 'password' => $oa_password], $oa_cj, (string)($oa_in['csrfToken'] ?? ''));
+check('propojení u poskytovatele bez client ID skončí na profilu s důvodem', [$code, $oa_ans['url'] ?? null], [200, '/app/profile?oauth_error=unavailable&provider=github']);
+@unlink($oa_cj);
+
+// admin.php stays the callback URL the four providers know and forwards it,
+// and the old start links, with their query.
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+check('admin.php předá odpověď poskytovatele do api.php',
+    $oa_nav('admin.php?code=abc&state=def', $oa_cj), [302, 'api.php?action=oauth_callback&code=abc&state=def']);
+check('i zrušení u poskytovatele',
+    $oa_nav('admin.php?error=access_denied&state=def', $oa_cj), [302, 'api.php?action=oauth_callback&state=def&error=access_denied']);
+check('starý odkaz na přihlášení míří na oauth_start',
+    $oa_nav('admin.php?login_oauth=github', $oa_cj), [302, 'api.php?action=oauth_start&provider=github']);
+check('starý odkaz na propojení taky, s link=1',
+    $oa_nav('admin.php?link_oauth=google', $oa_cj), [302, 'api.php?action=oauth_start&provider=google&link=1']);
+@unlink($oa_cj);
+
+// The password of the same account stops at the same step: admin.php's form
+// in the legacy UI, and the API asks for the code before it signs in.
+$pa_clear();
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+[$code, $oa_page] = $oa_admin($oa_cj, ['login' => '1', 'username' => 'oauth_totp', 'password' => $oa_password]);
+check_true('heslo účtu s 2FA v admin.php vede na krok s kódem', $code === 200 && str_contains($oa_page, 'name="totp_login_code"'));
+// A recovery code has letters: a digits-only keypad on a phone cannot type it.
+check_false('pole kódu nevynutí číselnou klávesnici, záložní kód má písmena',
+    (bool)preg_match('/<input[^>]*name="totp_code"[^>]*inputmode="numeric"/', $oa_page));
+[$code] = $oa_admin($oa_cj, ['totp_login_code' => '1', 'totp_code' => $oa_code(), 'csrf_token' => $oa_csrf($oa_page)]);
+check('a kód přihlásí', $code, 302);
+check('audit u hesla zůstává Jméno a heslo + 2FA', $oa_last_success($oa_totp_id), 'Jméno a heslo + 2FA');
+@unlink($oa_cj);
+
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+[$code, $oa_api] = api_post($base, 'action=login', ['username' => 'oauth_totp', 'password' => $oa_password], $oa_cj, '');
+[, $oa_sess] = api_get_auth($base, 'action=session', $oa_cj);
+check('API: heslo účtu s 2FA vrátí requires2fa a nepřihlásí',
+    [$code, $oa_api['requires2fa'] ?? null, $oa_sess['authenticated'] ?? null], [200, true, false]);
+[$code, $oa_api] = api_post($base, 'action=login', ['username' => 'oauth_totp', 'password' => $oa_password, 'totp_code' => $oa_code()], $oa_cj, '');
+check('API: s kódem přihlásí, bez záložního kódu', [$code, $oa_api['authenticated'] ?? null,
+    array_key_exists('recoveryCodesRemaining', $oa_api ?? []) ? $oa_api['recoveryCodesRemaining'] : 'chybí'], [200, true, null]);
+check('audit u API zůstává Password + 2FA', $oa_last_success($oa_totp_id), 'Password + 2FA');
+@unlink($oa_cj);
+// After the password alone, the code by itself finishes the sign-in too.
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+api_post($base, 'action=login', ['username' => 'oauth_totp', 'password' => $oa_password], $oa_cj, '');
+[$code, $oa_api] = $oa_l2($oa_cj, $oa_code());
+check('API: po heslu stačí login_2fa jen s kódem', [$code, $oa_api['authenticated'] ?? null], [200, true]);
+check('audit pak říká Password + 2FA', $oa_last_success($oa_totp_id), 'Password + 2FA');
+@unlink($oa_cj);
+$oa_cj = tempnam(sys_get_temp_dir(), 'bk_test_oa');
+[$code, $oa_api] = $oa_l2($oa_cj, $oa_code());
+check('login_2fa bez čekajícího přihlášení nepřihlásí nikoho',
+    [$code, $oa_api['message'] ?? null], [401, 'No sign-in is waiting for a code. Sign in again.']);
+@unlink($oa_cj);
+
+$pdo->exec("DELETE FROM totp_recovery_codes WHERE user_id IN ({$oa_totp_id}, {$oa_plain_id})");
+$pdo->exec("DELETE FROM users WHERE id IN ({$oa_totp_id}, {$oa_plain_id})");
+
+// The provider's request cannot run here, so the callback's source is held to
+// the tested path. admin_logged_in is set only by bk_login_start_session()
+// and by api.php action=setup (the install's first account).
+// bk_login_start_session() runs only for an account without 2FA
+// (bk_login_first_factor_passed) or after bk_login_second_factor(): in
+// admin.php's code step, in api.php action=login and action=login_2fa. A
+// callback that set admin_logged_in itself or called bk_login_start_session()
+// would sign a 2FA account in without its code, and the checks above, which
+// call bk_oauth_finish(), would still pass.
+$oa_src = [];
+foreach (glob($root . '/*.php') ?: [] as $oa_file) {
+    $oa_stripped = '';
+    foreach (token_get_all((string)file_get_contents($oa_file)) as $oa_tok) {
+        if (!is_array($oa_tok) || !in_array($oa_tok[0], [T_COMMENT, T_DOC_COMMENT], true)) {
+            $oa_stripped .= is_array($oa_tok) ? $oa_tok[1] : $oa_tok;
+        }
+    }
+    $oa_src[basename($oa_file)] = $oa_stripped;
+}
+// Each match as where it is: the function in functions.php, the action in
+// api.php, the file alone elsewhere.
+$oa_sites = function (string $pattern) use ($oa_src): array {
+    $sites = [];
+    foreach ($oa_src as $file => $src) {
+        preg_match_all($pattern, $src, $m, PREG_OFFSET_CAPTURE);
+        foreach ($m[0] as [, $offset]) {
+            $before = substr($src, 0, $offset);
+            if ($file === 'functions.php' && preg_match_all('/\nfunction ([a-zA-Z_0-9]+)\s*\(/', $before, $fm)) {
+                $sites[] = $file . ' ' . end($fm[1]);
+            } elseif ($file === 'api.php' && preg_match_all("/\\\$action === '([a-z_0-9]+)'/", $before, $am)) {
+                $sites[] = $file . ' action=' . end($am[1]);
+            } else {
+                $sites[] = $file;
+            }
+        }
+    }
+    sort($sites);
+    return $sites;
+};
+check('admin_logged_in nastavuje jen bk_login_start_session a setup prvního účtu',
+    $oa_sites('/\$_SESSION\[\s*[\'"]admin_logged_in[\'"]\s*\]\s*=(?!=)/'),
+    ['api.php action=setup', 'functions.php bk_login_start_session']);
+check('bk_login_start_session se volá jen bez 2FA nebo po druhém faktoru',
+    $oa_sites('/(?<!function )\bbk_login_start_session\s*\(/'),
+    ['admin.php', 'api.php action=login', 'api.php action=login_2fa', 'functions.php bk_login_first_factor_passed']);
+check('OAuth callback v api.php končí přes bk_oauth_finish, ten přihlašuje přes bk_oauth_login',
+    [$oa_sites('/(?<!function )\bbk_oauth_finish\s*\(/'), $oa_sites('/(?<!function )\bbk_oauth_login\s*\(/')],
+    [['api.php action=oauth_callback'], ['functions.php bk_oauth_finish']]);
+check('admin.php už nikoho přes OAuth nepřihlašuje, jen přeposílá',
+    preg_match_all('/\bbk_oauth_(?:login|finish|fetch_identity)\s*\(/', $oa_src['admin.php'] ?? ''), 0);
+
+// --- Retention for process history --------------------------------------
+//
+// The two-stage prune is the part that can quietly destroy data, so it is
+// tested against a real database rather than reasoned about. Timestamps are
+// built with MySQL DATE_SUB so they share a timezone with NOW() inside the
+// function - the same mismatch already produced one bug in this endpoint.
+$seed_samples = function (PDO $pdo) {
+    $pdo->exec("DELETE FROM process_samples");
+    $rows = [
+        // [days back, name, cpu, ram]
+        [1, 'dnesni-klidny', 3.0, 10.0],
+        [1, 'dnesni-spicka', 95.0, 10.0],
+        [10, 'stary-klidny', 3.0, 10.0],
+        [10, 'stary-spicka', 95.0, 10.0],
+        [10, 'stary-zravy-na-pamet', 1.0, 800.0],
+        [90, 'davno-za-retenci', 99.0, 900.0],
+    ];
+    foreach ($rows as [$days_ago, $name, $cpu, $ram]) {
+        $st = $pdo->prepare(
+            "INSERT INTO process_samples (monitor_id, sampled_at, kind, name, cpu_pct, ram_mb)
+             VALUES (2, DATE_SUB(NOW(), INTERVAL ? DAY), 'cpu', ?, ?, ?)"
+        );
+        $st->execute([$days_ago, $name, $cpu, $ram]);
+    }
+};
+
+$names_left = function (PDO $pdo): array {
+    $rows = $pdo->query("SELECT name FROM process_samples ORDER BY name")->fetchAll(PDO::FETCH_COLUMN);
+    return $rows ?: [];
+};
+
+// 1. Without thinning only what is beyond retention is dropped.
+$seed_samples($pdo);
+$r = bk_prune_process_samples($pdo, 30, 0, 50.0);
+check('za retencí se smaže', $r['deleted'], 1);
+check('bez prořezávání se nic neprořezává', $r['pruned'], 0);
+check(
+    'v okně retence zůstane všechno',
+    $names_left($pdo),
+    ['dnesni-klidny', 'dnesni-spicka', 'stary-klidny', 'stary-spicka', 'stary-zravy-na-pamet']
+);
+
+// 2. With thinning on, old calm samples vanish and the peaks stay.
+$seed_samples($pdo);
+$r = bk_prune_process_samples($pdo, 30, 7, 50.0);
+check('prořezal se jeden klidný starý vzorek', $r['pruned'], 1);
+check('a dvě špičky se označily', $r['marked'], 2);
+check(
+    'dnešek nedotčen, ze starých zbyly špičky',
+    $names_left($pdo),
+    ['dnesni-klidny', 'dnesni-spicka', 'stary-spicka', 'stary-zravy-na-pamet']
+);
+
+// The marking must be visible in the data - a thinned window would otherwise
+// look like a time when nothing happened.
+$kept = $pdo->query("SELECT kept_reason FROM process_samples WHERE name = 'stary-spicka'")->fetchColumn();
+check('přeživší vzorek přizná, že je z prořezaného okna', $kept, 'peak');
+$fresh = $pdo->query("SELECT kept_reason FROM process_samples WHERE name = 'dnesni-klidny'")->fetchColumn();
+check('čerstvý vzorek zůstává raw', $fresh, 'raw');
+
+// 3. Thinning configured beyond the retention boundary is a no-op.
+//
+// Mind what this case does NOT test: it does not guard data loss, because
+// the first phase deletes the affected window before the second reaches it -
+// verified by sabotage, the tests kept passing with the guard removed. The
+// guard therefore protects no data, it only saves two pointless queries.
+// The test guards what matters: fresh samples stay untouched in that configuration.
+$seed_samples($pdo);
+$r = bk_prune_process_samples($pdo, 5, 30, 50.0);
+check('prořezání za hranicí retence nic neprořeže', $r['pruned'], 0);
+check('a nic neoznačí', $r['marked'], 0);
+check('čerstvé vzorky zůstanou nedotčené', $names_left($pdo), ['dnesni-klidny', 'dnesni-spicka']);
+
+// 4. Disabled history empties the table - data nobody collects and
+//    nobody sees has no business in the database.
+$seed_samples($pdo);
+$r = bk_prune_process_samples($pdo, 0);
+check_true('vypnutá historie se přizná', $r['disabled']);
+check('a tabulka je prázdná', $names_left($pdo), []);
+
+// --- Settings: save, read back, save again ------------------------------
+//
+// This set exists because of one specific silent data loss: `whatsapp_*` could
+// be saved, but get_settings never returned those keys. The form therefore
+// showed them empty and the next "Save all" overwrote them with empty values -
+// the settings vanished without anyone making a mistake and without anything
+// being reported. This reproduces the whole cycle, not just a single save.
+if ($logged_in) {
+    // The key list checked at the end is the server's own bk_settings_keys(),
+    // not a copy in the test - a copy would drift apart exactly like the
+    // original three.
+    [$code, $res] = api_post($base, 'action=save_settings', [
+        'settings' => [
+            'escalation_enabled' => '1',
+            'escalation_after_mins' => '20',
+            'escalation_webhook_url' => 'https://discord.com/api/webhooks/test',
+            'smtp_host' => 'smtp.example.com',
+            'smtp_pass' => 'TajneHeslo123',
+        ],
+    ], $cookie_jar);
+    check('save_settings vrací 200', $code, 200);
+
+    [$code, $got] = api_get_auth($base, 'action=get_settings', $cookie_jar);
+    check('get_settings vrací 200', $code, 200);
+    $s = $got['settings'] ?? [];
+
+    // The test buttons send a REAL message and report the channel's verdict.
+    // Without a saved webhook the verdict is an honest failure, not "Test OK".
+    // Historie doručení: řádek vzniká i u neúspěchu, protože to je ta
+    // zajímavější půlka. Bez přihlášení se nevydá vůbec - jsou tam adresáti.
+    $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message)
+                VALUES (1, 'down', 'email', 'admin@example.com', 1, NULL)");
+    $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, error_message)
+                VALUES (1, 'down', 'discord', NULL, 0, 'HTTP 404')");
+    // Vymazání historie je nevratné, takže server chce zpátky přesný název.
+    // Překlep nebo prázdné pole nesmí smazat měsíce měření.
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (1, 'up', 111, NOW())");
+    [$clr_anon] = api_post($base, 'action=clear_monitor_history', ['monitor_id' => 1, 'confirm_name' => 'Testovací web'], '');
+    check('anonym historii nesmaže', $clr_anon, 403);
+    [$clr_bad] = api_post($base, 'action=clear_monitor_history', ['monitor_id' => 1, 'confirm_name' => 'špatný název'], $cookie_jar);
+    check('špatné potvrzení je 400', $clr_bad, 400);
+    $clr_before = (int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE monitor_id = 1")->fetchColumn();
+    check_true('a nic nesmazalo', $clr_before > 0);
+    [$clr_ok] = api_post($base, 'action=clear_monitor_history', ['monitor_id' => 1, 'confirm_name' => 'Testovací web'], $cookie_jar);
+    check('se správným názvem projde', $clr_ok, 200);
+    check('a historie je pryč', (int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE monitor_id = 1")->fetchColumn(), 0);
+    // Stav jde s ní: „up“ vedle prázdné historie by tvrdilo měření, které
+    // už neexistuje.
+    check('stav se vrátil na neznámý', $pdo->query("SELECT status FROM monitors WHERE id = 1")->fetchColumn(), 'unknown');
+
+    // Údržba jedním voláním, klidně pro víc monitorů. Vypnutí musí smazat i
+    // okno, jinak by další údržba vypršela hned, jak ji někdo zapne.
+    [$tm_anon] = api_post($base, 'action=toggle_maintenance', ['monitor_ids' => [1], 'maintenance' => true], '');
+    check('anonym údržbu nepřepne', $tm_anon, 403);
+    [$tm_code, $tm_res] = api_post(
+        $base,
+        'action=toggle_maintenance',
+        ['monitor_ids' => [1, 2], 'maintenance' => true, 'description' => 'Výměna disku', 'maintenance_end' => '2030-01-02 03:00:00'],
+        $cookie_jar
+    );
+    check('toggle_maintenance vrací 200', $tm_code, 200);
+    // R218: a window that ends before it starts never applied and was saved.
+    [$tm_back] = api_post($base, 'action=toggle_maintenance',
+        ['monitor_ids' => [1], 'maintenance' => true, 'maintenance_end' => date('Y-m-d H:i:s', time() - 3600)], $cookie_jar);
+    check('toggle_maintenance s koncem v minulosti je 400', $tm_back, 400);
+    check('a přepne oba monitory', $tm_res['changed'] ?? 0, 2);
+    [, $tm_list] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    $tm_by_id = [];
+    foreach (($tm_list['monitors'] ?? []) as $m) { $tm_by_id[(int)$m['id']] = $m; }
+    check_true('údržba je zapnutá u obou', ($tm_by_id[1]['maintenance'] ?? null) === true && ($tm_by_id[2]['maintenance'] ?? null) === true);
+    check('a popis je veřejný, dokud běží', $tm_by_id[1]['maintenanceDescription'] ?? null, 'Výměna disku');
+    api_post($base, 'action=toggle_maintenance', ['monitor_ids' => [1, 2], 'maintenance' => false], $cookie_jar);
+    [, $tm_off] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    $tm_off_by_id = [];
+    foreach (($tm_off['monitors'] ?? []) as $m) { $tm_off_by_id[(int)$m['id']] = $m; }
+    check_false('po vypnutí už údržba neběží', ($tm_off_by_id[1]['maintenance'] ?? null) === true);
+    $tm_win = $pdo->query("SELECT maintenance_end FROM monitors WHERE id = 1")->fetchColumn();
+    check_true('a okno je smazané, ne jen příznak', $tm_win === null);
+
+    // Kdo bral výkon za období, ne kdo byl náhodou nahoře v posledním hlášení.
+    // Seskupuje se podle jména: služba, která se restartuje, žere dál pod novým
+    // pid a per-pid žebříček by ji rozdrobil na neškodně vypadající řádky.
+    $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
+    for ($i = 1; $i <= 5; $i++) {
+        $pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb)
+                    VALUES (2, DATE_SUB(NOW(), INTERVAL {$i} MINUTE), 'cpu', 'hogger', " . (100 + $i) . ", " . (60 + $i) . ", NULL)");
+        $pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb)
+                    VALUES (2, DATE_SUB(NOW(), INTERVAL {$i} MINUTE), 'cpu', 'quiet', 200, 2, NULL)");
+    }
+    [$pt_anon] = api_get($base, 'action=process_top&monitor_id=2');
+    check('anonym žebříček procesů nedostane', $pt_anon, 401);
+    [$pt_code, $pt] = api_get_auth($base, 'action=process_top&monitor_id=2&kind=cpu&minutes=1440', $cookie_jar);
+    check('process_top vrací 200', $pt_code, 200);
+    check('nejžravější je první', $pt['processes'][0]['name'] ?? null, 'hogger');
+    check_true('a nese průměr i špičku', ($pt['processes'][0]['max'] ?? 0) >= ($pt['processes'][0]['avg'] ?? 0));
+    check_true('pět vzorků pod jedním jménem, ne pět řádků', ($pt['processes'][0]['samples'] ?? 0) === 5);
+    // R300: the average counted only the minutes a process was in the top
+    // ten, so a one-minute spike outranked a load that lasted all day.
+    $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
+    for ($i = 1; $i <= 10; $i++) {
+        $pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb)
+                    VALUES (2, DATE_SUB(NOW(), INTERVAL {$i} MINUTE), 'cpu', 'steady', 300, 40, NULL)");
+    }
+    $pdo->exec("INSERT INTO process_samples (monitor_id, sampled_at, kind, name, pid, cpu_pct, ram_mb)
+                VALUES (2, DATE_SUB(NOW(), INTERVAL 3 MINUTE), 'cpu', 'spike', 400, 95, NULL)");
+    [, $pt2] = api_get_auth($base, 'action=process_top&monitor_id=2&kind=cpu&minutes=1440', $cookie_jar);
+    check('průměr je za celé okno: celodenní zátěž před minutovou špičkou',
+        array_map(fn ($p) => [$p['name'] ?? null, $p['avg'] ?? null, $p['max'] ?? null], $pt2['processes'] ?? []),
+        [['steady', 40, 40], ['spike', 9.5, 95]]);
+    $pdo->exec("DELETE FROM process_samples WHERE monitor_id = 2");
+
+    // Denní provoz per rozhraní: tabulka ho drží dávno, četl ho jen součet.
+    $pdo->exec("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total, rx_packets_total, tx_packets_total)
+                VALUES (2, 'wan', DATE_SUB(CURDATE(), INTERVAL 2 DAY), 5000000000, 1000000000, 10, 10)
+                ON DUPLICATE KEY UPDATE rx_bytes_total = VALUES(rx_bytes_total)");
+    $pdo->exec("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total, rx_packets_total, tx_packets_total)
+                VALUES (2, 'wan', DATE_SUB(CURDATE(), INTERVAL 1 DAY), 7000000000, 2000000000, 10, 10)
+                ON DUPLICATE KEY UPDATE rx_bytes_total = VALUES(rx_bytes_total)");
+    [$itd_anon] = api_get($base, 'action=interface_traffic_daily&monitor_id=2');
+    check('anonym denní provoz rozhraní nedostane', $itd_anon, 401);
+    [$itd_code, $itd] = api_get_auth($base, 'action=interface_traffic_daily&monitor_id=2&days=30', $cookie_jar);
+    check('interface_traffic_daily vrací 200', $itd_code, 200);
+    check_true('a vrací dny, ne jen součet', count($itd['interfaces'][0]['days'] ?? []) === 2);
+    check_true('nejvytíženější rozhraní je první', ($itd['interfaces'][0]['iface'] ?? '') === 'wan');
+    $pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2");
+
+    [$nl_anon_code] = api_get($base, 'action=notification_log&monitor_id=1');
+    check('anonym historii notifikací nedostane', $nl_anon_code, 403);
+    [$nl_code, $nl] = api_get_auth($base, 'action=notification_log&monitor_id=1&limit=50', $cookie_jar);
+    check('notification_log vrací 200', $nl_code, 200);
+    check_true('a obě odeslání', count($nl['entries'] ?? []) === 2);
+    $nl_fail = null;
+    foreach ($nl['entries'] ?? [] as $e) {
+        if (($e['channel'] ?? '') === 'discord') $nl_fail = $e;
+    }
+    check('neúspěch je zaznamenaný jako neúspěch', $nl_fail['ok'] ?? null, false);
+    check('i s důvodem', $nl_fail['error'] ?? null, 'HTTP 404');
+    $pdo->exec("DELETE FROM notification_log");
+
+    // --- Protokol odchozích zpráv: filtry, stránkování, souhrn -------------
+    // Od chvíle, kdy zapisuje send_email(), tu nejsou jen výstrahy, ale i
+    // pozvánky, digesty a resety hesla. Bez filtrů a stránkování se v tom
+    // nedá hledat a bez souhrnu se jeden neúspěch schová mezi úspěchy.
+    // [monitor, druh, kanál, příjemce, ok, chyba, předmět, způsob, stáří v minutách]
+    // Od nejstaršího: řadí se podle id, protože podle něj se i stránkuje, a
+    // ve skutečném provozu řádky přibývají v čase.
+    foreach ([
+        [null, 'password_reset', 'email', 'admin@example.com', 1, null, 'Nové heslo', 'smtp', 4320],
+        [null, 'daily_reminder', 'email', 'admin@example.com', 1, null, 'Co je rozbité', 'smtp', 1500],
+        [null, 'digest', 'email', 'sef@example.com', 0, 'SMTP connect() failed', 'Týdenní přehled', null, 120],
+        [null, 'invitation', 'email', 'novy@example.com', 1, null, 'Pozvánka', 'fallback', 30],
+        [1, 'alert', 'discord', null, 0, 'HTTP 404', null, null, 10],
+        [1, 'alert', 'email', 'admin@example.com', 1, null, 'Monitor je dole', 'smtp', 5],
+    ] as $nl_seed) {
+        $st = $pdo->prepare("INSERT INTO notification_log
+            (monitor_id, status, channel, recipient, ok, error_message, kind, subject, method, created_at)
+            VALUES (?, '', ?, ?, ?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+        $st->execute([$nl_seed[0], $nl_seed[2], $nl_seed[3], $nl_seed[4], $nl_seed[5], $nl_seed[1], $nl_seed[6], $nl_seed[7], $nl_seed[8]]);
+    }
+
+    [, $nl_all] = api_get_auth($base, 'action=notification_log&limit=50', $cookie_jar);
+    check('bez filtru vrátí celý protokol, ne jen výstrahy', count($nl_all['entries'] ?? []), 6);
+    check('nejnovější je první', $nl_all['entries'][0]['subject'] ?? null, 'Monitor je dole');
+    check('řádek nese druh zprávy', $nl_all['entries'][0]['kind'] ?? null, 'alert');
+    check('i způsob odeslání', $nl_all['entries'][0]['method'] ?? null, 'smtp');
+    // array_key_exists, ne ??: ?? by z testovaného nullu udělalo náhradní
+    // hodnotu a klíč, který server vůbec neposlal, by prošel jako null.
+    check_true('na jedné stránce se kurzor nenabízí', array_key_exists('nextCursor', $nl_all ?: []) && $nl_all['nextCursor'] === null);
+    // Nabídka filtrů se bere z celého protokolu - jinak by filtr sebral
+    // možnost, která ho zruší.
+    check('nabídka druhů je celý protokol', $nl_all['kinds'] ?? [], ['alert', 'daily_reminder', 'digest', 'invitation', 'password_reset']);
+    check('nabídka kanálů taky', $nl_all['channels'] ?? [], ['discord', 'email']);
+
+    [, $nl_kind] = api_get_auth($base, 'action=notification_log&kind=alert', $cookie_jar);
+    check('filtr na druh vybere jen výstrahy', count($nl_kind['entries'] ?? []), 2);
+    check_true('a nabídka zůstane úplná', count($nl_kind['kinds'] ?? []) === 5);
+    [, $nl_ch] = api_get_auth($base, 'action=notification_log&channel=discord', $cookie_jar);
+    check('filtr na kanál vybere jen ten kanál', count($nl_ch['entries'] ?? []), 1);
+    [, $nl_bad] = api_get_auth($base, 'action=notification_log&kind=neexistuje', $cookie_jar);
+    check('neznámý druh vrátí prázdno, ne všechno', count($nl_bad['entries'] ?? []), 0);
+    [, $nl_fails] = api_get_auth($base, 'action=notification_log&ok=0', $cookie_jar);
+    check('ok=0 vybere jen neúspěchy', count($nl_fails['entries'] ?? []), 2);
+    check_true('a opravdu jen neúspěchy', !array_filter($nl_fails['entries'] ?? [], fn($e) => $e['ok'] !== false));
+    [$nl_ok_code] = api_get_auth($base, 'action=notification_log&ok=mozna', $cookie_jar);
+    check('nesmyslné ok je 400, ne tiše širší odpověď', $nl_ok_code, 400);
+
+    [, $nl_q] = api_get_auth($base, 'action=notification_log&q=' . rawurlencode('novy@'), $cookie_jar);
+    check('hledání podle příjemce', count($nl_q['entries'] ?? []), 1);
+    check('a najde toho správného', $nl_q['entries'][0]['recipient'] ?? null, 'novy@example.com');
+    // Podtržítko je v LIKE zástupný znak. Kdyby se neescapovalo, „admin_example"
+    // by našlo „admin@example.com" a filtr by se sám rozšířil.
+    [, $nl_wild] = api_get_auth($base, 'action=notification_log&q=' . rawurlencode('admin_example'), $cookie_jar);
+    check('zástupný znak v hledání se nebere jako zástupný', count($nl_wild['entries'] ?? []), 0);
+
+    // Stránkuje se kurzorem: během čtení přibývají řádky a offset by jeden
+    // zopakoval a jiný přeskočil. Stránky proto musí být disjunktní.
+    $nl_seen = [];
+    $nl_cursor = null;
+    $nl_pages = 0;
+    do {
+        [, $nl_page] = api_get_auth($base, 'action=notification_log&limit=2' . ($nl_cursor !== null ? '&before_id=' . $nl_cursor : ''), $cookie_jar);
+        foreach ($nl_page['entries'] ?? [] as $e) {
+            $nl_seen[] = (int)$e['id'];
+        }
+        $nl_cursor = $nl_page['nextCursor'] ?? null;
+        $nl_pages++;
+    } while ($nl_cursor !== null && $nl_pages < 10);
+    check('kurzor projde celý protokol', count($nl_seen), 6);
+    check('a žádný řádek nedá dvakrát', count(array_unique($nl_seen)), 6);
+    check('po třech stránkách po dvou končí', $nl_pages, 3);
+    $nl_desc = $nl_seen;
+    rsort($nl_desc);
+    check('a chodí od nejnovějšího', $nl_seen, $nl_desc);
+    // Karta u monitoru volá pořád to samé volání jako dřív - filtry ji nesmí
+    // rozbít.
+    [, $nl_mon] = api_get_auth($base, 'action=notification_log&monitor_id=1&limit=50', $cookie_jar);
+    check('filtr na monitor bere jen jeho zprávy', count($nl_mon['entries'] ?? []), 2);
+    check('a nese jméno monitoru jako dřív', $nl_mon['entries'][0]['monitorName'] ?? null, 'Testovací web');
+
+    // Souhrn se neptá na filtry. Pruh „něco neodešlo" musí říct pravdu i
+    // uživateli, který si právě prohlíží jen pozvánky.
+    [, $nl_sum] = api_get_auth($base, 'action=notification_log&summary=1', $cookie_jar);
+    check('souhrn za 24 h počítá jen posledních 24 h', $nl_sum['summary']['last24h']['total'] ?? null, 4);
+    check('a ví, kolik z toho neodešlo', $nl_sum['summary']['last24h']['failed'] ?? null, 2);
+    check('souhrn za 7 dní vidí i starší', $nl_sum['summary']['last7d']['total'] ?? null, 6);
+    check('a neúspěchy se mu nerozmnožily', $nl_sum['summary']['last7d']['failed'] ?? null, 2);
+    $nl_by = [];
+    foreach ($nl_sum['summary']['last24h']['byChannel'] ?? [] as $c) {
+        $nl_by[$c['channel']] = $c;
+    }
+    // The invitation went through mail() (fallback): handed over, nobody
+    // confirmed it, so it is unknown - neither sent nor failed.
+    check('souhrn rozpadá 24 h po kanálech', $nl_by['email'] ?? null,
+        ['channel' => 'email', 'total' => 3, 'sent' => 1, 'unknown' => 1, 'failed' => 1]);
+    check('včetně kanálu, kde selhalo všechno', $nl_by['discord'] ?? null,
+        ['channel' => 'discord', 'total' => 1, 'sent' => 0, 'unknown' => 0, 'failed' => 1]);
+    check('souhrn za 24 h rozliší potvrzené od nepotvrzeného',
+        [$nl_sum['summary']['last24h']['sent'] ?? null, $nl_sum['summary']['last24h']['unknown'] ?? null], [1, 1]);
+    [, $nl_sum_f] = api_get_auth($base, 'action=notification_log&summary=1&kind=invitation', $cookie_jar);
+    check('filtr zúží tabulku', count($nl_sum_f['entries'] ?? []), 1);
+    check('ale souhrn ne - jinak by pruh mlčel kvůli filtru', $nl_sum_f['summary']['last24h']['failed'] ?? null, 2);
+    [, $nl_nosum] = api_get_auth($base, 'action=notification_log', $cookie_jar);
+    check_true('bez summary=1 se souhrn nepočítá', array_key_exists('summary', $nl_nosum ?: []) && $nl_nosum['summary'] === null);
+
+    // Časové meze se porovnávají v databázi, takže hranice musí přijít taky
+    // z ní - PHP testu a MySQL nesdílí časovou zónu.
+    $nl_hour_ago = (string)$pdo->query("SELECT DATE_FORMAT(DATE_SUB(NOW(), INTERVAL 60 MINUTE), '%Y-%m-%d %H:%i:%s')")->fetchColumn();
+    [, $nl_from] = api_get_auth($base, 'action=notification_log&from=' . rawurlencode($nl_hour_ago), $cookie_jar);
+    check('from vybere jen novější', count($nl_from['entries'] ?? []), 3);
+    [, $nl_to] = api_get_auth($base, 'action=notification_log&to=' . rawurlencode($nl_hour_ago), $cookie_jar);
+    check('to vybere jen starší', count($nl_to['entries'] ?? []), 3);
+    [$nl_date_code] = api_get_auth($base, 'action=notification_log&from=vcera', $cookie_jar);
+    check('nečitelné datum je 400, ne odpověď bez meze', $nl_date_code, 400);
+    // Holé datum v „to" znamená celý den. Kdyby znamenalo půlnoc, tenhle
+    // řádek by ve výběru nebyl a filtr by tiše mlžil o tom, co ten den odešlo.
+    $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind, subject, created_at)
+                VALUES (NULL, '', 'email', 'historik@example.com', 1, 'admin_notice', 'Starý dopis', '2026-01-15 20:00:00')");
+    [, $nl_day] = api_get_auth($base, 'action=notification_log&from=2026-01-15&to=2026-01-15', $cookie_jar);
+    check('holé datum v to znamená celý den', count($nl_day['entries'] ?? []), 1);
+    check('a je to ten řádek', $nl_day['entries'][0]['recipient'] ?? null, 'historik@example.com');
+    $pdo->exec("DELETE FROM notification_log");
+
+    // --- Delivery: what a row may claim ------------------------------------
+    // ok = 1 used to be "sent" whatever it meant. Rows from before the
+    // delivery column are derived when read, never better than they proved:
+    // WhatsApp's ok was any HTTP 2xx and mail() fallback only a hand-off.
+    // [kanál, ok, způsob, stav, uložené delivery, odpověď, očekávané delivery]
+    $nl_dv_cases = [
+        'wa_legacy_ok' => ['whatsapp', 1, null, 'down', null, null, 'unknown'],
+        'wa_legacy_fail' => ['whatsapp', 0, null, 'down', null, null, 'failed'],
+        'mail_legacy_smtp' => ['email', 1, 'smtp', 'digest', null, null, 'sent'],
+        'mail_legacy_fallback' => ['email', 1, 'fallback', 'digest', null, null, 'unknown'],
+        'mail_legacy_nomethod' => ['email', 1, null, 'digest', null, null, 'unknown'],
+        'discord_legacy_ok' => ['discord', 1, null, 'down', null, null, 'sent'],
+        'reminder_skipped' => ['none', 1, null, 'skipped', null, null, 'skipped'],
+        'wa_recorded_sent' => ['whatsapp', 1, null, 'up', 'sent', 'Message queued. You have 0 Messages left', 'sent'],
+        'wa_recorded_unknown' => ['whatsapp', 1, null, 'up', 'unknown', null, 'unknown'],
+        'wa_recorded_failed' => ['whatsapp', 0, null, 'up', 'failed', 'Your Account is Paused', 'failed'],
+    ];
+    foreach ($nl_dv_cases as $nl_dv_key => $c) {
+        $pdo->prepare("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind, method, delivery, provider_reply, subject)
+                       VALUES (NULL, ?, ?, NULL, ?, 'alert', ?, ?, ?, ?)")
+            ->execute([$c[3], $c[0], $c[1], $c[2], $c[4], $c[5], $nl_dv_key]);
+    }
+    [, $nl_dv] = api_get_auth($base, 'action=notification_log&limit=50', $cookie_jar);
+    $nl_dv_by = [];
+    foreach ($nl_dv['entries'] ?? [] as $e) {
+        $nl_dv_by[(string)$e['subject']] = $e;
+    }
+    foreach ($nl_dv_cases as $nl_dv_key => $c) {
+        check("delivery {$nl_dv_key}", $nl_dv_by[$nl_dv_key]['delivery'] ?? null, $c[6]);
+        check("deliveryRecorded {$nl_dv_key}", $nl_dv_by[$nl_dv_key]['deliveryRecorded'] ?? null, $c[4] !== null);
+    }
+    check('řádek nese slova poskytovatele', $nl_dv_by['wa_recorded_failed']['providerReply'] ?? null, 'Your Account is Paused');
+    check_true('a starý řádek žádná nemá',
+        array_key_exists('providerReply', $nl_dv_by['wa_legacy_ok'] ?? []) && $nl_dv_by['wa_legacy_ok']['providerReply'] === null);
+
+    [, $nl_dvf] = api_get_auth($base, 'action=notification_log&limit=50&delivery=' . rawurlencode('failed,unknown'), $cookie_jar);
+    $nl_dvf_keys = array_map(fn ($e) => (string)$e['subject'], $nl_dvf['entries'] ?? []);
+    sort($nl_dvf_keys);
+    check('filtr delivery=failed,unknown bere i odvozené hodnoty', $nl_dvf_keys,
+        ['mail_legacy_fallback', 'mail_legacy_nomethod', 'wa_legacy_fail', 'wa_legacy_ok', 'wa_recorded_failed', 'wa_recorded_unknown']);
+    [, $nl_dvs] = api_get_auth($base, 'action=notification_log&limit=50&delivery=sent', $cookie_jar);
+    check('delivery=sent vrátí jen potvrzené', count($nl_dvs['entries'] ?? []), 3);
+    [$nl_dv_bad] = api_get_auth($base, 'action=notification_log&delivery=' . rawurlencode('sent,delivered'), $cookie_jar);
+    check('neznámá hodnota delivery je 400, ne tiše širší odpověď', $nl_dv_bad, 400);
+    [$nl_dv_inj] = api_get_auth($base, 'action=notification_log&delivery=' . rawurlencode("sent') OR 1=1 -- "), $cookie_jar);
+    check('a podvržený SQL v delivery taky', $nl_dv_inj, 400);
+
+    [, $nl_dv_sum] = api_get_auth($base, 'action=notification_log&summary=1', $cookie_jar);
+    $nl_dv_24 = $nl_dv_sum['summary']['last24h'] ?? [];
+    check('souhrn: tichý den připomínky není pokus o odeslání',
+        [$nl_dv_24['total'] ?? null, $nl_dv_24['sent'] ?? null, $nl_dv_24['unknown'] ?? null, $nl_dv_24['failed'] ?? null],
+        [9, 3, 4, 2]);
+    $nl_dv_ch = array_column($nl_dv_24['byChannel'] ?? [], null, 'channel');
+    check('kanál jen s přeskočenými řádky v rozpadu není', isset($nl_dv_ch['none']), false);
+    check('WhatsApp v rozpadu', $nl_dv_ch['whatsapp'] ?? null,
+        ['channel' => 'whatsapp', 'total' => 5, 'sent' => 1, 'unknown' => 2, 'failed' => 2]);
+    $pdo->exec("DELETE FROM notification_log");
+
+    // --- notification_health: the /app warning ----------------------------
+    // The owner's day: WhatsApp refused (quota), the e-mail went through
+    // mail() and nobody confirmed it. Both must be named, neither address shown.
+    [$nh_anon] = api_get($base, 'action=notification_health');
+    check('anonym stav doručování nedostane', $nh_anon, 403);
+    $pdo->prepare("UPDATE users SET phone = ? WHERE username = ?")->execute(['777 123 456', 'admin']);
+    $nh_ins = $pdo->prepare("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind, delivery,
+                                 error_message, provider_reply, method, created_at)
+                             VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+    $nh_ins->execute(['storage_warning', 'whatsapp', '+420777123456', 1, 'alert', 'sent', null, 'Message queued. You have 2 Messages left', null, 600]);
+    $nh_ins->execute(['lte_backup_restored', 'whatsapp', '+420777123456', 0, 'alert', 'failed', 'CallMeBot 209: Quota exceeded or banned', null, null, 200]);
+    $nh_ins->execute(['storage_recovered', 'whatsapp', '+420777123456', 0, 'alert', 'failed', 'CallMeBot 209: Quota exceeded or banned', null, null, 10]);
+    $nh_ins->execute(['storage_recovered', 'email', 'nh-owner@example.com', 1, 'alert', 'unknown',
+        "Handed to the hosting's mail(); nothing confirmed delivery. SMTP not configured: missing smtp_host.", null, 'fallback', 10]);
+    // A one-off invitation that failed is not a channel's health.
+    $nh_ins->execute(['invitation', 'email', 'pozvany@example.com', 0, 'invitation', 'failed', 'SMTP Error', null, null, 5]);
+    // An old row whose reason still quotes the address.
+    $nh_ins->execute(['down', 'email', 'stary@example.com', 0, 'alert', null, 'SMTP Error: The following recipients failed: stary@example.com', null, null, 30]);
+    [$nh_code, $nh, $nh_raw] = api_get_auth($base, 'action=notification_health', $cookie_jar);
+    check('notification_health vrací 200', $nh_code, 200);
+    $nh_by = [];
+    foreach ($nh['problems'] ?? [] as $p) {
+        $nh_by[$p['channel'] . ':' . ($p['recipient'] ?? '')] = $p;
+    }
+    check('WhatsApp, který odmítá, je jmenovaný jako neodesláno', $nh_by['whatsapp:•••456']['state'] ?? null, 'failed');
+    check('i s účtem, kterému nic nechodí', $nh_by['whatsapp:•••456']['username'] ?? null, 'admin');
+    check('a počtem pokusů od posledního potvrzení', $nh_by['whatsapp:•••456']['count'] ?? null, 2);
+    check_true('a kdy naposledy něco prošlo', ($nh_by['whatsapp:•••456']['lastSentAtIso'] ?? null) !== null);
+    check('e-mail přes mail() je nepotvrzený', $nh_by['email:n…@example.com']['state'] ?? null, 'unknown');
+    check('jednorázová pozvánka do stavu kanálů nepatří', isset($nh_by['email:p…@example.com']), false);
+    check('starý řádek bez výsledku se odvodí a označí', [$nh_by['email:s…@example.com']['state'] ?? null, $nh_by['email:s…@example.com']['legacy'] ?? null], ['failed', true]);
+    foreach (['+420777123456', '777123456', 'nh-owner@example.com', 'stary@example.com', 'pozvany@example.com'] as $nh_secret) {
+        check_false("odpověď neobsahuje {$nh_secret}", str_contains((string)$nh_raw, $nh_secret)
+            || str_contains((string)$nh_raw, json_encode($nh_secret)));
+    }
+    check('neořezáno', $nh['truncated'] ?? null, false);
+
+    // A later confirmed send clears the channel: it reaches the owner again.
+    $nh_ins->execute(['storage_recovered', 'whatsapp', '+420777123456', 1, 'alert', 'sent', null, 'Message queued. You have 30 Messages left', null, 1]);
+    [, $nh2] = api_get_auth($base, 'action=notification_health', $cookie_jar);
+    $nh2_channels = array_map(fn ($p) => $p['channel'] . ':' . ($p['recipient'] ?? ''), $nh2['problems'] ?? []);
+    check_false('potvrzené odeslání problém WhatsAppu ukončí', in_array('whatsapp:•••456', $nh2_channels, true));
+    check_true('e-mail pořád nepotvrzený', in_array('email:n…@example.com', $nh2_channels, true));
+    $pdo->prepare("UPDATE users SET phone = NULL WHERE username = ?")->execute(['admin']);
+    $pdo->exec("DELETE FROM notification_log");
+
+    // Which kinds a channel is judged by, end to end: one failed e-mail of
+    // every kind (and one nobody declared), each to its own domain. Only the
+    // messages about the monitoring come back.
+    $nh_kind_ins = $pdo->prepare("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind, delivery,
+                                      error_message, created_at)
+                                  VALUES (NULL, 'down', 'email', ?, 0, ?, 'failed', 'SMTP Error', DATE_SUB(NOW(), INTERVAL 5 MINUTE))");
+    foreach (array_merge(bk_notification_kinds(), ['neznamy_druh']) as $nh_kind) {
+        $nh_kind_ins->execute(['k@' . str_replace('_', '-', $nh_kind) . '.example.com', $nh_kind]);
+    }
+    [, $nh_k] = api_get_auth($base, 'action=notification_health', $cookie_jar);
+    $nh_k_kinds = [];
+    foreach ($nh_k['problems'] ?? [] as $p) {
+        $nh_k_kinds[] = preg_match('/@(.+)\.example\.com$/', (string)($p['recipient'] ?? ''), $nh_k_m) ? $nh_k_m[1] : '?';
+    }
+    sort($nh_k_kinds);
+    check('stav kanálů čte výstrahy, připomínky, souhrny, oznámení a eskalace', $nh_k_kinds,
+        ['admin-notice', 'alert', 'daily-reminder', 'digest', 'escalation']);
+    $pdo->exec("DELETE FROM notification_log");
+
+    // Every status change is stored as kind 'alert', so the kind alone named
+    // a recovered disk "Outage alert". The row carries the tone the e-mail
+    // uses; it is derived when read, so rows written before it get it too.
+    foreach (['storage_recovered', 'storage_warning', 'down', 'maintenance'] as $nl_tone_status) {
+        $pdo->prepare("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind)
+                       VALUES (1, ?, 'whatsapp', '+420000000000', 1, 'alert')")->execute([$nl_tone_status]);
+    }
+    $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind)
+                VALUES (NULL, 'invitation', 'email', 'novy@example.com', 1, 'invitation')");
+    [, $nl_tone] = api_get_auth($base, 'action=notification_log&limit=50', $cookie_jar);
+    $nl_tones = [];
+    foreach ($nl_tone['entries'] ?? [] as $e) {
+        $nl_tones[(string)$e['status']] = array_key_exists('alertTone', $e) ? $e['alertTone'] : 'CHYBÍ';
+    }
+    check('obnovení úložiště má tón obnovení, ne výpadku', $nl_tones['storage_recovered'] ?? null, 'good');
+    check('varování má tón varování', $nl_tones['storage_warning'] ?? null, 'warn');
+    check('výpadek zůstává výpadkem', $nl_tones['down'] ?? null, 'bad');
+    check('údržba má třídu varování (štítek si ji rozliší sám)', $nl_tones['maintenance'] ?? null, 'warn');
+    // array_key_exists, not ??: ?? would turn the null under test into the fallback.
+    check_true('zpráva jiného druhu tón nemá',
+        array_key_exists('invitation', $nl_tones) && $nl_tones['invitation'] === null);
+    $pdo->exec("DELETE FROM notification_log");
+
+    [$tn_code, $tn_res] = api_post($base, 'action=test_notification', ['channel' => 'fax'], $cookie_jar);
+    check('test_notification: neznámý kanál je 400', $tn_code, 400);
+    $pdo->exec("DELETE FROM settings WHERE key_name IN ('discord_webhook_url', 'telegram_bot_token', 'telegram_chat_id')");
+    [$tn_code, $tn_res] = api_post($base, 'action=test_notification', ['channel' => 'discord'], $cookie_jar);
+    check('test_notification: bez webhooku odpoví 200', $tn_code, 200);
+    check('test_notification: bez webhooku ok=false', $tn_res['ok'] ?? null, false);
+    check_true('test_notification: říká, co chybí', str_contains((string)($tn_res['message'] ?? ''), 'Discord'));
+    [$tn_code, $tn_res] = api_post($base, 'action=test_notification', ['channel' => 'telegram'], $cookie_jar);
+    check('test_notification: telegram bez tokenu ok=false', $tn_res['ok'] ?? null, false);
+
+    check('eskalace se uložila a přečetla', $s['escalation_enabled'] ?? null, '1');
+    check('lhůta na převzetí se uložila', $s['escalation_after_mins'] ?? null, '20');
+    // A webhook URL is a credential: masked like a password, stored whole.
+    check('eskalační webhook se vrací maskovaný a uložil se celý',
+        [$s['escalation_webhook_url'] ?? null, $pdo->query("SELECT key_value FROM settings WHERE key_name = 'escalation_webhook_url'")->fetchColumn()],
+        ['••••••test', 'https://discord.com/api/webhooks/test']);
+
+    // The heart of it: whatever can be saved must also be readable. If a key
+    // dropped out of the read path again, the next save would erase it.
+    // (The original canary were the whatsapp_* keys - they turned out dead on
+    // 2026-08-17 and were deleted; the canary is now the SMTP plain+secret pair.)
+    check('smtp host se vrací zpátky (jinak ho další uložení smaže)', $s['smtp_host'] ?? null, 'smtp.example.com');
+    check_true('smtp heslo se vrací maskované, ne prázdné a ne plaintext',
+        ($s['smtp_pass'] ?? '') !== '' && ($s['smtp_pass'] ?? '') !== 'TajneHeslo123');
+
+    // The second save sends back what the form loaded - exactly like a user
+    // flipping some other option and hitting save.
+    api_post($base, 'action=save_settings', ['settings' => $s], $cookie_jar);
+    [, $again] = api_get_auth($base, 'action=get_settings', $cookie_jar);
+    check('druhé uložení nastavení nesmaže', $again['settings']['smtp_host'] ?? null, 'smtp.example.com');
+    // And a masked password sent back must NOT overwrite the real value.
+    $smtp_pass_db = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'smtp_pass'")->fetchColumn();
+    check('maskovaný secret nepřepsal skutečné heslo', $smtp_pass_db, 'TajneHeslo123');
+
+    // Every key the server accepts must also be returnable. Without this the
+    // same bug could be recreated with a different key.
+    $missing = array_values(array_diff(bk_settings_keys(), array_keys($s)));
+    check('get_settings vrací všechny klíče, které save_settings přijímá', $missing, []);
+}
+
+// =======================================================================
+// A fresh install followed by one save leaves every alert switch unchanged.
+//
+// get_settings used to answer '' for a key nobody had saved, the form posted
+// that '' back with its first "Save", and a stored '' read as "off": one save
+// of an unrelated field silenced every WAN, LTE, disk and firewall alert and
+// sent agent alerts to all users instead of admins. Reproduced end to end:
+// the rows of a fresh install, the read the form does, the save it sends.
+// =======================================================================
+if ($logged_in) {
+    $fi_defaults = bk_settings_defaults();
+    $fi_switches = bk_settings_boolean_keys();
+    $fi_backup = $pdo->query("SELECT key_name, key_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
+
+    $fi_keys = array_keys($fi_defaults);
+    $pdo->prepare("DELETE FROM settings WHERE key_name IN (" . implode(',', array_fill(0, count($fi_keys), '?')) . ")")
+        ->execute($fi_keys);
+
+    [$code, $fi_read] = api_get_auth($base, 'action=get_settings', $cookie_jar);
+    check('čerstvá instalace: get_settings vrací 200', $code, 200);
+    $fi_s = $fi_read['settings'] ?? [];
+    $fi_shown = array_intersect_key($fi_s, $fi_defaults);
+    ksort($fi_shown);
+    $fi_expected = $fi_defaults;
+    ksort($fi_expected);
+    check('nikdy neuložený klíč ukáže svou výchozí hodnotu, ne prázdno', $fi_shown, $fi_expected);
+
+    // One save of exactly what the form loaded.
+    [$code] = api_post($base, 'action=save_settings', ['settings' => $fi_s], $cookie_jar);
+    check('první uložení čerstvé instalace projde', $code, 200);
+    $fi_rows = $pdo->query("SELECT key_name, key_value FROM settings")->fetchAll(PDO::FETCH_KEY_PAIR);
+    $fi_stored = [];
+    foreach ($fi_switches as $fi_key) {
+        $fi_stored[$fi_key] = $fi_rows[$fi_key] ?? null;
+    }
+    check(
+        'po jednom uložení zůstal každý přepínač upozornění na výchozí hodnotě',
+        $fi_stored,
+        array_intersect_key($fi_defaults, array_flip($fi_switches))
+    );
+    [, $fi_again] = api_get_auth($base, 'action=get_settings', $cookie_jar);
+    $fi_after = array_intersect_key($fi_again['settings'] ?? [], $fi_defaults);
+    ksort($fi_after);
+    check('a čte se stejně jako před uložením', $fi_after, $fi_shown);
+
+    // A production row already damaged by the old form: '' reads as the
+    // default, so the alerts come back on the deploy, not on the next save.
+    $pdo->exec("REPLACE INTO settings (key_name, key_value) VALUES ('agent_notifications_enabled', ''), ('agent_notify_admin_only', '')");
+    [, $fi_legacy] = api_get_auth($base, 'action=get_settings', $cookie_jar);
+    check('uložené prázdné upozornění z agentů se čte jako zapnuté', $fi_legacy['settings']['agent_notifications_enabled'] ?? null, '1');
+    check('uložené prázdné "jen adminům" se čte jako zapnuté', $fi_legacy['settings']['agent_notify_admin_only'] ?? null, '1');
+    // SMTP had no default: an empty port reached the mailer as 0, and the
+    // forms showed SSL on 465 where the mailer used STARTTLS (R174).
+    $pdo->exec("REPLACE INTO settings (key_name, key_value) VALUES ('smtp_port', ''), ('smtp_secure', '')");
+    [, $fi_smtp] = api_get_auth($base, 'action=get_settings', $cookie_jar);
+    check('prázdný SMTP port a zabezpečení se čtou jako 587 a STARTTLS',
+        [$fi_smtp['settings']['smtp_port'] ?? null, $fi_smtp['settings']['smtp_secure'] ?? null], ['587', 'tls']);
+
+    // An empty switch is refused as a whole: nothing of that save is written.
+    $fi_host_before = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'smtp_host'")->fetchColumn();
+    [$code, $fi_bad] = api_post($base, 'action=save_settings', [
+        'settings' => ['agent_notifications_enabled' => '', 'smtp_host' => 'smtp.nesmi-se-ulozit.example'],
+    ], $cookie_jar);
+    check('prázdný přepínač uložení odmítne (400)', $code, 400);
+    check('a odpověď jmenuje ten klíč', $fi_bad['invalidKeys'] ?? null, ['agent_notifications_enabled']);
+    check(
+        'a z odmítnutého uložení se nezapsalo nic',
+        $pdo->query("SELECT key_value FROM settings WHERE key_name = 'smtp_host'")->fetchColumn(),
+        $fi_host_before
+    );
+    [$code] = api_post($base, 'action=save_settings', ['settings' => ['escalation_enabled' => 'ano']], $cookie_jar);
+    check('přepínač s jinou hodnotou než 0/1 je taky 400', $code, 400);
+    [$code] = api_post($base, 'action=save_settings', ['settings' => ['agent_notifications_enabled' => '0']], $cookie_jar);
+    check('vědomé vypnutí (0) se uložit dá', $code, 200);
+    check(
+        'a opravdu se uložilo',
+        $pdo->query("SELECT key_value FROM settings WHERE key_name = 'agent_notifications_enabled'")->fetchColumn(),
+        '0'
+    );
+
+    // The rest of the suite runs on the settings it had before this block.
+    $pdo->exec("DELETE FROM settings");
+    $fi_restore = $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES (?, ?)");
+    foreach ($fi_backup as $fi_key => $fi_val) {
+        $fi_restore->execute([$fi_key, $fi_val]);
+    }
+}
+
+// =======================================================================
+// The digest in the recipient's language - the preview renders with the same
+// template as the real e-mail. The EN version must not leak a single Czech
+// template string; Czech data (monitor names from the seeds) is removed
+// before the check, because it rightfully stays untranslated.
+//
+// The app opens the preview from api.php (it used to open admin.php). Until
+// the legacy UI goes, admin.php keeps its own, and the two must be one page.
+// =======================================================================
+if (isset($cookie_jar)) {
+    // admin.php has an install gate: a logged-in admin without setup_completed
+    // gets the wizard-completion page instead of content. The test DB never ran
+    // the wizard, so the flag is set directly.
+    $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('setup_completed', '1') ON DUPLICATE KEY UPDATE key_value = '1'");
+    /** [status, Content-Type, body] of one page with the admin's session. */
+    $digest_fetch = function (string $path) use ($base, $cookie_jar): array {
+        $ch = curl_init($base . $path);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_COOKIEJAR => $cookie_jar,
+            CURLOPT_COOKIEFILE => $cookie_jar,
+            CURLOPT_TIMEOUT => 30,
+        ]);
+        $body = (string)curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        $type = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+        curl_close($ch);
+        return [$code, $type, $body];
+    };
+    $digest_preview = function (string $lang) use ($pdo, $digest_fetch): string {
+        $pdo->exec("UPDATE users SET email_lang = " . ($lang === '' ? 'NULL' : "'{$lang}'") . " WHERE username = 'admin'");
+        return $digest_fetch('/api.php?action=digest_preview&period=weekly')[2];
+    };
+    // The same page, not the same instant: the footer prints the minute it
+    // was rendered and the windows and outage lengths run up to NOW(), so a
+    // number can tick between the two requests, and once in a while a window
+    // edge passes a fixture row in between, which adds or drops a whole line.
+    // That edge passes at most once, so a mismatch fetches both pages again;
+    // a page that differs twice is a real difference.
+    $digest_same = fn (string $a, string $b): bool
+        => preg_replace('/\d+/', '#', $a) === preg_replace('/\d+/', '#', $b);
+    $digest_parity = function (string $api_path, string $admin_path) use ($digest_fetch, $digest_same): bool {
+        for ($try = 0; $try < 2; $try++) {
+            if ($digest_same($digest_fetch($api_path)[2], $digest_fetch($admin_path)[2])) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    // Events of the same second: the digest keeps the newest 25, and under a
+    // LIMIT MySQL returns equal times in any order, so this preview and
+    // admin.php's below listed the same new servers in different orders now
+    // and then. The later row comes first now, every time.
+    $dg_tie = date('Y-m-d H:i:s');
+    $dg_tie_ins = $pdo->prepare("INSERT INTO monitor_events (monitor_id, monitor_name, monitor_type, event_type, description, occurred_at)
+                                 VALUES (NULL, ?, 'vps', 'monitor_added', 'test', ?)");
+    $dg_tie_ins->execute(['Souběh A', $dg_tie]);
+    $dg_tie_ins->execute(['Souběh B', $dg_tie]);
+    $dg_tie_names = array_values(array_filter(array_column(build_digest_data($pdo, 'weekly', false)['new_servers'], 'name'),
+        fn ($n) => str_starts_with((string)$n, 'Souběh ')));
+    check('nové servery ze stejné sekundy: pozdější řádek první, pokaždé stejně', $dg_tie_names, ['Souběh B', 'Souběh A']);
+    $pdo->exec("DELETE FROM monitor_events WHERE monitor_name LIKE 'Souběh %'");
+
+    // R151, R256: twenty 'down' rows of one outage were twenty incidents.
+    $dg151_base = build_digest_data($pdo, 'monthly', false);
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, created_at) VALUES (9151, 'R151', 'web', 'https://r151.example.test', 'up', NOW() - INTERVAL 1 DAY)");
+    $dg151_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES (9151, ?, FROM_UNIXTIME(?))");
+    $dg151_t0 = time() - 3600;
+    $dg151_ins->execute(['up', $dg151_t0 - 60]);
+    for ($i = 0; $i < 20; $i++) {
+        $dg151_ins->execute(['down', $dg151_t0 + $i * 60]);
+    }
+    $dg151_ins->execute(['up', $dg151_t0 + 1200]);
+    $dg151 = build_digest_data($pdo, 'monthly', false);
+    check('dvacet řádků jednoho výpadku je jeden incident', $dg151['incident_count'] - $dg151_base['incident_count'], 1);
+    check('mapa incidentů dá výpadku jedno políčko', array_sum($dg151['monthly']['incident_heatmap'] ?? []) - array_sum($dg151_base['monthly']['incident_heatmap'] ?? []), 1);
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9151");
+    $pdo->exec("DELETE FROM monitors WHERE id = 9151");
+
+    // R250: with nothing measured, "no outage" followed "cannot be judged".
+    $pdo->beginTransaction();
+    $pdo->exec("DELETE FROM monitor_logs");
+    $pdo->exec("DELETE FROM uptime_daily");
+    $dg250 = build_digest_data($pdo, 'weekly', false);
+    $pdo->rollBack();
+    check_true('bez měření digest netvrdí, že výpadek nebyl', !in_array(t('digest_summary_no_outages'), $dg250['executive_summary'], true));
+
+    // R267: the header named eight dates over seven days of availability.
+    check('hlavička souhrnu: tolik dat, kolik dní pokrývá dostupnost',
+        [build_digest_data($pdo, 'weekly', false)['range_from'], build_digest_data($pdo, 'monthly', false)['range_from']],
+        [date('d.m.Y', strtotime('-6 day', strtotime('today'))), date('d.m.Y', strtotime('-29 day', strtotime('today')))]);
+
+    // R202: the biggest incident came from the first 2000 'down' rows sorted
+    // by monitor id, so a flapping monitor with a lower id hid a longer
+    // outage. Only these two monitors count here, the rest is archived.
+    $pdo->beginTransaction();
+    $pdo->exec("DELETE FROM monitor_logs");
+    $pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE archived_at IS NULL");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, created_at) VALUES
+        (9201, 'R202 kolísající', 'web', 'https://r202a.example.test', 'up', NOW() - INTERVAL 1 DAY),
+        (9203, 'R202 dlouhý', 'web', 'https://r202b.example.test', 'up', NOW() - INTERVAL 1 DAY)");
+    $dg202_t = time();
+    $dg202_rows = [];
+    // 9201: 2001 'down' rows a second apart, half an hour of outage.
+    for ($i = 0; $i <= 2001; $i++) {
+        $dg202_rows[] = sprintf("(9201, '%s', NULL, FROM_UNIXTIME(%d))", $i < 2001 ? 'down' : 'up', $dg202_t - 2400 + $i);
+    }
+    // 9203: three hours down, checked every minute, the first row with its reason.
+    $dg202_t0 = $dg202_t - 4 * 3600;
+    $dg202_rows[] = sprintf("(9203, 'up', NULL, FROM_UNIXTIME(%d))", $dg202_t0 - 60);
+    for ($i = 0; $i <= 181; $i++) {
+        $dg202_rows[] = sprintf("(9203, '%s', %s, FROM_UNIXTIME(%d))", $i < 181 ? 'down' : 'up', $i === 0 ? "'HTTP 503'" : 'NULL', $dg202_t0 + $i * 60);
+    }
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES " . implode(', ', $dg202_rows));
+    $dg202 = build_digest_data($pdo, 'weekly', false)['biggest_incident'] ?? [];
+    $pdo->rollBack();
+    check('největší incident je nejdelší výpadek, ne první podle id: kde, jak dlouho, proč, vyřešený',
+        [$dg202['monitor'] ?? null, intdiv((int)($dg202['duration_sec'] ?? 0), 60), $dg202['reason'] ?? null, $dg202['resolved'] ?? null],
+        ['R202 dlouhý', 181, 'HTTP 503', true]);
+
+    // R203: the monthly best and worst day counted archived monitors.
+    $pdo->beginTransaction();
+    $pdo->exec("DELETE FROM monitor_logs");
+    $pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE archived_at IS NULL");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, created_at, archived_at) VALUES
+        (9205, 'R203 aktivní', 'web', 'https://r203a.example.test', 'up', NOW() - INTERVAL 3 DAY, NULL),
+        (9206, 'R203 archivovaný', 'web', 'https://r203b.example.test', 'down', NOW() - INTERVAL 3 DAY, NOW())");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES
+        (9205, 'up', NOW() - INTERVAL 1 HOUR), (9206, 'down', NOW() - INTERVAL 1 HOUR), (9206, 'down', NOW() - INTERVAL 70 MINUTE)");
+    // The archived ids are cached per process; this test changes them twice.
+    bk_archived_monitor_ids($pdo, true);
+    $dg203 = build_digest_data($pdo, 'monthly', false)['monthly'] ?? [];
+    $pdo->rollBack();
+    bk_archived_monitor_ids($pdo, true);
+    check('měsíční nejhorší den nepočítá archivovaný monitor', (float)($dg203['worst_day']['uptime'] ?? 0), 100.0);
+
+    // R266: a row that named no place stores the column's default 'Main
+    // Server', so an agent's outage came "z Main Server", and an empty
+    // place left "()" in the summary.
+    $pdo->beginTransaction();
+    $pdo->exec("DELETE FROM monitor_logs");
+    $pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE archived_at IS NULL");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, created_at) VALUES
+        (9266, 'R266 agent', 'web', 'https://r266.example.test', 'up', NOW() - INTERVAL 1 DAY)");
+    $dg266_t0 = time() - 7200;
+    $dg266_rows = [sprintf("(9266, 'up', FROM_UNIXTIME(%d))", $dg266_t0 - 60)];
+    for ($i = 0; $i <= 30; $i++) {
+        $dg266_rows[] = sprintf("(9266, '%s', FROM_UNIXTIME(%d))", $i < 30 ? 'down' : 'up', $dg266_t0 + $i * 60);
+    }
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, checked_at) VALUES " . implode(', ', $dg266_rows));
+    $dg266 = build_digest_data($pdo, 'weekly', false);
+    $pdo->rollBack();
+    $dg266_html = render_digest_html($dg266);
+    check('největší incident bez místa kontroly nemá místo', is_array($dg266['biggest_incident'])
+        && array_key_exists('location', $dg266['biggest_incident']) ? $dg266['biggest_incident']['location'] : 'chybí', null);
+    check_true('souhrn ani karta neříkají Main Server ani ()', $dg266['biggest_incident'] !== null
+        && !str_contains($dg266_html, 'Main Server') && !str_contains(implode(' ', $dg266['executive_summary']), '()'));
+
+    // R153: the rules that compare with the tariff never fired in the e-mail.
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, wan_plan_down_mbit, last_details) VALUES (9153, 'R153 router', 'openwrt', 'r153.example.test', 'up', 1000, ?)")
+        ->execute([json_encode(['agent_version' => '0.1.13', 'agent_last_seen' => time() - 30, 'wan_link_dev' => 'eth2'])]);
+    $dg153_md = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (9153, ?, 'wan_link_mbit', 100, 100, 100, 1440)");
+    foreach (bk_router_rec_window(date('Y-m-d'))['days'] as $dg153_day) {
+        $dg153_md->execute([$dg153_day]);
+    }
+    $dg153 = array_values(array_filter(build_digest_data($pdo, 'weekly', false)['routers'] ?? [], fn ($r) => (int)$r['id'] === 9153))[0] ?? [];
+    check_true('pravidlo pod tarifem v digestu vystřelí', str_contains((string)json_encode($dg153), 'wan_link_below_plan'));
+    $pdo->exec("DELETE FROM metrics_daily WHERE monitor_id = 9153");
+    $pdo->exec("DELETE FROM monitors WHERE id = 9153");
+
+    $digest_en = $digest_preview('en');
+    check_true('EN digest se vyrenderoval', str_contains($digest_en, 'Weekly Report'));
+    // DB data stays in its original language - only the template translates.
+    // Monitor names are the user's own words, and /app's new monitors reach the digest.
+    $digest_names = $pdo->query("SELECT DISTINCT monitor_name FROM monitor_events WHERE monitor_name IS NOT NULL")->fetchAll(PDO::FETCH_COLUMN);
+    $digest_en_clean = str_replace(array_merge(['Testovací web', 'Router bez metrik', 'Síť', 'Weby'], $digest_names), '', $digest_en);
+    $digest_leaks = [];
+    if (preg_match_all('/[^\s>]*[ěščřžýáíéúůťďňóĚŠČŘŽÝÁÍÉÚŮŤĎŇ][^\s<]*/u', $digest_en_clean, $m)) {
+        $digest_leaks = array_slice(array_unique($m[0]), 0, 5);
+    }
+    check('EN digest nepropouští české řetězce šablony', $digest_leaks, []);
+    check_true('EN náhled z api.php je táž stránka jako náhled v admin.php',
+        $digest_parity('/api.php?action=digest_preview&period=weekly', '/admin.php?action=preview_weekly_digest'));
+
+    // A preview must not move the trend base the next real digest compares
+    // against. A known snapshot goes in first, so "unchanged" is not "absent".
+    $dp_snapshot_saved = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'digest_snapshot_weekly'")->fetchColumn();
+    $dp_snapshot = '{"score":42,"saved_at":"2026-01-05T06:00:00+01:00"}';
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('digest_snapshot_weekly', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+        ->execute([$dp_snapshot]);
+
+    $digest_cs = $digest_preview('cs');
+    check_true('CS digest je česky', str_contains($digest_cs, 'Týdenní report'));
+    check_true('CS náhled z api.php je táž stránka jako náhled v admin.php',
+        $digest_parity('/api.php?action=digest_preview&period=weekly', '/admin.php?action=preview_weekly_digest'));
+    check('náhled nepřepíše snímek, se kterým srovná příští souhrn',
+        $pdo->query("SELECT key_value FROM settings WHERE key_name = 'digest_snapshot_weekly'")->fetchColumn(), $dp_snapshot);
+    if ($dp_snapshot_saved === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'digest_snapshot_weekly'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'digest_snapshot_weekly'")->execute([$dp_snapshot_saved]);
+    }
+
+    [$dp_code, $dp_type, $dp_monthly] = $digest_fetch('/api.php?action=digest_preview&period=monthly');
+    check('měsíční náhled z api.php: adminovi 200', $dp_code, 200);
+    check_true('náhled je HTML, ne JSON (dostal ' . $dp_type . ')', str_starts_with($dp_type, 'text/html'));
+    check_true('měsíční náhled je měsíční report', str_contains($dp_monthly, 'Měsíční report'));
+    check_true('měsíční náhled z api.php je táž stránka jako náhled v admin.php',
+        $digest_parity('/api.php?action=digest_preview&period=monthly', '/admin.php?action=preview_monthly_digest'));
+
+    // An unknown period is refused, never shown as the weekly digest.
+    foreach (['&period=yearly' => 'neznámé období', '' => 'chybějící období'] as $dp_query => $dp_label) {
+        [$dp_bad_code, , $dp_bad_body] = $digest_fetch('/api.php?action=digest_preview' . $dp_query);
+        check("náhled souhrnu: {$dp_label} je 400", $dp_bad_code, 400);
+        check_false("náhled souhrnu: {$dp_label} nevrátí týdenní report", str_contains($dp_bad_body, 'Týdenní report'));
+    }
+    [$dp_anon_code, , $dp_anon_body] = api_get($base, 'action=digest_preview&period=weekly');
+    check('náhled souhrnu bez přihlášení: 403', $dp_anon_code, 403);
+    check_false('a bez kousku souhrnu', str_contains($dp_anon_body, 'report'));
+
+    // Cleanup: the admin back to the global language.
+    $digest_preview('');
+}
+
+// --- Admin role of account 1 across a schema bump -------------------------
+// Every schema bump used to run "UPDATE users SET role = 'admin' WHERE id = 1",
+// giving full rights back to an account an admin had deliberately demoted.
+$role_of = function (int $uid) use ($pdo): ?string {
+    $st = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+    $st->execute([$uid]);
+    $v = $st->fetchColumn();
+    return $v === false ? null : (string)$v;
+};
+$force_schema_bump = function () use ($pdo): void {
+    $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('schema_version', 'test-old') ON DUPLICATE KEY UPDATE key_value = 'test-old'");
+};
+// The one-time data fixes that ran (migrations.php keeps their ids), and a
+// database from before one of them: its id leaves the record.
+$data_fixes_applied = function () use ($pdo): array {
+    $ids = json_decode((string)$pdo->query("SELECT key_value FROM settings WHERE key_name = 'data_fixes_applied'")->fetchColumn(), true);
+    return is_array($ids) ? $ids : [];
+};
+$forget_data_fix = function (string $id) use ($pdo, $data_fixes_applied): void {
+    $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'data_fixes_applied'")
+        ->execute([json_encode(array_values(array_diff($data_fixes_applied(), [$id])))]);
+};
+check('první běh migrací zapsal všechny jednorázové opravy dat', $data_fixes_applied(), [
+    'cpanel-monitors-to-web', 'agent-keys', 'one-asset-per-monitor', 'speedtest-source-turris', 'speedtest-below-0.1-mbps',
+    'cloudflare-location-history',
+]);
+$pdo->prepare("INSERT INTO users (username, email, password_hash, role) VALUES ('second_admin', 'second_admin@example.com', ?, 'admin')")
+    ->execute([password_hash('DruheHeslo123!', PASSWORD_DEFAULT)]);
+$second_admin_id = (int)$pdo->lastInsertId();
+$role1_before = $role_of(1);
+$pdo->exec("UPDATE users SET role = 'user' WHERE id = 1");
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check_true('migrace skutečně proběhla', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn() !== 'test-old');
+check('degradovaný účet 1 zůstane uživatelem, když jiný admin existuje', $role_of(1), 'user');
+$pdo->prepare("DELETE FROM users WHERE id = ?")->execute([$second_admin_id]);
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check('bez jediného admina migrace účtu 1 roli admin vrátí', $role_of(1), 'admin');
+$pdo->prepare("UPDATE users SET role = ? WHERE id = 1")->execute([$role1_before ?? 'admin']);
+
+// --- Ingest of an 0.1.7 report (fixture: the user's Turris Omnia) -------------
+//
+// The payload of a real router goes in and what comes out is checked column by
+// column: the sanitizers, the band totals and the step metrics all sit on this
+// one path, and a value that quietly became 0 or a bound would look exactly
+// like a measurement on the page.
+$omnia_fx = require __DIR__ . '/fixtures/omnia_router.php';
+$omnia_pl = $omnia_fx['payload'];
+$omnia_before_id = (int)$pdo->query("SELECT COALESCE(MAX(id), 0) FROM vps_metrics")->fetchColumn();
+$omnia_details = function () use ($pdo): array {
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+};
+$omnia_metrics = function (string $cols) use ($pdo): array {
+    return $pdo->query("SELECT {$cols} FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetch() ?: [];
+};
+$omnia_num = fn ($v) => $v === null ? null : (float)$v;
+// `?? ` cannot tell a key that is missing from one that is honestly null.
+$omnia_at = fn ($a, string $k) => is_array($a) && array_key_exists($k, $a) ? $a[$k] : 'chybí';
+
+// The router's clock is read as the distance from ours, so the fixture's own
+// moment (2026-09-16) would be stored as a five-day skew.
+check('Omnia 0.1.7: hlášení z fixture agent přijme', $post_agent(array_merge($omnia_pl, ['agent_time' => time()])), 200);
+$om = $omnia_metrics('wifi_noise_24g, wifi_noise_5g, wifi_noise_6g, wifi_busy_24g, wifi_busy_5g, wifi_busy_6g, wifi_busy_other_24g, wifi_busy_other_5g, wifi_busy_other_6g, wifi_weak_clients, wifi_wpa2_clients, wifi_6e_unserved, wifi_5g_capable_24g');
+check('Omnia: šum a vytížení kanálu na 5 GHz', [$omnia_num($om['wifi_noise_5g']), $omnia_num($om['wifi_busy_5g']), $omnia_num($om['wifi_busy_other_5g'])], [-92.0, 3.5, 1.2]);
+check('Omnia: slabý klient jeden, WPA2 klientů opravdu nula', [$omnia_num($om['wifi_weak_clients']), $omnia_num($om['wifi_wpa2_clients'])], [1.0, 0.0]);
+check('Omnia: dva klienti s 6 GHz bez 6GHz rádia = 1', $omnia_num($om['wifi_6e_unserved']), 1.0);
+check('Omnia: pásma bez rádia zůstanou NULL, ne nula', [
+    $om['wifi_noise_24g'], $om['wifi_noise_6g'], $om['wifi_busy_24g'], $om['wifi_busy_6g'],
+    $om['wifi_busy_other_24g'], $om['wifi_busy_other_6g'], $om['wifi_5g_capable_24g'],
+], [null, null, null, null, null, null, null]);
+$om_wan = $omnia_metrics('wan_link_mbit, cpu_core_max, cpu_core_max_softirq, wan_rx_mbps, wan_tx_mbps, wan_errors, wan_drops, wan_ring_drops, wan_link_flaps, conntrack_drops, agent_run_ms, clock_skew_s, conntrack_pct');
+check('Omnia: rychlost linky WAN se uloží', $omnia_num($om_wan['wan_link_mbit']), 2500.0);
+check('Omnia: nezměřené CPU jádro, rychlosti WAN a doba běhu zůstanou NULL', [
+    $om_wan['cpu_core_max'], $om_wan['cpu_core_max_softirq'], $om_wan['wan_rx_mbps'],
+    $om_wan['wan_tx_mbps'], $om_wan['agent_run_ms'], $om_wan['conntrack_pct'],
+], [null, null, null, null, null, null]);
+check('Omnia: první hlášení nemá s čím porovnat, kroky jsou NULL', [
+    $om_wan['wan_errors'], $om_wan['wan_drops'], $om_wan['wan_ring_drops'],
+    $om_wan['wan_link_flaps'], $om_wan['conntrack_drops'],
+], [null, null, null, null, null]);
+check_true('Omnia: odchylka hodin je změřená a malá', ($om_wan['clock_skew_s'] ?? null) !== null && (int)$om_wan['clock_skew_s'] <= 5);
+
+$omd = $omnia_details();
+check('Omnia: rádio dostane odvozenou generaci a šířku', [$omd['wifi_radios'][0]['generation'] ?? null, $omd['wifi_radios'][0]['width_mhz'] ?? null], [6, 80]);
+check('Omnia: nástroje routeru jsou striktní booly', [
+    $omd['agent_tools']['librespeed_cli'] ?? 'chybí', $omd['agent_tools']['ethtool'] ?? 'chybí',
+    $omd['agent_tools']['tc'] ?? 'chybí', $omd['agent_tools']['pkg_manager'] ?? 'chybí',
+], [true, false, false, 'opkg']);
+check('Omnia: cesta WAN si nese conduit a strop portů LAN', [
+    $omd['wan_path']['lan_port_cap_mbit'] ?? null, $omd['wan_path']['lan_conduits'][0]['dev'] ?? null,
+    $omd['wan_path']['lan_conduits'][0]['mbit'] ?? null, $omnia_at($omd['wan_path'] ?? null, 'wan_rx_ring_drops'),
+], [1000, 'eth1', 1000, null]);
+// The wired switch (0.1.8). Five ports, two without a cable: their rate and
+// duplex must arrive as null - a dead socket showing "1000 Mbit/s" would be
+// read as a working one. lan1 at 100 is the partner's limit, not a fault.
+$omd_lan = is_array($omd['lan_ports'] ?? null) ? $omd['lan_ports'] : [];
+check('Omnia: přepínač dorazí port po portu, bez kabelu bez rychlosti', [
+    array_column($omd_lan['ports'] ?? [], 'name'), array_column($omd_lan['ports'] ?? [], 'link'),
+    array_column($omd_lan['ports'] ?? [], 'speed_mbit'),
+], [['lan0', 'lan1', 'lan2', 'lan3', 'lan4'], [true, true, false, false, true], [1000, 100, null, null, 1000]]);
+check('Omnia: 100 Mbit na lan1 je strop protistrany, port sám umí 1000', [
+    $omd_lan['ports'][1]['partner_max_mbit'] ?? null, $omd_lan['ports'][1]['max_mbit'] ?? null,
+    $omnia_at($omd_lan['ports'][2] ?? null, 'partner_max_mbit'),
+], [100, 1000, null]);
+check('Omnia: jedno gigabitové vedení ke CPU a nezměřené počty zůstanou null', [
+    $omd_lan['conduits'] ?? null, $omd_lan['bridge'] ?? null,
+    $omnia_at($omd_lan, 'clients_total'), $omnia_at($omd_lan['ports'][0] ?? null, 'clients'),
+    $omd_lan['ports'][3]['clients'] ?? 'chybí',
+], [[['dev' => 'eth1', 'link' => true, 'speed_mbit' => 1000, 'duplex' => 'full']], 'br-lan', null, null, 0]);
+// A router that could not look must say so, and the section must not be kept
+// from an older report - the cable picture goes stale within a minute.
+check('Omnia: router, který se nemohl podívat, hlásí null místo starého obrázku', [
+    $post_agent(array_merge($omnia_pl, ['agent_time' => time(), 'lan_ports' => null])),
+    $omnia_at($omnia_details(), 'lan_ports'),
+], [200, null]);
+$omnia_lan_dirty = array_merge($omnia_pl, ['agent_time' => time()]);
+$omnia_lan_dirty['lan_ports']['ports'][0]['mac'] = 'aa:bb:cc:dd:ee:ff';
+$omnia_lan_dirty['lan_ports']['ports'][0]['clients'] = -3;
+$omnia_lan_dirty['lan_ports']['hostnames'] = ['notebook'];
+check('Omnia: hlášení s MAC a jménem stanice u portu agent přijme', $post_agent($omnia_lan_dirty), 200);
+$omd_lan2 = $omnia_details()['lan_ports'] ?? [];
+check('MAC, jména stanic ani záporný počet se k portu nedostanou', [
+    array_keys($omd_lan2['ports'][0] ?? []), array_key_exists('hostnames', $omd_lan2),
+    $omnia_at($omd_lan2['ports'][0] ?? null, 'clients'),
+], [['name', 'link', 'speed_mbit', 'duplex', 'max_mbit', 'partner_max_mbit', 'clients'], false, null]);
+check_false('a ani hodnota té MAC nikde v details není',
+    str_contains((string)json_encode($omnia_details()), 'aa:bb:cc'));
+// It reaches the app on the router detail path that already exists - the
+// `details` object of action=monitors - so there is no new endpoint to guard.
+// The public view is an allow-list, and the household's wiring is not on it.
+check('Omnia: čisté hlášení se uloží zpět', $post_agent(array_merge($omnia_pl, ['agent_time' => time()])), 200);
+[, $lan_app] = api_get_auth($base, 'action=monitors', $cookie_jar);
+$lan_app_router = null;
+foreach ($lan_app['monitors'] ?? [] as $m) {
+    if ((int)$m['id'] === 2) { $lan_app_router = $m; }
+}
+check('aplikace dostane přepínač stávající cestou detailu routeru, bez nového endpointu', [
+    array_column($lan_app_router['details']['lan_ports']['ports'] ?? [], 'name'),
+    $lan_app_router['details']['lan_ports']['conduits'][0]['speed_mbit'] ?? null,
+], [['lan0', 'lan1', 'lan2', 'lan3', 'lan4'], 1000]);
+[, $lan_anon, $lan_anon_raw] = api_get($base, 'action=monitors');
+$lan_anon_router = null;
+foreach ($lan_anon['monitors'] ?? [] as $m) {
+    if ((int)$m['id'] === 2) { $lan_anon_router = $m; }
+}
+check_false('anonym zapojení kabelů v domácnosti nevidí',
+    array_key_exists('lan_ports', $lan_anon_router['details'] ?? []) || str_contains($lan_anon_raw, 'lan_ports'));
+check('Omnia: seznam disků se uloží i s časem odběru a klíčem', [
+    count($omd['storage_disks'] ?? []), strlen((string)($omd['storage_disks'][0]['key'] ?? '')),
+    isset($omd['storage_disks_at']), $omnia_at($omd['storage_disks'][0] ?? null, 'emmc'),
+], [1, 16, true, null]);
+check('Omnia: čisté hlášení nehlásí žádnou ztrátu dat', [$omnia_at($omd, 'details_dropped'), $omnia_at($omd, 'ingest_issues')], [[], []]);
+
+// G24: co router nepozná, dojde jako null a null také zůstane. Agent 0.1.7
+// posílá null, když žádnou konfiguraci SQM nenašel ani resolver nerozpoznal;
+// dřív se z toho na serveru stala tvrzení „shaper vypnutý" a „Dnsmasq".
+$omnia_unknown = array_merge($omnia_pl, ['agent_time' => time(),
+    'sqm_enabled' => null, 'dns_engine' => null, 'dns_encryption' => null,
+    'dns_servers' => null, 'wan_reconnect_count' => null]);
+check('G24: hlášení, kde router pět věcí nepozná, agent přijme', $post_agent($omnia_unknown), 200);
+$omd_unknown = $omnia_details();
+check('G24: neznámý stav SQM a resolveru zůstane null, ne tvrzení', [
+    $omnia_at($omd_unknown, 'sqm_enabled'), $omnia_at($omd_unknown, 'dns_engine'),
+    $omnia_at($omd_unknown, 'dns_encryption'), $omnia_at($omd_unknown, 'dns_servers'),
+], [null, null, null, null]);
+// Starší agent posílá booly dál a nic se mu nemění.
+check('G24: agent, který SQM zná, hlásí dál true/false', [
+    $post_agent(array_merge($omnia_pl, ['agent_time' => time(), 'sqm_enabled' => false])),
+    $omnia_at($omnia_details(), 'sqm_enabled'),
+], [200, false]);
+
+// --- Agent 0.1.9: CPU time of the previous run, runs the takeover stopped -----
+//
+// agent_prev_cpu_ms is a stored metric (the fleet's measured cost per release),
+// runs_skipped_killed a counter in last_details for the reports_missing issue.
+// An agent up to 0.1.8 sends neither key, and "not measured" must stay null:
+// a 0 would read as a free run and as "nothing was killed".
+$cpu_col = function () use ($omnia_metrics) {
+    $row = $omnia_metrics('agent_prev_cpu_ms');
+    if (!array_key_exists('agent_prev_cpu_ms', $row)) {
+        return 'chybí';
+    }
+    return $row['agent_prev_cpu_ms'] === null ? null : (int)$row['agent_prev_cpu_ms'];
+};
+$cpu_seen = function () use ($cpu_col, $omnia_details, $omnia_at): array {
+    $d = $omnia_details();
+    return [$cpu_col(), $omnia_at($d, 'agent_prev_cpu_ms'), $omnia_at($d, 'runs_skipped_killed')];
+};
+$omnia_018 = array_merge($omnia_pl, ['agent_time' => time()]);
+unset($omnia_018['agent_prev_cpu_ms'], $omnia_018['runs_skipped_killed']);
+check('0.1.9: hlášení agenta 0.1.8 bez nových klíčů agent přijme', $post_agent($omnia_018), 200);
+check('0.1.9: agent 0.1.8 CPU čas ani ukončené běhy neměří - null ve sloupci i v details, ne nula',
+    $cpu_seen(), [null, null, null]);
+$omnia_019 = array_merge($omnia_pl, ['agent_time' => time()]);
+check('0.1.9: hlášení s CPU časem a ukončenými běhy agent přijme',
+    $post_agent(array_merge($omnia_019, ['agent_prev_cpu_ms' => 190, 'runs_skipped_killed' => 2])), 200);
+check('0.1.9: CPU čas předchozího běhu se uloží jako metrika i do details, ukončené běhy do details',
+    $cpu_seen(), [190, 190, 2]);
+check('0.1.9: skutečná nula je měření, ne neznámo',
+    [$post_agent(array_merge($omnia_019, ['agent_prev_cpu_ms' => 0, 'runs_skipped_killed' => 0])), $cpu_seen()],
+    [200, [0, 0, 0]]);
+check('0.1.9: horní meze (600 s CPU, 100 000 běhů) ještě platí',
+    [$post_agent(array_merge($omnia_019, ['agent_prev_cpu_ms' => 600000, 'runs_skipped_killed' => 100000])), $cpu_seen()],
+    [200, [600000, 600000, 100000]]);
+// Out of range is dropped, never clamped: a clamped 600000 would read as a
+// real ten-minute run. The pass-through must not store the raw value either.
+foreach ([
+    'nad mezí' => [600001, 100001],
+    'záporné' => [-10, -1],
+    'text' => ['abc', 'dva'],
+    'desetinné' => [190.5, 2.5],
+    'bool' => [true, true],
+    'pole' => [[190], [2]],
+] as $cpu_case => [$cpu_bad, $killed_bad]) {
+    check("0.1.9: {$cpu_case} CPU čas a počet ukončených běhů se zahodí na null",
+        [$post_agent(array_merge($omnia_019, ['agent_prev_cpu_ms' => $cpu_bad, 'runs_skipped_killed' => $killed_bad])), $cpu_seen()],
+        [200, [null, null, null]]);
+}
+check('0.1.9: celé číslo poslané jako text se přečte',
+    [$post_agent(array_merge($omnia_019, ['agent_prev_cpu_ms' => '260', 'runs_skipped_killed' => '1'])), $cpu_seen()],
+    [200, [260, 260, 1]]);
+// The app reads the series under the same key; unmeasured minutes are gaps,
+// not zeros (the only 0 in it is the one the agent really measured).
+[$cpu_s_code, $cpu_s] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=agent_prev_cpu_ms&period=1h', $cookie_jar);
+// Reports of one second tie on checked_at, so the values are compared sorted.
+$cpu_s_vals = array_map(fn ($p) => (float)$p[1], $cpu_s['points'] ?? []);
+sort($cpu_s_vals);
+check('0.1.9: řada agent_prev_cpu_ms vrací jen naměřené body v ms', [$cpu_s_code, $cpu_s['unit'] ?? null, $cpu_s_vals],
+    [200, 'ms', [0.0, 190.0, 260.0, 600000.0]]);
+
+// Identifiers injected at three levels: the allow-lists must drop every one of
+// them, whatever the agent calls itself. Nothing here may reach last_details.
+$omnia_dirty = array_merge($omnia_pl, ['agent_time' => time()]);
+$omnia_dirty['wifi_radios'][0]['bssid'] = 'aa:bb:cc:dd:ee:ff';
+$omnia_dirty['wifi_radios'][0]['hwmodes'] = ['a', 'n', 'ac'];
+$omnia_dirty['storage_disks'][0]['serial_number'] = 'SN50026B7683';
+$omnia_dirty['storage_disks'][0]['smart']['wwn'] = '0x50026b7683';
+$omnia_dirty['storage_disks'][0]['partitions'][0]['eui64'] = 'ABCDEF0123456789';
+check('Omnia: hlášení s vloženými identifikátory agent přijme', $post_agent($omnia_dirty), 200);
+$omd = $omnia_details();
+check('vložený sériový klíč, WWN ani BSSID se do details nedostanou',
+    preg_grep('/serial|wwn|eui|guid|cid|bssid|hwmodes/i', array_keys(array_merge(
+        $omd['wifi_radios'][0] ?? [], $omd['storage_disks'][0] ?? [],
+        $omd['storage_disks'][0]['smart'] ?? [], $omd['storage_disks'][0]['partitions'][0] ?? []
+    ))), []);
+check_true('a ani jejich hodnota nikde v details není',
+    !str_contains((string)json_encode($omd), '50026b7683') && !str_contains(strtolower((string)json_encode($omd)), 'aa:bb:cc'));
+
+// --- Step metrics of the WAN port: what grew since the previous report --------
+//
+// The stored series is the STEP, never the lifetime total: a counter that shows
+// 4 000 errors since boot says nothing about this minute, and a reboot would
+// otherwise book its whole bring-up as one minute's spike.
+$omnia_counters = function (array $extra) use ($post_agent, $omnia_pl): int {
+    return $post_agent(array_merge($omnia_pl, ['agent_time' => time()], $extra));
+};
+$wan_cols = 'wan_errors, wan_drops, wan_ring_drops, wan_link_flaps, conntrack_drops';
+$wan_base = ['uptime' => 100000, 'wan_link_dev' => 'eth2', 'wan_rx_errors' => 10, 'wan_tx_errors' => 5,
+    'wan_rx_dropped' => 7, 'wan_tx_dropped' => 3, 'conntrack_drop' => 2, 'wan_carrier_down_count' => 1];
+check('WAN kroky: základní hlášení agent přijme', $omnia_counters($wan_base), 200);
+check('WAN kroky: proti čemu porovnat se teprve uložilo', $omnia_metrics($wan_cols),
+    ['wan_errors' => null, 'wan_drops' => null, 'wan_ring_drops' => null, 'wan_link_flaps' => null, 'conntrack_drops' => null]);
+check('WAN kroky: další hlášení s vyššími čítači agent přijme', $omnia_counters(array_merge($wan_base, [
+    'uptime' => 100060, 'wan_rx_errors' => 14, 'wan_tx_errors' => 5, 'wan_rx_dropped' => 9, 'wan_tx_dropped' => 3,
+    'conntrack_drop' => 5, 'wan_carrier_down_count' => 3,
+])), 200);
+check('WAN kroky: uloží se přírůstek, ne celkový součet', $omnia_metrics($wan_cols),
+    ['wan_errors' => 4, 'wan_drops' => 2, 'wan_ring_drops' => null, 'wan_link_flaps' => 2, 'conntrack_drops' => 3]);
+check('WAN kroky: po restartu (nižší uptime) hlášení agent přijme', $omnia_counters(array_merge($wan_base, [
+    'uptime' => 120, 'wan_rx_errors' => 20, 'wan_tx_errors' => 5, 'wan_rx_dropped' => 12, 'wan_tx_dropped' => 3,
+    'conntrack_drop' => 8, 'wan_carrier_down_count' => 4,
+])), 200);
+check('WAN kroky: restart nevyrobí špičku, kroky jsou NULL', $omnia_metrics($wan_cols),
+    ['wan_errors' => null, 'wan_drops' => null, 'wan_ring_drops' => null, 'wan_link_flaps' => null, 'conntrack_drops' => null]);
+check('WAN kroky: hlášení z jiného portu WAN agent přijme', $omnia_counters(array_merge($wan_base, [
+    'uptime' => 180, 'wan_link_dev' => 'eth0', 'wan_rx_errors' => 25, 'wan_tx_errors' => 5,
+    'wan_rx_dropped' => 14, 'wan_tx_dropped' => 3, 'conntrack_drop' => 9, 'wan_carrier_down_count' => 5,
+])), 200);
+check('WAN kroky: cizí port není krok toho starého', $omnia_metrics($wan_cols),
+    ['wan_errors' => null, 'wan_drops' => null, 'wan_ring_drops' => null, 'wan_link_flaps' => null, 'conntrack_drops' => null]);
+
+// Ring drops come from ethtool once an hour: their step belongs to the report
+// that carries a NEW wan_path.checked_at, every other minute is null.
+$wan_path_ring = function (int $checked_at, ?int $ring) use ($omnia_pl): array {
+    $path = $omnia_pl['wan_path'];
+    $path['checked_at'] = $checked_at;
+    $path['wan_rx_ring_drops'] = $ring;
+    return $path;
+};
+$ring_base = array_merge($wan_base, ['uptime' => 200000, 'wan_link_dev' => 'eth2']);
+check('prstenec: první hodinové čtení agent přijme', $omnia_counters(array_merge($ring_base, ['wan_path' => $wan_path_ring(1789600000, 40)])), 200);
+check('prstenec: druhé čtení s novým časem agent přijme', $omnia_counters(array_merge($ring_base, [
+    'uptime' => 200060, 'wan_path' => $wan_path_ring(1789603600, 46),
+])), 200);
+check('prstenec: krok se zapíše na hlášení s novým hodinovým čtením', $omnia_metrics('wan_ring_drops'), ['wan_ring_drops' => 6]);
+check('prstenec: minuta beze změny času agent přijme', $omnia_counters(array_merge($ring_base, [
+    'uptime' => 200120, 'wan_path' => $wan_path_ring(1789603600, 46),
+])), 200);
+check('prstenec: minuta beze změny času nemá krok', $omnia_metrics('wan_ring_drops'), ['wan_ring_drops' => null]);
+
+// --- The WAN port's own counters and the speed-test flag (schema r022) --------
+//
+// Agent 0.1.13 splits what wan_errors and the ring lump together. The six
+// counters ride the ring's hourly gate; the SFP facts stay in last_details.
+// speedtest_active is stored per minute: 1 / 0, and NULL when not reported.
+$pc_cols = 'wan_rx_overrun, wan_rx_discard, wan_crc_errors, wan_mac_rx_errors, wan_refill_errors, wan_oversize, wan_ring_drops';
+$pc_path = function (int $checked_at, array $counters) use ($omnia_pl): array {
+    $path = $omnia_pl['wan_path'];
+    $path['checked_at'] = $checked_at;
+    return array_merge($path, $counters);
+};
+$pc_sfp = ['sfp_temp_mc' => 49000, 'sfp_temp_max_mc' => 70000, 'sfp_temp_crit_mc' => 75000, 'sfp_rx_power_uw' => null,
+    'sfp_rx_power_min_uw' => null, 'sfp_rx_power_lcrit_uw' => null, 'sfp_phy_hwmon' => true];
+$pc_first = ['wan_rx_ring_drops' => 7, 'rx_overrun' => 2, 'rx_discard' => 5, 'bad_crc_event' => 3, 'mac_receive_error' => 1,
+    'refill_errors' => 4, 'oversize_received' => 0] + $pc_sfp;
+$pc_base = array_merge($wan_base, ['uptime' => 250000, 'wan_link_dev' => 'eth2']);
+check('čítače portu: první hodinové čtení agent přijme', $omnia_counters(array_merge($pc_base, [
+    'speedtest_active' => true, 'wan_path' => $pc_path(1789700000, $pc_first)])), 200);
+check('čítače portu: první čtení nemá krok ani v jednom sloupci', array_values(array_unique(array_values($omnia_metrics($pc_cols)), SORT_REGULAR)), [null]);
+check('test rychlosti: příznak true se uloží jako 1', $omnia_num($omnia_metrics('speedtest_active')['speedtest_active']), 1.0);
+check('čítače portu: další hodinové čtení agent přijme', $omnia_counters(array_merge($pc_base, [
+    'uptime' => 250060, 'speedtest_active' => false,
+    'wan_path' => $pc_path(1789703600, ['wan_rx_ring_drops' => 17, 'rx_overrun' => 12, 'rx_discard' => 5, 'bad_crc_event' => 3,
+        'mac_receive_error' => 1, 'refill_errors' => 9, 'oversize_received' => 0] + $pc_sfp)])), 200);
+check('čítače portu: kroky jsou přírůstky, změřená nula zůstane nulou',
+    array_map($omnia_num, $omnia_metrics($pc_cols)),
+    ['wan_rx_overrun' => 10.0, 'wan_rx_discard' => 0.0, 'wan_crc_errors' => 0.0, 'wan_mac_rx_errors' => 0.0,
+        'wan_refill_errors' => 5.0, 'wan_oversize' => 0.0, 'wan_ring_drops' => 10.0]);
+check('test rychlosti: příznak false se uloží jako 0, ne NULL', $omnia_num($omnia_metrics('speedtest_active')['speedtest_active']), 0.0);
+$pc_d = $omnia_details()['wan_path'] ?? [];
+check('modul SFP: údaje zůstanou v last_details i s neznámým výkonem',
+    [$pc_d['sfp_temp_mc'] ?? 'chybí', $pc_d['sfp_temp_max_mc'] ?? 'chybí', $pc_d['sfp_phy_hwmon'] ?? 'chybí',
+        $omnia_at($pc_d, 'sfp_rx_power_uw'), $pc_d['bad_crc_event'] ?? 'chybí'],
+    [49000, 70000, true, null, 3]);
+$pc_no_flag = $omnia_pl;
+unset($pc_no_flag['speedtest_active']);
+check('čítače portu: minuta beze změny času agent přijme', $post_agent(array_merge($pc_no_flag, $pc_base, [
+    'agent_time' => time(), 'uptime' => 250120,
+    'wan_path' => $pc_path(1789703600, ['wan_rx_ring_drops' => 17, 'rx_overrun' => 12] + $pc_first)])), 200);
+check('čítače portu: minuta beze změny času nemá krok', array_values(array_unique(array_values($omnia_metrics($pc_cols)), SORT_REGULAR)), [null]);
+check('test rychlosti: agent, který příznak neposlal, má NULL, ne 0', $omnia_metrics('speedtest_active')['speedtest_active'], null);
+
+// --- Nothing is dropped silently (details_dropped, ingest_issues) -------------
+//
+// last_details is one 64 KB column. A report that does not fit used to shed its
+// largest lists with nothing but an error_log line, so a router whose disk list
+// was dropped looked exactly like a router without disks.
+$omnia_now = fn (array $extra = []) => array_merge($omnia_pl, ['agent_time' => time()], $extra);
+// Each list is under the pass-through's own 8 KB cap, so they really are
+// stored - and together they push the blob over the column.
+$omnia_pad = [];
+foreach (range(1, 9) as $pad_n) {
+    $omnia_pad["pad_{$pad_n}"] = array_fill(0, 70, str_repeat('x', 100 + 9 - $pad_n));
+}
+check('přetečení: hlášení s devíti seznamy agent přijme', $post_agent($omnia_now(array_merge(['uptime' => 300000], $omnia_pad))), 200);
+$omd = $omnia_details();
+$omnia_shed = $omd['details_dropped'] ?? [];
+check_true('přetečení: zahozené klíče jsou pojmenované a jdou od největšího',
+    $omnia_shed !== [] && $omnia_shed[0] === 'pad_1' && preg_grep('/^pad_\d$/', $omnia_shed) === $omnia_shed);
+check_true('přetečení: details se vejdou a malé klíče přežijí',
+    isset($omd['wifi_radios'], $omd['storage_disks'], $omd['ingest_issues'], $omd['wan_counters_prev'])
+    && strlen((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn()) <= 60000);
+check('přetečení: další hlášení, které se vejde, agent přijme', $post_agent($omnia_now(['uptime' => 300060])), 200);
+check('přetečení: seznam zahozených klíčů se vyprázdní sám', $omnia_details()['details_dropped'] ?? null, []);
+
+// The pass-through has its own limits (8 KB per key, 64 new keys). What it
+// refuses is named in ingest_issues instead of vanishing.
+check('příjem: hlášení s přerostlým klíčem agent přijme', $post_agent($omnia_now([
+    'uptime' => 300120, 'obri_klic' => str_repeat('y', 9000),
+])), 200);
+$omd = $omnia_details();
+check('příjem: přerostlý klíč se nezapíše a je vidět v ingest_issues',
+    [array_key_exists('obri_klic', $omd), $omd['ingest_issues'][0]['type'] ?? null, $omd['ingest_issues'][0]['key'] ?? null, $omd['ingest_issues'][0]['bytes'] ?? null],
+    [false, 'passthrough_too_large', 'obri_klic', 9000]);
+check('příjem: čisté hlášení seznam problémů vynuluje', [$post_agent($omnia_now(['uptime' => 300180])), $omnia_details()['ingest_issues'] ?? null], [200, []]);
+
+// X15: a light run that stepped aside for the router's own speed test measured
+// almost nothing ON PURPOSE. It is no evidence of loss, so it neither raises
+// the two records nor clears what the last full report put there.
+check('zkrácené hlášení: nejdřív přetečení agent přijme', $post_agent($omnia_now(array_merge(['uptime' => 300240], $omnia_pad))), 200);
+$omnia_shed = $omnia_details()['details_dropped'] ?? [];
+check_true('zkrácené hlášení: předtím je co ztratit', $omnia_shed !== []);
+check('zkrácené hlášení agent přijme', $post_agent([
+    'agent_type' => 'openwrt', 'version' => '0.1.7', 'agent_time' => time(),
+    'uptime' => 300300, 'reduced' => 'wan_probe', 'speedtest_active' => true,
+]), 200);
+$omd = $omnia_details();
+check('zkrácené hlášení ztrátu nevyvolá ani nesmaže', [$omd['details_dropped'] ?? null, $omd['reduced'] ?? null], [$omnia_shed, 'wan_probe']);
+check('po zkráceném hlášení plné hlášení seznam uklidí', [$post_agent($omnia_now(['uptime' => 300360])), $omnia_details()['details_dropped'] ?? null], [200, []]);
+
+// --- An 0.1.6 report must not erase what 0.1.7 measured -----------------------
+// The old agent sends no storage_disks at all. Treating "absent" as "no disks"
+// would wipe the list the router reported a minute ago.
+check('agent 0.1.6 (bez seznamu disků) hlášení pošle', $post_agent([
+    'agent_type' => 'openwrt', 'version' => '0.1.6', 'uptime' => 300420,
+    'wifi_radios' => [['radio' => 'phy0-ap0', 'band' => '5GHz', 'channel' => 36, 'clients' => 4]],
+]), 200);
+$omd = $omnia_details();
+check('agent 0.1.6 seznam disků nepřepíše', [count($omd['storage_disks'] ?? []), $omd['storage_disks'][0]['name'] ?? null], [1, 'sda']);
+check('agent 0.1.6 nemá nástroje ani cestu WAN, a null se nepředstírá',
+    [$omnia_at($omd, 'agent_tools'), $omnia_at($omd, 'wan_path')], [null, null]);
+
+// --- The new series reach the charts -----------------------------------------
+[, $om_batch] = api_get_auth($base, 'action=metric_series_batch&monitor_id=2&period=24h', $cookie_jar);
+check_true('graf šumu na 5 GHz je mezi grafy routeru', isset($om_batch['series']['wifi_noise_5g']));
+[$om_s_code, $om_s] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=wifi_busy_5g&period=24h', $cookie_jar);
+check('metric_series zná vytížení kanálu na 5 GHz', $om_s_code, 200);
+check_true('a vrátí změřenou hodnotu 3,5 %', in_array(3.5, array_map(fn ($p) => (float)$p[1], $om_s['points'] ?? []), true));
+[$om_e_code, $om_e] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=wan_errors&period=24h', $cookie_jar);
+check('metric_series zná krokovou metriku chyb na WAN', $om_e_code, 200);
+check_true('a krok 4 chyb je v ní vidět', in_array(4.0, array_map(fn ($p) => (float)$p[1], $om_e['points'] ?? []), true));
+$pdo->prepare("DELETE FROM vps_metrics WHERE monitor_id = 2 AND id > ?")->execute([$omnia_before_id]);
+
+// --- A step metric is summed, never averaged ---------------------------------
+//
+// The 90-day view reads metrics_daily, where a step metric's day is
+// avg_val x samples. Drawing avg_val instead would show a day with 2 880
+// errors as "2 errors" and the chart would look healthy.
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wan_errors', 'cpu_core_max')")->execute();
+$pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, DATE_SUB(CURDATE(), INTERVAL 3 DAY), 'wan_errors', 0, 2, 40, 1440)")->execute();
+$pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, DATE_SUB(CURDATE(), INTERVAL 3 DAY), 'cpu_core_max', 3, 12.5, 97, 1440)")->execute();
+[$step_code, $step_s] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=wan_errors&period=90d', $cookie_jar);
+check('90 dní: kroková metrika se načte', $step_code, 200);
+check('90 dní: den kroků je součet, ne průměr (2 × 1440)', array_map(fn ($p) => (float)$p[1], $step_s['points'] ?? []), [2880.0]);
+[, $avg_s] = api_get_auth($base, 'action=metric_series&monitor_id=2&metric=cpu_core_max&period=90d', $cookie_jar);
+check('90 dní: běžná metrika zůstává průměrem', array_map(fn ($p) => (float)$p[1], $avg_s['points'] ?? []), [12.5]);
+[$step_d_code, $step_d] = api_get_auth($base, 'action=metric_detail&monitor_id=2&metric=wan_errors', $cookie_jar);
+check('detail metriky přizná, že jde o krok', [$step_d_code, $step_d['metric']['step'] ?? null, $step_d['metric']['counter'] ?? null], [200, true, false]);
+[, $avg_d] = api_get_auth($base, 'action=metric_detail&monitor_id=2&metric=cpu_core_max', $cookie_jar);
+check('a u běžné metriky ne', $avg_d['metric']['step'] ?? null, false);
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wan_errors', 'cpu_core_max')")->execute();
+
+
+// --- Disk tables: what one hourly SMART reading writes (CORE 3.4) -------------
+//
+// last_details keeps only the LATEST reading, so without these two tables
+// "did the bad blocks grow since spring" has no answer at all. The reading is
+// hourly, which means every gate here has to be proved on real reports: a
+// report replayed twice must not become two samples, and a router whose disk
+// list did not fit must not get one upsert per disk per minute.
+$st_wipe = function () use ($pdo): void {
+    $pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
+    $st_d = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+    unset($st_d['storage_sample_at'], $st_d['storage_disks'], $st_d['storage_disks_at'], $st_d['fs_alerts']);
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($st_d)]);
+};
+// Opens the hourly gate without waiting an hour - and ONLY the gate, so what
+// the database decides about freshness stays visible.
+$st_force = function () use ($pdo): void {
+    $st_d = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+    unset($st_d['storage_sample_at']);
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($st_d)]);
+};
+$st_strip_list = function () use ($pdo): void {
+    $st_d = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+    unset($st_d['storage_disks']);
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($st_d)]);
+};
+$st_disk = fn (): array => $pdo->query("SELECT * FROM storage_disks WHERE monitor_id = 2 ORDER BY id LIMIT 1")->fetch(PDO::FETCH_ASSOC) ?: [];
+$st_day = fn (): array => $pdo->query("SELECT d.* FROM storage_disk_daily d JOIN storage_disks s ON s.id = d.disk_id WHERE s.monitor_id = 2 ORDER BY d.day DESC LIMIT 1")->fetch(PDO::FETCH_ASSOC) ?: [];
+$st_ev = function (string $type) use ($pdo): int {
+    $q = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 2 AND event_type = ?");
+    $q->execute([$type]);
+    return (int)$q->fetchColumn();
+};
+$st_report = function (int $checked, array $smart = [], array $extra = []) use ($post_agent, $omnia_pl): int {
+    $pl = array_merge($omnia_pl, ['agent_time' => time()], $extra);
+    $pl['storage_disks'][0]['smart'] = array_merge($pl['storage_disks'][0]['smart'], $smart, ['checked_at' => $checked]);
+    return $post_agent($pl);
+};
+$st_checked = (int)$omnia_pl['storage_disks'][0]['smart']['checked_at'];
+
+$st_wipe();
+check('Disky: hlášení s čerstvým čtením SMART agent přijme', $st_report($st_checked), 200);
+$st_r = $st_disk();
+check('Disky: disk dostane řádek s 16znakovým klíčem', [
+    strlen((string)($st_r['disk_key'] ?? '')), $st_r['name'] ?? null, $st_r['transport'] ?? null,
+    $st_r['smart_model'] ?? null, (int)($st_r['last_checked_at'] ?? 0),
+], [16, 'sda', 'sata', 'KINGSTON SUV500MS120G', $st_checked]);
+$st_d1 = $st_day();
+check('Disky: den disku má jeden vzorek a nezměřené čítače zůstanou NULL', [
+    (int)$st_d1['samples'], (int)$st_d1['temp_max'], (int)$st_d1['temp_n'], (int)$st_d1['unsafe_shutdowns'],
+    (int)$st_d1['runtime_bad_blocks'], $st_d1['offline_uncorrectable'], $st_d1['host_written_bytes'],
+], [1, 67, 1, 227, 3, null, null]);
+
+check('Disky: stejné hlášení podruhé neotevře ani bránu', $st_report($st_checked), 200);
+check('Disky: a nepřidá vzorek', (int)$st_day()['samples'], 1);
+$st_force();
+$st_report($st_checked);
+check('Disky: ani s otevřenou bránou - o čerstvosti rozhoduje databáze', (int)$st_day()['samples'], 1);
+$st_report($st_checked + 60);
+$st_d2 = $st_day();
+check('Disky: novější checked_at přidá vzorek', [(int)$st_d2['samples'], (int)$st_d2['temp_n']], [2, 2]);
+
+// The dropped disk list (storage_list_dropped) must fall back to the SCALAR
+// throttle: three reports in three minutes are one hourly pass, not three.
+$st_wipe();
+$st_strip_list();
+$st_report($st_checked + 100, ['temperature_c' => 70]);
+$st_sampled_at = $st_disk()['last_sample_at'] ?? null;
+for ($st_i = 1; $st_i < 3; $st_i++) {
+    $st_strip_list();
+    $st_report($st_checked + 100 + $st_i, ['temperature_c' => 70]);
+}
+$st_d3 = $st_day();
+$st_state = json_decode((string)($st_disk()['alert_state'] ?? ''), true) ?: [];
+$st_temp0 = $st_ev('disk_temp_critical');
+check('Disky bez seznamu v details: tři hlášení za tři minuty dají jeden vzorek',
+    [(int)$st_d3['samples'], (int)$st_d3['temp_n']], [1, 1]);
+check('a druhé ani třetí hlášení do storage_disks nesáhne', $st_disk()['last_sample_at'] ?? null, $st_sampled_at);
+check('teplotní série je 1, takže 70 °C zatím neupozorní',
+    [$st_state['temp_streak'] ?? null, $st_temp0], [1, 0]);
+
+// --- Host writes: the kernel counter is 32-bit and restarts at every boot ------
+$st_wipe();
+$pdo->exec("DELETE FROM storage_disk_daily");
+$st_dev = fn (int $sectors, int $uptime): array => [
+    'uptime' => $uptime,
+    'disk_devices' => [['device' => 'sda', 'read_kbps' => null, 'write_kbps' => null,
+        'read_sectors_total' => 10, 'write_sectors_total' => $sectors]],
+];
+$st_report($st_checked + 200, [], $st_dev(1000, 100000));
+check('Zápisy hostitele: první vzorek nepřičte nic', $st_day()['host_written_bytes'], null);
+
+// An hour of wall clock, faked on the row the delta is measured against.
+$st_hour_ago = function () use ($pdo): void {
+    $pdo->exec("UPDATE storage_disks SET last_sample_at = DATE_SUB(NOW(), INTERVAL 1 HOUR) WHERE monitor_id = 2");
+    $pdo->exec("DELETE FROM storage_disk_daily");
+};
+$st_hour_ago();
+$st_report($st_checked + 201, [], $st_dev(3048, 103600));
+check('Zápisy hostitele: 2048 sektorů za hodinu = 1 MiB', (int)$st_day()['host_written_bytes'], 1048576);
+
+$st_hour_ago();
+$st_report($st_checked + 202, [], $st_dev(500, 300));
+$st_d4 = $st_day();
+check('Zápisy hostitele: po restartu se počítá od nuly a den je neúplný',
+    [(int)$st_d4['host_written_bytes'], (int)$st_d4['host_written_partial']], [256000, 1]);
+
+$st_hour_ago();
+$pdo->exec("UPDATE storage_disks SET last_write_sectors = 5000, last_uptime = 300 WHERE monitor_id = 2");
+$st_report($st_checked + 203, [], $st_dev(400, 3900));
+$st_d5 = $st_day();
+check('Zápisy hostitele: nižší čítač při plynulém uptime nepřičte nic, jen označí den',
+    [$st_d5['host_written_bytes'], (int)$st_d5['host_written_partial']], [null, 1]);
+
+// --- Disk and filesystem alerts (CORE 3.5) -------------------------------------
+$st_wipe();
+$pdo->exec("DELETE FROM storage_disk_daily");
+$st_notif = function () use ($pdo): int {
+    return (int)$pdo->query("SELECT COUNT(*) FROM notification_log WHERE monitor_id = 2 AND status = 'storage_warning'")->fetchColumn();
+};
+// An earlier block of this suite leaves the agent switch off; the alert path
+// is only observable with it on, so it is set here and restored afterwards.
+$st_agent_switch = (string)$pdo->query("SELECT key_value FROM settings WHERE key_name = 'agent_notifications_enabled'")->fetchColumn();
+$set_setting('agent_notifications_enabled', '1');
+$st_grow0 = $st_ev('disk_errors_growing');
+$st_notif0 = $st_notif();
+$st_report($st_checked + 300);
+check('Upozornění: první pohled na 3 vadné bloky je tichý', $st_ev('disk_errors_growing') - $st_grow0, 0);
+$st_report($st_checked + 301, ['runtime_bad_blocks' => 4]);
+check('Upozornění: 3 → 4 vadné bloky dají právě jednu událost', $st_ev('disk_errors_growing') - $st_grow0, 1);
+$st_warn_ev = $pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'disk_errors_growing' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('a událost říká, který čítač a z čeho kam', str_contains((string)$st_warn_ev, 'vadné bloky 3 → 4'));
+check('a se zapnutými zprávami agenta odejde i notifikace', $st_notif() - $st_notif0, 1);
+$st_report($st_checked + 302, ['runtime_bad_blocks' => 4]);
+check('Upozornění: stejné čtení se už neohlásí', $st_ev('disk_errors_growing') - $st_grow0, 1);
+
+// The gate of agent_notifications_enabled must silence the NOTIFICATION, never
+// the event: the timeline is the record that the disk is getting worse.
+$pdo->exec("UPDATE storage_disks SET alert_state = '{\"base\":{\"badblk\":6}}' WHERE monitor_id = 2");
+$st_n0 = $st_notif();
+$st_e0 = $st_ev('disk_errors_growing');
+$set_setting('agent_notifications_enabled', '0');
+$st_report($st_checked + 304, ['runtime_bad_blocks' => 7]);
+check('Upozornění: s vypnutými zprávami agenta událost vznikne, notifikace ne',
+    [$st_ev('disk_errors_growing') - $st_e0, $st_notif() - $st_n0], [1, 0]);
+$set_setting('agent_notifications_enabled', $st_agent_switch === '' ? '1' : $st_agent_switch);
+
+// The user's SSD idles at 67 °C with a lifetime maximum of 68 - forever.
+$st_wipe();
+$st_temp1 = $st_ev('disk_temp_critical');
+for ($st_i = 0; $st_i < 5; $st_i++) {
+    $st_report($st_checked + 400 + $st_i, ['temperature_c' => 67]);
+}
+check('Upozornění: 67 °C pětkrát po sobě nic nehlásí', $st_ev('disk_temp_critical') - $st_temp1, 0);
+
+$st_fs = fn (float $pct, string $mount = '/srv'): array => ['filesystems' => [[
+    'mount' => $mount, 'device' => '/dev/sda1', 'fstype' => 'btrfs',
+    'total_kb' => 117217792, 'used_kb' => 1, 'avail_kb' => 1, 'used_pct' => $pct,
+]]];
+$st_full0 = $st_ev('fs_full');
+$st_freed0 = $st_ev('fs_freed');
+$st_report($st_checked + 500, [], $st_fs(95));
+check('Oddíl: jedno hlášení nad limitem ještě nealertuje', $st_ev('fs_full') - $st_full0, 0);
+$st_report($st_checked + 501, [], $st_fs(95));
+check('Oddíl: /srv na 95 % dvakrát = jedna událost fs_full', $st_ev('fs_full') - $st_full0, 1);
+$st_report($st_checked + 502, [], $st_fs(84));
+check('Oddíl: 84 % uvolní a ohlásí fs_freed', $st_ev('fs_freed') - $st_freed0, 1);
+$st_report($st_checked + 503, [], $st_fs(99, '/'));
+$st_report($st_checked + 504, [], $st_fs(99, '/'));
+check('Oddíl: kořen zůstává na starém hdd alertu', $st_ev('fs_full') - $st_full0, 1);
+$st_wipe();
+// --- Speed tests: ack, repair of damaged rows, nothing lost silently ---------
+//
+// W01 divided real speeds by 125000, W02 threw the files away on a bare 200.
+// Both are fixed here: the response says how far the batch was dealt with, and
+// a re-sent file repairs the damaged row instead of being ignored.
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+$sp_post = function (array $extra) use ($base, $agent_payload): array {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode(array_merge($agent_payload, $extra), JSON_UNESCAPED_UNICODE),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    $body = (string)curl_exec($ch);
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), json_decode($body, true) ?: []];
+};
+$sp_rows = function () use ($pdo): array {
+    return $pdo->query("SELECT measured_at, download_mbps, upload_mbps, ping_ms, source, iface, tool, link_mbit,"
+        . " bytes_received, bytes_sent, diagnostics FROM speedtest_results WHERE monitor_id = 2 ORDER BY measured_at")->fetchAll();
+};
+$sp_details = function () use ($pdo): array {
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+};
+$sp_ts1 = '2026-09-19T05:23:41+02:00';
+$sp_ts2 = '2026-09-20T05:11:07+02:00';
+$sp_probe = [
+    'timestamp' => $sp_ts2, 'download_mbps' => 1350.12, 'upload_mbps' => 902.4, 'ping_ms' => 2.1, 'jitter_ms' => 0.3,
+    'server' => 'Prague, Czech Republic (CESNET)', 'bytes_received' => 2531000000, 'bytes_sent' => 1692000000,
+    'started_by' => 'agent', 'iface' => 'eth2', 'tool' => 'go-1.0.12', 'link_mbit' => 2500,
+    'diagnostics' => ['v' => 1, 'cpu_measured' => true, 'path_verified' => true, 'samples' => 45,
+        'dl' => ['secs' => 15.0, 'wan_mbps' => 1400.0, 'core' => 0, 'core_busy_pct' => 100.0], 'client' => ['ip' => '10.0.0.1']],
+];
+$sp_turris = ['timestamp' => $sp_ts1, 'download_mbps' => 830.0, 'upload_mbps' => 560.0,
+    'bytes_received' => 1556250000, 'bytes_sent' => 1050000000, 'started_by' => 'turris', 'link_mbit' => 2500];
+
+[$sp_code, $sp_body] = $sp_post(['speedtests' => [$sp_turris, $sp_probe]]);
+check('Speedtesty: dávku agent přijme', $sp_code, 200);
+check('Speedtesty: odpověď potvrdí nejnovější vyřízenou položku (holá 200 stačit nesmí)',
+    $sp_body['speedtests_acked'] ?? null, $sp_ts2);
+$sp_r = $sp_rows();
+check('Speedtesty: obě měření se uloží se svým původem', [count($sp_r), $sp_r[0]['source'], $sp_r[1]['source']], [2, 'turris', 'agent']);
+check('Speedtesty: kontext měření se uloží do nových sloupců',
+    [(float)$sp_r[1]['download_mbps'], $sp_r[1]['iface'], $sp_r[1]['tool'], (int)$sp_r[1]['link_mbit'], (int)$sp_r[1]['bytes_received']],
+    [1350.12, 'eth2', 'go-1.0.12', 2500, 2531000000]);
+check('Speedtesty: měření z Turrisu rozhraní nevymýšlí', [$sp_r[0]['iface'], $sp_r[0]['tool']], [null, null]);
+check_true('Speedtesty: diagnostika se uloží bez bloku client',
+    str_contains((string)$sp_r[1]['diagnostics'], '"wan_mbps"') && !str_contains((string)$sp_r[1]['diagnostics'], '10.0.0.1'));
+$spd = $sp_details();
+check('Speedtesty: dávka se do details nedostane ani jako neznámý klíč',
+    [array_key_exists('speedtests', $spd), $spd['ingest_issues'] ?? null], [false, []]);
+
+// A row damaged by the pre-0.1.7 unit bug is repaired by the file the agent
+// re-sends once; a healthy row is the same measurement and stays as it is.
+$pdo->exec("UPDATE speedtest_results SET download_mbps = 0.0148, upload_mbps = NULL, iface = NULL WHERE monitor_id = 2 AND source = 'agent'");
+$pdo->exec("UPDATE speedtest_results SET download_mbps = 830, upload_mbps = 560 WHERE monitor_id = 2 AND source = 'turris'");
+[$sp_code2] = $sp_post(['speedtests' => [array_merge($sp_turris, ['download_mbps' => 111.0]), $sp_probe]]);
+$sp_r = $sp_rows();
+check('Speedtesty: opakovaná dávka projde', $sp_code2, 200);
+check('Speedtesty: poškozený řádek se opraví (a doplní chybějící kontext)',
+    [(float)$sp_r[1]['download_mbps'], (float)$sp_r[1]['upload_mbps'], $sp_r[1]['iface']], [1350.12, 902.4, 'eth2']);
+check('Speedtesty: zdravý řádek se nepřepíše pomalejším čtením', (float)$sp_r[0]['download_mbps'], 830.0);
+check('Speedtesty: dávka se neduplikuje', count($sp_r), 2);
+
+// An item from an agent before 0.1.7: no byte counter, and 0.01 Mbit/s is the
+// artefact of the unit bug, not a line. Unmeasured is NULL.
+$sp_old = ['timestamp' => '2026-09-18T04:02:00+02:00', 'download_mbps' => 0.0148, 'upload_mbps' => 0.0095];
+[, $sp_body3] = $sp_post(['speedtests' => [$sp_old]]);
+$sp_r = $sp_rows();
+check('Speedtesty: poškozená hodnota bez bajtů se uloží jako NULL, ne jako 0.01',
+    [$sp_r[0]['download_mbps'], $sp_r[0]['upload_mbps'], $sp_r[0]['source']], [null, null, 'turris']);
+check('Speedtesty: i tak je položka vyřízená a potvrzená', $sp_body3['speedtests_acked'] ?? null, $sp_old['timestamp']);
+
+// A rejected item is acked (re-sending repairs nothing) and NAMED.
+[, $sp_body4] = $sp_post(['speedtests' => [['download_mbps' => 500.0], $sp_probe]]);
+$spd = $sp_details();
+check('Speedtesty: položka bez času měření se odmítne a je vidět',
+    [$spd['ingest_issues'][0]['type'] ?? null, $sp_body4['speedtests_acked'] ?? null], ['speedtest_rejected', $sp_ts2]);
+[, $sp_body5] = $sp_post(['speedtests' => [array_merge($sp_probe, ['timestamp' => '2026-09-21T05:00:00+02:00', 'download_mbps' => 0.0148])]]);
+$spd = $sp_details();
+check('Speedtesty: neshoda jednotek se uloží i ohlásí',
+    [$spd['ingest_issues'][0]['type'] ?? null, $sp_body5['speedtests_acked'] ?? null], ['unit_mismatch', '2026-09-21T05:00:00+02:00']);
+check_true('Speedtesty: a je u samotného měření',
+    str_contains((string)($pdo->query("SELECT diagnostics FROM speedtest_results WHERE monitor_id = 2 ORDER BY measured_at DESC LIMIT 1")->fetchColumn()), '"unit_mismatch":true'));
+check('Speedtesty: hlášení bez dávky klíč speedtests_acked vůbec nenese',
+    array_key_exists('speedtests_acked', $sp_post([])[1]), false);
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+
+// Agent 0.1.11 says which line carried the test. The Turris ran its nightly
+// test over the LTE backup and the page used to show 47 Mbit/s as the WAN.
+$ul_wan = ['timestamp' => date('c', time() - 3600), 'download_mbps' => 393.09, 'upload_mbps' => 435.67, 'ping_ms' => 3.49,
+    'started_by' => 'turris', 'iface' => 'pppoe-wan', 'uplink' => 'wan', 'uplink_evidence' => 'counters', 'proto' => 'https'];
+$ul_lte = ['timestamp' => date('c', time() - 7200), 'download_mbps' => 47.18, 'upload_mbps' => 44.08, 'ping_ms' => 37.75,
+    'started_by' => 'turris', 'iface' => 'eth3', 'uplink' => 'backup', 'uplink_evidence' => 'counters', 'proto' => 'http'];
+$ul_bad = ['timestamp' => date('c', time() - 9000), 'download_mbps' => 10.0, 'upload_mbps' => 10.0,
+    'started_by' => 'turris', 'uplink' => 'lte', 'uplink_evidence' => 'guess', 'proto' => 'ftp'];
+check('Linka: dávku s linkami agent přijme', $sp_post(['speedtests' => [$ul_bad, $ul_lte, $ul_wan]])[0], 200);
+$ul_db = $pdo->query("SELECT uplink, uplink_source, proto FROM speedtest_results WHERE monitor_id = 2 ORDER BY measured_at")->fetchAll(PDO::FETCH_NUM);
+check('Linka: uloží se změřená linka, důkaz i protokol; neplatné hodnoty jako NULL',
+    $ul_db, [[null, null, null], ['backup', 'counters', 'http'], ['wan', 'counters', 'https']]);
+$sp_post(['speedtests' => [array_diff_key($ul_lte, ['uplink' => 1, 'uplink_evidence' => 1])]]);
+check('Linka: opakované poslání od staršího agenta změřenou linku nesmaže',
+    $pdo->query("SELECT uplink FROM speedtest_results WHERE monitor_id = 2 AND ABS(download_mbps - 47.18) < 0.001")->fetchColumn(), 'backup');
+[$ul_code, $ul_hist] = api_get_auth($base, 'action=speedtest_history&monitor_id=2', $cookie_jar);
+check('Linka: historie odpoví', $ul_code, 200);
+check('Linka: každé měření nese svou linku a protokol',
+    array_map(fn ($m) => [$m['uplink'], $m['uplinkSource'], $m['proto']], $ul_hist['measurements'] ?? []),
+    [['wan', 'counters', 'https'], ['backup', 'counters', 'http'], [null, null, null]]);
+check('Linka: týdenní průměr WAN LTE nestáhne dolů (WAN + neznámý řádek)',
+    [$ul_hist['averages']['week']['samples'] ?? null, $ul_hist['averages']['week']['unknownSamples'] ?? null,
+     (float)($ul_hist['averages']['week']['downloadMinMbps'] ?? -1)], [2, 1, 10.0]);
+check('Linka: LTE má vlastní průměr',
+    [$ul_hist['backupAverages']['week']['samples'] ?? null, $ul_hist['backupAverages']['week']['downloadMbps'] ?? null], [1, 47.18]);
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+
+// X17: while the router's own test runs, the CPU of that minute is the test.
+// The latch is left exactly as it was - not set, and not cleared either.
+$sp_thr = function () use ($pdo): int {
+    return (int)$pdo->query("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 2 AND event_type = 'threshold_exceeded'")->fetchColumn();
+};
+$sp_latch = fn () => $sp_details()['cpu_alert_sent'] ?? null;
+$pdo->exec("UPDATE monitors SET last_details = JSON_SET(COALESCE(last_details, '{}'), '$.cpu_alert_sent', false) WHERE id = 2");
+$sp_thr0 = $sp_thr();
+$sp_post(['cpu' => 97.0, 'speedtest_active' => true]);
+check('test rychlosti v minutě hlášení nespustí poplach CPU',
+    [$sp_thr() - $sp_thr0, $sp_latch()], [0, false]);
+$sp_post(['cpu' => 97.0, 'speedtest_active' => false]);
+check('Hygiena: bez měření se stejná hodnota ohlásí', [$sp_thr() - $sp_thr0, $sp_latch()], [1, true]);
+$sp_post(['cpu' => 12.5, 'speedtest_active' => true]);
+check('Hygiena: hlášení s měřením západku ani nezhasne', $sp_latch(), true);
+$sp_post(['cpu' => 12.5, 'speedtests' => [array_merge($sp_probe, ['timestamp' => date('c')])]]);
+check('Hygiena: měření v téhle minutě si hlášení označí samo (agent o něm vědět nemusel)',
+    [$sp_latch(), $sp_thr() - $sp_thr0], [true, 1]);
+$sp_post(['cpu' => 12.5]);
+check('Hygiena: čisté hlášení pod limitem západku zhasne', $sp_latch(), false);
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+
+// --- Latches and events of the router (X14, alert sheet 2.2) -----------------
+//
+// Every one of them follows the debounce the WAN and LTE alerts already use: a
+// streak, a latch so the alert goes out once, and a recovery that clears it.
+// The timeline-only events (a restart, an emptied connection table, an OOM
+// kill) must NOT turn into a notification - a router that loses power every
+// few days would otherwise wake somebody up every few days.
+$ra_ev = function (string $type) use ($pdo): int {
+    $st = $pdo->prepare("SELECT COUNT(*) FROM monitor_events WHERE monitor_id = 2 AND event_type = ?");
+    $st->execute([$type]);
+    return (int)$st->fetchColumn();
+};
+$ra_notif = function (string $status) use ($pdo): int {
+    $st = $pdo->prepare("SELECT COUNT(*) FROM notification_log WHERE monitor_id = 2 AND status = ?");
+    $st->execute([$status]);
+    return (int)$st->fetchColumn();
+};
+$ra_details = function () use ($pdo): array {
+    return json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+};
+// Only the keys of these rules are reset: the blocks around this one live in
+// the same column.
+$ra_reset = function (array $keys) use ($pdo, $ra_details): void {
+    $details = $ra_details();
+    foreach ($keys as $key) {
+        unset($details[$key]);
+    }
+    $st = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2");
+    $st->execute([json_encode($details, JSON_UNESCAPED_UNICODE)]);
+};
+$ra_switch = (string)$pdo->query("SELECT key_value FROM settings WHERE key_name = 'agent_notifications_enabled'")->fetchColumn();
+$set_setting('agent_notifications_enabled', '1');
+
+// Link rate of the WAN port (W14).
+$ra_reset(['wan_link_baseline', 'wan_link_low_since', 'wan_link_bad_streak', 'wan_link_alert_sent']);
+$ra_deg0 = $ra_ev('wan_link_degraded');
+$ra_notif0 = $ra_notif('wan_link_degraded');
+$post_agent(['wan_link_mbit' => 2500, 'wan_link_dev' => 'eth2']);
+check('Port WAN: první rychlost je jen základ', $ra_ev('wan_link_degraded') - $ra_deg0, 0);
+$post_agent(['wan_link_mbit' => 1000, 'wan_link_dev' => 'eth2']);
+$post_agent(['wan_link_mbit' => 1000, 'wan_link_dev' => 'eth2']);
+check('Port WAN: dvě pomalejší hlášení ještě mlčí', $ra_ev('wan_link_degraded') - $ra_deg0, 0);
+$post_agent(['wan_link_mbit' => 1000, 'wan_link_dev' => 'eth2']);
+check('Port WAN: třetí pomalejší hlášení ohlásí degradaci právě jednou',
+    [$ra_ev('wan_link_degraded') - $ra_deg0, $ra_notif('wan_link_degraded') - $ra_notif0], [1, 1]);
+$post_agent(['wan_link_mbit' => 1000, 'wan_link_dev' => 'eth2']);
+check('Port WAN: opakování už neohlásí nic', $ra_ev('wan_link_degraded') - $ra_deg0, 1);
+$ra_res0 = $ra_ev('wan_link_restored');
+$post_agent(['wan_link_mbit' => 2500, 'wan_link_dev' => 'eth2']);
+check('Port WAN: návrat na plnou rychlost se ohlásí jednou',
+    [$ra_ev('wan_link_restored') - $ra_res0, (float)($ra_details()['wan_link_baseline']['mbit'] ?? 0)], [1, 2500.0]);
+
+// Connection table (W09).
+$ra_reset(['conntrack_bad_streak', 'conntrack_full_sent']);
+$ra_ct0 = $ra_ev('conntrack_full');
+$ra_ctn0 = $ra_ev('conntrack_normal');
+$post_agent(['conntrack_pct' => 92.0]);
+check('Tabulka spojení: jedno hlášení na 92 % nealertuje', $ra_ev('conntrack_full') - $ra_ct0, 0);
+$post_agent(['conntrack_pct' => 92.0]);
+check('Tabulka spojení: druhé hlášení ohlásí plnou tabulku', $ra_ev('conntrack_full') - $ra_ct0, 1);
+$post_agent(['conntrack_pct' => 80.0]);
+check('Tabulka spojení: pod 85 % jde návrat do normálu jen do časové osy',
+    [$ra_ev('conntrack_normal') - $ra_ctn0, $ra_notif('conntrack_normal')], [1, 0]);
+
+// Firewall (G20): only a device with a WAN role.
+$ra_reset(['firewall_bad_streak', 'firewall_alert_sent', 'firewall_off_since']);
+$ra_fw0 = $ra_ev('firewall_disabled');
+$post_agent(['firewall_enabled' => false, 'wan_up' => true]);
+$post_agent(['firewall_enabled' => false, 'wan_up' => true]);
+check('Firewall: dvě hlášení bez pravidel ještě mlčí', $ra_ev('firewall_disabled') - $ra_fw0, 0);
+$post_agent(['firewall_enabled' => false, 'wan_up' => true]);
+check('Firewall: tři hlášení po sobě ohlásí nenačtená pravidla a zapamatují si čas',
+    [$ra_ev('firewall_disabled') - $ra_fw0, isset($ra_details()['firewall_off_since'])], [1, true]);
+$ra_fwr0 = $ra_ev('firewall_restored');
+$post_agent(['firewall_enabled' => true, 'wan_up' => true]);
+check('Firewall: načtená pravidla ohlásí zotavení a čas zapomenou',
+    [$ra_ev('firewall_restored') - $ra_fwr0, array_key_exists('firewall_off_since', $ra_details())], [1, true]);
+check('Firewall: a čas je opravdu prázdný, ne jen chybějící', $ra_details()['firewall_off_since'], null);
+$ra_reset(['firewall_bad_streak', 'firewall_alert_sent', 'firewall_off_since']);
+$ra_fw1 = $ra_ev('firewall_disabled');
+for ($ra_i = 0; $ra_i < 3; $ra_i++) {
+    $post_agent(['firewall_enabled' => false, 'wan_up' => null]);
+}
+check('AP bez WAN role nedostane poplach o firewallu', $ra_ev('firewall_disabled') - $ra_fw1, 0);
+
+// Local DNS resolver (G41): judged only while the line itself works.
+$ra_reset(['dns_resolver_bad_streak', 'dns_resolver_alert_sent']);
+$ra_dns0 = $ra_ev('dns_resolver_failed');
+$post_agent(['dns_resolver_ok' => false, 'wan_internet' => false, 'wan_up' => true]);
+$post_agent(['dns_resolver_ok' => false, 'wan_internet' => false, 'wan_up' => true]);
+check('DNS resolver: při výpadku linky se nesoudí (mluví poplach o WAN)', $ra_ev('dns_resolver_failed') - $ra_dns0, 0);
+$post_agent(['dns_resolver_ok' => false, 'wan_internet' => null, 'wan_up' => true]);
+check('DNS resolver: bez měření dosažitelnosti taky ne', $ra_ev('dns_resolver_failed') - $ra_dns0, 0);
+$post_agent(['dns_resolver_ok' => false, 'wan_internet' => true, 'wan_up' => true]);
+$post_agent(['dns_resolver_ok' => false, 'wan_internet' => true, 'wan_up' => true]);
+check('DNS resolver: dvě selhání s funkční linkou ohlásí výpadek resolveru', $ra_ev('dns_resolver_failed') - $ra_dns0, 1);
+$ra_dnsr0 = $ra_ev('dns_resolver_restored');
+$post_agent(['dns_resolver_ok' => true, 'wan_internet' => true, 'wan_up' => true]);
+check('DNS resolver: odpovídající resolver ohlásí návrat', $ra_ev('dns_resolver_restored') - $ra_dnsr0, 1);
+
+// Public addresses (IPv6 first, phase 1). A loss needs the public address
+// seen first, goes out as a notification without the address in it, and the
+// derived scope reaches last_details for the router page.
+$ra_reset(['public_ipv4_seen', 'public_ipv4_bad_streak', 'public_ipv4_alert_sent',
+    'wan_ipv6_seen', 'wan_ipv6_bad_streak', 'wan_ipv6_alert_sent']);
+$ra_line = ['wan_up' => true, 'wan_proto' => 'dhcp', 'wan_internet' => true];
+$ra_v4_0 = $ra_ev('public_ipv4_lost');
+$ra_v4n0 = $ra_notif('public_ipv4_lost');
+$post_agent($ra_line + ['wan_ipv4' => '203.0.113.10', 'wan_ipv6' => '2001:db8::1']);
+check('Veřejná adresa: rozsah IPv4 a globální IPv6 jsou v details',
+    [$ra_details()['wan_ipv4_scope'] ?? null, $ra_details()['wan_ipv6_global'] ?? null], ['public', true]);
+$post_agent($ra_line + ['wan_ipv4' => '100.64.3.4', 'wan_ipv6' => '2001:db8::1']);
+check('Veřejná adresa: jedno hlášení za CGNAT ještě mlčí', $ra_ev('public_ipv4_lost') - $ra_v4_0, 0);
+$post_agent($ra_line + ['wan_ipv4' => '100.64.3.4', 'wan_ipv6' => '2001:db8::1']);
+check('Veřejná adresa: druhé hlášení za CGNAT ohlásí ztrátu právě jednou, i notifikací',
+    [$ra_ev('public_ipv4_lost') - $ra_v4_0, $ra_notif('public_ipv4_lost') - $ra_v4n0, $ra_details()['wan_ipv4_scope'] ?? null],
+    [1, 1, 'cgnat']);
+$ra_v4_desc = (string)$pdo->query("SELECT description FROM monitor_events WHERE monitor_id = 2 AND event_type = 'public_ipv4_lost' ORDER BY id DESC LIMIT 1")->fetchColumn();
+check_true('Veřejná adresa: událost adresu neprozradí', str_contains($ra_v4_desc, 'CGNAT') && !str_contains($ra_v4_desc, '100.64'));
+$ra_v6_0 = $ra_ev('wan_ipv6_lost');
+$post_agent($ra_line + ['wan_ipv4' => '100.64.3.4']);
+$post_agent($ra_line + ['wan_ipv4' => '100.64.3.4']);
+check('Veřejná adresa: dvě hlášení bez IPv6 ještě mlčí', $ra_ev('wan_ipv6_lost') - $ra_v6_0, 0);
+$post_agent($ra_line + ['wan_ipv4' => '100.64.3.4']);
+check('Veřejná adresa: třetí hlášení bez IPv6 ohlásí ztrátu', $ra_ev('wan_ipv6_lost') - $ra_v6_0, 1);
+$ra_v6r0 = $ra_ev('wan_ipv6_restored');
+$ra_v4r0 = $ra_ev('public_ipv4_restored');
+$post_agent($ra_line + ['wan_ipv4' => '203.0.113.10', 'wan_ipv6' => '2001:db8::2']);
+check('Veřejná adresa: návrat IPv4 i IPv6 se ohlásí každý jednou',
+    [$ra_ev('public_ipv4_restored') - $ra_v4r0, $ra_ev('wan_ipv6_restored') - $ra_v6r0], [1, 1]);
+// The blocks below post payloads without wan_ipv6; with the latch armed
+// they would raise wan_ipv6_lost into suites that count events by type.
+$ra_reset(['public_ipv4_seen', 'public_ipv4_bad_streak', 'public_ipv4_alert_sent',
+    'wan_ipv6_seen', 'wan_ipv6_bad_streak', 'wan_ipv6_alert_sent']);
+
+// Restart (G21) and OOM kills (G31): timeline only.
+$ra_rb0 = $ra_ev('router_rebooted');
+$post_agent(['uptime' => 400000, 'oom_kills' => 1]);
+$post_agent(['uptime' => 400060, 'oom_kills' => 1]);
+check('Restart: rostoucí uptime restart není', $ra_ev('router_rebooted') - $ra_rb0, 0);
+$post_agent(['uptime' => 90, 'oom_kills' => 0]);
+check('Restart: klesající uptime je událost, notifikace ne',
+    [$ra_ev('router_rebooted') - $ra_rb0, $ra_notif('router_rebooted')], [1, 0]);
+$ra_oom0 = $ra_ev('oom_kill');
+$post_agent(['uptime' => 150, 'oom_kills' => 0]);
+$post_agent(['uptime' => 210, 'oom_kills' => 2]);
+check('OOM: růst čítače je událost a zapíše si čas',
+    [$ra_ev('oom_kill') - $ra_oom0, isset($ra_details()['oom_kill_at'])], [1, true]);
+$post_agent(['uptime' => 270, 'oom_kills' => 2]);
+check('OOM: stejný čítač už událost nevyrobí', $ra_ev('oom_kill') - $ra_oom0, 1);
+
+// The step of the connection table is the `drop` column ALONE: insert_failed
+// counts unresolved clashes and early_drop successful evictions (WAN 3.1.4),
+// and summing them would report a busy router as one refusing connections.
+$ra_ct_base = ['uptime' => 500000, 'wan_link_dev' => 'eth2', 'conntrack_drop' => 2,
+    'conntrack_insert_failed' => 100, 'conntrack_early_drop' => 200];
+$post_agent($ra_ct_base);
+$post_agent(array_merge($ra_ct_base, ['uptime' => 500060, 'conntrack_drop' => 5,
+    'conntrack_insert_failed' => 140, 'conntrack_early_drop' => 260]));
+check('krok conntracku je jen sloupec drop',
+    (int)$pdo->query("SELECT conntrack_drops FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetchColumn(), 3);
+
+// ... and the other two columns are kept as evidence: early_drop is the
+// sentence under the rule conntrack_drops ("evicted to make room"),
+// insert_failed is support material that no rule reads. Typed on the way in,
+// not left to the pass-through - a rule renders one of them.
+$ra_ct_det = $ra_details();
+check('vytlačená a neuložená spojení se ukládají jako čísla',
+    [$ra_ct_det['conntrack_early_drop'] ?? 'chybí', $ra_ct_det['conntrack_insert_failed'] ?? 'chybí'], [260, 140]);
+$post_agent(array_merge($ra_ct_base, ['uptime' => 500120, 'conntrack_early_drop' => 'nesmysl',
+    'conntrack_insert_failed' => -5]));
+$ra_ct_det = $ra_details();
+check('nečíselný čítač se neuloží jako text',
+    [$ra_ct_det['conntrack_early_drop'], $ra_ct_det['conntrack_insert_failed']], [null, null]);
+
+// G26: the metric column used to be NULL every minute - the list is a list.
+$post_agent(['wireguard_peers' => [
+    ['public_key' => 'aaa', 'latest_handshake' => 1789891000],
+    ['public_key' => 'bbb', 'latest_handshake' => 1789891100],
+]]);
+check('WireGuard: do sloupce se uloží počet protějšků, ne NULL',
+    (int)$pdo->query("SELECT wireguard_peers FROM vps_metrics WHERE monitor_id = 2 ORDER BY id DESC LIMIT 1")->fetchColumn(), 2);
+
+// The first report of an interface carries its counters since boot. Booked
+// as today's traffic it made a new agent look like it moved terabytes today.
+$pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface = 'lan9'");
+$if_row = function () use ($pdo) {
+    return $pdo->query("SELECT rx_bytes_total, tx_bytes_total, last_rx_bytes FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface = 'lan9'")->fetch();
+};
+$post_agent(['interfaces' => [['iface' => 'lan9', 'rx_bytes' => 5e12, 'tx_bytes' => 7e11, 'rx_packets' => 9e9, 'tx_packets' => 8e8]]]);
+$if1 = $if_row();
+check('Provoz rozhraní: první hlášení je jen výchozí bod, ne dnešní provoz',
+    [(float)($if1['rx_bytes_total'] ?? -1), (float)($if1['tx_bytes_total'] ?? -1)], [0.0, 0.0]);
+check('Provoz rozhraní: a čítač od startu se uloží jako výchozí bod', (float)($if1['last_rx_bytes'] ?? -1), 5e12);
+$post_agent(['interfaces' => [['iface' => 'lan9', 'rx_bytes' => 5e12 + 1500, 'tx_bytes' => 7e11 + 300, 'rx_packets' => 9e9 + 3, 'tx_packets' => 8e8 + 2]]]);
+$if2 = $if_row();
+check('Provoz rozhraní: další hlášení přičte jen rozdíl',
+    [(float)($if2['rx_bytes_total'] ?? -1), (float)($if2['tx_bytes_total'] ?? -1)], [1500.0, 300.0]);
+$pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface = 'lan9'");
+
+// G42: the hourly cron pass. Without it the banner could never say how many
+// minutes are missing - the pure function has no database to count with.
+// Only the router's agent runs every minute, so monitor 2 reports as one here.
+$ra_put = function (array $set) use ($pdo, $ra_details): void {
+    $st = $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2");
+    $st->execute([json_encode(array_merge($ra_details(), $set), JSON_UNESCAPED_UNICODE)]);
+};
+$ra_agent_type = $ra_details()['agent_type'] ?? null;
+$ra_reset(['reports_24h', 'boot_time']);
+$ra_put(['agent_type' => 'openwrt']);
+check_true('Hlášení za 24 h: hodinový krok cronu monitor přepočítá', bk_update_reports_24h($pdo) >= 1);
+$ra_rep = $ra_details()['reports_24h'] ?? [];
+// R152: owed from the first report on, not from a full day before it.
+$ra_first = (int)$pdo->query("SELECT UNIX_TIMESTAMP(MIN(checked_at)) FROM vps_metrics WHERE monitor_id = 2")->fetchColumn();
+$ra_owed = intdiv(time() - max(time() - 86400, $ra_first), 60);
+check('Hlášení za 24 h: uloží se očekávání, skutečnost i čas výpočtu',
+    [is_int($ra_rep['expected'] ?? null) && abs($ra_rep['expected'] - $ra_owed) <= 1, is_int($ra_rep['received'] ?? null), is_int($ra_rep['checked_at'] ?? null)], [true, true, true]);
+check_true('Hlášení za 24 h: napočítá právě ta, která opravdu dorazila',
+    ($ra_rep['received'] ?? 0) === (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = 2 AND checked_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)")->fetchColumn());
+check('Hlášení za 24 h: do hodiny se nepočítá znovu', bk_update_reports_24h($pdo), 0);
+// R140: agent.sh on its 5-minute cron sends 288 a day. Held to 1440 minutes,
+// every healthy server showed "1152 of 1440 missing"; that stored count goes.
+$ra_put(['agent_type' => 'bash', 'reports_24h' => ['expected' => 1440, 'received' => 288, 'checked_at' => time() - 7200]]);
+bk_update_reports_24h($pdo);
+check('Hlášení za 24 h: serverový agent se minutami nesoudí a starý počet zmizí',
+    array_key_exists('reports_24h', $ra_details()), false);
+$ra_put(['agent_type' => $ra_agent_type]);
+$set_setting('agent_notifications_enabled', $ra_switch === '' ? '1' : $ra_switch);
+
+// --- The Routers section of the weekly digest (CORE 3.8) ----------------------
+//
+// The engine is only worth as much as what reaches the e-mail, and that path
+// touches the database three times: the inputs batch, the weekly snapshot and
+// the build itself. The snapshot is the dangerous one - it decides what counts
+// as "new this week", so a wrong write would either mail the whole list again
+// every Monday or never mail anything again.
+$dg_state = fn (): array => $pdo->query("SELECT rec_key, active, severity, first_digest_week, raised_digest_week, UNIX_TIMESTAMP(last_seen) AS seen FROM router_rec_state WHERE monitor_id = 2 ORDER BY rec_key")->fetchAll(PDO::FETCH_ASSOC);
+$dg_week = date('o-\WW');
+$dg_item = fn (string $key, string $sev, string $rule = 'disk_temp_warm'): array =>
+    bk_rec_item($rule, $key, 'storage', $sev, ['kind' => 'disk'], ['name' => 'sda', 'disk' => 'SSD (sda)']);
+$pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+
+// The blocks above leave the router in whatever state their own last case
+// needed (one of them deliberately strips the disk list), so this block
+// seeds what it measures: the fixture's radios and disks, one disk row and
+// two days of its history.
+$dg_seed = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+$dg_seed['agent_version'] = $omnia_fx['payload']['version'];
+$dg_seed['agent_last_seen'] = time();
+$dg_seed['wifi_radios'] = $omnia_fx['payload']['wifi_radios'];
+$dg_seed['storage_disks'] = $omnia_fx['payload']['storage_disks'];
+$dg_seed['storage_disks'][0]['key'] = 'digestdiskaaaaaa';
+// The fixture payload carries no `filesystems` (the capture did not have
+// one), so the mount this block needs is written out here.
+$dg_seed['filesystems'] = [['mount' => '/srv', 'fstype' => 'ext4', 'total_kb' => 1048576,
+    'used_pct' => 19.0, 'avail_kb' => 800000]];
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_seed)]);
+$pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
+$pdo->prepare(
+    "INSERT INTO storage_disks (monitor_id, disk_key, name, transport, rotational, size_bytes, first_seen, last_seen)
+     VALUES (2, 'digestdiskaaaaaa', 'sda', 'sata', 0, 120034123776, DATE_SUB(NOW(), INTERVAL 400 DAY), NOW())"
+)->execute();
+$dg_disk_id = (int)$pdo->lastInsertId();
+$dg_day = $pdo->prepare(
+    "INSERT INTO storage_disk_daily (disk_id, day, samples, temp_sum, temp_n, temp_max, runtime_bad_blocks)
+     VALUES (?, DATE_SUB(CURDATE(), INTERVAL ? DAY), 24, ?, 24, 69, 3)"
+);
+$dg_day->execute([$dg_disk_id, 2, 24 * 67]);
+$dg_day->execute([$dg_disk_id, 3, 24 * 66]);
+
+// 1. The inputs batch: three queries for the whole chunk, the result keyed
+//    by monitor id. Monitor 2 has the fixture's disks and a week of metrics.
+$dg_in = bk_router_rec_inputs_batch($pdo, [2, 96], date('Y-m-d'));
+check('Digest: dávka vstupů odpoví na každý router zvlášť', array_keys($dg_in), [2, 96]);
+check('Digest: okno je sedm celých dní před dneškem', count($dg_in[2]['window']['days']), 7);
+check('Digest: disky routeru se načtou i se svými dny',
+    [count($dg_in[2]['disks']), count($dg_in[2]['disks']['digestdiskaaaaaa']['daily'] ?? [])], [1, 2]);
+// A column the reading never filled has to come back NULL: the counter
+// rules ask "did it grow", and a zero would be an answer nobody measured.
+$dg_daily = $dg_in[2]['disks']['digestdiskaaaaaa']['daily'];
+$dg_newest = $dg_daily[max(array_keys($dg_daily))] ?? [];
+check('Digest: den bez záznamu zůstane nezměřený, ne nulový',
+    [array_key_exists('media_errors', $dg_newest), $dg_newest['media_errors'], $dg_newest['runtime_bad_blocks']],
+    [true, null, 3]);
+check('Digest: prázdný stav je prázdné pole, ne null', $dg_in[96]['state'], []);
+
+// 2. The snapshot: the first build of a week writes, a retry does not.
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'warning')], $dg_week, [], []);
+$rows = $dg_state();
+check('Digest: první sestavení týdne uloží položku jako novou',
+    [count($rows), $rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week'], $rows[0]['raised_digest_week']],
+    [1, 1, 'warning', $dg_week, null]);
+
+// Back-date last_seen inside the SAME week: a retry between 08:00 and
+// 12:00 must leave the row completely alone. The build's week, not a
+// plain half hour: at 00:15 on a Monday that is last week, which
+// re-stamps the row by design (the pinned block below runs that case).
+$pdo->prepare("UPDATE router_rec_state SET last_seen = ? WHERE monitor_id = 2")
+    ->execute([bk_test_back_in_week($dg_week, time(), 1800)]);
+$before = $dg_state()[0]['seen'];
+$state_now = [];
+foreach ($dg_state() as $r) {
+    $state_now[$r['rec_key']] = ['active' => (int)$r['active'], 'severity' => $r['severity'],
+        'first_digest_week' => $r['first_digest_week'], 'last_seen' => date('Y-m-d H:i:s', (int)$r['seen'])];
+}
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'warning')], $dg_week, [], $state_now);
+check('Digest: opakované sestavení ve stejném týdnu nic nepřepíše', $dg_state()[0]['seen'], $before);
+
+// 3. A severity that rose is the reason an old item is mailed in full again.
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'critical')], $dg_week, [], $state_now);
+$rows = $dg_state();
+check('Digest: zhoršení zapíše týden, kdy se zhoršilo',
+    [$rows[0]['severity'], $rows[0]['raised_digest_week']], ['critical', $dg_week]);
+
+// 4. What was evaluated and stopped firing is cleared; what could NOT be
+//    evaluated keeps everything, or the next data would mail it as new.
+$state_now = [
+    'disk_temp_warm:d:a' => ['active' => 1, 'severity' => 'critical', 'first_digest_week' => $dg_week],
+    'disk_temp_warm:d:b' => ['active' => 1, 'severity' => 'warning', 'first_digest_week' => '2026-W30'],
+];
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, [], $state_now);
+$rows = $dg_state();
+check('Digest: vyhodnocená a už nehořící položka se zhasne',
+    [$rows[0]['rec_key'], $rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week']],
+    ['disk_temp_warm:d:a', 0, null, null]);
+// R53: a closed item that opens again is open since now, not since its very
+// first time ("trvá od" read the first_seen of an earlier episode).
+$pdo->prepare("UPDATE router_rec_state SET first_seen = '2026-01-01 00:00:00' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->execute();
+$pdo->prepare("UPDATE router_rec_state SET active = 1, severity = 'warning' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->execute();
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week,
+    [], ['disk_temp_warm:d:a' => ['active' => 1, 'severity' => 'warning', 'first_digest_week' => $dg_week]] + $state_now);
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:a', 'warning'), $dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, [], []);
+check_true('Digest: znovu otevřená položka trvá od teď, ne od prvního výskytu kdysi',
+    (int)$pdo->query("SELECT UNIX_TIMESTAMP(first_seen) FROM router_rec_state WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->fetchColumn() > time() - 600);
+$pdo->prepare("UPDATE router_rec_state SET active = 0, severity = NULL, first_digest_week = NULL WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->execute();
+
+$pdo->prepare("UPDATE router_rec_state SET active = 1, severity = 'warning', first_digest_week = '2026-W30' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:a'")->execute();
+$state_now['disk_temp_warm:d:a'] = ['active' => 1, 'severity' => 'warning', 'first_digest_week' => '2026-W30'];
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, ['disk_temp_warm:d:a'], $state_now);
+$rows = $dg_state();
+check('Digest: nevyhodnocená položka si nechá všechno',
+    [$rows[0]['active'], $rows[0]['severity'], $rows[0]['first_digest_week']], [1, 'warning', '2026-W30']);
+
+// A mute survives the snapshot: it is the owner's decision, not a state.
+$pdo->prepare("UPDATE router_rec_state SET muted_at = NOW(), muted_severity = 'warning', mute_reason = 'vím o tom' WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:b'")->execute();
+bk_router_rec_state_save($pdo, 2, [$dg_item('disk_temp_warm:d:b', 'warning')], $dg_week, [], []);
+check('Digest: ztlumení přežije zápis snímku',
+    (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:b' AND muted_at IS NOT NULL")->fetchColumn(), 1);
+$pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+
+// 5. The whole section, against the routers the suite really has.
+$dg = bk_digest_routers($pdo, false);
+$dg_by_id = [];
+foreach ($dg['routers'] as $r) {
+    $dg_by_id[(int)$r['id']] = $r;
+}
+check_true('Digest: sekce zná routery této databáze', isset($dg_by_id[2]));
+check('Digest: náhled nic nezapíše',
+    (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2")->fetchColumn(), 0);
+check_true('Digest: router s 0.1.7 se hodnotí', (bool)$dg_by_id[2]['applicable']);
+check_true('Digest: fakta se staví jen pro vykreslené routery a nesou rádio i disk',
+    count($dg_by_id[2]['facts']['radios'] ?? []) >= 1 && count($dg_by_id[2]['facts']['disks'] ?? []) >= 1);
+check_false('Digest: v faktech není SSID',
+    str_contains(json_encode($dg_by_id[2]['facts'], JSON_UNESCAPED_UNICODE), 'Domov'));
+check('Digest: nejhorší závažnost řadí routery, nejvýš deset', count($dg['routers']) <= 10, true);
+foreach ($dg['routers'] as $r) {
+    check_true('Digest: každý router má jen položky bez page_only',
+        !array_filter($r['items_full'], fn ($i) => !empty($i['page_only'])));
+}
+
+// A router whose agent is older than 0.1.7 says so instead of looking healthy.
+$dg_old = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+$dg_keep = $dg_old['agent_version'] ?? null;
+$dg_old['agent_version'] = '0.1.6';
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_old)]);
+$dg2 = bk_digest_routers($pdo, false);
+foreach ($dg2['routers'] as $r) {
+    if ((int)$r['id'] === 2) {
+        check('Digest: starší agent se nehodnotí a řekne proč', [$r['applicable'], $r['reason']], [false, 'agent_old']);
+        check('Digest: a jeho verze je v datech', $r['reason_params']['version'] ?? null, '0.1.6');
+    }
+}
+$dg_old['agent_version'] = $dg_keep;
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($dg_old)]);
+
+// 6. The snapshot really is written when the build is not a preview.
+//    The fixture's filesystems are a fifth full, so the monitor's own
+//    threshold is lowered to make a real rule fire through the real path.
+$dg_thr = $pdo->query("SELECT hdd_threshold FROM monitors WHERE id = 2")->fetchColumn();
+$pdo->prepare("UPDATE monitors SET hdd_threshold = 5 WHERE id = 2")->execute();
+$dg3 = bk_digest_routers($pdo, true);
+$dg_fired = [];
+foreach ($dg3['routers'] as $r) {
+    if ((int)$r['id'] === 2) {
+        foreach (array_merge($r['items_full'], $r['items_open']) as $i) {
+            $dg_fired[] = (string)$i['key'];
+        }
+    }
+}
+sort($dg_fired);
+check_true('Digest: plný oddíl se do sekce dostane', count($dg_fired) >= 1);
+$dg_saved = $pdo->query("SELECT rec_key FROM router_rec_state WHERE monitor_id = 2 AND active = 1 ORDER BY rec_key")->fetchAll(PDO::FETCH_COLUMN);
+check('Digest: ostré sestavení uloží právě to, co hoří', $dg_saved, $dg_fired);
+check('Digest: a označí to za novinku tohoto týdne',
+    $pdo->query("SELECT DISTINCT first_digest_week FROM router_rec_state WHERE monitor_id = 2 AND active = 1")->fetchAll(PDO::FETCH_COLUMN),
+    [$dg_week]);
+
+// 7. And the same thing as HTML: the preview renders with the very
+//    template the e-mail uses, so this is the only place where a fatal in
+//    the section or a missing dictionary key would show up.
+if (isset($cookie_jar)) {
+    // site_url as the old label asked for it - the URL of the status page.
+    // The link is built from its origin, so it cannot lose /status.
+    $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('site_url', 'https://bloodkings.eu/status') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+    // A new server of the week, so its link is in the e-mail too.
+    $pdo->exec("INSERT INTO monitor_events (monitor_id, monitor_name, monitor_type, event_type, description, occurred_at)
+                VALUES (1, 'Nový server digestu', 'web', 'monitor_added', 'test', NOW())");
+    $ch = curl_init($base . '/api.php?action=digest_preview&period=weekly');
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_COOKIEJAR => $cookie_jar,
+        CURLOPT_COOKIEFILE => $cookie_jar, CURLOPT_TIMEOUT => 30]);
+    $dg_html = (string)curl_exec($ch);
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'site_url'");
+    $pdo->exec("DELETE FROM monitor_events WHERE monitor_name = 'Nový server digestu'");
+    check_true('Digest: e-mail má sekci Routery', str_contains($dg_html, 'Routery'));
+    // The pages are in /app (D1); the legacy index.php?expand=N goes away.
+    check_true('Digest: a v ní jméno routeru i s odkazem na jeho stránku v /app',
+        str_contains($dg_html, 'Router bez metrik')
+        && str_contains($dg_html, 'href="https://bloodkings.eu/app/infrastructure/2"'));
+    check_true('Digest: nový server odkazuje na svou stránku v /app',
+        str_contains($dg_html, 'Nový server digestu') && str_contains($dg_html, 'href="https://bloodkings.eu/app/infrastructure/1"'));
+    check_false('Digest: žádný odkaz nevede na starou index.php', str_contains($dg_html, 'index.php'));
+    check_true('Digest: položka je vidět i s tím, co se naměřilo a co s tím',
+        str_contains($dg_html, 'Plný oddíl') && str_contains($dg_html, 'Uvolněte místo'));
+    check_true('Digest: fakta o disku jsou v e-mailu, ne poplach',
+        str_contains($dg_html, 'vadné bloky za běhu: 3'));
+    check_false('Digest: e-mail neobsahuje SSID', str_contains($dg_html, 'Domov'));
+}
+$pdo->prepare("UPDATE monitors SET hdd_threshold = ? WHERE id = 2")->execute([$dg_thr]);
+$pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+
+// --- The SLA and digest fixtures just after midnight, on a pinned clock -------
+//
+// Quality Gate run 36354545459 started at 22:14 UTC on a Sunday, which is
+// 00:14 on Monday in Prague, the application's zone. Two checks failed that
+// pass the rest of the day: their fixtures reach 30 minutes back, and that was
+// yesterday and last ISO week. Here that case does not wait for CI to hit it.
+// The same fixtures and production functions run at fixed instants, with PHP's
+// clock pinned by bk_test_load_pinned() and MySQL's by SET timestamp. They run
+// on a scratch database, because the rollup writes every monitor it finds.
+$clk_ns = bk_test_load_pinned($root . '/functions.php', ['bk_rollup_daily_uptime_time', 'bk_uptime_day_windows']);
+$clk_rollup = $clk_ns . 'bk_rollup_daily_uptime_time';
+$clk_windows = $clk_ns . 'bk_uptime_day_windows';
+$clk_date = $clk_ns . 'date';
+$clk_db = $db_name . '_clock';
+$clk_tables = ['monitors', 'monitor_logs', 'uptime_daily', 'router_rec_state'];
+$pdo->exec("DROP DATABASE IF EXISTS `{$clk_db}`");
+$pdo->exec("CREATE DATABASE `{$clk_db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+try {
+    foreach ($clk_tables as $clk_table) {
+        $pdo->exec("CREATE TABLE `{$clk_db}`.`{$clk_table}` LIKE `{$db_name}`.`{$clk_table}`");
+    }
+    $clk = new PDO("mysql:host={$db_host};port={$db_port};dbname={$clk_db};charset=utf8mb4", $db_user, $db_pass, [
+        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+    $clk_seen = fn (): int => (int)$clk->query("SELECT UNIX_TIMESTAMP(last_seen) FROM router_rec_state")->fetchColumn();
+    // The state the digest reads before it saves, as the suite builds it above.
+    $clk_state = function () use ($clk): array {
+        $out = [];
+        foreach ($clk->query("SELECT rec_key, active, severity, first_digest_week, UNIX_TIMESTAMP(last_seen) AS seen FROM router_rec_state")->fetchAll() as $r) {
+            $out[$r['rec_key']] = ['active' => (int)$r['active'], 'severity' => $r['severity'],
+                'first_digest_week' => $r['first_digest_week'], 'last_seen' => date('Y-m-d H:i:s', (int)$r['seen'])];
+        }
+        return $out;
+    };
+    $clk_item = ['id' => 'disk_temp_warm', 'key' => 'disk_temp_warm:d:a', 'severity' => 'warning'];
+    foreach ([
+        // The failed run: a new day and a new ISO week in Prague, still Sunday in UTC.
+        ['Po 00:15 v Praze = Ne 22:15 UTC', '2026-09-28 00:15:00', '2026-09-27 22:15:00', true],
+        // An ordinary midnight: a new day in the same week.
+        ['Út 00:15, jen nový den', '2026-09-29 00:15:00', '2026-09-28 22:15:00', false],
+    ] as [$clk_label, $clk_at, $clk_utc, $clk_new_week]) {
+        $clk_now = (int)strtotime($clk_at);
+        $GLOBALS['bk_test_now'] = $clk_now;
+        foreach ($clk_tables as $clk_table) {
+            $clk->exec("DELETE FROM `{$clk_table}`");
+        }
+        // The offset AT the pinned instant, not today's: a run in winter would
+        // read this summer instant an hour off.
+        $clk->prepare('SET time_zone = ?')->execute([date('P', $clk_now)]);
+        $clk->exec('SET timestamp = ' . $clk_now);
+        $clk_sql = $clk->query('SELECT NOW() AS now, UTC_TIMESTAMP() AS utc')->fetch();
+        check("{$clk_label}: PHP i MySQL stojí na připnutém čase",
+            [$clk_date('Y-m-d H:i:s'), $clk_sql['now'], gmdate('Y-m-d H:i:s', $clk_now), $clk_sql['utc']],
+            [$clk_at, $clk_at, $clk_utc, $clk_utc]);
+
+        // Section 4: the seed, cron's rollup, the 7-day window. The 'down'
+        // row stands for 150 s (2.5 one-minute intervals) and the up rows for
+        // 540 s; two days, because the outage is yesterday's.
+        $clk->exec("INSERT INTO monitors (id, name, type, target, port, status, category)
+                    VALUES (1, 'Testovací web', 'web', 'https://example.com', 443, 'up', 'Weby')");
+        bk_test_seed_sla_logs($clk, 1);
+        check("{$clk_label}: výpadek ze seedu je ještě včerejší",
+            (int)$clk->query("SELECT COUNT(*) FROM monitor_logs WHERE status = 'down' AND checked_at < CURDATE()")->fetchColumn(), 1);
+        $clk_rollup($clk, 2);
+        $clk_w = $clk_windows($clk, [1], [7])[1][7] ?? [];
+        check("{$clk_label}: SLA 7 dní drží včerejší výpadek",
+            [$clk_w['down'] ?? null, $clk_w['up'] ?? null, $clk_w['days'] ?? null], [150, 540, 2]);
+        check_true("{$clk_label}: a vyjde jako v sekci 4 (dostal " . json_encode($clk_w['pct'] ?? null) . ')',
+            is_numeric($clk_w['pct'] ?? null) && $clk_w['pct'] > 75 && $clk_w['pct'] < 85);
+
+        // The digest: a retry in the build's week leaves the row alone.
+        $clk_week = $clk_date('o-\WW');
+        bk_router_rec_state_save($clk, 2, [$clk_item], $clk_week, [], []);
+        $clk->prepare("UPDATE router_rec_state SET last_seen = ?")->execute([bk_test_back_in_week($clk_week, $clk_now, 1800)]);
+        $clk_before = $clk_seen();
+        bk_router_rec_state_save($clk, 2, [$clk_item], $clk_week, [], $clk_state());
+        check("{$clk_label}: digest - opakované sestavení ve stejném týdnu nic nepřepíše", $clk_seen(), $clk_before);
+        // A row last seen 30 minutes ago is re-stamped exactly when that was
+        // last week, which is why the fixture stays in the build's week.
+        $clk->prepare("UPDATE router_rec_state SET last_seen = ?")->execute([date('Y-m-d H:i:s', $clk_now - 1800)]);
+        bk_router_rec_state_save($clk, 2, [$clk_item], $clk_week, [], $clk_state());
+        check("{$clk_label}: řádek z minulého týdne se přepíše, z tohoto ne", $clk_seen() === $clk_now, $clk_new_week);
+    }
+} finally {
+    // The closures hold the connection too; all of it goes before the drop.
+    unset($GLOBALS['bk_test_now'], $clk, $clk_seen, $clk_state);
+    $pdo->exec("DROP DATABASE IF EXISTS `{$clk_db}`");
+}
+
+
+// --- The raw-minute scans of X13 read vps_metrics.checked_at ------------------
+//
+// Both scans once filtered on `created_at`, a column vps_metrics does not
+// have: a router whose loaded month held a saturated core failed the whole
+// page (500) and the digest with it. The conntrack scan looked for its peak
+// under the column name, which metrics_daily never uses (`conntrack`), so it
+// never ran at all and its rule could not fire.
+$x13_days = bk_router_rec_window(date('Y-m-d'))['days'];
+$x13_day = $x13_days[3];
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('cpu_core_max', 'conntrack')")->execute();
+$x13_daily = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, ?, ?, 1, 20, ?, 1440)");
+$x13_daily->execute([$x13_day, 'cpu_core_max', 99]);
+$x13_daily->execute([$x13_day, 'conntrack', 95]);
+$x13_before = (int)$pdo->query("SELECT COALESCE(MAX(id), 0) FROM vps_metrics")->fetchColumn();
+$x13_min = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, cpu_core_max, cpu_core_max_softirq, wan_rx_mbps, wan_tx_mbps, conntrack_pct, conntrack_drops, checked_at) VALUES (2, ?, ?, ?, ?, ?, ?, ?)");
+foreach (['12:00:00', '12:01:00', '12:02:00'] as $x13_t) {
+    $x13_min->execute([99.0, 90.0, 400.0, 20.0, null, null, "{$x13_day} {$x13_t}"]);
+}
+// Under the bar (softirq 50 %): the same minute shape, not counted.
+$x13_min->execute([99.0, 50.0, 400.0, 20.0, null, null, "{$x13_day} 12:03:00"]);
+$x13_min->execute([null, null, null, null, 95.0, 4, "{$x13_day} 13:00:00"]);
+$x13_min->execute([null, null, null, null, 96.0, 3, "{$x13_day} 13:01:00"]);
+$x13_in = bk_router_rec_inputs_batch($pdo, [2], date('Y-m-d'))[2] ?? [];
+check('X13: minuty se saturovaným jádrem se spočítají podle checked_at', $x13_in['forwarding_minutes'] ?? null, 3);
+check('X13: den s plnou tabulkou spojení nese zahozená spojení i špičku',
+    $x13_in['conntrack_days'][$x13_day] ?? null, ['drops' => 7.0, 'pct' => 96.0]);
+if ($logged_in) {
+    [$x13_code] = api_get_auth($base, 'action=router_recommendations&monitor_id=2', $cookie_jar);
+    check('X13: doporučení routeru se špičkou v měsíci odpoví 200, ne 500', $x13_code, 200);
+}
+$pdo->prepare("DELETE FROM vps_metrics WHERE monitor_id = 2 AND id > ?")->execute([$x13_before]);
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('cpu_core_max', 'conntrack')")->execute();
+
+
+// --- The digest's week figures read only W ------------------------------------
+//
+// The facts line prints each radio's noise and airtime "this week". The batch
+// loads thirty days, so a reading from twenty days ago must not move them.
+$wk_days = bk_router_rec_window(date('Y-m-d'))['days'];
+$wk_old = date('Y-m-d', (int)strtotime(date('Y-m-d') . ' -20 days'));
+$wk_keep = (string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn();
+$wk_details = json_decode($wk_keep, true) ?: [];
+$wk_details['wifi_radios'] = [['radio' => 'phy0-ap0', 'mode' => 'ap', 'band' => '5GHz', 'channel' => 36]];
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([json_encode($wk_details)]);
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g')")->execute();
+$wk_ins = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (2, ?, ?, ?, ?, ?, 1440)");
+$wk_ins->execute([$wk_days[2], 'wifi_noise_5g', -92, -92, -92]);
+$wk_ins->execute([$wk_old, 'wifi_noise_5g', -60, -60, -60]);
+$wk_ins->execute([$wk_days[2], 'wifi_busy_5g', 10, 10, 10]);
+$wk_ins->execute([$wk_old, 'wifi_busy_5g', 90, 90, 90]);
+$wk_radio = bk_digest_router_facts($pdo, [['id' => 2, 'applicable' => true]])[0]['facts']['radios'][0] ?? [];
+check('Digest: šum a vytížení kanálu za týden jsou jen ze sedmi dní',
+    [$wk_radio['noise_week'] ?? null, $wk_radio['busy_week'] ?? null], [-92.0, 10.0]);
+$pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = 2 AND metric_key IN ('wifi_noise_5g', 'wifi_busy_5g')")->execute();
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 2")->execute([$wk_keep]);
+
+
+// --- The WAN port finding over the wire: measured cause and speed-test minutes --
+//
+// A router of its own (id 9500), so the seeded days cannot collide with what
+// the blocks above left on monitor 2. The daily rows say what the week held;
+// the raw minutes carry the speed-test flag (1 / 0 / NULL) the finding counts.
+if ($logged_in) {
+    $wp_id = 9500;
+    $wp_win = bk_router_rec_window(date('Y-m-d'));
+    $wp_days = $wp_win['days'];
+    $wp_before = $wp_win['days30'][22];
+    $pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$wp_id]);
+    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = ?")->execute([$wp_id]);
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES (?, 'WAN port router', 'openwrt', '10.9.5.1', 'up', 'Síť', ?)")
+        ->execute([$wp_id, json_encode(['agent_version' => '0.1.13', 'agent_last_seen' => time(), 'wan_up' => true,
+            'wan_link_dev' => 'eth2', 'wan_path' => ['sfp_phy_hwmon' => true, 'sfp_temp_mc' => 49000, 'sfp_temp_max_mc' => 70000]])]);
+    $wp_daily = $pdo->prepare("INSERT INTO metrics_daily (monitor_id, day, metric_key, min_val, avg_val, max_val, samples) VALUES (?, ?, ?, 0, ?, ?, ?)");
+    foreach ($wp_days as $wp_day) {
+        $wp_daily->execute([$wp_id, $wp_day, 'cpu', 10, 20, 1440]);
+    }
+    foreach (array_slice($wp_days, 0, 3) as $wp_day) {
+        $wp_daily->execute([$wp_id, $wp_day, 'wan_errors', 40 / 1440, 40, 1440]);
+    }
+    $wp_split = ['wan_crc_errors', 'wan_mac_rx_errors', 'wan_rx_overrun', 'wan_rx_discard', 'wan_refill_errors', 'wan_oversize'];
+    foreach (array_merge([$wp_before], $wp_days) as $wp_day) {
+        foreach ($wp_split as $wp_key) {
+            $wp_total = ($wp_day === $wp_days[0] && $wp_key === 'wan_crc_errors') ? 30 : 0;
+            $wp_daily->execute([$wp_id, $wp_day, $wp_key, $wp_total / 24, $wp_total, 24]);
+        }
+    }
+    $wp_min = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, wan_errors, speedtest_active, checked_at) VALUES (?, ?, ?, ?)");
+    $wp_min->execute([$wp_id, 20, 1, "{$wp_days[0]} 03:10:00"]);
+    $wp_min->execute([$wp_id, 5, 0, "{$wp_days[1]} 12:00:00"]);
+    $wp_min->execute([$wp_id, 7, null, "{$wp_days[2]} 12:00:00"]);
+    $wp_min->execute([$wp_id, 0, 1, "{$wp_days[2]} 12:01:00"]);
+    $wp_of = function () use ($base, $cookie_jar, $wp_id): ?array {
+        [, $res] = api_get_auth($base, 'action=router_recommendations&lang=en&monitor_id=' . $wp_id, $cookie_jar);
+        foreach ($res['items'] ?? [] as $item) {
+            if (($item['id'] ?? '') === 'wan_port_errors') {
+                return $item;
+            }
+        }
+        return null;
+    };
+    $wp_item = $wp_of();
+    check('port WAN: CRC nad prahem přijde pod klíčem závady linky, s počty z minut',
+        [$wp_item['key'] ?? null, $wp_item['severity'] ?? null, $wp_item['params']['cause'] ?? null,
+            $wp_item['params']['st_errors'] ?? null, $wp_item['params']['st_during'] ?? null, $wp_item['params']['st_unknown'] ?? null,
+            $wp_item['params']['module'] ?? null, is_array($wp_item) && array_key_exists('command', $wp_item) ? $wp_item['command'] : 'chybí'],
+        ['wan_port_errors:line', 'warning', 'physical', 32, 20, 7, 'copper', null]);
+    check_true('port WAN: text jmenuje metalický modul a netvrdí optiku',
+        str_contains((string)($wp_item['action'] ?? ''), 'copper (RJ45)') && !str_contains((string)($wp_item['action'] ?? ''), 'fibre')
+        && str_contains((string)($wp_item['measured'] ?? ''), 'Of the 32 errors counted minute by minute, 20 fell in minutes with a speed test'));
+    // Without the split the cause is unknown, and the command is the answer.
+    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = ? AND metric_key LIKE 'wan\\_%' AND metric_key <> 'wan_errors'")->execute([$wp_id]);
+    $wp_item = $wp_of();
+    check('port WAN: bez vlastních počítadel neznámá příčina, varování a příkaz, který ji zjistí',
+        [$wp_item['key'] ?? null, $wp_item['severity'] ?? null, $wp_item['params']['cause'] ?? null, $wp_item['command'] ?? null],
+        ['wan_port_errors', 'warning', 'unknown', "ethtool -S eth2 | grep -E 'bad_crc_event|mac_receive_error|oversize_received|rx_overrun|rx_discard|refill_errors'"]);
+    $pdo->prepare("DELETE FROM metrics_daily WHERE monitor_id = ?")->execute([$wp_id]);
+    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = ?")->execute([$wp_id]);
+    $pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$wp_id]);
+    check('port WAN: testovací router po sobě uklidí',
+        (int)$pdo->query("SELECT COUNT(*) FROM vps_metrics WHERE monitor_id = {$wp_id}")->fetchColumn(), 0);
+}
+
+
+// --- Received packets per interface: the ring share and the per-million rate ----
+//
+// One query answers both: the ring branch divides by the router's packets over
+// every interface, the error rate by the WAN port's own. A day's sum must stay
+// what it was before the rows were kept per interface.
+$rp_id = 9501;
+$rp_days = bk_router_rec_window(date('Y-m-d'))['days'];
+$pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$rp_id]);
+$pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES (?, 'Packets router', 'openwrt', '10.9.5.2', 'up', 'Síť', '{}')")
+    ->execute([$rp_id]);
+$rp_ins = $pdo->prepare("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total, rx_packets_total, tx_packets_total) VALUES (?, ?, ?, 0, 0, ?, 0)");
+$rp_ins->execute([$rp_id, 'eth2', $rp_days[0], 1000]);
+$rp_ins->execute([$rp_id, 'br-lan', $rp_days[0], 500]);
+$rp_ins->execute([$rp_id, 'br-lan', $rp_days[1], 70]);
+$rp_in = bk_router_rec_inputs_batch($pdo, [$rp_id], date('Y-m-d'))[$rp_id] ?? [];
+$rp_rx = $rp_in['rx_packets'] ?? [];
+ksort($rp_rx);
+$rp_ifaces = array_keys($rp_in['rx_packets_iface'] ?? []);
+sort($rp_ifaces);
+check('pakety: součet dne přes rozhraní zůstane, port WAN má své vlastní dny',
+    [$rp_rx, $rp_in['rx_packets_iface']['eth2'] ?? null, $rp_ifaces],
+    [[$rp_days[0] => 1500.0, $rp_days[1] => 70.0], [$rp_days[0] => 1000.0], ['br-lan', 'eth2']]);
+$pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$rp_id]);
+
+
+// --- The five router endpoints (CORE 3.9, WAN 3.6; CORE 6.3 tests 7-9) -------
+//
+// They are read-only except the mute, and the mute is the only place where a
+// client could otherwise decide how loud a finding has to get before it is
+// heard again. That is what most of this block is about.
+if ($logged_in) {
+    $ra_id = 2;                                     // the suite's OpenWrt monitor
+    $ra_web = 1;                                    // a web monitor: not a router
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?")->execute([
+        json_encode(['agent_version' => '0.1.7', 'agent_last_seen' => time(), 'wan_up' => true,
+            'agent_tools' => ['iw' => false, 'smartctl' => true],
+            'filesystems' => [['mount' => '/srv', 'fstype' => 'ext4', 'total_kb' => 2097152,
+                'used_pct' => 96.0, 'avail_kb' => 60000]]], JSON_UNESCAPED_UNICODE), $ra_id]);
+    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = ?")->execute([$ra_id]);
+
+    [$ra_code, $ra] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id, $cookie_jar);
+    check('doporučení routeru: 200 a tvar odpovědi', [$ra_code, is_array($ra['items'] ?? null),
+        is_array($ra['muted'] ?? null), $ra['monitorId'] ?? null, $ra['canMute'] ?? null],
+        [200, true, true, $ra_id, true]);
+    check_true('doporučení routeru: plný oddíl se opravdu najde',
+        in_array('fs_nearly_full', array_map(fn (array $i): string => (string)$i['id'], $ra['items']), true));
+    check_true('doporučení routeru: chybějící balíček je v missingPackages i mezi položkami',
+        in_array('iw', $ra['missingPackages'] ?? [], true)
+        && in_array('pkg_iw', array_map(fn (array $i): string => (string)$i['id'], $ra['items']), true));
+    check('doporučení routeru: GET nezapíše žádný stav',
+        (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = " . (int)$ra_id)->fetchColumn(), 0);
+
+    [$ra_code, $ra_web_res] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_web, $cookie_jar);
+    check('doporučení routeru: web monitor není router',
+        [$ra_code, $ra_web_res['applicable'] ?? null, $ra_web_res['reason'] ?? null], [200, false, 'not_router']);
+    [$ra_code] = api_get($base, 'action=router_recommendations&monitor_id=' . $ra_id);
+    check('doporučení routeru: bez přihlášení 401', $ra_code, 401);
+
+    // The English answer must not leak Czech: the texts are rendered per call.
+    [, $ra_en] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id . '&lang=en', $cookie_jar);
+    $ra_en_text = '';
+    foreach ($ra_en['items'] ?? [] as $ra_item) {
+        $ra_en_text .= (string)($ra_item['title'] ?? '') . (string)($ra_item['measured'] ?? '')
+            . (string)($ra_item['action'] ?? '');
+    }
+    check_true('doporučení routeru: anglická odpověď nemá českou diakritiku',
+        $ra_en_text !== '' && preg_match('/[ěščřžýáíéůúňťď]/u', $ra_en_text) === 0);
+
+    // A Wi-Fi item over the wire (CORE 3.7). The item is stored language-
+    // neutral and rendered per request, so the SAME key must come back as
+    // „2,4 GHz" in Czech and "2.4 GHz" in English - and its key must survive
+    // the interface being renamed, which is what a mute is stored under.
+    $ra_wifi_details = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = " . (int)$ra_id)->fetchColumn(), true);
+    $ra_radio = ['radio' => 'phy3-ap0', 'phy' => 'phy3', 'ssid' => 'Domov', 'mode' => 'ap',
+        'band' => '2.4GHz', 'frequency_mhz' => 2432, 'channel' => 5, 'htmode' => 'HT20',
+        'htmodes_supported' => ['HT20', 'HT40'], 'encryption' => 'wpa2',
+        'encryption_enterprise' => false, 'phy_has_6ghz' => false, 'clients' => 2];
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?")->execute([
+        json_encode(array_merge($ra_wifi_details, ['wifi_radios' => [$ra_radio]]), JSON_UNESCAPED_UNICODE), $ra_id]);
+    $ra_wifi_of = function (array $res): ?array {
+        foreach ($res['items'] ?? [] as $item) {
+            if ((string)($item['id'] ?? '') === 'wifi_wpa2_only') {
+                return $item;
+            }
+        }
+        return null;
+    };
+    // `lang=en` above stuck to the session (lang.php:11-21), so the Czech
+    // call has to say `lang=cs` - exactly what the app's language switch does.
+    [, $ra_w_cs] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id . '&lang=cs', $cookie_jar);
+    [, $ra_w_en] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id . '&lang=en', $cookie_jar);
+    $ra_item_cs = $ra_wifi_of($ra_w_cs);
+    $ra_item_en = $ra_wifi_of($ra_w_en);
+    check('doporučení Wi-Fi: pásmo se vykreslí v jazyce požadavku, klíč je jeden',
+        [(string)($ra_item_cs['title'] ?? ''), (string)($ra_item_en['title'] ?? ''),
+            (string)($ra_item_cs['key'] ?? '') === (string)($ra_item_en['key'] ?? '')],
+        ['Jen WPA2 na 2,4 GHz, kanál 5', 'WPA2 only on 2.4 GHz, channel 5', true]);
+    check_true('doporučení Wi-Fi: měření nese naměřenou hodnotu, ne holý pokyn',
+        str_contains((string)($ra_item_cs['measured'] ?? ''), '2,4 GHz, kanál 5'));
+    // The key is keyed on band + SSID, never on the interface name.
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?")->execute([
+        json_encode(array_merge($ra_wifi_details, ['wifi_radios' => [array_merge($ra_radio, ['radio' => 'phy1-ap0', 'phy' => 'phy1'])]]), JSON_UNESCAPED_UNICODE), $ra_id]);
+    [, $ra_w_renamed] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id . '&lang=cs', $cookie_jar);
+    check('doporučení Wi-Fi: přejmenované rozhraní klíč nezmění',
+        (string)($ra_wifi_of($ra_w_renamed)['key'] ?? ''), (string)($ra_item_cs['key'] ?? ''));
+    // And the mute accepts that key, which is what V5 needs.
+    [$ra_wm_code, $ra_wm] = api_post($base, 'action=router_recommendation_mute',
+        ['monitor_id' => $ra_id, 'key' => (string)($ra_item_cs['key'] ?? ''), 'muted' => true,
+            'reason' => 'stará tiskárna WPA3 neumí'], $cookie_jar);
+    check('doporučení Wi-Fi: klíč rádia lze ztlumit', [$ra_wm_code, $ra_wm['ok'] ?? null], [200, true]);
+    [, $ra_w_muted] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id, $cookie_jar);
+    check('doporučení Wi-Fi: ztlumená položka je mezi ztlumenými, ne v seznamu',
+        [$ra_wifi_of($ra_w_muted) === null,
+            in_array('wifi_wpa2_only', array_map(fn (array $i): string => (string)$i['id'], $ra_w_muted['muted'] ?? []), true)],
+        [true, true]);
+    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = ?")->execute([$ra_id]);
+    $pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = ?")->execute([
+        json_encode($ra_wifi_details, JSON_UNESCAPED_UNICODE), $ra_id]);
+
+    // The mute. GET is refused, a missing token is refused, a non-admin is
+    // refused, an unknown rule id is refused - and only then does it work.
+    [$ra_code] = api_get_auth($base, 'action=router_recommendation_mute&monitor_id=' . $ra_id, $cookie_jar);
+    check('ztlumení: GET je 405', $ra_code, 405);
+    [$ra_code] = api_post($base, 'action=router_recommendation_mute',
+        ['monitor_id' => $ra_id, 'key' => 'fs_nearly_full:m:x', 'muted' => true], $cookie_jar, '');
+    check('ztlumení: bez CSRF tokenu 403', $ra_code, 403);
+    [$ra_code] = api_post($base, 'action=router_recommendation_mute',
+        ['monitor_id' => $ra_id, 'key' => 'nesmysl', 'muted' => true], $cookie_jar);
+    check('ztlumení: neznámé id pravidla je 400', $ra_code, 400);
+
+    $ra_key = (string)($ra['items'][0]['key'] ?? '');
+    $ra_audit_before = (int)$pdo->query("SELECT COUNT(*) FROM audit_log")->fetchColumn();
+    [$ra_code, $ra_mute] = api_post($base, 'action=router_recommendation_mute',
+        ['monitor_id' => $ra_id, 'key' => $ra_key, 'muted' => true, 'reason' => 'Vím o tom'], $cookie_jar);
+    check('ztlumení: uloží se', [$ra_code, $ra_mute['ok'] ?? null, $ra_mute['muted'] ?? null], [200, true, true]);
+    check_true('ztlumení: vznikne řádek v auditu',
+        (int)$pdo->query("SELECT COUNT(*) FROM audit_log")->fetchColumn() > $ra_audit_before);
+    [, $ra_after] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id, $cookie_jar);
+    $ra_muted_keys = array_map(fn (array $i): string => (string)$i['key'], $ra_after['muted'] ?? []);
+    check_true('ztlumení: položka se přesune do muted i s důvodem',
+        in_array($ra_key, $ra_muted_keys, true)
+        && !in_array($ra_key, array_map(fn (array $i): string => (string)$i['key'], $ra_after['items']), true)
+        && ($ra_after['muted'][0]['mute']['reason'] ?? null) === 'Vím o tom'
+        && ($ra_after['muted'][0]['mute']['by'] ?? '') !== ''
+        && ($ra_after['muted'][0]['mute']['at'] ?? null) !== null);
+    [$ra_code] = api_post($base, 'action=router_recommendation_mute',
+        ['monitor_id' => $ra_id, 'key' => $ra_key, 'muted' => false], $cookie_jar);
+    [, $ra_back] = api_get_auth($base, 'action=router_recommendations&monitor_id=' . $ra_id, $cookie_jar);
+    check('ztlumení: zrušení vrátí položku mezi items',
+        [$ra_code, in_array($ra_key, array_map(fn (array $i): string => (string)$i['key'], $ra_back['items']), true)],
+        [200, true]);
+
+    // storage_history: shape, nulls kept, days clamped.
+    [$ra_code, $ra_hist] = api_get_auth($base, 'action=storage_history&monitor_id=' . $ra_id . '&days=99999', $cookie_jar);
+    check('historie disků: 200, tvar a ořezaný počet dní',
+        [$ra_code, $ra_hist['monitorId'] ?? null, $ra_hist['days'] ?? null, is_array($ra_hist['disks'] ?? null)],
+        [200, $ra_id, 400, true]);
+
+    // wan_bottleneck + wan_settings_save.
+    [$ra_code, $ra_wan] = api_get_auth($base, 'action=wan_bottleneck&monitor_id=' . $ra_id, $cookie_jar);
+    check('rozbor WAN: 200 a oba směry mají verdikt',
+        [$ra_code, $ra_wan['verdict']['dl']['class'] ?? null, $ra_wan['verdict']['ul']['reason'] ?? null],
+        [200, 'inconclusive', 'not_enough_tests']);
+    [$ra_code] = api_get($base, 'action=wan_bottleneck&monitor_id=' . $ra_id);
+    check('rozbor WAN: bez přihlášení 401', $ra_code, 401);
+    [$ra_code] = api_post($base, 'action=wan_settings_save',
+        ['monitor_id' => $ra_id, 'plan_down_mbit' => 2000, 'plan_up_mbit' => 1000], $cookie_jar, '');
+    check('tarif WAN: bez CSRF tokenu 403', $ra_code, 403);
+    [$ra_code] = api_post($base, 'action=wan_settings_save',
+        ['monitor_id' => $ra_id, 'plan_down_mbit' => 0], $cookie_jar);
+    check('tarif WAN: hodnota mimo rozsah je 400, ne oříznutí', $ra_code, 400);
+    [$ra_code, $ra_save] = api_post($base, 'action=wan_settings_save',
+        ['monitor_id' => $ra_id, 'plan_down_mbit' => 2000, 'plan_up_mbit' => 1000, 'plan_ok_pct' => 60], $cookie_jar);
+    check('tarif WAN: uloží se a vrátí se zpátky',
+        [$ra_code, $ra_save['plan']['downMbit'] ?? null, $ra_save['plan']['okPct'] ?? null], [200, 2000, 60]);
+    check('tarif WAN: chybějící probe_enabled nechá souhlas být',
+        (int)$pdo->query("SELECT wan_probe_enabled FROM monitors WHERE id = " . (int)$ra_id)->fetchColumn(), 0);
+    [$ra_code, $ra_clear] = api_post($base, 'action=wan_settings_save',
+        ['monitor_id' => $ra_id, 'plan_down_mbit' => null, 'plan_up_mbit' => null, 'plan_ok_pct' => null], $cookie_jar);
+    // `?? ` would read a real null as "missing", and the difference between
+    // "no plan" and "a plan of zero" is the whole point of WAN 3.0.
+    check('tarif WAN: prázdná hodnota tarif smaže, nenastaví nulu',
+        [$ra_code, array_key_exists('downMbit', $ra_clear['plan'] ?? []), $ra_clear['plan']['downMbit']],
+        [200, true, null]);
+    $pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = ?")->execute([$ra_id]);
+}
+
+// --- What the digest costs at 120 routers (X13) -------------------------------
+//
+// The build runs on every cron minute from 08:00 to 12:00 until a send
+// succeeds, on shared hosting. The bound is therefore a number and not a
+// hope: at most 7 queries per chunk of 50 routers, and a router without a
+// spike costs nothing extra. Measured with the server's own SELECT counter,
+// so a rule that starts querying per router shows up here and not in
+// production.
+$selects = function () use ($pdo): int {
+    $row = $pdo->query("SHOW SESSION STATUS LIKE 'Com_select'")->fetch(PDO::FETCH_ASSOC);
+    return (int)($row['Value'] ?? 0);
+};
+$cost_ins = $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES (?, ?, 'openwrt', '10.9.0.1', 'up', 'Síť', ?)");
+$cost_details = json_encode(['agent_version' => '0.1.7', 'agent_last_seen' => time(),
+    'filesystems' => [['mount' => '/srv', 'fstype' => 'ext4', 'total_kb' => 1048576, 'used_pct' => 19.0, 'avail_kb' => 800000]]]);
+for ($i = 0; $i < 120; $i++) {
+    $cost_ins->execute([9000 + $i, 'Cost router ' . $i, $cost_details]);
+}
+// The counter also sees the two SHOW statements themselves; they are not
+// SELECTs, so nothing has to be subtracted.
+$cost_before = $selects();
+$cost_data = bk_digest_routers($pdo, false);
+$cost_used = $selects() - $cost_before;
+check_true('Cena digestu: 120 routerů se sestaví ve třech dávkách', count($cost_data['routers']) === 10 && $cost_data['more'] >= 110);
+// 1 list + 3 chunks x at most 7 (X13) + the second fetch of facts, which
+// is one more batch of at most 7 plus its own details query. The bound is
+// per CHUNK, so it does not move when a router is added. A chunk that
+// holds speed tests adds two outage queries; these routers have none.
+check_true('Cena digestu: nejvýše 7 dotazů na dávku po 50 routerech (' . $cost_used . ' celkem)', $cost_used <= 1 + 4 * 7 + 1);
+check_true('Cena digestu: routery bez špiček žádný dotaz navíc', $cost_used < 120);
+$pdo->exec("DELETE FROM monitors WHERE id >= 9000 AND id < 9120");
+check('Cena digestu: testovací routery po sobě uklidí',
+    (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE id >= 9000 AND id < 9120")->fetchColumn(), 0);
+
+// --- Retention of the router tables (X7) -------------------------------------
+//
+// Disk history, recommendation state and speed tests are the three tables of
+// this release that nothing else ever deletes from. The boundaries are tested
+// against a real database because every one of them is a day apart from a
+// deletion that cannot be undone, and because the mute exception ("a muted
+// item is never pruned") only exists in the WHERE clause.
+$pr_count = fn (string $sql): int => (int)$pdo->query($sql)->fetchColumn();
+$pr_disks = "SELECT COUNT(*) FROM storage_disks WHERE monitor_id = 2";
+$pr_days = "SELECT COUNT(*) FROM storage_disk_daily d JOIN storage_disks s ON s.id = d.disk_id WHERE s.monitor_id = 2";
+$pr_state = "SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2";
+$pr_speed = "SELECT COUNT(*) FROM speedtest_results WHERE monitor_id = 2";
+
+// A disk seen yesterday with one daily row just inside the window and one just
+// outside it, and a second disk that has not been seen for two years.
+$pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
+$pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+$pdo->prepare("DELETE FROM speedtest_results WHERE monitor_id = 2")->execute();
+$pr_add_disk = function (string $key, int $seen_days_ago) use ($pdo): int {
+    $st = $pdo->prepare(
+        "INSERT INTO storage_disks (monitor_id, disk_key, name, transport, first_seen, last_seen)
+         VALUES (2, ?, 'sda', 'sata', DATE_SUB(NOW(), INTERVAL 900 DAY), DATE_SUB(NOW(), INTERVAL ? DAY))"
+    );
+    $st->execute([$key, $seen_days_ago]);
+    return (int)$pdo->lastInsertId();
+};
+$pr_add_day = function (int $disk_id, int $days_ago) use ($pdo): void {
+    $st = $pdo->prepare(
+        "INSERT INTO storage_disk_daily (disk_id, day, samples, temp_max)
+         VALUES (?, DATE_SUB(CURDATE(), INTERVAL ? DAY), 1, 40)"
+    );
+    $st->execute([$disk_id, $days_ago]);
+};
+$pr_live = $pr_add_disk('pruneliveaaaaaaa', 1);
+$pr_gone = $pr_add_disk('prunegoneaaaaaaa', 731);
+$pr_add_day($pr_live, 729);
+$pr_add_day($pr_live, 731);
+$pr_add_day($pr_gone, 3);
+
+// Recommendation state: a live item, an unmuted one just inside 90 days, an
+// unmuted one past it and a muted one that is years old.
+$pr_add_state = function (string $key, ?int $seen_days_ago, bool $muted) use ($pdo): void {
+    $st = $pdo->prepare(
+        "INSERT INTO router_rec_state (monitor_id, rec_key, rule_id, active, severity, first_seen, last_seen, muted_at)
+         VALUES (2, ?, 'disk_temp_warm', 1, 'warning', DATE_SUB(NOW(), INTERVAL 400 DAY),
+                 " . ($seen_days_ago === null ? "NULL" : "DATE_SUB(NOW(), INTERVAL ? DAY)") . ",
+                 " . ($muted ? "NOW()" : "NULL") . ")"
+    );
+    $st->execute($seen_days_ago === null ? [$key] : [$key, $seen_days_ago]);
+};
+$pr_add_state('disk_temp_warm:d:live', 1, false);
+$pr_add_state('disk_temp_warm:d:edge', 89, false);
+$pr_add_state('disk_temp_warm:d:old', 91, false);
+$pr_add_state('disk_temp_warm:d:muted', 400, true);
+$pr_add_state('disk_temp_warm:d:never', null, false);
+
+$pr_before = [$pr_count($pr_disks), $pr_count($pr_days), $pr_count($pr_state)];
+$pr_r = bk_prune_router_health($pdo);
+$pr_after = [$pr_count($pr_disks), $pr_count($pr_days), $pr_count($pr_state)];
+
+check('Retence: denní řádek disku z -731 dní zmizí, z -729 zůstane',
+    $pdo->query("SELECT DATEDIFF(CURDATE(), day) FROM storage_disk_daily d JOIN storage_disks s ON s.id = d.disk_id WHERE s.monitor_id = 2 ORDER BY day")->fetchAll(PDO::FETCH_COLUMN),
+    [729]);
+check('Retence: disk neviděný dva roky zmizí i se svými dny (kaskáda)',
+    (int)$pdo->query("SELECT COUNT(*) FROM storage_disks WHERE monitor_id = 2 AND disk_key = 'prunegoneaaaaaaa'")->fetchColumn(), 0);
+// The counts are what the three statements deleted THEMSELVES: the day row of
+// the two-year-old disk disappears as well, but through the FK cascade, so it
+// is in the table difference (3 -> 1) and not in `disk_daily` (1).
+check('Retence: vrácené počty sedí na to, co opravdu zmizelo',
+    [$pr_r['disk_daily'], $pr_r['disks'], $pr_r['rec_state'], $pr_before[1] - $pr_after[1]],
+    [1, $pr_before[0] - $pr_after[0], $pr_before[2] - $pr_after[2], 2]);
+check('Retence: ze stavů doporučení zůstane živý, hraničních 89 dní a ztlumený',
+    $pdo->query("SELECT rec_key FROM router_rec_state WHERE monitor_id = 2 ORDER BY rec_key")->fetchAll(PDO::FETCH_COLUMN),
+    ['disk_temp_warm:d:edge', 'disk_temp_warm:d:live', 'disk_temp_warm:d:muted']);
+check('Retence: ztlumený stav se nemaže ani po 400 dnech',
+    (int)$pdo->query("SELECT COUNT(*) FROM router_rec_state WHERE monitor_id = 2 AND rec_key = 'disk_temp_warm:d:muted'")->fetchColumn(), 1);
+check('Retence: druhé volání už nemá co mazat', bk_prune_router_health($pdo), ['disk_daily' => 0, 'disks' => 0, 'rec_state' => 0]);
+
+// Speed tests: the row lives 400 days, the per-test diagnostics 90.
+$pr_add_speed = function (int $days_ago, ?string $diag) use ($pdo): void {
+    $st = $pdo->prepare(
+        "INSERT INTO speedtest_results (monitor_id, measured_at, download_mbps, upload_mbps, source, diagnostics)
+         VALUES (2, DATE_SUB(NOW(), INTERVAL ? DAY), 300.0, 30.0, 'turris', ?)"
+    );
+    $st->execute([$days_ago, $diag]);
+};
+$pr_add_speed(401, '{"cpu_max_pct":42}');
+$pr_add_speed(399, '{"cpu_max_pct":43}');
+$pr_add_speed(91, '{"cpu_max_pct":44}');
+$pr_add_speed(89, '{"cpu_max_pct":45}');
+$pr_w = bk_prune_wan_data($pdo);
+check('Retence WAN: test starší 400 dní zmizí, mladší zůstane',
+    $pdo->query("SELECT DATEDIFF(NOW(), measured_at) FROM speedtest_results WHERE monitor_id = 2 ORDER BY measured_at")->fetchAll(PDO::FETCH_COLUMN),
+    [399, 91, 89]);
+check('Retence WAN: diagnostika se po 90 dnech vymaže, měření zůstane',
+    $pdo->query("SELECT DATEDIFF(NOW(), measured_at) FROM speedtest_results WHERE monitor_id = 2 AND diagnostics IS NULL")->fetchAll(PDO::FETCH_COLUMN),
+    [399, 91]);
+check('Retence WAN: diagnostika mladší 90 dní zůstane',
+    (int)$pdo->query("SELECT COUNT(*) FROM speedtest_results WHERE monitor_id = 2 AND diagnostics IS NOT NULL")->fetchColumn(), 1);
+check('Retence WAN: vrácené počty', [$pr_w['speedtests'], $pr_w['diagnostics']], [1, 2]);
+check('Retence WAN: druhé volání už nemá co mazat', bk_prune_wan_data($pdo), ['speedtests' => 0, 'diagnostics' => 0]);
+$pdo->prepare("DELETE FROM storage_disks WHERE monitor_id = 2")->execute();
+$pdo->prepare("DELETE FROM router_rec_state WHERE monitor_id = 2")->execute();
+$pdo->prepare("DELETE FROM speedtest_results WHERE monitor_id = 2")->execute();
+
+// --- A report the server cannot read --------------------------------------
+// One invalid value used to void the whole minute: a bare 400 before the
+// monitor was even known, nothing logged, and the router looked switched off.
+$ru_post = function (string $body) use ($base): int {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $body,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    curl_exec($ch);
+    return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+};
+$ru_details = function () use ($pdo): array {
+    $d = json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true);
+    return is_array($d) ? $d : [];
+};
+$ru_issues = function () use ($pdo, $ru_details): array {
+    $row = $pdo->query("SELECT * FROM monitors WHERE id = 2")->fetch();
+    return array_column(bk_get_collection_issues($row, $ru_details()), null, 'type');
+};
+$ru_json = (string)json_encode($agent_payload + ['hostname' => 'kavarna-@@'], JSON_UNESCAPED_UNICODE);
+check('hlášení s bajtem v Latin-1 server přijme', $ru_post(str_replace('@@', "caf\xE9", $ru_json)), 200);
+check('a bajt uloží jako U+FFFD', $ru_details()['hostname'] ?? null, "kavarna-caf\u{FFFD}");
+
+check('nečitelné hlášení dostane dál 400', $ru_post(substr($ru_json, 0, -1)), 400);
+$ru_first = $ru_details()['report_unreadable'] ?? [];
+check('a monitor si důvod zapíše', [$ru_first['reason'] ?? null, $ru_first['bytes'] ?? null],
+    ['Syntax error', strlen($ru_json) - 1]);
+check_true('hlásí se jako problém se sběrem dat, se stejným důvodem',
+    str_contains((string)($ru_issues()['report_unreadable']['message'] ?? ''), 'Syntax error'));
+// The streak keeps its start and does not log again within the hour.
+$pdo->prepare("UPDATE monitors SET last_details = JSON_SET(last_details,
+    '$.report_unreadable.since', ?, '$.report_unreadable.logged_at', ?) WHERE id = 2")
+    ->execute([(int)$ru_first['at'] - 300, (int)$ru_first['at'] - 60]);
+$ru_post('{"agent_key": "' . $agent_key . '", "cpu": 007}');
+$ru_next = $ru_details()['report_unreadable'] ?? [];
+check('další nečitelné hlášení drží začátek i hodinový log',
+    [$ru_next['since'] ?? null, $ru_next['logged_at'] ?? null], [(int)$ru_first['at'] - 300, (int)$ru_first['at'] - 60]);
+
+check('první čitelné hlášení projde', $ru_post((string)json_encode($agent_payload, JSON_UNESCAPED_UNICODE)), 200);
+check_false('a problém se sběrem zmizí', isset($ru_issues()['report_unreadable']));
+check_false('i záznam v last_details', isset($ru_details()['report_unreadable']));
+$ru_marked = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE last_details LIKE '%report_unreadable%'")->fetchColumn();
+check('nečitelné hlášení bez známého klíče dostane 400', $ru_post('{"agent_key": "' . str_repeat('f', 32) . '", "cpu": }'), 400);
+check('a nezapíše se k žádnému monitoru', $ru_marked(), 0);
+
+// --- Time zone of the database session -------------------------------------
+// db.php puts the SESSION on PHP's clock. Without that, every comparison of
+// SQL NOW() / CURDATE() with a time formatted in PHP silently depends on the
+// database running in PHP's zone: a UTC container with TIMEZONE =
+// 'Europe/Prague' reported "checks have not run for 120 minutes" for EVERY
+// monitor, a two-hour shift and not one error anywhere. The probe runs as a
+// separate process because it measures what db.php does on connect (the
+// suite opens its own PDO, which db.php never sees).
+$tz_probe_file = sys_get_temp_dir() . '/bk_tz_probe_' . getmypid() . '.php';
+file_put_contents($tz_probe_file, <<<'PROBE'
+<?php
+require getenv('BK_TZ_DB');
+$fixed = $pdo->query("SELECT @@session.time_zone AS tz, NOW() AS now")->fetch();
+$clock = bk_db_clock($pdo);
+// Druhé spojení BEZ opravy: ukazuje, o kolik se obě strany rozcházely.
+$raw_port = defined('DB_PORT') ? (int)DB_PORT : 3306;
+$raw = new PDO("mysql:host=" . DB_HOST . ";port={$raw_port};dbname=" . DB_NAME . ";charset=utf8mb4",
+    DB_USER, DB_PASS, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+$plain = $raw->query("SELECT NOW() AS now, TIMESTAMPDIFF(SECOND, UTC_TIMESTAMP(), NOW()) AS srv_offset")->fetch();
+echo '<<TZ>>' . json_encode([
+    'tz'            => $fixed['tz'],
+    'agrees'        => $clock['agrees'],
+    'php_offset'    => (int)date('Z'),
+    'skew'          => strtotime($fixed['now']) - time(),
+    'raw_skew'      => strtotime($plain['now']) - time(),
+    'server_offset' => (int)$plain['srv_offset'],
+]);
+PROBE
+);
+$tz_out = (string)shell_exec('BK_TZ_DB=' . escapeshellarg($root . '/db.php')
+    . ' php ' . escapeshellarg($tz_probe_file) . ' 2>&1');
+@unlink($tz_probe_file);
+$tz = preg_match('/<<TZ>>(\{.*\})/s', $tz_out, $tz_m) ? (json_decode($tz_m[1], true) ?: []) : [];
+
+// Not "the session runs on today's offset": that one read every summer
+// TIMESTAMP an hour off after the October switch. What counts is that a
+// winter and a summer time convert to the same instants as in PHP.
+check('zimní i letní čas převede relace stejně jako PHP',
+    [$tz['tz'] ?? trim($tz_out), $tz['agrees'] ?? null], [$tz['tz'] ?? trim($tz_out), true]);
+check_true('NOW() z databáze je stejný okamžik jako time() v PHP',
+    isset($tz['skew']) && abs($tz['skew']) <= 2);
+// Identita, která platí všude a pojmenuje chybu: neopravené spojení se míjí
+// přesně o rozdíl zón databáze a PHP (v UTC kontejneru s Prahou o -7200 s).
+check_true('bez nastavení zóny se NOW() míjí přesně o rozdíl zón',
+    isset($tz['raw_skew'], $tz['server_offset'], $tz['php_offset'])
+        && abs($tz['raw_skew'] - ($tz['server_offset'] - $tz['php_offset'])) <= 2);
+
+// Each branch of bk_db_clock_sync, from a session that disagrees with PHP.
+// The last resort has to be exactly today's offset: never worse than before.
+$tzc = new PDO("mysql:host={$db_host};port={$db_port};charset=utf8mb4", $db_user, $db_pass,
+    [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]);
+$tzc->exec("SET time_zone = '+05:00'");
+check('zónu, kterou databáze nezná, nahradí dnešní posun',
+    [bk_db_clock_sync($tzc, 'Bk/Nowhere'), $tzc->query('SELECT @@session.time_zone')->fetchColumn()], [date('P'), date('P')]);
+$tzc->exec("SET time_zone = '+05:00'");
+check('zónu PHP, kterou databáze zná, nastaví jménem', bk_db_clock_sync($tzc, 'Europe/Prague'), 'Europe/Prague');
+check_true('a s ní sedí zimní i letní čas', bk_db_clock($tzc)['agrees']);
+// A name the server knows but converts differently from PHP (stale time-zone
+// tables do that; UTC stands in for them here) is not kept either.
+$tzc->exec("SET time_zone = '+05:00'");
+check('zónu, kterou databáze zná, ale převádí jinak než PHP, nahradí dnešní posun',
+    [bk_db_clock_sync($tzc, 'UTC'), $tzc->query('SELECT @@session.time_zone')->fetchColumn()], [date('P'), date('P')]);
+$tzc->exec("SET time_zone = 'Europe/Prague'");
+check('zóna, která s PHP už souhlasí, zůstane', bk_db_clock_sync($tzc, 'Bk/Nowhere'), 'Europe/Prague');
+$tzc = null;
+
+// --- Router release migration (schema 20260920) ---------------------------
+// The schema lint compares migrations.php with schema.sql as TEXT. Only a real run on
+// an older database shows that the block at the end of the migrations works:
+// that the speedtest columns arrive although their table is created late, and
+// that the repair UPDATEs run after the column they filter on exists.
+// Keep this block at the END of the suite: it drops and re-creates the router
+// tables, so rows an earlier test stored in them are gone afterwards.
+$column_exists = function (string $table, string $column) use ($pdo, $db_name): bool {
+    $st = $pdo->prepare("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+    $st->execute([$db_name, $table, $column]);
+    return (int)$st->fetchColumn() === 1;
+};
+$table_exists = function (string $table) use ($pdo, $db_name): bool {
+    $st = $pdo->prepare("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?");
+    $st->execute([$db_name, $table]);
+    return (int)$st->fetchColumn() === 1;
+};
+$speedtest_row = function (string $measured_at) use ($pdo): array {
+    $st = $pdo->prepare("SELECT download_mbps, upload_mbps, source FROM speedtest_results WHERE monitor_id = 2 AND measured_at = ?");
+    $st->execute([$measured_at]);
+    $row = $st->fetch() ?: [];
+    foreach (['download_mbps', 'upload_mbps'] as $k) {
+        $row[$k] = isset($row[$k]) ? round((float)$row[$k], 4) : null;
+    }
+    return $row;
+};
+
+// Back to the shape of 20260916: no router tables, none of the new columns.
+foreach (['storage_disk_daily', 'storage_disks', 'router_rec_state'] as $old_missing) {
+    $pdo->exec("DROP TABLE IF EXISTS `{$old_missing}`");
+}
+$pdo->exec("ALTER TABLE vps_metrics DROP COLUMN wifi_busy_5g, DROP COLUMN wan_link_flaps, DROP COLUMN clock_skew_s");
+$pdo->exec("ALTER TABLE monitors DROP COLUMN wan_plan_ok_pct, DROP COLUMN wan_probe_enabled");
+$pdo->exec("ALTER TABLE speedtest_results DROP COLUMN bytes_received, DROP COLUMN diagnostics");
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+// What agents before 0.1.7 stored: a line of 1000 Mbit/s and more divided once
+// too often (0.0148), next to honest results.
+$old_speedtest = $pdo->prepare("INSERT INTO speedtest_results (monitor_id, measured_at, download_mbps, upload_mbps, source) VALUES (2, ?, ?, ?, ?)");
+$old_speedtest->execute(['2026-09-01 05:00:00', 0.0148, 0.0087, 'librespeed']);
+$old_speedtest->execute(['2026-09-02 05:00:00', 0.5, 0.0121, 'librespeed']);
+$old_speedtest->execute(['2026-09-03 05:00:00', 940.25, 48.5, 'librespeed']);
+
+// Those rows are older than both speed test fixes.
+$forget_data_fix('speedtest-source-turris');
+$forget_data_fix('speedtest-below-0.1-mbps');
+// A fresh install from the older schema.sql held the checked_at index and the
+// asset_id foreign key twice, an unnamed copy next to the migration's (R215).
+$r215_keys = function () use ($pdo, $db_name): array {
+    $ix = $pdo->prepare("SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'monitor_logs'
+        GROUP BY INDEX_NAME HAVING COUNT(*) = 1 AND MAX(COLUMN_NAME) = 'checked_at' ORDER BY INDEX_NAME");
+    $ix->execute([$db_name]);
+    $fk = $pdo->prepare("SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'monitors'
+        AND COLUMN_NAME = 'asset_id' AND REFERENCED_TABLE_NAME = 'assets' ORDER BY CONSTRAINT_NAME");
+    $fk->execute([$db_name]);
+    return [$ix->fetchAll(PDO::FETCH_COLUMN), $fk->fetchAll(PDO::FETCH_COLUMN)];
+};
+if (!in_array('checked_at', $r215_keys()[0], true)) {
+    $pdo->exec("CREATE INDEX `checked_at` ON monitor_logs (checked_at)");
+}
+$pdo->exec("ALTER TABLE monitors ADD CONSTRAINT `monitors_ibfk_r215` FOREIGN KEY (asset_id) REFERENCES assets(id) ON DELETE SET NULL");
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check_true('migrace routerového vydání doběhla', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn() !== 'test-old');
+check('migrace nechá jen pojmenovaný index checked_at a cizí klíč asset_id', $r215_keys(), [['idx_logs_checked_at'], ['fk_monitors_asset_id']]);
+check('migrace doplní starší databázi sloupce metrik, monitoru i měření rychlosti', [
+    $column_exists('vps_metrics', 'wifi_busy_5g'), $column_exists('vps_metrics', 'wan_link_flaps'), $column_exists('vps_metrics', 'clock_skew_s'),
+    $column_exists('monitors', 'wan_plan_ok_pct'), $column_exists('monitors', 'wan_probe_enabled'),
+    $column_exists('speedtest_results', 'bytes_received'), $column_exists('speedtest_results', 'diagnostics'),
+], [true, true, true, true, true, true, true]);
+check('migrace založí tabulky disků a stavu doporučení', [
+    $table_exists('storage_disks'), $table_exists('storage_disk_daily'), $table_exists('router_rec_state'),
+], [true, true, true]);
+check_false('tabulka grantů vlastního měření do téhle vlny nepatří', $table_exists('wan_probe_grants'));
+check('souhlas s vlastním měřením je po migraci vypnutý', (int)$pdo->query("SELECT wan_probe_enabled FROM monitors WHERE id = 2")->fetchColumn(), 0);
+check('migrace udělá z poškozené rychlosti 0.0148 neznámou a zdroj přepíše na turris', $speedtest_row('2026-09-01 05:00:00'), ['download_mbps' => null, 'upload_mbps' => null, 'source' => 'turris']);
+check('migrace nechá 0.5 být a maže jen poškozený sloupec', $speedtest_row('2026-09-02 05:00:00'), ['download_mbps' => 0.5, 'upload_mbps' => null, 'source' => 'turris']);
+check('zdravé měření migrace nezmění', $speedtest_row('2026-09-03 05:00:00'), ['download_mbps' => 940.25, 'upload_mbps' => 48.5, 'source' => 'turris']);
+
+// Who wrote a check row (20261101r024): an older database gains the column
+// on the next bump, and its rows stay without a source (they count as before).
+$pdo->exec("ALTER TABLE monitor_logs DROP COLUMN source");
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check('migrace doplní monitor_logs.source a staré řádky nechá bez zdroje',
+    [$column_exists('monitor_logs', 'source'), (int)$pdo->query("SELECT COUNT(*) FROM monitor_logs WHERE source IS NOT NULL")->fetchColumn()], [true, 0]);
+
+// Agent 0.1.9: a database from before the release gains the CPU column on the
+// next schema bump. Without it every report's metrics INSERT would fail.
+$pdo->exec("ALTER TABLE vps_metrics DROP COLUMN agent_prev_cpu_ms");
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check('migrace doplní starší databázi sloupec CPU času agenta (0.1.9)', $column_exists('vps_metrics', 'agent_prev_cpu_ms'), true);
+
+// metric_annotations was only ever in schema.sql: production, set up before
+// it, lacked the table and every annotations request failed with 1146. The
+// migration creates it with the very definition schema.sql gives (the test
+// database was imported from schema.sql), and a second bump leaves it alone.
+$ann_create_sql = function () use ($pdo, $table_exists): string {
+    if (!$table_exists('metric_annotations')) {
+        return '';
+    }
+    $row = $pdo->query("SHOW CREATE TABLE metric_annotations")->fetch(PDO::FETCH_NUM);
+    return (string)preg_replace('/ AUTO_INCREMENT=\d+/', '', (string)($row[1] ?? ''));
+};
+$ann_from_schema = $ann_create_sql();
+$pdo->exec("DROP TABLE metric_annotations");
+check_false('tabulka poznámek ke grafům před migrací chybí', $table_exists('metric_annotations'));
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check('migrace založí chybějící tabulku poznámek ke grafům jako schema.sql', [$table_exists('metric_annotations'),
+    $ann_from_schema !== '' && $ann_create_sql() === $ann_from_schema], [true, true]);
+if ($table_exists('metric_annotations')) {
+    $pdo->exec("INSERT INTO metric_annotations (monitor_id, metric_key, timestamp, note) VALUES (2, 'cpu', NOW(), 'po migraci')");
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    check('opakovaná migrace tabulku poznámek nechá i s řádky', (int)$pdo->query("SELECT COUNT(*) FROM metric_annotations WHERE note = 'po migraci'")->fetchColumn(), 1);
+    $pdo->exec("DELETE FROM metric_annotations WHERE note = 'po migraci'");
+}
+
+// A later schema bump does not run the fixes again: a result that a 0.1.7
+// agent really measured (it carries bytes_received) stays, however small,
+// and so do the rows the fixes repaired.
+$pdo->exec("INSERT INTO speedtest_results (monitor_id, measured_at, download_mbps, upload_mbps, source, bytes_received) VALUES (2, '2026-09-04 05:00:00', 0.05, 0.04, 'agent', 93750)");
+$force_schema_bump();
+api_get($base, 'action=public_status');
+check_true('obě opravy rychlostí jsou zase v záznamu',
+    !array_diff(['speedtest-source-turris', 'speedtest-below-0.1-mbps'], $data_fixes_applied()));
+check('opakovaná migrace nesmaže malou hodnotu, kterou agent 0.1.7 opravdu naměřil', $speedtest_row('2026-09-04 05:00:00'), ['download_mbps' => 0.05, 'upload_mbps' => 0.04, 'source' => 'agent']);
+check('opakovaná migrace nechá dřív opravené řádky být', $speedtest_row('2026-09-02 05:00:00'), ['download_mbps' => 0.5, 'upload_mbps' => null, 'source' => 'turris']);
+$pdo->exec("DELETE FROM speedtest_results WHERE monitor_id = 2");
+
+// --- The monitor type cpanel is retired (D7, M28) --------------------------
+// A database from before the data fix still holds a cpanel monitor. The fix
+// makes it a web check of its host with the exporter's address as
+// cpanel_stats_url, records its id and never runs again: a cpanel row that
+// turns up later stays as it is. Nothing makes one: save_monitor maps an
+// older client's cpanel the same way and refuses a target without a host.
+$cp_row = fn (int $id): array => $pdo->query("SELECT type, target, cpanel_stats_url FROM monitors WHERE id = {$id}")->fetch(PDO::FETCH_NUM) ?: [];
+$cp_saved_id = 0;
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+            (264, 'D7 hosting', 'cpanel', 'https://hosting.example.test/cpanel_stats.php?key=d7-test', 'unknown', 'Test')");
+try {
+    $forget_data_fix('cpanel-monitors-to-web');
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    check('oprava dat převede monitor cpanel na web hostitele s adresou exportéru', [
+        $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn() !== 'test-old', $cp_row(264),
+        in_array('cpanel-monitors-to-web', $data_fixes_applied(), true),
+    ], [true, ['web', 'https://hosting.example.test', 'https://hosting.example.test/cpanel_stats.php?key=d7-test'], true]);
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+                (265, 'D7 pozdě', 'cpanel', 'https://late.example.test/cpanel_stats.php', 'unknown', 'Test')");
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    check('další bump ji nespustí: převod proběhne jen jednou', [
+        $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn() !== 'test-old', $cp_row(265)[0] ?? null,
+    ], [true, 'cpanel']);
+
+    [$cp_code, $cp_saved] = api_post($base, 'action=save_monitor', [
+        'id' => 0, 'name' => 'D7 klient', 'type' => 'cpanel', 'target' => 'https://client.example.test/cpanel_stats.php?key=d7',
+    ], $cookie_jar);
+    $cp_saved_id = (int)($cp_saved['id'] ?? 0);
+    check('save_monitor: typ cpanel staršího klienta uloží web hostitele s adresou exportéru', [$cp_code, $cp_row($cp_saved_id)],
+        [200, ['web', 'https://client.example.test', 'https://client.example.test/cpanel_stats.php?key=d7']]);
+    [$cp_bad_code, $cp_bad] = api_post($base, 'action=save_monitor', ['id' => 0, 'name' => 'D7 bez hostitele', 'type' => 'cpanel', 'target' => 'cpanel_stats.php'], $cookie_jar);
+    check('save_monitor: typ cpanel bez hostitele je 400 a nic neuloží', [
+        $cp_bad_code, str_contains((string)($cp_bad['error'] ?? ''), 'cpanel_stats_url'),
+        (int)$pdo->query("SELECT COUNT(*) FROM monitors WHERE name = 'D7 bez hostitele'")->fetchColumn(),
+    ], [400, true, 0]);
+} finally {
+    $cp_asset = $pdo->query("SELECT asset_id FROM monitors WHERE id = {$cp_saved_id}")->fetchColumn();
+    $pdo->exec("DELETE FROM monitors WHERE id IN (264, 265, {$cp_saved_id})");
+    if ($cp_asset) {
+        $pdo->exec("DELETE FROM assets WHERE id = " . (int)$cp_asset);
+    }
+}
+
+// =======================================================================
+// Outgoing message log - one row per attempt, written inside send_email()
+// =======================================================================
+// Only alerts used to be logged, so "did that invitation e-mail go out?" had
+// no answer. These checks run against a real database and a real (failing)
+// SMTP server, because the interesting half is the failure.
+check('migrace doplní protokolu zpráv druh, předmět a způsob odeslání', [
+    $column_exists('notification_log', 'kind'),
+    $column_exists('notification_log', 'subject'),
+    $column_exists('notification_log', 'method'),
+], [true, true, true]);
+check('a výsledek doručení s odpovědí poskytovatele', [
+    $column_exists('notification_log', 'delivery'),
+    $column_exists('notification_log', 'provider_reply'),
+], [true, true]);
+
+$pdo->exec("DELETE FROM notification_log");
+
+// A closed privileged port on loopback refuses the connection at once: nothing
+// is really sent anywhere and the failure looks the same on every machine.
+// Port 1 deliberately - an unprivileged process cannot occupy it, so the test
+// cannot accidentally meet a listening server and wait out PHPMailer's timeout.
+$set_setting('smtp_host', '127.0.0.1');
+$set_setting('smtp_port', '1');
+$set_setting('smtp_user', 'odesilatel@example.invalid');
+$set_setting('smtp_pass', 'tajne');
+
+$mail_kinds = ['invitation', 'password_reset', 'digest', 'subscriber_confirm', 'test', 'daily_reminder'];
+$secret_body = '<p>TAJNE-TELO-ZPRAVY</p>';
+$claimed_sent = 0;
+foreach ($mail_kinds as $mk) {
+    if (send_email('prijemce-' . $mk . '@example.invalid', 'Předmět ' . $mk, $secret_body, [], ['kind' => $mk])) {
+        $claimed_sent++;
+    }
+}
+check('neodeslaná zpráva se nehlásí jako odeslaná', $claimed_sent, 0);
+
+$log_rows = $pdo->query("SELECT kind, channel, recipient, subject, ok, error_message, method, status, delivery, provider_reply
+                         FROM notification_log ORDER BY id")->fetchAll();
+check('každý pokus o odeslání má v protokolu právě jeden řádek', count($log_rows), count($mail_kinds));
+check('a každý zná svůj druh zprávy', array_column($log_rows, 'kind'), $mail_kinds);
+check('kanálem je e-mail', array_values(array_unique(array_column($log_rows, 'channel'))), ['email']);
+check('bez události monitoru se stavem stává druh zprávy', array_column($log_rows, 'status'), $mail_kinds);
+check('adresáta protokol drží', $log_rows[0]['recipient'] ?? null, 'prijemce-invitation@example.invalid');
+check('předmět protokol drží', $log_rows[0]['subject'] ?? null, 'Předmět invitation');
+check('selhání je zapsané jako selhání', array_values(array_unique(array_map('intval', array_column($log_rows, 'ok')))), [0]);
+check_true('a nese text chyby, ne prázdno',
+    str_contains((string)($log_rows[0]['error_message'] ?? ''), 'SMTP'));
+// A failed attempt honestly knows no delivery route - claiming 'smtp' because
+// SMTP was tried would turn the column into a guess.
+// array_key_exists, ne ?? - fallback by pod testem zaměnil NULL za hodnotu.
+check_true('u selhání zůstává způsob odeslání neznámý',
+    array_key_exists('method', $log_rows[0] ?? []) && $log_rows[0]['method'] === null);
+check('odmítnuté SMTP je zapsané jako neodesláno, ne jako nepotvrzené',
+    array_values(array_unique(array_column($log_rows, 'delivery'))), ['failed']);
+// PHPMailer names the recipient in some refusals; the row keeps it in its own
+// column, so the reason never has to.
+check_false('důvod neopakuje adresu příjemce',
+    str_contains((string)($log_rows[0]['error_message'] ?? ''), 'prijemce-invitation@example.invalid'));
+
+$body_leak = (int)$pdo->query("SELECT COUNT(*) FROM notification_log
+    WHERE subject LIKE '%TAJNE-TELO%' OR error_message LIKE '%TAJNE-TELO%'
+       OR recipient LIKE '%TAJNE-TELO%' OR status LIKE '%TAJNE-TELO%'")->fetchColumn();
+check('tělo zprávy se do protokolu nikdy neukládá', $body_leak, 0);
+
+// The other half: a confirmed delivery keeps the route it really used.
+bk_log_notification($pdo, null, 'digest', 'email', 'admin@example.invalid', true, null, 'digest', 'Týdenní přehled', 'smtp');
+$ok_row = $pdo->query("SELECT ok, method, error_message FROM notification_log ORDER BY id DESC LIMIT 1")->fetch();
+check('potvrzené odeslání má ok = 1', (int)($ok_row['ok'] ?? -1), 1);
+check('a pojmenuje ověřenou cestu', $ok_row['method'] ?? null, 'smtp');
+check_true('a nevymýšlí si chybu',
+    array_key_exists('error_message', $ok_row ?: []) && $ok_row['error_message'] === null);
+
+$pdo->exec("DELETE FROM notification_log");
+foreach (['smtp_host', 'smtp_user', 'smtp_pass'] as $smtp_key) {
+    $set_setting($smtp_key, '');
+}
+$set_setting('smtp_port', '587');
+
+// Retence protokolu: 180 dnů. Hranice se testuje z obou stran, protože chyba
+// o den se pozná až tím, že důkaz o odeslání zmizel dřív, než na něj došlo.
+$pdo->exec("DELETE FROM notification_log");
+foreach ([
+    'cerstvy' => 'DATE_SUB(NOW(), INTERVAL 1 HOUR)',
+    'tesne_uvnitr' => 'DATE_ADD(DATE_SUB(NOW(), INTERVAL 180 DAY), INTERVAL 1 MINUTE)',
+    'tesne_venku' => 'DATE_SUB(DATE_SUB(NOW(), INTERVAL 180 DAY), INTERVAL 1 MINUTE)',
+    'davny' => 'DATE_SUB(NOW(), INTERVAL 400 DAY)',
+] as $ret_key => $ret_when) {
+    $pdo->exec("INSERT INTO notification_log (monitor_id, status, channel, recipient, ok, kind, subject, created_at)
+                VALUES (NULL, '', 'email', '{$ret_key}@example.invalid', 1, 'digest', 'Retence', {$ret_when})");
+}
+$ret_result = bk_prune_notification_log($pdo);
+check('retence smaže jen řádky za hranicí 180 dnů', $ret_result['deleted'], 2);
+$ret_left = $pdo->query("SELECT recipient FROM notification_log ORDER BY recipient")->fetchAll(PDO::FETCH_COLUMN);
+check('a nechá ty uvnitř, včetně řádku minutu před hranicí', $ret_left, ['cerstvy@example.invalid', 'tesne_uvnitr@example.invalid']);
+// Kratší retence je volba volajícího, ne přepsaná konstanta - test si ji smí
+// zavolat, aniž by čekal půl roku.
+check('kratší retence se řídí parametrem', bk_prune_notification_log($pdo, 1)['deleted'], 1);
+check_true('a nechá to, co je mladší než den', (int)$pdo->query("SELECT COUNT(*) FROM notification_log")->fetchColumn() === 1);
+$pdo->exec("DELETE FROM notification_log");
+
+/**
+ * One raw request that keeps the response headers.
+ *
+ * @return array{0: int, 1: string, 2: string} status, headers, body
+ */
+function bk_raw_request(string $url, array $headers = [], ?string $post_body = null): array {
+    $ch = curl_init($url);
+    $opts = [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HEADER => true,
+        CURLOPT_HTTPHEADER => $headers,
+        CURLOPT_TIMEOUT => 15,
+    ];
+    if ($post_body !== null) {
+        $opts[CURLOPT_POST] = true;
+        $opts[CURLOPT_POSTFIELDS] = $post_body;
+    }
+    curl_setopt_array($ch, $opts);
+    $raw = (string)curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    $size = (int)curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+    return [$code, substr($raw, 0, $size), substr($raw, $size)];
+}
+
+// =======================================================================
+// The session cookie carries HttpOnly and SameSite (W1-H1).
+//
+// The deployed config.php starts the session without its own cookie block,
+// and index.php started it even before config.php, so the admin cookie went
+// out bare. db.php now sets the flags before config.php runs; this suite's
+// config.php is exactly such a bare one, which makes it the right witness.
+// =======================================================================
+foreach (['api.php?action=session' => 'API', 'index.php' => 'veřejná stránka', 'admin.php' => 'administrace'] as $ck_path => $ck_label) {
+    [, $ck_head] = bk_raw_request($base . '/' . $ck_path);
+    preg_match('/^set-cookie:\s*(PHPSESSID=[^\r\n]*)/mi', $ck_head, $ck_m);
+    $ck_cookie = $ck_m[1] ?? '';
+    check_true("{$ck_label}: cookie relace přijde", $ck_cookie !== '');
+    check_true("{$ck_label}: cookie relace má HttpOnly", (bool)preg_match('/;\s*HttpOnly/i', $ck_cookie));
+    check_true("{$ck_label}: cookie relace má SameSite=Lax", (bool)preg_match('/;\s*SameSite=Lax/i', $ck_cookie));
+}
+[, $ck_https_head] = bk_raw_request($base . '/api.php?action=session', ['X-Forwarded-Proto: https']);
+preg_match('/^set-cookie:\s*(PHPSESSID=[^\r\n]*)/mi', $ck_https_head, $ck_m);
+check_true('za HTTPS proxy má cookie relace i Secure', (bool)preg_match('/;\s*Secure/i', $ck_m[1] ?? ''));
+
+// =======================================================================
+// Availability in time, through the real tables (W1-B1).
+//
+// run_tests.php pins the arithmetic without a database; this is the path the
+// numbers really take: the rows cron and the agents write, uptime_windows,
+// the cron rollup into uptime_daily and the 30-day strip. A router reported
+// every five minutes for twelve hours, cron wrote its one "not responding"
+// row, and it has been silent for almost eight hours since. By rows that was
+// 145 up of 146 (99.3 %); in time it is 12 h up of 20 h measured. A website
+// with the same rows and no silence row (cron stopped) keeps 100 %: the gap
+// says nothing about the site, so it is unmeasured, not an outage.
+// =======================================================================
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at) VALUES
+            (160, 'Router, který zmlkl', 'openwrt', 'router-b1', 'down', 'Síť', DATE_SUB(NOW(), INTERVAL 3 DAY)),
+            (161, 'Web bez cronu', 'web', 'https://example.org', 'up', 'Weby', DATE_SUB(NOW(), INTERVAL 3 DAY))");
+// One clock for every row: NOW() per insert let the 290 rows drift apart on
+// a loaded host (43506-43532 s instead of 43500), and a flaky check is how a
+// real failure gets ignored.
+$b1_now = (string)$pdo->query('SELECT NOW()')->fetchColumn();
+$b1_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at)
+                         VALUES (?, 'up', 20, DATE_SUB(?, INTERVAL ? MINUTE))");
+for ($b1_min = 20 * 60; $b1_min >= 8 * 60; $b1_min -= 5) {
+    $b1_ins->execute([160, $b1_now, $b1_min]);
+    $b1_ins->execute([161, $b1_now, $b1_min]);
+}
+$pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at)
+               VALUES (160, 'down', 'Agent routeru neodpovídá', DATE_SUB(?, INTERVAL 475 MINUTE))")
+    ->execute([$b1_now]);
+try {
+    [$b1_code, $b1_uw] = api_get_auth($base, 'action=uptime_windows', $cookie_jar);
+    check('uptime_windows vrací 200', $b1_code, 200);
+    $b1_router = $b1_uw['windows']['160']['d1'] ?? null;
+    $b1_web = $b1_uw['windows']['161']['d1'] ?? null;
+    check_true('mlčící router: 24 h v čase kolem 60 %, ne 99,3 % z řádků (dostal ' . json_encode($b1_router) . ')', is_numeric($b1_router) && $b1_router > 55 && $b1_router < 62);
+    check_true('web bez cronu: mezera není výpadek, 100 % z naměřeného (dostal ' . json_encode($b1_web) . ')', is_numeric($b1_web) && (float)$b1_web === 100.0);
+
+    // The rollup cron runs every ten minutes, over the same rows.
+    check_true('časový souhrn dnů se zapsal', bk_rollup_daily_uptime_time($pdo, 2) > 0);
+    $b1_sum = fn (int $mid) => $pdo->query("SELECT COALESCE(SUM(secs_up), -1) AS up, COALESCE(SUM(secs_down), -1) AS down,
+                                                  COALESCE(SUM(secs_silent), -1) AS silent
+                                           FROM uptime_daily WHERE monitor_id = {$mid}")->fetch();
+    $b1_r = $b1_sum(160);
+    check('souhrn routeru: 12 h 5 min provozu', (int)$b1_r['up'], 43500);
+    check('souhrn routeru: řádek „neodpovídá“ platí 2,5 intervalu', (int)$b1_r['down'], 750);
+    check_true('souhrn routeru: mlčení je výpadek, ~7 h 42 min (dostal ' . $b1_r['silent'] . ' s)', abs((int)$b1_r['silent'] - 27750) < 300);
+    $b1_w = $b1_sum(161);
+    check('souhrn webu: bez cronu žádný výpadek ani mlčení', (int)$b1_w['down'] + (int)$b1_w['silent'], 0);
+
+    // Today's strip day tells the silence apart from failed checks.
+    [$b1_du_code, $b1_du] = api_get_auth($base, 'action=daily_uptime&days=2', $cookie_jar);
+    check('daily_uptime vrací 200', $b1_du_code, 200);
+    $b1_today = null;
+    foreach ($b1_du['series']['160'] ?? [] as $b1_day) {
+        if (($b1_day['date'] ?? '') === date('j.n.')) {
+            $b1_today = $b1_day;
+        }
+    }
+    check('dnešní den mlčícího routeru je výpadek', $b1_today['status'] ?? null, 'down');
+    check_true('a popis říká, že agent mlčel (dostal ' . json_encode($b1_today['detail'] ?? null, JSON_UNESCAPED_UNICODE) . ')', str_contains((string)($b1_today['detail'] ?? ''), 'mlčel'));
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (160, 161)");
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id IN (160, 161)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (160, 161)");
+}
+
+// =======================================================================
+// The public page shows a curated set (W1-G3, owner decision 5.3).
+//
+// It is indexed by search engines and listed every server and the home
+// router by name. Servers, the router and agent services now stay off it
+// unless the owner puts them on; websites and game services stay.
+// =======================================================================
+$g3_ids = fn (?array $list): array => array_map(fn ($m) => (int)$m['id'], $list['monitors'] ?? []);
+[, $g3_anon] = api_get($base, 'action=monitors&scope=public');
+check_true('veřejný seznam ukáže web', in_array(1, $g3_ids($g3_anon), true));
+check_false('veřejný seznam neukáže domácí router', in_array(2, $g3_ids($g3_anon), true));
+check('ani žádný server, router či službu pod agentem',
+    array_values(array_filter($g3_anon['monitors'] ?? [], fn ($m) => in_array($m['type'], ['vps', 'openwrt', 'agent_service'], true))), []);
+[, $g3_admin_pub] = api_get_auth($base, 'action=monitors&scope=public', $cookie_jar);
+check('přihlášený admin na veřejné stránce vidí totéž co návštěvník', $g3_ids($g3_admin_pub), $g3_ids($g3_anon));
+[, $g3_admin] = api_get_auth($base, 'action=monitors', $cookie_jar);
+$g3_row = fn (int $id): array => array_values(array_filter($g3_admin['monitors'] ?? [], fn ($m) => (int)$m['id'] === $id))[0] ?? [];
+check('admin vidí u webu, že je veřejný', $g3_row(1)['isPublic'] ?? null, true);
+check('a u routeru, že veřejný není', $g3_row(2)['isPublic'] ?? null, false);
+check('řádky logu jsou u routeru zapnuté', $g3_row(2)['logLinesEnabled'] ?? null, true);
+// CR-5: the app's list carries the certificate limit cron alerts at, so the
+// dashboard's attention list uses the same rule; a non-default value proves it
+// is read from the setting, and the public view does not get it.
+$pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('ssl_alert_days', '21') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+try {
+    [, $cr5_admin] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    check('seznam monitorů nese mez upozornění na certifikát z nastavení', $cr5_admin['sslAlertDays'] ?? null, 21);
+    [, $cr5_pub] = api_get($base, 'action=monitors&scope=public');
+    check_false('veřejný seznam mez nenese', array_key_exists('sslAlertDays', $cr5_pub ?? []));
+} finally {
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'ssl_alert_days'");
+}
+
+[, $g3_ps] = api_get($base, 'action=public_status');
+check('veřejný souhrn počítá jen veřejnou sadu', $g3_ps['totalMonitors'] ?? null, count($g3_ids($g3_anon)));
+check_false('router není mezi veřejnými uzly', in_array('Router bez metrik', array_column($g3_ps['nodes'] ?? [], 'name'), true));
+
+// The switch: a new server is hidden, the owner can put it on and hand the
+// choice back to the type's default; "false" as text is refused, not read as on.
+$g3_payload = ['name' => 'G3 veřejný server', 'type' => 'vps', 'target' => '', 'category' => 'Test'];
+[$g3_code, $g3_created] = api_post($base, 'action=save_monitor', $g3_payload, $cookie_jar);
+$g3_id = (int)($g3_created['id'] ?? 0);
+check('nový server se uloží', $g3_code, 200);
+[, $g3_l1] = api_get($base, 'action=monitors&scope=public');
+check_false('nový server na veřejné stránce není', in_array($g3_id, $g3_ids($g3_l1), true));
+api_post($base, 'action=save_monitor', $g3_payload + ['id' => $g3_id, 'is_public' => true], $cookie_jar);
+[, $g3_l2] = api_get($base, 'action=monitors&scope=public');
+check_true('vlastník ho na stránku dá', in_array($g3_id, $g3_ids($g3_l2), true));
+api_post($base, 'action=save_monitor', $g3_payload + ['id' => $g3_id], $cookie_jar);
+[, $g3_l3] = api_get($base, 'action=monitors&scope=public');
+check_true('uložení bez přepínače volbu nezmění', in_array($g3_id, $g3_ids($g3_l3), true));
+api_post($base, 'action=save_monitor', $g3_payload + ['id' => $g3_id, 'is_public' => null], $cookie_jar);
+[, $g3_l4] = api_get($base, 'action=monitors&scope=public');
+check_false('null vrátí rozhodnutí typu (server zase skrytý)', in_array($g3_id, $g3_ids($g3_l4), true));
+[$g3_bad_code, $g3_bad] = api_post($base, 'action=save_monitor', $g3_payload + ['id' => $g3_id, 'is_public' => 'false'], $cookie_jar);
+check('"false" jako text se odmítne', [$g3_bad_code, $g3_bad['error'] ?? null, $g3_bad['invalidKeys'] ?? null], [400, 'invalid_switch', ['is_public']]);
+$pdo->prepare("DELETE FROM monitors WHERE id = ?")->execute([$g3_id]);
+
+// Every other public read covers the same set.
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, error_message, checked_at) VALUES (2, 'down', 'Agent routeru neodpovídá', NOW())");
+$g3_log = (int)$pdo->lastInsertId();
+$pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('Výpadek: Router bez metrik', 'major', 'investigating', 2)");
+$g3_inc = (int)$pdo->lastInsertId();
+try {
+    [, $g3_ev] = api_get($base, 'action=events&monitor_id=2&limit=50');
+    check('veřejné události skrytého routeru jsou prázdné', $g3_ev['events'] ?? null, []);
+    [, $g3_ev_admin] = api_get_auth($base, 'action=events&monitor_id=2&limit=50', $cookie_jar);
+    check_true('admin je vidí', count($g3_ev_admin['events'] ?? []) > 0);
+    [, $g3_du] = api_get($base, 'action=daily_uptime&days=7&scope=public');
+    check_false('veřejné denní pásy router nemají', isset($g3_du['series']['2']) || isset($g3_du['series'][2]));
+    $g3_inc_mids = fn (?array $p): array => array_map(fn ($r) => (int)($r['monitor_id'] ?? $r['monitorId'] ?? 0), array_merge($p['incidents'] ?? [], $p['manualIncidents'] ?? []));
+    [, $g3_inc_anon] = api_get($base, 'action=incidents&scope=public');
+    check_false('veřejné incidenty skrytý router nejmenují', in_array(2, $g3_inc_mids($g3_inc_anon), true));
+    [, $g3_inc_admin] = api_get_auth($base, 'action=incidents', $cookie_jar);
+    check_true('admin incident routeru vidí', in_array(2, $g3_inc_mids($g3_inc_admin), true));
+    [$g3_bdg] = api_get($base, 'action=badge&monitor_id=2');
+    check('odznak skrytého routeru je pro návštěvníka 404', $g3_bdg, 404);
+    [$g3_bdg_admin] = api_get_auth($base, 'action=badge&monitor_id=2', $cookie_jar);
+    check('přihlášenému adminovi se ukáže', $g3_bdg_admin, 200);
+    [$g3_wdg_code, $g3_wdg_head] = bk_raw_request($base . '/widget.php?id=2');
+    [$g3_wdg_target] = api_get($base, 'action=badge&monitor_id=2&type=uptime');
+    check('widget skrytého routeru vede na odznak, který je pro návštěvníka 404', [
+        $g3_wdg_code, str_contains($g3_wdg_head, 'monitor_id=2&type=uptime'), $g3_wdg_target,
+    ], [302, true, 404]);
+    [, , $g3_rss] = bk_raw_request($base . '/rss.php');
+    check_false('RSS skrytý router nejmenuje', str_contains($g3_rss, 'Router bez metrik'));
+    @unlink($root . '/cache/dashboard_agg.json');
+    [$g3_idx_code, , $g3_idx] = bk_raw_request($base . '/index.php');
+    check('stará veřejná stránka odpoví', $g3_idx_code, 200);
+    check_false('stará veřejná stránka router nejmenuje', str_contains($g3_idx, 'Router bez metrik'));
+    check_true('web na ní zůstává', str_contains($g3_idx, 'Testovací web'));
+} finally {
+    $pdo->prepare("DELETE FROM monitor_logs WHERE id = ?")->execute([$g3_log]);
+    $pdo->prepare("DELETE FROM incidents WHERE id = ?")->execute([$g3_inc]);
+}
+
+// The game portal (BKPepe/bloodkings) reads action=portal_status: anyone may
+// call it, so it covers the public set. It used to read api.php with no
+// action, which took the first monitor whose type or name said TeamSpeak
+// (hidden ones included), printed the last players of a server that was down
+// and never filled Discord. Other game monitors are archived for the block,
+// so "the first by id" is one of these.
+$pg_others = array_map('intval', $pdo->query("SELECT id FROM monitors WHERE archived_at IS NULL
+    AND type IN ('teamspeak', 'minecraft', 'discord')")->fetchAll(PDO::FETCH_COLUMN));
+$pg_cron = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'last_cron_run'")->fetchColumn();
+// A key the answer must carry, null included (?? would read null as missing).
+$pg_val = fn (array $entry, string $key): mixed => array_key_exists($key, $entry) ? $entry[$key] : 'chybí';
+$pg_set_cron = function (int $ago) use ($pdo): void {
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('last_cron_run', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+        ->execute([date('Y-m-d H:i:s', time() - $ago)]);
+};
+try {
+    if ($pg_others) {
+        $pdo->exec('UPDATE monitors SET archived_at = NOW() WHERE id IN (' . implode(',', $pg_others) . ')');
+    }
+    $pg_set_cron(30);
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked, last_details) VALUES
+        (971, 'Interní TeamSpeak', 'teamspeak', 'ts.example.com', 'up', 'Hry', 0, NOW(), '{\"clients_online\":3,\"clients_max\":32}'),
+        (972, 'TeamSpeak stránka', 'web', 'https://ts.example.com', 'up', 'Hry', 1, NOW(), NULL),
+        (973, 'Minecraft', 'minecraft', 'mc.example.com', 'down', 'Hry', 1, NOW(), '{\"players_online\":4,\"players_max\":20,\"version\":\"Paper 1.21\"}'),
+        (974, 'Discord', 'discord', '123456', 'warning', 'Hry', 1, NOW(), '{\"presence_count\":7}')");
+    [$pg_code, $pg, $pg_raw] = api_get($base, 'action=portal_status');
+    check('portal_status vrací 200', $pg_code, 200);
+    check_false('skrytý TeamSpeak nejmenuje', str_contains($pg_raw, 'Interní TeamSpeak'));
+    check('web se jménem TeamSpeak není TeamSpeak, hra bez veřejného monitoru nemá stav',
+        $pg['teamspeak'] ?? null,
+        ['online' => false, 'status' => null, 'checkedAt' => null, 'name' => null, 'clients_online' => null, 'clients_max' => null]);
+    check('Minecraft ve výpadku: offline a bez hráčů z doby před ním',
+        [$pg['minecraft']['status'] ?? null, $pg['minecraft']['online'] ?? null, $pg_val($pg['minecraft'] ?? [], 'players_online'),
+            $pg_val($pg['minecraft'] ?? [], 'players_max'), $pg_val($pg['minecraft'] ?? [], 'version')],
+        ['down', false, null, null, null]);
+    check_true('a nese čas kontroly', is_string($pg['minecraft']['checkedAt'] ?? null) && strtotime($pg['minecraft']['checkedAt']) !== false);
+    check('Discord zhoršený, ale dosažitelný: online s počtem z monitoru, celkový počet nikdo neměří',
+        [$pg['discord']['status'] ?? null, $pg['discord']['online'] ?? null, $pg['discord']['online_count'] ?? null, $pg_val($pg['discord'] ?? [], 'total_count')],
+        ['warning', true, 7, null]);
+
+    $pdo->exec("UPDATE monitors SET is_public = 1 WHERE id = 971");
+    $pdo->exec("UPDATE monitors SET status = 'up', last_details = '{\"players_online\":0}' WHERE id = 973");
+    [, $pg2] = api_get($base, 'action=portal_status');
+    check('veřejný TeamSpeak ukáže jméno, stav i počet klientů',
+        [$pg2['teamspeak']['name'] ?? null, $pg2['teamspeak']['status'] ?? null, $pg2['teamspeak']['online'] ?? null,
+            $pg2['teamspeak']['clients_online'] ?? null, $pg2['teamspeak']['clients_max'] ?? null],
+        ['Interní TeamSpeak', 'up', true, 3, 32]);
+    check('nula hráčů je nula, nezměřené maximum a verze null (ne 20 a ne "")',
+        [$pg_val($pg2['minecraft'] ?? [], 'players_online'), $pg_val($pg2['minecraft'] ?? [], 'players_max'), $pg_val($pg2['minecraft'] ?? [], 'version')],
+        [0, null, null]);
+
+    // An empty action answers the same, and says it is on its way out.
+    [$pg_code, $pg_head, $pg_body] = bk_raw_request($base . '/api.php');
+    check('prázdná akce dál odpovídá jako portal_status', [$pg_code, json_decode($pg_body, true)], [200, $pg2]);
+    check_true('a hlásí Deprecation s odkazem na portal_status',
+        (bool)preg_match('/^Deprecation: @\d+\r?$/mi', $pg_head) && str_contains($pg_head, 'action=portal_status'));
+    [, $pg_head] = bk_raw_request($base . '/api.php?action=portal_status');
+    check_false('portal_status sám Deprecation nenese', (bool)preg_match('/^Deprecation:/mi', $pg_head));
+
+    // A stopped collector: nobody knows the state, so nothing is online.
+    $pg_set_cron(7200);
+    [, $pg3] = api_get($base, 'action=portal_status');
+    check('bez běžícího sběru je každý stav unknown a nic online',
+        [$pg3['teamspeak']['status'] ?? null, $pg3['teamspeak']['online'] ?? null, $pg_val($pg3['teamspeak'] ?? [], 'clients_online'),
+            $pg3['discord']['status'] ?? null, $pg3['discord']['online'] ?? null],
+        ['unknown', false, null, 'unknown', false]);
+} finally {
+    $pdo->exec("DELETE FROM monitors WHERE id IN (971, 972, 973, 974)");
+    if ($pg_others) {
+        $pdo->exec('UPDATE monitors SET archived_at = NULL WHERE id IN (' . implode(',', $pg_others) . ')');
+    }
+    if ($pg_cron === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'last_cron_run'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'last_cron_run'")->execute([$pg_cron]);
+    }
+}
+
+// A red strip day never says "100 %". A failed check answered 30 s later is
+// 0.035 % of the day; rounded half-up to one decimal it was 100.0, and the
+// strip printed "1 z 1441 kontrol selhalo (100 % dostupnost)" on a red cell.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+            (181, 'Den s krátkým výpadkem', 'web', 'https://example.net', 'up', 'Test'),
+            (182, 'Čistý den', 'web', 'https://example.org', 'up', 'Test')");
+$rd_from = strtotime('yesterday 00:00:00');
+$rd_to = strtotime('today 00:00:00');
+$rd_rows = [];
+for ($t = $rd_from; $t < $rd_to; $t += 60) {
+    $rd_rows[] = sprintf("(181, '%s', 100, '%s')", $t === $rd_from + 720 * 60 ? 'down' : 'up', date('Y-m-d H:i:s', $t));
+    $rd_rows[] = sprintf("(182, 'up', 100, '%s')", date('Y-m-d H:i:s', $t));
+}
+$rd_rows[] = sprintf("(181, 'up', 100, '%s')", date('Y-m-d H:i:s', $rd_from + 720 * 60 + 30));
+try {
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES " . implode(',', $rd_rows));
+    // The day as the ten-minute rollup writes it (bk_rollup_daily_uptime_time),
+    // limited to these two monitors so the rest of the suite keeps its rows.
+    $rd_ins = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    foreach (bk_uptime_segments_for($pdo, $rd_from, $rd_to, [181, 182]) as $rd_mid => $rd_seg) {
+        foreach (bk_uptime_by_day($rd_seg['segments'], $rd_seg['from'], $rd_seg['to']) as $rd_day => $rd_sum) {
+            if ($rd_sum['measured'] > 0) {
+                $rd_ins->execute([$rd_mid, $rd_day, $rd_sum['up'], $rd_sum['down'], $rd_sum['warning'], $rd_sum['silent'], $rd_sum['maintenance'], $rd_sum['unmeasured']]);
+            }
+        }
+    }
+    check('souhrn dne: výpadek trval 30 s', (int)$pdo->query("SELECT secs_down FROM uptime_daily WHERE monitor_id = 181 AND day = '" . date('Y-m-d', $rd_from) . "'")->fetchColumn(), 30);
+    [$rd_code, $rd_du] = api_get_auth($base, 'action=daily_uptime&days=2', $cookie_jar);
+    check('daily_uptime vrací 200', $rd_code, 200);
+    $rd_day_of = function (int $mid) use ($rd_du, $rd_from): ?array {
+        foreach ($rd_du['series'][(string)$mid] ?? [] as $day) {
+            if (($day['date'] ?? '') === date('j.n.', $rd_from)) {
+                return $day;
+            }
+        }
+        return null;
+    };
+    $rd_bad = $rd_day_of(181);
+    check('den s 30 s výpadku: červený a 99,9 %, ne 100 (dostal ' . json_encode($rd_bad, JSON_UNESCAPED_UNICODE) . ')',
+        [$rd_bad['status'] ?? null, $rd_bad['uptimePct'] ?? null], ['down', 99.9]);
+    check_false('a popisek netvrdí 100 % dostupnost', str_contains((string)($rd_bad['detail'] ?? ''), '(100 %'));
+    $rd_ok = $rd_day_of(182);
+    check('čistý den zůstane zelený a 100 %', [$rd_ok['status'] ?? null, $rd_ok['uptimePct'] ?? null], ['up', 100]);
+} finally {
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id IN (181, 182)");
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (181, 182)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (181, 182)");
+}
+
+// An old failure's outage ends at the first 'up' check that really follows it.
+// The events list is the newest checks plus the newest failures of any age,
+// and the pairing used to take the nearest newer 'up' in that list: for a
+// 30-second blip three days ago that was the oldest recent check, so the
+// public page showed a three-day outage that ended ten minutes ago.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+            (183, 'Web s dávným výpadkem', 'web', 'https://example.com/a', 'up', 'Test'),
+            (184, 'Web v otevřeném výpadku', 'web', 'https://example.com/b', 'down', 'Test')");
+$op_now = time();
+$op_blip = $op_now - 3 * 86400;
+$op_long = $op_now - 2 * 86400;
+$op_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (?, ?, 100, ?)");
+$op_at = fn (int $ts): string => date('Y-m-d H:i:s', $ts);
+try {
+    foreach ([[$op_blip, 'down'], [$op_blip + 30, 'up'], [$op_long, 'down'], [$op_long + 60, 'down'], [$op_long + 180, 'up']] as [$ts, $st]) {
+        $op_ins->execute([183, $st, $op_at($ts)]);
+    }
+    for ($i = 20; $i >= 1; $i--) {
+        $op_ins->execute([183, 'up', $op_at($op_now - $i * 60)]);
+    }
+    foreach ([[$op_now - 7200, 'up'], [$op_now - 3600, 'down'], [$op_now - 3540, 'down']] as [$ts, $st]) {
+        $op_ins->execute([184, $st, $op_at($ts)]);
+    }
+    $op_by_time = function (array $events): array {
+        $out = [];
+        foreach ($events as $e) {
+            if (($e['rawStatus'] ?? '') === 'down') {
+                // array_key_exists, not ??: a missing key must not pass for null.
+                $out[(string)$e['timeIso']] = [
+                    array_key_exists('outageDurationSec', $e) ? $e['outageDurationSec'] : 'chybí',
+                    array_key_exists('outageEnd', $e) ? $e['outageEnd'] : 'chybí',
+                ];
+            }
+        }
+        return $out;
+    };
+    [$op_code, $op_ev] = api_get($base, 'action=events&monitor_id=183&limit=10&scope=public');
+    check('events veřejně vrací 200', $op_code, 200);
+    $op_183 = $op_by_time($op_ev['events'] ?? []);
+    check('výpadek před třemi dny trval 30 s a skončil tehdy, ne před deseti minutami',
+        $op_183[date('c', $op_blip)] ?? null, [30, date('d.m.Y H:i:s', $op_blip + 30)]);
+    check('dva selhané řádky za sebou končí stejnou OK kontrolou',
+        [$op_183[date('c', $op_long)] ?? null, $op_183[date('c', $op_long + 60)] ?? null],
+        [[180, date('d.m.Y H:i:s', $op_long + 180)], [120, date('d.m.Y H:i:s', $op_long + 180)]]);
+    [, $op_open] = api_get($base, 'action=events&monitor_id=184&limit=10&scope=public');
+    check('výpadek bez následné OK kontroly je otevřený: konec i délka null',
+        array_values($op_by_time($op_open['events'] ?? [])), [[null, null], [null, null]]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (183, 184)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (183, 184)");
+}
+
+// Several locations check in the same second, so "after the failure" is a
+// later second or the same second written later (a higher id). A failure
+// answered by another location within its own second ended then (0 s); an
+// 'up' written before the failure in that second does not end it - the next
+// one, a second later, does.
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+            (191, 'Web měřený z více míst', 'web', 'https://example.com/tie', 'up', 'Test')");
+$ts_at = time() - 2 * 86400;
+$ts_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, checked_from) VALUES (191, ?, 100, ?, ?)");
+try {
+    foreach ([
+        [$ts_at, 'down', 'Praha'], [$ts_at, 'up', 'Frankfurt'],
+        [$ts_at + 600, 'up', 'Frankfurt'], [$ts_at + 600, 'down', 'Praha'], [$ts_at + 601, 'up', 'Praha'],
+    ] as [$ts, $st, $loc]) {
+        $ts_ins->execute([$st, $op_at($ts), $loc]);
+    }
+    for ($i = 10; $i >= 1; $i--) {
+        $ts_ins->execute(['up', $op_at($op_now - $i * 60), 'Praha']);
+    }
+    [$ts_code, $ts_ev] = api_get($base, 'action=events&monitor_id=191&limit=10&scope=public');
+    check('events se dvěma místy vrací 200', $ts_code, 200);
+    $ts_191 = $op_by_time($ts_ev['events'] ?? []);
+    check('výpadek, na který jiné místo odpovědělo OK v téže sekundě, skončil tehdy: 0 s',
+        $ts_191[date('c', $ts_at)] ?? null, [0, date('d.m.Y H:i:s', $ts_at)]);
+    check('OK zapsané v téže sekundě před výpadkem ho neukončí; konec je OK o sekundu později',
+        $ts_191[date('c', $ts_at + 600)] ?? null, [1, date('d.m.Y H:i:s', $ts_at + 601)]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 191");
+    $pdo->exec("DELETE FROM monitors WHERE id = 191");
+}
+
+// The public headline "30 days" figure is the mean of the monitors' figures.
+// One second of outage in 29 days is 99.999 for that monitor; with three
+// perfect ones the mean is 99.99975, which rounded at three decimals printed
+// 100 on the public page over a month with an outage in it.
+$av_saved = $pdo->query("SELECT id, is_public FROM monitors")->fetchAll();
+$av_ins = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                         VALUES (?, ?, ?, ?, 0, 0, 0, 0)");
+try {
+    $pdo->exec("UPDATE monitors SET is_public = 0");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked) VALUES
+                (185, 'Měsíc s jednou sekundou výpadku', 'web', 'https://example.com/c', 'up', 'Test', 1, NOW()),
+                (186, 'Čistý měsíc A', 'web', 'https://example.com/d', 'up', 'Test', 1, NOW()),
+                (187, 'Čistý měsíc B', 'web', 'https://example.com/e', 'up', 'Test', 1, NOW()),
+                (188, 'Čistý měsíc C', 'web', 'https://example.com/f', 'up', 'Test', 1, NOW())");
+    for ($age = 1; $age <= 29; $age++) {
+        $av_day = date('Y-m-d', strtotime("-{$age} day", strtotime('today')));
+        $av_ins->execute([185, $av_day, $age === 10 ? 86399 : 86400, $age === 10 ? 1 : 0]);
+        foreach ([186, 187, 188] as $av_mid) {
+            $av_ins->execute([$av_mid, $av_day, 86400, 0]);
+        }
+    }
+    [, $av_win] = api_get($base, 'action=uptime_windows&scope=public');
+    check('monitor s 1 s výpadku za 29 dní: 99,999, ne 100', $av_win['windows']['185']['d30'] ?? null, 99.999);
+    [, $av_ps] = api_get($base, 'action=public_status');
+    check('souhrn 30 dní na veřejné stránce: 99,999, ne 100 (dostal ' . json_encode($av_ps['uptimePercent'] ?? null) . ')',
+        $av_ps['uptimePercent'] ?? null, 99.999);
+} finally {
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id IN (185, 186, 187, 188)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (185, 186, 187, 188)");
+    $av_restore = $pdo->prepare("UPDATE monitors SET is_public = ? WHERE id = ?");
+    foreach ($av_saved as $av_row) {
+        $av_restore->execute([$av_row['is_public'], $av_row['id']]);
+    }
+}
+
+// The rest of the places that print an availability. Five seconds of outage
+// in 30 days is 99.9998 % and one failed check among 20 001 is 99.995 %; the
+// badge, the legacy page, the SLA report's mean, the regions, the asset SLA,
+// the old monitor page and the e-mail digest rounded both to 100. Only these two monitors are active meanwhile,
+// so the means and the digest contain nothing else.
+$fs_saved = $pdo->query("SELECT id, archived_at FROM monitors")->fetchAll();
+$pdo->exec("INSERT INTO assets (name) VALUES ('Stroj s pěti sekundami výpadku')");
+$fs_asset = (int)$pdo->lastInsertId();
+$fs_day = strtotime('-3 day', strtotime('today'));
+$fs_clear_caches = function () use ($pdo, $root): void {
+    @unlink($root . '/cache/dashboard_agg.json');
+    $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'regions\\_cache\\_%'");
+};
+$fs_page = function (string $path, ?string $jar = null) use ($base): string {
+    $ch = curl_init($base . $path);
+    $opts = [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 30];
+    if ($jar !== null) {
+        $opts[CURLOPT_COOKIEFILE] = $jar;
+        $opts[CURLOPT_COOKIEJAR] = $jar;
+    }
+    curl_setopt_array($ch, $opts);
+    $body = (string)curl_exec($ch);
+    curl_close($ch);
+    return $body;
+};
+try {
+    $pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE archived_at IS NULL");
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked, asset_id) VALUES
+                   (189, 'Pět sekund výpadku', 'web', 'https://example.com/g', 'up', 'Test', 1, NOW(), ?),
+                   (190, 'Čistý web', 'web', 'https://example.com/h', 'up', 'Test', 1, NOW(), ?)")
+        ->execute([$fs_asset, $fs_asset]);
+    $fs_ins = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                             VALUES (?, ?, ?, ?, 0, 0, 0, 0)");
+    for ($age = 1; $age <= 29; $age++) {
+        $fs_d = date('Y-m-d', strtotime("-{$age} day", strtotime('today')));
+        $fs_ins->execute([189, $fs_d, $age === 3 ? 86395 : 86400, $age === 3 ? 5 : 0]);
+        $fs_ins->execute([190, $fs_d, 86400, 0]);
+    }
+    // The same day in the check log: one failed check among 20 001, all from one location.
+    $fs_rows = [];
+    for ($i = 0; $i < 20001; $i++) {
+        $fs_rows[] = sprintf("(189, '%s', 100, '%s', 'Zkušební region')", $i === 10000 ? 'down' : 'up', date('Y-m-d H:i:s', $fs_day + 3600 + $i * 4));
+        if (count($fs_rows) === 2000 || $i === 20000) {
+            $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, checked_from) VALUES " . implode(',', $fs_rows));
+            $fs_rows = [];
+        }
+    }
+    $fs_clear_caches();
+
+    [, , $fs_badge] = api_get($base, 'action=badge&monitor_id=189&type=uptime');
+    check_true('odznak dostupnosti: 99.99 %, ne 100.00 % (dostal ' . json_encode(preg_match('/[0-9.]+ %/', $fs_badge, $fs_m) ? $fs_m[0] : $fs_badge) . ')',
+        str_contains($fs_badge, '99.99 %') && !str_contains($fs_badge, '100.00 %'));
+
+    $fs_index = $fs_page('/index.php');
+    $fs_card = preg_match('/id="monitor-item-189".*?(?=id="monitor-item-|$)/s', $fs_index, $fs_m) ? $fs_m[0] : '';
+    check_true('stará stránka: karta monitoru 99,99 %', str_contains($fs_card, '99,99%') && !str_contains($fs_card, '100,00%'));
+    check('stará stránka: průměr za 30 dní 99,99 %, ne 100,00 %',
+        preg_match('/class="stat-value [a-z]+">([^<]*)<\/div>\s*<div class="stat-label">Dostupnost 30 dní/u', $fs_index, $fs_m) ? $fs_m[1] : null, '99,99%');
+    check_true('stará stránka: SLA stroje 99.99 %, ne 100.00 %', str_contains($fs_index, '99.99% SLA') && !str_contains($fs_index, '100.00% SLA'));
+    check_true('stará stránka: den s výpadkem v pásu „dostupnost 99,99 %“',
+        str_contains($fs_index, 'dostupnost 99,99 %') && !str_contains($fs_index, 'dostupnost 100,00'));
+
+    [, $fs_sla] = api_get_auth($base, 'action=sla_report&days=30', $cookie_jar);
+    check('SLA report: průměr 99,999, ne 100 (dostal ' . json_encode($fs_sla['overallUptime'] ?? null) . ')', $fs_sla['overallUptime'] ?? null, 99.999);
+
+    [, $fs_reg] = api_get_auth($base, 'action=regions&days=7', $cookie_jar);
+    $fs_region = array_values(array_filter($fs_reg['regions'] ?? [], fn ($r) => ($r['location'] ?? null) === 'Zkušební region'))[0] ?? [];
+    check('místa měření: jedna selhaná kontrola z 20 001 je 99,99 %, ne 100', $fs_region['successRate'] ?? null, 99.99);
+
+    $fs_mon = $fs_page('/monitor.php?id=189', $cookie_jar);
+    check_true('detail monitoru: karta Uptime 99.9 %, ne 100 %', str_contains($fs_mon, '>99.9%<') && !str_contains($fs_mon, '>100%<'));
+
+    $fs_admin = $fs_page('/admin.php', $cookie_jar);
+    $fs_asset_row = preg_match('/Stroj s pěti sekundami výpadku.*?<\/tr>/su', $fs_admin, $fs_m) ? $fs_m[0] : '';
+    check_true('administrace: SLA stroje 99.99 %, ne 100.00 % (řádek ' . ($fs_asset_row === '' ? 'chybí' : 'nalezen') . ')',
+        str_contains($fs_asset_row, '99.99%') && !str_contains($fs_asset_row, '100.00%'));
+
+    $fs_weekly = $fs_page('/api.php?action=digest_preview&period=weekly', $cookie_jar);
+    check('týdenní digest: monitor s výpadkem 99.99 %, ne 100 %',
+        preg_match('/Pět sekund výpadku<\/td><td[^>]*>([^<]*)</u', $fs_weekly, $fs_m) ? $fs_m[1] : null, '99.99%');
+    check('týdenní digest: místo měření 99.99 %, ne 100 %',
+        preg_match('/Zkušební region<\/td><td[^>]*>([^<]*)</u', $fs_weekly, $fs_m) ? $fs_m[1] : null, '99.99%');
+    $fs_monthly = $fs_page('/api.php?action=digest_preview&period=monthly', $cookie_jar);
+    check_true('měsíční digest: den s výpadkem 99.99 %, ne 100 %',
+        str_contains($fs_monthly, date('d.m.', $fs_day) . ' &middot; 99.99%') && !str_contains($fs_monthly, date('d.m.', $fs_day) . ' &middot; 100%'));
+    check_true('měsíční digest: místo měření 99.99 %, ne 100 %',
+        str_contains($fs_monthly, 'Zkušební region &middot; 99.99%') && !str_contains($fs_monthly, 'Zkušební region &middot; 100%'));
+} finally {
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id IN (189, 190)");
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (189, 190)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (189, 190)");
+    $pdo->prepare("DELETE FROM assets WHERE id = ?")->execute([$fs_asset]);
+    $fs_restore = $pdo->prepare("UPDATE monitors SET archived_at = ? WHERE id = ?");
+    foreach ($fs_saved as $fs_row) {
+        $fs_restore->execute([$fs_row['archived_at'], $fs_row['id']]);
+    }
+    $fs_clear_caches();
+}
+
+// R277: a warning is an answered check. Counted as a failure, ten checks with
+// one slow answer read 90 % next to "0 selhání".
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES (9277, 'R277', 'web', 'https://example.com/r277', 'up', 'Test')");
+    $sr_rows = [];
+    for ($i = 1; $i <= 10; $i++) {
+        $sr_rows[] = sprintf("(9277, '%s', 120, NOW() - INTERVAL %d MINUTE, 'R277 region')", $i === 5 ? 'warning' : 'up', $i);
+    }
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, checked_from) VALUES " . implode(',', $sr_rows));
+    $fs_clear_caches();
+    [, $sr_reg] = api_get_auth($base, 'action=regions&days=7', $cookie_jar);
+    $sr_region = array_values(array_filter($sr_reg['regions'] ?? [], fn ($r) => ($r['location'] ?? null) === 'R277 region'))[0] ?? [];
+    check('místa měření: varování je zodpovězená kontrola, ne selhání', [(float)($sr_region['successRate'] ?? 0), $sr_region['downChecks'] ?? null], [100.0, 0]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 9277");
+    $pdo->exec("DELETE FROM monitors WHERE id = 9277");
+    $fs_clear_caches();
+}
+
+// A failed check another location answered OK within the same second has no
+// outage second of its own: the day's rollup says 0 s of down and the 30-day
+// figure is exactly 100. The strip marks that day red, so the legacy card and
+// the digest row next to it must not read 100 either.
+$zs_saved = $pdo->query("SELECT id, archived_at FROM monitors")->fetchAll();
+try {
+    $pdo->exec("UPDATE monitors SET archived_at = NOW() WHERE archived_at IS NULL");
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked) VALUES
+                (192, 'Selhání v téže sekundě', 'web', 'https://example.com/zs', 'up', 'Test', 1, NOW())");
+    $zs_ins = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, checks_up, checks_down, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                             VALUES (192, ?, ?, ?, 86400, 0, 0, 0, 0, 0)");
+    for ($age = 1; $age <= 29; $age++) {
+        $zs_ins->execute([date('Y-m-d', strtotime("-{$age} day", strtotime('today'))), $age === 3 ? 3 : 1, $age === 3 ? 1 : 0]);
+    }
+    $zs_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, checked_from) VALUES (192, ?, 100, ?, ?)");
+    foreach ([[3600, 'up', 'Praha'], [3660, 'down', 'Praha'], [3660, 'up', 'Frankfurt'], [3720, 'up', 'Praha']] as [$zs_off, $zs_st, $zs_loc]) {
+        $zs_log->execute([$zs_st, date('Y-m-d H:i:s', $fs_day + $zs_off), $zs_loc]);
+    }
+    $fs_clear_caches();
+
+    $zs_index = $fs_page('/index.php');
+    $zs_card = preg_match('/id="monitor-item-192".*?(?=id="monitor-item-|$)/s', $zs_index, $zs_m) ? $zs_m[0] : '';
+    check_true('stará stránka: selhání bez vlastní sekundy výpadku - karta 99,99 %, ne 100,00 %',
+        str_contains($zs_card, '99,99%') && !str_contains($zs_card, '100,00%'));
+    $zs_weekly = $fs_page('/api.php?action=digest_preview&period=weekly', $cookie_jar);
+    check('týdenní digest: selhání bez vlastní sekundy výpadku 99.99 %, ne 100 %',
+        preg_match('/Selhání v téže sekundě<\/td><td[^>]*>([^<]*)</u', $zs_weekly, $zs_m) ? $zs_m[1] : null, '99.99%');
+} finally {
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id = 192");
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 192");
+    $pdo->exec("DELETE FROM monitors WHERE id = 192");
+    $zs_restore = $pdo->prepare("UPDATE monitors SET archived_at = ? WHERE id = ?");
+    foreach ($zs_saved as $zs_row) {
+        $zs_restore->execute([$zs_row['archived_at'], $zs_row['id']]);
+    }
+    $fs_clear_caches();
+}
+
+// =======================================================================
+// One overall verdict for public_status and the fleet badge (W1-B4).
+//
+// Both said "healthy" / "vše online" unless something was down: a degraded
+// monitor, an unknown one and a stopped collector read as all-clear, and
+// lastUpdated fell back to "now" when nothing had been measured.
+// =======================================================================
+$b4_saved = $pdo->query("SELECT id, status, last_checked, maintenance FROM monitors")->fetchAll();
+$b4_cron = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'last_cron_run'")->fetchColumn();
+$b4_set_cron = function (int $ago) use ($pdo): void {
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('last_cron_run', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+        ->execute([date('Y-m-d H:i:s', time() - $ago)]);
+};
+$b4_badge = function () use ($base): string {
+    [, , $svg] = api_get($base, 'action=badge');
+    return $svg;
+};
+try {
+    $pdo->exec("UPDATE monitors SET status = 'up', maintenance = 0, last_checked = NOW()");
+    $b4_set_cron(60);
+    [, $b4_ok] = api_get($base, 'action=public_status');
+    check('vše běží a sběr je čerstvý: healthy', $b4_ok['status'] ?? null, 'healthy');
+    check_true('odznak flotily: vše online', str_contains($b4_badge(), 'vše online'));
+    check_true('lastUpdated je skutečná poslední kontrola', is_string($b4_ok['lastUpdated'] ?? null));
+    // The legacy /status/ page is indexed as well, and its headline said
+    // "Všechny systémy jsou online" over a warning or a stopped collector.
+    [, , $b4_idx_ok] = bk_raw_request($base . '/index.php');
+    check_true('stará stránka: vše běží, říká online', str_contains($b4_idx_ok, 'Všechny systémy jsou online'));
+    // R3: /app/public judges the list action=monitors gives it, a ?page=
+    // selection included - the list has to say whether cron is running.
+    [, $b4_list_ok] = api_get($base, 'action=monitors&scope=public');
+    check('veřejný seznam při čerstvém sběru: collectionFresh true', $b4_list_ok['collectionFresh'] ?? 'chybí', true);
+
+    $pdo->exec("UPDATE monitors SET status = 'warning' WHERE id = 1");
+    [, $b4_warn] = api_get($base, 'action=public_status');
+    check('jeden zhoršený monitor: degraded', $b4_warn['status'] ?? null, 'degraded');
+    check('a souhrn ho počítá', $b4_warn['warningMonitors'] ?? null, 1);
+    $b4_warn_svg = $b4_badge();
+    check_false('odznak flotily s varováním netvrdí „vše online“', str_contains($b4_warn_svg, 'vše online'));
+    check_true('ale „zhoršeno“', str_contains($b4_warn_svg, 'zhoršeno'));
+    [, , $b4_idx_warn] = bk_raw_request($base . '/index.php');
+    check_false('stará stránka s varováním netvrdí „online“', str_contains($b4_idx_warn, 'Všechny systémy jsou online'));
+    check_true('ale že jsou služby omezené', str_contains($b4_idx_warn, 'Některé služby jsou omezené'));
+
+    $pdo->exec("UPDATE monitors SET status = 'up' WHERE id = 1");
+    $b4_set_cron(7200);
+    [, $b4_stale] = api_get($base, 'action=public_status');
+    check('zastavený sběr: unknown, ne healthy', $b4_stale['status'] ?? null, 'unknown');
+    [, $b4_list_stale] = api_get($base, 'action=monitors&scope=public');
+    check('veřejný seznam při zastaveném sběru: collectionFresh false', $b4_list_stale['collectionFresh'] ?? 'chybí', false);
+    check_true('odznak flotily: neznámý', str_contains($b4_badge(), 'neznámý'));
+    [, , $b4_idx_stale] = bk_raw_request($base . '/index.php');
+    check_true('stará stránka při zastaveném sběru: stav nezjištěn', str_contains($b4_idx_stale, 'Stav se nepodařilo zjistit')
+        && !str_contains($b4_idx_stale, 'Všechny systémy jsou online'));
+
+    $b4_set_cron(60);
+    $pdo->exec("UPDATE monitors SET status = 'maintenance' WHERE id = 1");
+    [, $b4_maint] = api_get($base, 'action=public_status');
+    check('údržba: maintenance', $b4_maint['status'] ?? null, 'maintenance');
+
+    $pdo->exec("UPDATE monitors SET status = 'unknown', last_checked = NULL");
+    [, $b4_none] = api_get($base, 'action=public_status');
+    check('nic nezměřeno: lastUpdated null, ne „teď“', array_key_exists('lastUpdated', $b4_none ?? []) ? $b4_none['lastUpdated'] : 'chybí', null);
+    check('a verdikt unknown', $b4_none['status'] ?? null, 'unknown');
+
+    // Nodes: unknown and maintenance keep their own words (were "offline").
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked) VALUES (171, 'B4 uzel', 'vps', '', 'maintenance', 'Test', 1, NOW())");
+    [, $b4_nodes] = api_get($base, 'action=public_status');
+    $b4_node = array_values(array_filter($b4_nodes['nodes'] ?? [], fn ($n) => $n['name'] === 'B4 uzel'))[0] ?? [];
+    check('uzel v údržbě je maintenance, ne offline', $b4_node['status'] ?? null, 'maintenance');
+    check_false('web mezi uzly není (dřív tam byl kvůli last_details)', in_array('Testovací web', array_column($b4_nodes['nodes'] ?? [], 'name'), true));
+} finally {
+    $pdo->exec("DELETE FROM monitors WHERE id = 171");
+    $b4_restore = $pdo->prepare("UPDATE monitors SET status = ?, last_checked = ?, maintenance = ? WHERE id = ?");
+    foreach ($b4_saved as $b4_row) {
+        $b4_restore->execute([$b4_row['status'], $b4_row['last_checked'], $b4_row['maintenance'], $b4_row['id']]);
+    }
+    if ($b4_cron === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'last_cron_run'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'last_cron_run'")->execute([$b4_cron]);
+    }
+}
+
+// =======================================================================
+// Windows longer than 30 days read the daily rollup (W1-B2).
+//
+// The raw logs are kept for 30 days: "Rok" counted a month of rows under a
+// one-year label, and response_time at 1y drew the last 24 hours. A monitor
+// with 21 rolled-up days 40-60 days ago and a few checks today.
+// =======================================================================
+$b2_day = fn (int $ago): string => date('Y-m-d', strtotime('-' . $ago . ' day', strtotime('today')));
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at) VALUES (170, 'B2 dlouhé okno', 'web', 'https://example.org', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 70 DAY))");
+$b2_ins = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, checks_total, checks_up, checks_down, checks_warning, avg_response_ms,
+    secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured) VALUES (170, ?, 288, 276, 12, 0, ?, 82800, 3600, 0, 0, 0, 0)");
+for ($b2_ago = 40; $b2_ago <= 60; $b2_ago++) {
+    $b2_ins->execute([$b2_day($b2_ago), 100 + $b2_ago]);
+}
+// Today's checks stay on today: at 00:05 "ten minutes ago" is yesterday, a
+// day with no rollup row, and the year's count below lost a check.
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+    (170, 'up', 90, GREATEST(DATE_SUB(NOW(), INTERVAL 10 MINUTE), TIMESTAMP(CURDATE()))),
+    (170, 'up', 95, GREATEST(DATE_SUB(NOW(), INTERVAL 5 MINUTE), TIMESTAMP(CURDATE()))), (170, 'up', 99, NOW())");
+try {
+    [, $b2_uw] = api_get_auth($base, 'action=uptime_windows', $cookie_jar);
+    $b2_row = $b2_uw['windows']['170'] ?? ($b2_uw['windows'][170] ?? []);
+    check('30 dní: jen dnešek, 100 %', $b2_row['d30'] ?? null, 100);
+    check_true('90 dní čte denní souhrny a liší se od 30 dní (dostal ' . json_encode($b2_row['d90'] ?? null) . ')', is_numeric($b2_row['d90'] ?? null) && $b2_row['d90'] < 99 && $b2_row['d90'] > 90);
+    check('okno 90 dní řekne, od kdy má data', $b2_row['since'] ?? null, $b2_day(60));
+    check('a kde okno začíná', $b2_uw['windowStart'] ?? null, ['d7' => $b2_day(6), 'd30' => $b2_day(29), 'd90' => $b2_day(89)]);
+
+    [, $b2_year] = api_get_auth($base, 'action=sla_report&days=365', $cookie_jar);
+    $b2_sla = array_values(array_filter($b2_year['monitors'] ?? [], fn ($m) => (int)$m['id'] === 170))[0] ?? [];
+    check('rok: okno začíná před 364 dny', $b2_year['windowStart'] ?? null, $b2_day(364));
+    check('rok: řádek řekne, od kdy má data', $b2_sla['since'] ?? null, $b2_day(60));
+    check_true('rok: souhrn nezačíná později než nejstarší řádek', is_string($b2_year['since'] ?? null) && $b2_year['since'] <= $b2_day(60));
+    check('rok: počet kontrol je z denních souhrnů, ne z měsíce logů', $b2_sla['totalChecks'] ?? null, 21 * 288 + 3);
+    check('rok: výpadky kontrol taky', $b2_sla['downChecks'] ?? null, 21 * 12);
+    check('percentily odezvy řeknou, že pokrývají 30 dní', $b2_year['percentileDays'] ?? null, 30);
+    [, $b2_month] = api_get_auth($base, 'action=sla_report&days=30', $cookie_jar);
+    $b2_sla30 = array_values(array_filter($b2_month['monitors'] ?? [], fn ($m) => (int)$m['id'] === 170))[0] ?? [];
+    check('30 dní: kontroly z logů jako dřív', $b2_sla30['totalChecks'] ?? null, 3);
+
+    [, $b2_rt] = api_get_auth($base, 'action=metric_series&monitor_id=170&metric=response_time&period=1y', $cookie_jar);
+    check('odezva za rok: denní rozlišení', $b2_rt['resolution'] ?? null, 'daily');
+    check('odezva za rok: 21 denních bodů, ne posledních 24 h', count($b2_rt['points'] ?? []), 21);
+    $b2_first = $b2_rt['points'][0] ?? [null, null];
+    check('první bod je nejstarší den se souhrnem', [$b2_first[0], (float)$b2_first[1]], [strtotime($b2_day(60) . ' 00:00:00'), 160.0]);
+    $b2_band = $b2_rt['dailyRange'][0] ?? [];
+    check('souhrn odezvy nemá min/max, pás se nevymýšlí',
+        [array_key_exists('min', $b2_band) ? $b2_band['min'] : 'chybí', array_key_exists('max', $b2_band) ? $b2_band['max'] : 'chybí'], [null, null]);
+    [, $b2_rt90] = api_get_auth($base, 'action=metric_series&monitor_id=170&metric=response_time&period=90d', $cookie_jar);
+    check('odezva za 90 dní: stejné dny', count($b2_rt90['points'] ?? []), 21);
+    [, $b2_prev] = api_get_auth($base, 'action=metric_series&monitor_id=170&metric=response_time&period=90d&previous=1', $cookie_jar);
+    check('předchozí okno 90 dní je o periodu zpět (prázdné)', $b2_prev['points'] ?? null, []);
+    [$b2_batch_code, $b2_batch] = api_get_auth($base, 'action=metric_series_batch&monitor_id=170&period=1y', $cookie_jar);
+    check('dávka grafů rok odmítne místo 24 h', [$b2_batch_code, $b2_batch['error'] ?? null], [400, 'period_unsupported']);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 170");
+    $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id = 170");
+    $pdo->exec("DELETE FROM monitors WHERE id = 170");
+}
+
+// =======================================================================
+// Insights in the findings feed: no cap of eight, one cache per language
+// (W1-B6).
+//
+// The Insights page reads the server's findings. The list stopped at eight,
+// and one cache served whichever language filled it first to everybody.
+// The dashboard_insights action that read the cache first is gone (D8).
+// =======================================================================
+$b6_items = fn (string $word): array => array_map(fn ($i) => ['monitorId' => 1, 'monitorName' => 'Testovací web',
+    'kind' => 'trend', 'severity' => 'warning', 'text' => "{$word} {$i}", 'detail' => ''], range(1, 10));
+bk_kv_cache_put($pdo, 'dashboard_insights_cache_cs', $b6_items('Česky'));
+bk_kv_cache_put($pdo, 'dashboard_insights_cache_en', $b6_items('English'));
+// The feed sorts one device's findings of one severity by key, a hash of the text.
+$b6_titles = function (?array $answer): array {
+    $titles = array_map(fn ($f) => (string)($f['title'] ?? ''),
+        array_values(array_filter($answer['findings'] ?? [], fn ($f) => ($f['source'] ?? '') === 'insight')));
+    sort($titles, SORT_NATURAL);
+    return $titles;
+};
+try {
+    [, $b6_cs] = api_get_auth($base, 'action=findings&limit=500&lang=cs', $cookie_jar);
+    check('postřehy ve zjištěních: všech deset z české cache, žádný strop osmi', $b6_titles($b6_cs),
+        array_map(fn ($i) => "Česky {$i}", range(1, 10)));
+    [, $b6_en] = api_get_auth($base, 'action=findings&limit=500&lang=en', $cookie_jar);
+    check('anglicky se čte anglická cache', $b6_titles($b6_en), array_map(fn ($i) => "English {$i}", range(1, 10)));
+    [, $b6_wo] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
+    check('přehled webů nese mez upozornění na certifikát', $b6_wo['sslAlertDays'] ?? null, 14);
+    // Neither D8 action has a caller in the app; both are unknown now.
+    [$b6_gone] = api_get_auth($base, 'action=dashboard_insights&lang=cs', $cookie_jar);
+    [$b6_assign] = api_post($base, 'action=assign_preset', ['presetId' => 0, 'monitorIds' => [1]], $cookie_jar);
+    check('dashboard_insights a assign_preset jsou neznámé akce', [$b6_gone, $b6_assign], [400, 400]);
+} finally {
+    $pdo->exec("DELETE FROM settings WHERE key_name IN ('dashboard_insights_cache_cs', 'dashboard_insights_cache_en')");
+}
+
+// =======================================================================
+// The router's last error lines (W1-C3, owner decision 5.7).
+//
+// Agent 0.1.8 sends up to five masked lines. The server masks them again,
+// keeps them in last_details only, and a monitor switched off keeps none and
+// tells the agent so with an unspaced "log_lines":false it matches literally.
+// =======================================================================
+$c3_post = function (array $extra) use ($base, $agent_payload): array {
+    [$code, , $body] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'],
+        (string)json_encode(array_merge($agent_payload, $extra), JSON_UNESCAPED_UNICODE));
+    return [$code, $body];
+};
+$c3_details = fn (): array => json_decode((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), true) ?: [];
+$c3_lines = [
+    'log_errors_recent' => [
+        ['ts' => 1758600000, 'prog' => 'netifd', 'msg' => 'Interface wan (10.20.30.40) is down', 'count' => 3],
+        ['ts' => 1758590000, 'prog' => 'kernel', 'msg' => 'eth1: link down aa:bb:cc:dd:ee:ff', 'count' => 1],
+    ],
+    'log_window_secs' => 5400,
+    'log_lines_state' => 'on',
+];
+try {
+    [$c3_code, $c3_body] = $c3_post($c3_lines);
+    check('hlášení s řádky logu agent přijme', $c3_code, 200);
+    check_true('odpověď řekne "log_lines":true', str_contains($c3_body, '"log_lines":true'));
+    $c3_d = $c3_details();
+    check('řádky se uloží, adresy zamaskované i u starého agenta', array_column($c3_d['log_errors_recent'] ?? [], 'msg'),
+        ['Interface wan (<ipv4>) is down', 'eth1: link down <mac>']);
+    check('okno logu se uloží', $c3_d['log_window_secs'] ?? null, 5400);
+    check('stav se uloží', $c3_d['log_lines_state'] ?? null, 'on');
+    check_false('syrová adresa v details není', str_contains((string)$pdo->query("SELECT last_details FROM monitors WHERE id = 2")->fetchColumn(), '10.20.30.40'));
+
+    $pdo->exec("UPDATE monitors SET log_lines_enabled = 0 WHERE id = 2");
+    [, $c3_off_body] = $c3_post($c3_lines);
+    check_true('vypnuto u monitoru: odpověď "log_lines":false', str_contains($c3_off_body, '"log_lines":false'));
+    $c3_off = $c3_details();
+    check('vypnuto: žádný řádek se neuloží', array_key_exists('log_errors_recent', $c3_off) ? $c3_off['log_errors_recent'] : 'chybí', null);
+    check('vypnuto: stav řekne, že u monitoru', $c3_off['log_lines_state'] ?? null, 'off_monitor');
+    [, $c3_admin] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    $c3_row = array_values(array_filter($c3_admin['monitors'] ?? [], fn ($m) => (int)$m['id'] === 2))[0] ?? [];
+    check('admin vidí přepínač vypnutý', $c3_row['logLinesEnabled'] ?? null, false);
+} finally {
+    $pdo->exec("UPDATE monitors SET log_lines_enabled = 1 WHERE id = 2");
+}
+
+// =======================================================================
+// The branded error page in both languages, absolute links (W1-F3).
+// =======================================================================
+[$f3_code, $f3_head, $f3_body] = bk_raw_request($base . '/error.php?code=410', ['Accept-Language: en-US,en;q=0.9']);
+check('chybová stránka 410 odpoví 410', $f3_code, 410);
+check_true('anglicky podle prohlížeče', str_contains($f3_body, '<html lang="en">') && str_contains($f3_body, 'This page is gone'));
+check_true('tlačítka vedou na /app/public a /status/', str_contains($f3_body, 'href="/app/public"') && str_contains($f3_body, 'href="/status/"'));
+check_false('a ne na administraci', str_contains($f3_body, 'admin.php'));
+check_true('stránka se neindexuje', str_contains($f3_body, '<meta name="robots" content="noindex">') && (bool)preg_match('/^x-robots-tag:\s*noindex/mi', $f3_head));
+[$f3_503, $f3_503_head, $f3_503_body] = bk_raw_request($base . '/error.php?code=503', ['Accept-Language: cs']);
+check('chybová stránka 503 odpoví 503 s Retry-After', [$f3_503, (bool)preg_match('/^retry-after:\s*60/mi', $f3_503_head)], [503, true]);
+check_true('česky', str_contains($f3_503_body, 'Služba je dočasně nedostupná'));
+[$f3_other] = bk_raw_request($base . '/error.php?code=418');
+check('neznámý kód je 404', $f3_other, 404);
+
+// =======================================================================
+// A failed query is a 5xx JSON error, never 200 with an empty list (W1-A2).
+//
+// Catch blocks answered `monitors: []`, `incidents: []`, `series: {}` with a
+// 200, and every reader turned that into "all online", "no outages" or
+// "nothing in the database" exactly when nothing was known.
+// =======================================================================
+
+// 1. Statically: no catch block in api.php echoes a body without an error
+//    status. A catch may log, rethrow, fall back to null or go on - but when
+//    it answers, it answers with 4xx/5xx (bk_api_fail or http_response_code).
+$a2_tokens = token_get_all((string)file_get_contents($root . '/api.php'));
+$a2_bad = [];
+$a2_count = 0;
+for ($i = 0, $n = count($a2_tokens); $i < $n; $i++) {
+    if (!is_array($a2_tokens[$i]) || $a2_tokens[$i][0] !== T_CATCH) {
+        continue;
+    }
+    $a2_count++;
+    $a2_line = $a2_tokens[$i][2];
+    $j = $i;
+    while ($j < $n && $a2_tokens[$j] !== '{') {
+        $j++;
+    }
+    $depth = 0;
+    $body = '';
+    for ($k = $j; $k < $n; $k++) {
+        $t = $a2_tokens[$k];
+        if (is_array($t) && in_array($t[0], [T_COMMENT, T_DOC_COMMENT], true)) {
+            continue;
+        }
+        if ($t === '{' || (is_array($t) && in_array($t[0], [T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true))) {
+            $depth++;
+        } elseif ($t === '}' && --$depth === 0) {
+            break;
+        }
+        $body .= is_array($t) ? $t[1] : $t;
+    }
+    $answers = (bool)preg_match('/\b(echo|print)\b/', $body);
+    $error_status = (bool)preg_match('/bk_api_fail\s*\(|http_response_code\s*\([^;]*\b[45]\d\d\b/', $body);
+    if ($answers && !$error_status) {
+        $a2_bad[] = 'api.php:' . $a2_line;
+    }
+    if (trim($body, " \t\n\r{") === '') {
+        // An empty catch hides the failure from everyone, the log included.
+        $a2_bad[] = 'api.php:' . $a2_line . ' (prázdný catch)';
+    }
+}
+check_true('api.php má bloky catch ke kontrole', $a2_count > 50);
+check('žádný catch v api.php neodpovídá úspěchem ani nemlčí', $a2_bad, []);
+
+// 2. For real: the two tables almost every read touches disappear for a
+//    moment, and each list endpoint must say it failed.
+$pdo->exec("RENAME TABLE monitor_logs TO monitor_logs_a2, vps_metrics TO vps_metrics_a2");
+try {
+    $a2_actions = [
+        'monitors' => 'monitors',
+        'incidents' => 'incidents',
+        'daily_uptime&days=7' => 'series',
+        'uptime_windows' => 'windows',
+        'sla_report&days=30' => 'monitors',
+        'audit_logs&limit=5' => 'logs',
+        'public_status' => 'status',
+        'metric_series&monitor_id=1&metric=response_time&period=24h' => 'points',
+        'metric_series_batch&monitor_id=1&period=24h' => 'series',
+        'metric_heatmap&monitor_id=1&metric=response_time&days=7' => 'days',
+        'metrics_history&monitor_id=2&period=24h' => 'labels',
+        'websites_overview' => 'monitors',
+    ];
+    // The overview is cached for ten minutes; a cached answer is not the read under test.
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'websites_overview_cache'");
+    foreach ($a2_actions as $a2_query => $a2_list_key) {
+        [$a2_code, $a2_json, $a2_raw] = api_get_auth($base, 'action=' . $a2_query, $cookie_jar);
+        $a2_label = explode('&', $a2_query)[0];
+        check_true("selhaný dotaz, {$a2_label}: 5xx (dostal {$a2_code})", $a2_code >= 500 && $a2_code < 600);
+        check_true("selhaný dotaz, {$a2_label}: JSON s kódem chyby", is_array($a2_json) && is_string($a2_json['error'] ?? null) && $a2_json['error'] !== '');
+        check_false("selhaný dotaz, {$a2_label}: žádný prázdný seznam vedle chyby", is_array($a2_json) && array_key_exists($a2_list_key, $a2_json));
+        check_false("selhaný dotaz, {$a2_label}: nic neprozradí", str_contains($a2_raw, 'SQLSTATE') || str_contains($a2_raw, 'monitor_logs'));
+    }
+} finally {
+    $pdo->exec("RENAME TABLE monitor_logs_a2 TO monitor_logs, vps_metrics_a2 TO vps_metrics");
+}
+[$a2_after] = api_get_auth($base, 'action=monitors', $cookie_jar);
+check('po obnovení tabulek monitory zase odpovídají', $a2_after, 200);
+
+// =======================================================================
+// Cloudflare Worker history (agents e13a2d4): until then the Worker put its
+// egress IP's country on every colo, and production shows "🇺🇸 Mumbai, US"
+// in the regions list and in every event. The schema migration gives those
+// rows the colo's country and leaves every other label as it was.
+// =======================================================================
+$cf_suffix = ' (AS13335 Cloudflare)';
+// The version db.php stores after the migrations, read from its source: a
+// later bump (or a merge that needs a third value) keeps these checks true.
+$cf_version = preg_match("/BK_SCHEMA_VERSION',\s*'([0-9a-z]+)'/", (string)file_get_contents($root . '/db.php'), $cf_v) ? $cf_v[1] : null;
+check_true('db.php definuje BK_SCHEMA_VERSION', $cf_version !== null);
+$cf_seed = [
+    // [minutes ago, status, label, label after the migration]
+    [180, 'up', '🇺🇸 Mumbai, US' . $cf_suffix, '🇮🇳 Mumbai, IN' . $cf_suffix],
+    [120, 'up', '🇺🇸 Mumbai, US' . $cf_suffix, '🇮🇳 Mumbai, IN' . $cf_suffix],
+    [100, 'up', '🇺🇸 TXL, US' . $cf_suffix, '🇩🇪 Berlin, DE' . $cf_suffix],
+    [90, 'down', '🇺🇸 Frankfurt, US' . $cf_suffix, '🇩🇪 Frankfurt, DE' . $cf_suffix],
+    // Only the flag is wrong - to the table's unicode_ci the same value as
+    // the correct label below, which is older: grouped in unicode_ci, the
+    // correct label would stand for both and this row would stay wrong.
+    [80, 'up', '🇺🇸 Frankfurt, DE' . $cf_suffix, '🇩🇪 Frankfurt, DE' . $cf_suffix],
+    [95, 'up', '🇩🇪 Frankfurt, DE' . $cf_suffix, '🇩🇪 Frankfurt, DE' . $cf_suffix],
+    [5, 'up', '🇺🇸 Seattle, US' . $cf_suffix, '🇺🇸 Seattle, US' . $cf_suffix],
+    [4, 'up', '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)', '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)'],
+    [3, 'up', '🇺🇸 Ashburn, US' . $cf_suffix, '🇺🇸 Ashburn, US' . $cf_suffix],
+    // No colo in the trace, and a colo the map does not know.
+    [70, 'up', '🇺🇸 US' . $cf_suffix, '🌐 Cloudflare Edge' . $cf_suffix],
+    [60, 'up', '🇺🇸 XYZ, US' . $cf_suffix, '🌐 XYZ' . $cf_suffix],
+];
+$cf_labels = function () use ($pdo): array {
+    return $pdo->query("SELECT id, checked_from COLLATE utf8mb4_bin AS label FROM monitor_logs ORDER BY id")->fetchAll(PDO::FETCH_KEY_PAIR);
+};
+$cf_snapshot = function () use ($pdo): ?array {
+    $raw = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'digest_snapshot_weekly'")->fetchColumn();
+    $regions = json_decode((string)$raw, true)['regions'] ?? null;
+    if (is_array($regions)) {
+        ksort($regions);
+    }
+    return $regions;
+};
+$cf_locations = fn (array $rows): array => array_values(array_unique(array_map(fn ($r) => (string)($r['location'] ?? ''), $rows)));
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, is_public, last_checked) VALUES
+                (195, 'Web z Cloudflare', 'web', 'https://example.com/cf', 'up', 'Test', 1, NOW())");
+    $cf_ins = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at, checked_from)
+                             VALUES (195, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE), ?)");
+    $cf_ids = [];
+    foreach ($cf_seed as [$cf_ago, $cf_status, $cf_label]) {
+        $cf_ins->execute([$cf_status, $cf_status === 'up' ? 80 : null, $cf_status === 'up' ? null : 'Timeout', $cf_ago, $cf_label]);
+        $cf_ids[] = (int)$pdo->lastInsertId();
+    }
+    $pdo->exec("INSERT INTO settings (key_name, key_value) VALUES ('digest_snapshot_weekly', '" . json_encode(['score' => 90, 'regions' => [
+        '🇺🇸 Mumbai, US' . $cf_suffix => 120,
+        '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)' => 30,
+        '🇺🇸 Frankfurt, US' . $cf_suffix => 40,
+        '🇩🇪 Frankfurt, DE' . $cf_suffix => 35,
+    ]], JSON_UNESCAPED_UNICODE) . "') ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)");
+
+    // Both regions answers get cached with the wrong labels first.
+    [, $cf_reg_before] = api_get_auth($base, 'action=regions&days=7', $cookie_jar);
+    [, $cf_pub_before] = api_get($base, 'action=regions&days=7');
+    check_true('před migrací: místa měření ukazují Mumbai s vlajkou USA',
+        in_array('🇺🇸 Mumbai, US' . $cf_suffix, $cf_locations($cf_reg_before['regions'] ?? []), true)
+        && in_array('🇺🇸 Mumbai, US' . $cf_suffix, $cf_locations($cf_pub_before['regions'] ?? []), true));
+
+    $cf_before = $cf_labels();
+    // The rows are older than the fix, so the database has not had it.
+    $forget_data_fix('cloudflare-location-history');
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    check('migrace Cloudflare proběhla a uložila novou verzi', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn(), $cf_version);
+    $cf_after = $cf_labels();
+
+    $cf_expected = $cf_before;
+    foreach ($cf_seed as $cf_i => $cf_row) {
+        $cf_expected[$cf_ids[$cf_i]] = $cf_row[3];
+    }
+    check('přepíšou se jen špatné štítky Cloudflare, ostatní řádky beze změny', $cf_after, $cf_expected);
+    check('změněné řádky: dva Mumbai, TXL, dva Frankfurty, bez kolokace a neznámý kód',
+        array_keys(array_diff_assoc($cf_after, $cf_before)), [$cf_ids[0], $cf_ids[1], $cf_ids[2], $cf_ids[3], $cf_ids[4], $cf_ids[9], $cf_ids[10]]);
+
+    [, $cf_reg] = api_get_auth($base, 'action=regions&days=7', $cookie_jar);
+    $cf_reg_rows = array_values(array_filter($cf_reg['regions'] ?? [], fn ($r) => str_contains((string)($r['location'] ?? ''), 'Cloudflare') || str_contains((string)($r['location'] ?? ''), 'RackNerd')));
+    $cf_reg_locs = $cf_locations($cf_reg_rows);
+    sort($cf_reg_locs);
+    $cf_reg_expected = [
+        '🇩🇪 Berlin, DE' . $cf_suffix,
+        '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)',
+        '🇩🇪 Frankfurt, DE' . $cf_suffix,
+        '🇮🇳 Mumbai, IN' . $cf_suffix,
+        '🇺🇸 Ashburn, US' . $cf_suffix,
+        '🇺🇸 Seattle, US' . $cf_suffix,
+        '🌐 Cloudflare Edge' . $cf_suffix,
+        '🌐 XYZ' . $cf_suffix,
+    ];
+    sort($cf_reg_expected);
+    check('místa měření (administrace): opravené štítky, RackNerd a neznámé město beze změny', $cf_reg_locs, $cf_reg_expected);
+    $cf_fra = array_values(array_filter($cf_reg_rows, fn ($r) => ($r['location'] ?? null) === '🇩🇪 Frankfurt, DE' . $cf_suffix))[0] ?? [];
+    check('Frankfurt je jedno místo se všemi třemi kontrolami, výpadek v něm', [$cf_fra['checks'] ?? null, $cf_fra['downChecks'] ?? null], [3, 1]);
+
+    [, $cf_pub] = api_get($base, 'action=regions&days=7');
+    $cf_pub_locs = $cf_locations($cf_pub['regions'] ?? []);
+    check_true('veřejná místa měření: Mumbai v Indii, žádná stará vlajka',
+        in_array('🇮🇳 Mumbai, IN' . $cf_suffix, $cf_pub_locs, true)
+        && !in_array('🇺🇸 Mumbai, US' . $cf_suffix, $cf_pub_locs, true)
+        && !in_array('🇺🇸 Frankfurt, US' . $cf_suffix, $cf_pub_locs, true));
+
+    [$cf_ev_code, $cf_ev] = api_get($base, 'action=events&monitor_id=195&limit=50&scope=public');
+    check('události veřejně vrací 200', $cf_ev_code, 200);
+    $cf_ev_locs = $cf_locations($cf_ev['events'] ?? []);
+    sort($cf_ev_locs);
+    $cf_ev_expected = array_values(array_unique(array_column($cf_seed, 3)));
+    sort($cf_ev_expected);
+    check('události: každá kontrola nese opravené místo', $cf_ev_locs, $cf_ev_expected);
+    $cf_down = array_values(array_filter($cf_ev['events'] ?? [], fn ($e) => ($e['rawStatus'] ?? null) === 'down'))[0] ?? [];
+    check('výpadek z Frankfurtu: vlajka a země Německa', $cf_down['location'] ?? null, '🇩🇪 Frankfurt, DE' . $cf_suffix);
+    [, $cf_ev_admin] = api_get_auth($base, 'action=events&monitor_id=195&limit=50', $cookie_jar);
+    $cf_ev_admin_locs = $cf_locations($cf_ev_admin['events'] ?? []);
+    sort($cf_ev_admin_locs);
+    check('události v administraci stejně', $cf_ev_admin_locs, $cf_ev_expected);
+
+    check('týdenní digest porovná trend pod opraveným štítkem (správný už uložený vyhrává)', $cf_snapshot(), [
+        '🇩🇪 Frankfurt am Main, DE (RackNerd, LLC)' => 30,
+        '🇩🇪 Frankfurt, DE' . $cf_suffix => 35,
+        '🇮🇳 Mumbai, IN' . $cf_suffix => 120,
+    ]);
+
+    // A second run (a run cut short before its record was stored) finds
+    // nothing to change.
+    $cf_snap_first = $cf_snapshot();
+    $forget_data_fix('cloudflare-location-history');
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    check('druhý běh migrace: verze zase uložená', $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn(), $cf_version);
+    check('druhý běh migrace nezmění žádný řádek', $cf_labels(), $cf_after);
+    check('druhý běh migrace nezmění snímek digestu', $cf_snapshot(), $cf_snap_first);
+} finally {
+    $pdo->exec("DELETE FROM monitors WHERE id = 195");
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'digest_snapshot_weekly' OR key_name LIKE 'regions_cache_%'");
+}
+
+// =======================================================================
+// A migration that fails for real keeps the old schema_version.
+//
+// Every migration error used to be swallowed and the version stored anyway,
+// so a failed statement was not tried again until the next bump. A check row
+// with no status makes the migration that sets monitor_logs.status NOT NULL
+// fail with 1138 in MySQL's strict mode (not an "already there" code): the
+// version stays, the failed run is kept, and the list runs again 10 minutes
+// later - not on every request in between, which reran every step while the
+// cause lasted. health.php says so meanwhile. Once the row is gone, the next
+// run after the 10 minutes succeeds, stores the version and drops the record.
+// =======================================================================
+$schema_stored = fn () => $pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_version'")->fetchColumn();
+$schema_failed_run = fn (): ?array => json_decode((string)$pdo->query("SELECT key_value FROM settings WHERE key_name = 'schema_migrations_failed'")->fetchColumn(), true);
+// The 10 minutes are over: the kept run moves 11 minutes back.
+$schema_wait_over = function () use ($pdo, $schema_failed_run): void {
+    $run = $schema_failed_run();
+    if (!is_array($run)) {
+        return;
+    }
+    $run['at'] -= 660;
+    $run['retry'] -= 660;
+    $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'schema_migrations_failed'")->execute([json_encode($run)]);
+};
+$schema_health = function () use ($page_get, $cookie_jar): array {
+    [, $b] = $page_get('/health.php?format=json', $cookie_jar);
+    return array_values(array_filter(json_decode($b, true)['checks'] ?? [], fn ($x) => ($x['name'] ?? '') === 'schema_version'))[0] ?? [];
+};
+check_true('testovací MySQL běží ve striktním režimu (bez něj NOT NULL nad NULL neselže)',
+    str_contains((string)$pdo->query('SELECT @@GLOBAL.sql_mode')->fetchColumn(), 'STRICT_TRANS_TABLES'));
+$me_log_before = count($migration_log());
+$pdo->exec("ALTER TABLE monitor_logs MODIFY COLUMN status VARCHAR(20) NULL");
+$pdo->exec("INSERT INTO monitor_logs (monitor_id, status, checked_from) VALUES (1, NULL, 'Test migrace')");
+try {
+    $force_schema_bump();
+    [$me_code] = api_get($base, 'action=public_status');
+    check('migrace se skutečnou chybou: request sám projde', $me_code, 200);
+    check('migrace se skutečnou chybou: verze schématu zůstane stará', $schema_stored(), 'test-old');
+    $me_lines = array_slice($migration_log(), $me_log_before);
+    check('a do logu jde ten jeden krok s chybou MySQL a verze, která zůstala, i s časem dalšího pokusu', [
+        count($me_lines),
+        preg_match('/\[db\] migration \d+ of \d+ failed \(ALTER TABLE monitor_logs MODIFY COLUMN status VARCHAR\(20\) NOT NULL\): SQLSTATE\[22004\]: .*1138/', $me_lines[0] ?? ''),
+        preg_match("/\\[db\\] schema_version stays 'test-old': 1 migrations failed \\(\\d+\\), the list runs again after \\d\\d:\\d\\d:\\d\\d$/", $me_lines[1] ?? ''),
+    ], [2, 1, 1]);
+    $me_run = $schema_failed_run();
+    check('neúspěšný běh se uloží s verzí, krokem a dalším pokusem za 10 minut', [
+        $me_run['version'] ?? null, count($me_run['steps'] ?? []), abs((int)($me_run['at'] ?? 0) - time()) <= 60,
+        (int)($me_run['retry'] ?? 0) - (int)($me_run['at'] ?? 0),
+    ], [$schema_version_src, 1, true, 600]);
+    [$me_code] = api_get($base, 'action=public_status');
+    check('další request do 10 minut seznam znovu nespustí, projde a verze zůstane',
+        [$me_code, $schema_stored(), count(array_slice($migration_log(), $me_log_before))], [200, 'test-old', 2]);
+    $me_check = $schema_health();
+    check('health.php místo OK hlásí krok, který selhal, a kdy se zkusí znovu', [
+        $me_check['ok'] ?? null,
+        preg_match("/^test-old, not {$schema_version_src}: migration step \\d+ failed at [0-9: -]{19}, next try after \\d\\d:\\d\\d:\\d\\d; the error log has the cause$/", (string)($me_check['detail'] ?? '')),
+    ], [false, 1]);
+    // After the 10 minutes the list runs again; the row is still there.
+    $schema_wait_over();
+    api_get($base, 'action=public_status');
+    check('po 10 minutách seznam běží znovu, krok zase selže a čeká se dalších 10 minut', [
+        $schema_stored(), count(array_slice($migration_log(), $me_log_before)), abs((int)($schema_failed_run()['at'] ?? 0) - time()) <= 60,
+    ], ['test-old', 4, true]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE checked_from = 'Test migrace'");
+}
+api_get($base, 'action=public_status');
+check('opravená data: do konce 10 minut seznam neběží a verze je pořád stará',
+    [$schema_stored(), count(array_slice($migration_log(), $me_log_before))], ['test-old', 4]);
+$schema_wait_over();
+api_get($base, 'action=public_status');
+check('bez vadného řádku migrace doběhne, uloží verzi, záznam o selhání smaže a status je zase NOT NULL', [
+    $schema_stored(),
+    $schema_failed_run(),
+    $pdo->query("SELECT IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'monitor_logs' AND COLUMN_NAME = 'status'")->fetchColumn(),
+    count(array_slice($migration_log(), $me_log_before)),
+], [$schema_version_src, null, 'NO', 4]);
+$me_check = $schema_health();
+check('a health.php verzi zase pustí', [$me_check['ok'] ?? null, $me_check['detail'] ?? null], [true, $schema_version_src]);
+
+// health.php and cron's daily self-test check the database against every
+// table and column of schema.sql (bk_schema_missing in db.php). Their own
+// hand-picked lists passed a database without metric_annotations (R280).
+$sm_health = function () use ($page_get, $cookie_jar): array {
+    [, $b] = $page_get('/health.php?format=json', $cookie_jar);
+    $out = [];
+    foreach (json_decode($b, true)['checks'] ?? [] as $c) {
+        if (in_array($c['name'] ?? '', ['Schema tables', 'Schema columns'], true)) {
+            $out[$c['name']] = [$c['ok'] ?? null, $c['detail'] ?? null];
+        }
+    }
+    return $out;
+};
+check('databáze ze schema.sql a migrací má všechno, co schema.sql zakládá', bk_schema_missing($pdo), ['tables' => [], 'columns' => []]);
+check('health.php: tabulky i sloupce schema.sql projdou', $sm_health(), [
+    'Schema tables' => [true, 'every table of schema.sql'],
+    'Schema columns' => [true, 'every column of schema.sql in the tables present'],
+]);
+$pdo->exec("RENAME TABLE metric_annotations TO bk_test_annotations_away");
+$pdo->exec("ALTER TABLE vps_metrics DROP COLUMN wan_oversize");
+try {
+    check('chybějící tabulku i sloupec schéma jmenuje', bk_schema_missing($pdo),
+        ['tables' => ['metric_annotations'], 'columns' => ['vps_metrics.wan_oversize']]);
+    check('health.php je jmenuje a neprojde', $sm_health(), [
+        'Schema tables' => [false, 'Missing: metric_annotations (schema.sql creates them)'],
+        'Schema columns' => [false, 'Missing: vps_metrics.wan_oversize (schema.sql defines them)'],
+    ]);
+} finally {
+    $pdo->exec("RENAME TABLE bk_test_annotations_away TO metric_annotations");
+    $pdo->exec("ALTER TABLE vps_metrics ADD COLUMN wan_oversize INT DEFAULT NULL");
+}
+check('vrácené schéma zase projde', bk_schema_missing($pdo), ['tables' => [], 'columns' => []]);
+
+// A duplicate row (1062) is "already there" only for the installer's seed
+// INSERTs. In the migrations only CREATE UNIQUE INDEX raises it, over rows
+// that break the index: two monitors with one heartbeat token leave the
+// index unbuilt, and the version stays until the data is fixed.
+$hb_tokens = $pdo->query("SELECT id, heartbeat_token FROM monitors WHERE id IN (1, 2)")->fetchAll(PDO::FETCH_KEY_PAIR);
+$hb_index = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'monitors' AND INDEX_NAME = 'idx_monitors_heartbeat_token'")->fetchColumn();
+check('unikátní index tokenů heartbeatu po migracích existuje', $hb_index(), 1);
+$hb_log_before = count($migration_log());
+$pdo->exec("DROP INDEX idx_monitors_heartbeat_token ON monitors");
+$pdo->exec("UPDATE monitors SET heartbeat_token = 'test-dup-token' WHERE id IN (1, 2)");
+try {
+    $force_schema_bump();
+    api_get($base, 'action=public_status');
+    $hb_lines = array_slice($migration_log(), $hb_log_before);
+    check('dva monitory s jedním tokenem: index nevznikne, verze zůstane a log jmenuje krok s 1062', [
+        $hb_index(),
+        $schema_stored(),
+        count($hb_lines),
+        preg_match('/\[db\] migration \d+ of \d+ failed \(CREATE UNIQUE INDEX idx_monitors_heartbeat_token ON monitors \(heartbeat_token\)\): SQLSTATE\[23000\]: .*1062/', $hb_lines[0] ?? ''),
+        count($schema_failed_run()['steps'] ?? []),
+    ], [0, 'test-old', 2, 1, 1]);
+} finally {
+    $hb_restore = $pdo->prepare("UPDATE monitors SET heartbeat_token = ? WHERE id = ?");
+    foreach ([1, 2] as $hb_id) {
+        $hb_restore->execute([$hb_tokens[$hb_id] ?? null, $hb_id]);
+    }
+}
+$schema_wait_over();
+api_get($base, 'action=public_status');
+check('po opravě dat a 10 minutách migrace index postaví, uloží verzi a záznam smaže', [
+    $hb_index(),
+    $schema_stored(),
+    $schema_failed_run(),
+    count(array_slice($migration_log(), $hb_log_before)),
+], [1, $schema_version_src, null, 2]);
+
+// =======================================================================
+// db.php runs only the list migrations.php holds for its own version, and
+// only when the file is there.
+//
+// FTP replaces files in name order, so a deploy puts a new db.php next to
+// the old migrations.php for a moment: that list finds its steps applied,
+// and running it would store the new version without the new steps. A file
+// that is gone (a malware scanner's quarantine took agent.sh before, and the
+// sync state never uploads a file it thinks is there) was a fatal error on
+// every request. Both are a logged skip: the request goes on and the version
+// stays. A copy of db.php in a folder of its own runs both cases without
+// touching the files the test server serves.
+// =======================================================================
+$hu_dir = sys_get_temp_dir() . '/bk_half_upload_' . bin2hex(random_bytes(4));
+$hu_log = $hu_dir . '/error.log';
+$hu_run = function () use ($hu_dir, $hu_log): array {
+    @unlink($hu_log);
+    $out = [];
+    exec(escapeshellarg(PHP_BINARY) . ' -d log_errors=1 -d error_log=' . escapeshellarg($hu_log) . ' -r '
+        . escapeshellarg('require ' . var_export($hu_dir . '/db.php', true) . '; echo "request done";') . ' 2>&1', $out, $rc);
+    return [$rc, implode("\n", $out), array_values(preg_grep('/\[db\] (migration|schema_version)/', file($hu_log, FILE_IGNORE_NEW_LINES) ?: []) ?: [])];
+};
+$hu_other = str_replace("return '{$schema_version_src}';", "return 'test-other';",
+    (string)file_get_contents($root . '/migrations.php'), $hu_replaced);
+mkdir($hu_dir, 0700);
+try {
+    // cloudflare_colos.php only for a list that should not have run.
+    foreach (['db.php', 'config.php', 'cloudflare_colos.php'] as $hu_file) {
+        copy($root . '/' . $hu_file, $hu_dir . '/' . $hu_file);
+    }
+    $force_schema_bump();
+    [$hu_rc, $hu_out, $hu_lines] = $hu_run();
+    check('bez migrations.php request doběhne, verze zůstane a log řekne proč', [
+        $hu_rc, $hu_out, $schema_stored(), count($hu_lines),
+        str_contains($hu_lines[0] ?? '', "[db] schema_version stays 'test-old': migrations.php is missing, the list did not run"),
+    ], [0, 'request done', 'test-old', 1, true]);
+    check('kopie migrations.php nese jinou verzi', $hu_replaced, 1);
+    file_put_contents($hu_dir . '/migrations.php', $hu_other);
+    [$hu_rc, $hu_out, $hu_lines] = $hu_run();
+    check('migrations.php pro jinou verzi: seznam neběží, verze zůstane a log řekne proč', [
+        $hu_rc, $hu_out, $schema_stored(), count($hu_lines),
+        str_contains($hu_lines[0] ?? '', "[db] schema_version stays 'test-old': migrations.php is for test-other, db.php for {$schema_version_src}, the list did not run"),
+    ], [0, 'request done', 'test-old', 1, true]);
+} finally {
+    foreach (['db.php', 'config.php', 'cloudflare_colos.php', 'migrations.php', 'error.log'] as $hu_file) {
+        @unlink($hu_dir . '/' . $hu_file);
+    }
+    @rmdir($hu_dir);
+    $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'schema_version'")->execute([$schema_version_src]);
+}
+
+// =======================================================================
+// A remote probe only adds a row to the measurement history (R144).
+//
+// node_api's post_results wrote the probe's status straight into monitors,
+// past maintenance, alert_confirm_failures and every notification, and set
+// last_details to NULL for a result without details - every web result of
+// the Cloudflare Worker. That wiped cron's last_ssl_warn, so the SSL warning
+// went out every five minutes; a monitor in maintenance turned 'up' and cron
+// announced the maintenance again; a 'down' written first was never alerted.
+// A monitor in maintenance gets no row at all: cron logs the window, and a
+// probe's 503 in it was an outage in availability and the SLA report.
+// =======================================================================
+$np_key = 'test-node-key-' . str_repeat('x', 24);
+$np_prev_key = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'cron_key'")->fetchColumn();
+$np_details = json_encode(['last_ssl_warn' => 1767225600, 'latency_alert_sent' => true, 'ssl_days_remaining' => 10]);
+$np_row = fn (): array => $pdo->query("SELECT id, status, last_checked, last_status_change, last_details
+                                        FROM monitors WHERE id IN (176, 177, 179) ORDER BY id")->fetchAll();
+try {
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('cron_key', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+        ->execute([$np_key]);
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_checked, last_status_change, last_details) VALUES
+                   (176, 'Web se sondou', 'web', 'https://example.com/sonda', 'up', 'Test', '2026-10-01 12:00:00', '2026-09-30 08:00:00', ?),
+                   (177, 'Web v údržbě se sondou', 'web', 'https://example.com/udrzba-sonda', 'maintenance', 'Test', '2026-10-01 12:00:00', '2026-10-01 11:00:00', NULL),
+                   (179, 'Web po skončené údržbě se sondou', 'web', 'https://example.com/po-okne-sonda', 'maintenance', 'Test', '2026-10-01 12:00:00', '2026-10-01 11:00:00', NULL)")
+        ->execute([$np_details]);
+    // 177's window runs now; 179's ended two days ago and cron has not yet
+    // switched the flag off. Days, not minutes, so no time-zone difference
+    // between PHP and this connection moves either window across now.
+    $pdo->exec("UPDATE monitors SET maintenance = 1, maintenance_start = DATE_SUB(NOW(), INTERVAL 1 DAY),
+                maintenance_end = DATE_ADD(NOW(), INTERVAL 1 DAY) WHERE id = 177");
+    $pdo->exec("UPDATE monitors SET maintenance = 1, maintenance_start = DATE_SUB(NOW(), INTERVAL 3 DAY),
+                maintenance_end = DATE_SUB(NOW(), INTERVAL 2 DAY) WHERE id = 179");
+    $np_before = $np_row();
+    [$np_code, , $np_body] = bk_raw_request($base . '/node_api.php?action=post_results&key=' . rawurlencode($np_key),
+        ['Content-Type: application/json'], json_encode(['location' => 'Testovací uzel', 'results' => [
+            ['id' => 176, 'status' => 'down', 'response_time' => 8000, 'error' => 'Timeout after 8000ms'],
+            ['id' => 177, 'status' => 'up'],
+            ['id' => 177, 'status' => 'down', 'error' => 'HTTP 503'],
+            ['id' => 176],
+            ['id' => 999999, 'status' => 'up', 'response_time' => 50],
+            ['id' => 179, 'status' => 'up'],
+        ]]));
+    $np_resp = json_decode($np_body, true);
+    check('sonda: výsledky přijaté', [$np_code, $np_resp['status'] ?? null, $np_resp['location'] ?? null], [200, 'success', 'Testovací uzel']);
+    check('sonda: uložená jsou jen dvě měření (bez stavu, neznámý monitor a monitor v údržbě ne)', $np_resp['message'] ?? null, 'Úspěšně zpracováno 2 z 6 výsledků.');
+    check('sonda nepřepíše stav, čas kontroly ani last_details monitoru', $np_row(), $np_before);
+    $np_logs = $pdo->query("SELECT monitor_id, status, response_time, error_message, checked_from
+                            FROM monitor_logs WHERE monitor_id IN (176, 177, 179) ORDER BY id")->fetchAll();
+    check('sonda zapíše měření do historie i s místem; bez času je odezva NULL, ne 0 ms; do běžící údržby nic, po jejím konci ano',
+        array_map(fn ($r) => [(int)$r['monitor_id'], $r['status'], $r['response_time'] === null ? null : (int)$r['response_time'], $r['error_message'], $r['checked_from']], $np_logs),
+        [[176, 'down', 8000, 'Timeout after 8000ms', 'Testovací uzel'], [179, 'up', null, null, 'Testovací uzel']]);
+    // The column above comes from schema.sql (a migration adds it to an
+    // older database). node_api.php ran the same ALTER TABLE on every
+    // request and swallowed the duplicate-column error.
+    check('sloupec místa měření je ve schema.sql i v migracích, node_api.php schéma nemění', [
+        preg_match('/`checked_from` VARCHAR\(50\)/', (string)file_get_contents($root . '/schema.sql')),
+        preg_match('/ALTER TABLE monitor_logs ADD COLUMN checked_from\b/', (string)file_get_contents($root . '/migrations.php')),
+        preg_match_all('/\b(?:ALTER|CREATE|DROP)\s+TABLE\b/i', (string)file_get_contents($root . '/node_api.php')),
+    ], [1, 1, 0]);
+
+    // Cron confirmed the outage, then a probe's 'up' became the newest row:
+    // the finding still gives the reason of the check that found it down.
+    // The rows get their own minutes: admin.php orders them by checked_at.
+    $pdo->exec("UPDATE monitors SET status = 'down' WHERE id = 176");
+    $pdo->exec("UPDATE monitor_logs SET checked_at = DATE_SUB(NOW(), INTERVAL 2 MINUTE) WHERE monitor_id = 176");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, checked_at) VALUES (176, 'down', 0, 'HTTP 503', 'Main Server', DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
+    bk_raw_request($base . '/node_api.php?action=post_results&key=' . rawurlencode($np_key),
+        ['Content-Type: application/json'], json_encode(['location' => 'Testovací uzel', 'results' => [['id' => 176, 'status' => 'up', 'response_time' => 90]]]));
+    [$np_f_code, $np_f] = api_get_auth($base, 'action=findings&monitor_id=176&lang=cs', $cookie_jar);
+    $np_down = array_column($np_f['findings'] ?? [], null, 'key')['status:176:status_down'] ?? [];
+    check('nález výpadku nese důvod kontroly, která výpadek našla, ne novější OK sondy',
+        [$np_f_code, array_key_exists('detail', $np_down) ? $np_down['detail'] : 'chybí'], [200, 'HTTP 503']);
+    // The same reason in the administration's outage diagnostics.
+    $np_admin = $fs_page('/admin.php', $cookie_jar);
+    check('diagnostika v administraci: důvod kontroly, která výpadek našla, ne „Neznámá chyba“ z OK sondy',
+        preg_match('~<i class="fas fa-server"></i> Web se sondou</strong>.*?Zjištěný problém:</strong> <code>([^<]*)</code>~su', $np_admin, $np_m) ? $np_m[1] : 'chybí', 'HTTP 503');
+
+    // Switching maintenance off sets 'unknown' and logs no row. The reason is
+    // looked for in the current state only: an 'unknown' row two weeks old
+    // belongs to an earlier silence, not to this one.
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, last_checked, last_status_change) VALUES
+                (178, 'Web po údržbě', 'web', 'https://example.com/po-udrzbe', 'unknown', 'Test', NOW(), DATE_SUB(NOW(), INTERVAL 1 HOUR))");
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, checked_at) VALUES
+                (178, 'unknown', NULL, 'Testovací agent přestal posílat výsledky', 'Agent', DATE_SUB(NOW(), INTERVAL 14 DAY)),
+                (178, 'up', 120, NULL, 'Main Server', DATE_SUB(NOW(), INTERVAL 7 DAY)),
+                (178, 'maintenance', 0, 'Plánovaná údržba', 'Main Server', DATE_SUB(NOW(), INTERVAL 2 HOUR))");
+    [$np_u_code, $np_u] = api_get_auth($base, 'action=findings&monitor_id=178&lang=cs', $cookie_jar);
+    $np_stale = array_column($np_u['findings'] ?? [], null, 'key')['status:178:status_unknown_stale'] ?? null;
+    check('nález o neznámém stavu nevezme důvod ze starší epizody téhož stavu',
+        [$np_u_code, is_array($np_stale) && array_key_exists('detail', $np_stale) ? $np_stale['detail'] : 'chybí'], [200, null]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (176, 177, 178, 179)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (176, 177, 178, 179)");
+    if ($np_prev_key === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'cron_key'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'cron_key'")->execute([$np_prev_key]);
+    }
+}
+
+// =======================================================================
+// Who wrote a row (r024, step 2): a remote probe's row (source 'probe') is a
+// measurement. It counts in availability and the history, but it confirms no
+// outage, splits none and gives none its reason. Monitor 1451: cron found it
+// down 30 minutes ago and still has it down; the probe, from another place,
+// logged a 'down' ten minutes before cron's (which would start the outage
+// early), a 'down' in the very second of the change (written first, so it
+// would win the tie), an 'up' in the middle of cron's outage, a later
+// 'down' of its own and the newest row of all, an 'up'.
+// =======================================================================
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, last_checked, last_status_change)
+                VALUES (1451, 'Web se sondou uprostřed výpadku', 'web', 'https://example.com/zdroj', 'down', 'Test',
+                        NOW(), DATE_SUB(NOW(), INTERVAL 30 MINUTE))");
+    $src_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source, checked_at)
+                              VALUES (1451, ?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? SECOND))");
+    foreach ([
+        ['up', 120, null, 'Praha', 'cron', 3600],
+        ['down', null, 'Probe early', 'Frankfurt', 'probe', 2400],
+        ['down', null, 'Probe timeout', 'Frankfurt', 'probe', 1800],
+        ['down', null, 'HTTP 503', 'Praha', 'cron', 1800],
+        ['up', 95, null, 'Frankfurt', 'probe', 1200],
+        ['down', null, 'HTTP 503', 'Praha', 'cron', 600],
+        ['down', null, 'Timeout after 8000ms', 'Frankfurt', 'probe', 300],
+        ['up', 90, null, 'Frankfurt', 'probe', 120],
+    ] as $src_r) {
+        $src_log->execute($src_r);
+    }
+    $src_cron_start = $pdo->query("SELECT checked_at FROM monitor_logs WHERE monitor_id = 1451 AND source = 'cron' AND status = 'down' ORDER BY id LIMIT 1")->fetchColumn();
+
+    [$src_ev_code, $src_ev] = api_get_auth($base, 'action=events&monitor_id=1451&limit=50', $cookie_jar);
+    check('zdroj: events vrací 200', $src_ev_code, 200);
+    $src_sc = $src_ev['statusChange'] ?? [];
+    check('statusChange je kontrola cronu, ne sonda ve stejné vteřině; fromStatus přeskočí řádek sondy',
+        [$src_sc['status'] ?? null, $src_sc['errorMsg'] ?? null, $src_sc['location'] ?? null, $src_sc['fromStatus'] ?? null],
+        ['down', 'HTTP 503', 'Praha', 'up']);
+    $src_events = $src_ev['events'] ?? [];
+    check('v historii zůstávají všechny řádky, i sondy, a každý říká, kdo ho zapsal',
+        array_map(fn ($e) => [$e['rawStatus'] ?? null, $e['source'] ?? null], $src_events),
+        [['up', 'probe'], ['down', 'probe'], ['down', 'cron'], ['up', 'probe'], ['down', 'cron'], ['down', 'probe'], ['down', 'probe'], ['up', 'cron']]);
+    check('down sondy není výpadek: isDown false a bez konce; down cronu je výpadek, který OK sondy neukončí',
+        array_map(fn ($e) => [$e['isDown'] ?? null, $e['outageEnd'] ?? null, $e['isRecovery'] ?? null], $src_events),
+        [[false, null, false], [false, null, false], [true, null, false], [false, null, false], [true, null, false], [false, null, false], [false, null, false], [false, null, false]]);
+
+    [$src_sla_code, $src_sla] = api_get_auth($base, 'action=sla_report&days=7', $cookie_jar);
+    $src_row = array_column($src_sla['monitors'] ?? [], null, 'id')[1451] ?? [];
+    $src_out = $src_row['lastOutage'] ?? [];
+    check('sla_report: poslední výpadek začal první kontrolou cronu a trvá, OK sondy ho neukončí ani nerozdělí, důvod je cronu',
+        [$src_sla_code, $src_out['start'] ?? null, array_key_exists('end', $src_out) ? $src_out['end'] : 'chybí', $src_out['resolved'] ?? null, $src_out['reason'] ?? null],
+        [200, $src_cron_start === false ? 'chybí' : date('d.m.Y H:i:s', strtotime((string)$src_cron_start)), null, false, 'HTTP 503']);
+    check('sla_report: v dostupnosti se řádky sondy počítají dál',
+        [$src_row['upChecks'] ?? null, $src_row['downChecks'] ?? null], [3, 5]);
+
+    [, $src_f] = api_get_auth($base, 'action=findings&monitor_id=1451&lang=cs', $cookie_jar);
+    $src_down = array_column($src_f['findings'] ?? [], null, 'key')['status:1451:status_down'] ?? [];
+    check('nález výpadku nese důvod cronu, ne novější down sondy', $src_down['detail'] ?? 'chybí', 'HTTP 503');
+
+    [, $src_inc] = api_get_auth($base, 'action=incidents', $cookie_jar);
+    $src_card = null;
+    foreach ($src_inc['incidents'] ?? $src_inc as $src_i) {
+        if (is_array($src_i) && (int)($src_i['monitor_id'] ?? 0) === 1451) {
+            $src_card = $src_i;
+        }
+    }
+    check('karta probíhajícího výpadku má důvod cronu, ne sondy', $src_card['reason'] ?? 'chybí', 'HTTP 503');
+
+    // The administration's outage diagnostics (legacy admin.php) too.
+    $src_admin = $fs_page('/admin.php', $cookie_jar);
+    check('diagnostika v administraci: důvod cronu, ne novějšího down sondy',
+        preg_match('~<i class="fas fa-server"></i> Web se sondou uprostřed výpadku</strong>.*?Zjištěný problém:</strong> <code>([^<]*)</code>~su', $src_admin, $src_m) ? $src_m[1] : 'chybí', 'HTTP 503');
+
+    // 1452 recovered: cron's 'up' is the recovery and ends the outage, the
+    // probe's 'up' before it is neither, and the probe's later 'down' starts
+    // nothing: cron's next 'up' after it is no recovery and ends no outage.
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, last_checked, last_status_change)
+                VALUES (1452, 'Web obnovený cronem', 'web', 'https://example.com/obnova', 'up', 'Test',
+                        NOW(), DATE_SUB(NOW(), INTERVAL 5 MINUTE))");
+    foreach ([
+        ['down', null, 'HTTP 503', 'Praha', 'cron', 600],
+        ['up', 80, null, 'Frankfurt', 'probe', 400],
+        ['up', 110, null, 'Praha', 'cron', 300],
+        ['down', null, 'Timeout after 8000ms', 'Frankfurt', 'probe', 200],
+        ['up', 105, null, 'Praha', 'cron', 100],
+    ] as $src_r) {
+        $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_from, source, checked_at)
+                       VALUES (1452, ?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? SECOND))")->execute($src_r);
+    }
+    $src_cron_up = $pdo->query("SELECT checked_at FROM monitor_logs WHERE monitor_id = 1452 AND source = 'cron' AND status = 'up' ORDER BY id LIMIT 1")->fetchColumn();
+    $src_cron_down = $pdo->query("SELECT checked_at FROM monitor_logs WHERE monitor_id = 1452 AND source = 'cron' AND status = 'down'")->fetchColumn();
+    $src_fmt = fn ($at): string => $at === false ? 'chybí' : date('d.m.Y H:i:s', strtotime((string)$at));
+    [, $src_ev2] = api_get_auth($base, 'action=events&monitor_id=1452&limit=50', $cookie_jar);
+    check('obnovení je OK cronu po jeho výpadku, OK sondy před ním není; výpadek končí OK cronu',
+        array_map(fn ($e) => [$e['source'] ?? null, $e['rawStatus'] ?? null, $e['isRecovery'] ?? null, $e['outageEnd'] ?? null], $src_ev2['events'] ?? []),
+        [['cron', 'up', false, null], ['probe', 'down', false, null], ['cron', 'up', true, null], ['probe', 'up', false, null],
+         ['cron', 'down', false, $src_fmt($src_cron_up)]]);
+    // The same in sla_report: the newest 'down' is the probe's, so cron's is
+    // looked up; the outage runs to cron's 'up', not to the probe's before it.
+    [, $src_sla2] = api_get_auth($base, 'action=sla_report&days=7', $cookie_jar);
+    $src_out2 = array_column($src_sla2['monitors'] ?? [], null, 'id')[1452]['lastOutage'] ?? [];
+    check('sla_report: vyřešený výpadek končí OK cronu, ne dřívějším OK sondy, a novější down sondy ho nenahradí',
+        [$src_out2['start'] ?? null, $src_out2['end'] ?? null, $src_out2['resolved'] ?? null, $src_out2['reason'] ?? null,
+         $src_out2['durationSec'] ?? null],
+        [$src_fmt($src_cron_down), $src_fmt($src_cron_up), true, 'HTTP 503',
+         $src_cron_up === false || $src_cron_down === false ? 'chybí' : strtotime((string)$src_cron_up) - strtotime((string)$src_cron_down)]);
+
+    [, $src_mi] = api_get_auth($base, 'action=monitor_insights&monitor_id=1451&lang=cs', $cookie_jar);
+    check('časová osa monitoru: jen změny cronu, OK sondy uprostřed výpadek nerozdělí',
+        array_values(array_map(fn ($e) => $e['type'], array_filter($src_mi['timeline'] ?? [], fn ($e) => str_starts_with((string)($e['type'] ?? ''), 'status_')))),
+        ['status_changed_down']);
+
+    // The writer itself: a real post is stored as the probe's, whatever the
+    // post claims about itself.
+    $src_key = 'test-node-key-' . str_repeat('y', 24);
+    $src_prev_key = $pdo->query("SELECT key_value FROM settings WHERE key_name = 'cron_key'")->fetchColumn();
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('cron_key', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+        ->execute([$src_key]);
+    bk_raw_request($base . '/node_api.php?action=post_results&key=' . rawurlencode($src_key),
+        ['Content-Type: application/json'], json_encode(['location' => 'Testovací uzel', 'results' => [
+            ['id' => 1451, 'status' => 'up', 'response_time' => 70, 'source' => 'cron'],
+            ['id' => 1451, 'status' => 'warning', 'error' => 'Pomalá odezva'],
+            ['id' => 1451, 'status' => 'maintenance'],
+            ['id' => 1451, 'status' => 'unknown'],
+        ]]));
+    check('node_api uloží řádek jako sondu, i když výsledek tvrdí něco jiného; sonda měří jen up a down',
+        $pdo->query("SELECT status, source FROM monitor_logs WHERE monitor_id = 1451 AND checked_from = 'Testovací uzel'")->fetchAll(PDO::FETCH_NUM),
+        [['up', 'probe']]);
+    if ($src_prev_key === false) {
+        $pdo->exec("DELETE FROM settings WHERE key_name = 'cron_key'");
+    } else {
+        $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = 'cron_key'")->execute([$src_prev_key]);
+    }
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (1451, 1452)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (1451, 1452)");
+}
+
+// =======================================================================
+// The database is down (W1-A6): 503 for everyone, JSON for programs, the
+// branded page for people, and not one word about why.
+//
+// It used to be a 500 HTML page with the PDO message in it - the database
+// host, the account and "config.php" - served to browsers, to the app and to
+// the agents alike. The X-BK-Test-DB-Down header points the request at a
+// closed port (see the generated config.php above).
+// =======================================================================
+$dd_down = ['X-BK-Test-DB-Down: 1'];
+$dd_leaks = ['SQLSTATE', 'config.php', 'PDO', 'Connection refused', $db_name, 'Warning', 'Fatal', 'Stack trace'];
+$dd_machine = [
+    'api.php?action=monitors' => [null, 'API: monitory'],
+    'api.php?action=public_status' => [null, 'API: veřejný stav'],
+    'agent_api.php' => ['{"agent_key":"x"}', 'příjem od agenta'],
+    'node_api.php?action=get_monitors' => [null, 'API vzdálených uzlů'],
+    'heartbeat.php?token=' . str_repeat('a', 48) => [null, 'heartbeat'],
+];
+foreach ($dd_machine as $dd_path => [$dd_post, $dd_label]) {
+    [$dd_code, $dd_head, $dd_body] = bk_raw_request($base . '/' . $dd_path, $dd_down, $dd_post);
+    check("databáze dole, {$dd_label}: 503", $dd_code, 503);
+    check_true("databáze dole, {$dd_label}: JSON", (bool)preg_match('/^content-type:\s*application\/json/mi', $dd_head));
+    check("databáze dole, {$dd_label}: kód chyby", json_decode($dd_body, true), ['error' => 'database_unavailable']);
+    check_true("databáze dole, {$dd_label}: Retry-After", (bool)preg_match('/^retry-after:\s*60\b/mi', $dd_head));
+}
+$dd_pages = ['index.php' => 'veřejná stránka', 'admin.php' => 'administrace', 'monitor.php?id=1' => 'detail monitoru'];
+foreach ($dd_pages as $dd_path => $dd_label) {
+    [$dd_code, $dd_head, $dd_body] = bk_raw_request($base . '/' . $dd_path, array_merge($dd_down, ['Accept: text/html']));
+    check("databáze dole, {$dd_label}: 503", $dd_code, 503);
+    check_true("databáze dole, {$dd_label}: HTML", (bool)preg_match('/^content-type:\s*text\/html/mi', $dd_head));
+    check_true("databáze dole, {$dd_label}: značková stránka 503", str_contains($dd_body, 'CHYBA 503') && str_contains($dd_body, 'Blood Kings Monitoring'));
+}
+// A program asking a page for JSON gets JSON, not HTML it cannot parse.
+[$dd_code, $dd_head, $dd_body] = bk_raw_request($base . '/index.php', array_merge($dd_down, ['Accept: application/json']));
+check('databáze dole, stránka s Accept JSON: JSON', json_decode($dd_body, true), ['error' => 'database_unavailable']);
+foreach (array_merge(array_keys($dd_machine), array_keys($dd_pages)) as $dd_path) {
+    [, , $dd_body] = bk_raw_request($base . '/' . $dd_path, $dd_down);
+    $dd_found = array_values(array_filter($dd_leaks, fn (string $leak): bool => stripos($dd_body, $leak) !== false));
+    check("databáze dole, {$dd_path}: tělo nic neprozradí", $dd_found, []);
+}
+
+// =======================================================================
+// UX wave 2, server half.
+//
+// C-7   the strip day carries its coverage: partial and nodata instead of
+//       'paused', warning counted as available with its minutes apart;
+// C-11  one status vocabulary: maintenance and unknown are not "OK";
+// C-12  one findings feed with severity and device;
+// charts-06/15/25/29, W2-4, W2-7, W2-10.
+// =======================================================================
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at, last_checked) VALUES
+            (190, 'W2 děravý web', 'web', 'https://example.org', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW()),
+            (191, 'W2 čeká na data', 'agent_service', 'nginx', 'unknown', 'Test', NOW(), NULL),
+            (192, 'W2 zmlklý agent', 'agent_service', 'nginx', 'unknown', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW()),
+            (193, 'W2 router s čítači', 'openwrt', 'router-w2', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW()),
+            (194, 'W2 nález', 'web', 'https://example.net', 'down', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW()),
+            (195, 'W2 v údržbě', 'web', 'https://example.com/udrzba', 'maintenance', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW())");
+$pdo->exec("UPDATE monitors SET last_status_change = DATE_SUB(NOW(), INTERVAL 1 HOUR),
+            last_details = '" . json_encode(['ssl_days_remaining' => 3]) . "' WHERE id = 194");
+$w2_ud = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                        VALUES (190, DATE_SUB(CURDATE(), INTERVAL ? DAY), ?, 0, ?, 0, 0, ?)");
+$w2_ud->execute([1, 50400, 0, 36000]);   // 14 h measured of 24
+$w2_ud->execute([2, 82800, 3600, 0]);    // a whole day, one hour degraded
+try {
+    // --- C-7 -------------------------------------------------------------
+    [$w2_code, $w2_du] = api_get_auth($base, 'action=daily_uptime&days=5', $cookie_jar);
+    check('C-7: daily_uptime vrací 200', $w2_code, 200);
+    $w2_days = [];
+    foreach ($w2_du['series']['190'] ?? [] as $w2_day) {
+        $w2_days[$w2_day['day'] ?? ''] = $w2_day;
+    }
+    $w2_d1 = $w2_days[date('Y-m-d', strtotime('-1 day'))] ?? [];
+    $w2_d2 = $w2_days[date('Y-m-d', strtotime('-2 day'))] ?? [];
+    $w2_d3 = $w2_days[date('Y-m-d', strtotime('-3 day'))] ?? [];
+    check('C-7: 14 h z 24 měřeno je partial, ne zelený den', [$w2_d1['status'] ?? null, $w2_d1['coveragePct'] ?? null], ['partial', 58.3]);
+    check('C-7: měřené a očekávané sekundy', [$w2_d1['measuredSecs'] ?? null, $w2_d1['expectedSecs'] ?? null], [50400, 86400]);
+    check_true('C-7: popis říká 14 h z 24 h (dostal ' . json_encode($w2_d1['detail'] ?? null, JSON_UNESCAPED_UNICODE) . ')',
+        str_contains((string)($w2_d1['detail'] ?? ''), '14 h z 24 h'));
+    check('C-7: varování je dostupné, minuty zhoršení zvlášť', [$w2_d2['status'] ?? null, (float)($w2_d2['uptimePct'] ?? -1), $w2_d2['degradedMin'] ?? null], ['warning', 100.0, 60]);
+    check('C-7: den bez dat je nodata s null', [$w2_d3['status'] ?? null, $w2_d3['uptimePct'] ?? null], ['nodata', null]);
+    $w2_statuses = [];
+    foreach ($w2_du['series'] ?? [] as $w2_list) {
+        foreach ($w2_list as $w2_day) {
+            $w2_statuses[$w2_day['status']] = true;
+        }
+    }
+    check_false('C-7: žádný den už není „paused“', isset($w2_statuses['paused']));
+    [, $w2_du_en] = api_get_auth($base, 'action=daily_uptime&days=5&lang=en', $cookie_jar);
+    $w2_en_d1 = array_values(array_filter($w2_du_en['series']['190'] ?? [], fn ($d) => ($d['day'] ?? '') === date('Y-m-d', strtotime('-1 day'))))[0] ?? [];
+    check_true('C-7: popis i anglicky', str_contains((string)($w2_en_d1['detail'] ?? ''), 'of 24 h'));
+    // ?lang= sticks to the session; the checks below read Czech again.
+    api_get_auth($base, 'action=daily_uptime&days=1&lang=cs', $cookie_jar);
+
+    // --- C-11 ------------------------------------------------------------
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+                (195, 'maintenance', NULL, DATE_SUB(NOW(), INTERVAL 3 MINUTE)),
+                (192, 'unknown', NULL, DATE_SUB(NOW(), INTERVAL 2 MINUTE)),
+                (190, 'warning', 900, DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
+    $w2_ev = function (int $mid) use ($base, $cookie_jar): array {
+        [, $ev] = api_get_auth($base, 'action=events&monitor_id=' . $mid . '&limit=10', $cookie_jar);
+        return $ev['events'][0] ?? [];
+    };
+    $w2_m = $w2_ev(195);
+    check('C-11: údržba není „OK“', [$w2_m['status'] ?? null, $w2_m['statusKey'] ?? null, $w2_m['statusTone'] ?? null], ['ÚDRŽBA', 'maintenance', 'info']);
+    check_false('C-11: a netvrdí, že kontrola prošla', str_contains((string)($w2_m['errorMsg'] ?? ''), 'v pořádku'));
+    $w2_u = $w2_ev(192);
+    check('C-11: řádek „unknown“ je agent mlčí, ne OK', [$w2_u['status'] ?? null, $w2_u['statusKey'] ?? null, $w2_u['statusTone'] ?? null], ['AGENT MLČÍ', 'unknown_stale', 'warning']);
+    $w2_w = $w2_ev(190);
+    check('C-11: varování bez zprávy', [$w2_w['status'] ?? null, $w2_w['errorMsg'] ?? null], ['VAROVÁNÍ', 'Kontrola hlásí zhoršený stav.']);
+    [, $w2_al] = api_get_auth($base, 'action=audit_logs&limit=10', $cookie_jar);
+    $w2_al_m = array_values(array_filter($w2_al['logs'] ?? [], fn ($l) => str_contains((string)($l['action'] ?? ''), 'W2 v údržbě')))[0] ?? [];
+    check('C-11: protokol kontrol - údržba se jmenuje údržba', [$w2_al_m['action'] ?? null, $w2_al_m['statusKey'] ?? null], ['ÚDRŽBA: W2 v údržbě', 'maintenance']);
+    check_false('C-11: a bez „(Odezva  ms)“, když se odezva neměřila', str_contains((string)($w2_al_m['details'] ?? ''), ' ms)'));
+    // Every row named the cron as its author, also an agent's or a probe's (R57).
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at, checked_from, source) VALUES
+                (190, 'up', 30, NOW(), 'Main Server', 'agent'), (190, 'up', 40, NOW(), 'Frankfurt', 'probe'),
+                (190, 'up', 50, NOW(), 'Main Server', 'cron'), (190, 'up', 60, NOW(), 'Main Server', NULL)");
+    $w2_src_first = (int)$pdo->lastInsertId();
+    [, $w2_al2] = api_get_auth($base, 'action=audit_logs&limit=10', $cookie_jar);
+    $w2_users = [];
+    foreach ($w2_al2['logs'] ?? [] as $w2_l) {
+        if ((int)($w2_l['id'] ?? 0) >= $w2_src_first) {
+            $w2_users[(int)$w2_l['id'] - $w2_src_first] = $w2_l['user'] ?? null;
+        }
+    }
+    ksort($w2_users);
+    check('protokol kontrol jmenuje zdroj řádku: agent, sonda, cron, neuvedený',
+        $w2_users, [0 => 'Agent na zařízení', 1 => 'Sonda Frankfurt', 2 => 'Cron serveru', 3 => 'Zdroj neuveden']);
+    [, $w2_mons] = api_get_auth($base, 'action=monitors', $cookie_jar);
+    $w2_key = [];
+    foreach ($w2_mons["monitors"] ?? [] as $w2_mon) {
+        $w2_key[(int)($w2_mon['id'] ?? 0)] = $w2_mon['statusKey'] ?? null;
+    }
+    check('C-11: nikdy nehlásil = čeká na první data, zmlkl = agent mlčí', [$w2_key[191] ?? null, $w2_key[192] ?? null, $w2_key[195] ?? null], ['unknown_new', 'unknown_stale', 'maintenance']);
+    [, $w2_sum] = api_get_auth($base, 'action=monitor_insights&monitor_id=195', $cookie_jar);
+    check_false('C-11: souhrn údržby neříká „nedostupný“', str_contains((string)($w2_sum['summary'] ?? ''), 'nedostupný'));
+    check('C-11: souhrn nese stav ve sdíleném slovníku', $w2_sum['status']['key'] ?? null, 'maintenance');
+    check_true('W2-2: souhrn nese i statusSentence (stav bez starostí, ty jsou v nálezech)',
+        is_string($w2_sum['statusSentence'] ?? null) && ($w2_sum['statusSentence'] ?? '') !== '');
+    [, $w2_sum_new] = api_get_auth($base, 'action=monitor_insights&monitor_id=191', $cookie_jar);
+    check_true('C-11: nový monitor čeká na data (dostal ' . json_encode($w2_sum_new['summary'] ?? null, JSON_UNESCAPED_UNICODE) . ')',
+        str_contains((string)($w2_sum_new['summary'] ?? ''), 'čeká na první data'));
+
+    // --- charts-06/15: counters as increments, nothing across a gap -------
+    // fw_accepted is a lifetime counter. Readings a minute apart, a reboot
+    // (the counter drops) and a three-hour gap: 10, 20, (reset), 15, (gap), 10.
+    $w2_vm = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, checked_at, fw_accepted, load_avg_1, load_avg_5, load_avg_15, cpu_usage, iowait_pct, entropy_avail)
+                            VALUES (193, DATE_SUB(NOW(), INTERVAL ? SECOND), ?, ?, ?, ?, ?, ?, 256)");
+    $w2_series = [[14400, 900000], [14340, 900010], [14280, 900030], [14220, 5], [14160, 20],
+        [1800, 700000], [1740, 700010]];
+    foreach ($w2_series as $w2_i => [$w2_ago, $w2_val]) {
+        $w2_vm->execute([$w2_ago, $w2_val, $w2_i, $w2_i * 0.8 + 1, $w2_i * 0.5 + 2, ($w2_i * 7) % 5 + $w2_i, ($w2_i * 3) % 4]);
+    }
+    // More readings for the correlations (at least ten pairs).
+    for ($w2_i = 0; $w2_i < 12; $w2_i++) {
+        $w2_vm->execute([1680 - $w2_i * 60, 700020 + $w2_i * 10, 7 + $w2_i, (7 + $w2_i) * 0.8 + 1, (7 + $w2_i) * 0.5 + 2, ($w2_i * 7) % 5 + $w2_i, ($w2_i * 3) % 4]);
+    }
+    [$w2_b_code, $w2_b] = api_get_auth($base, 'action=metric_series_batch&monitor_id=193&period=24h', $cookie_jar);
+    check('charts-06: metric_series_batch vrací 200', $w2_b_code, 200);
+    $w2_fw = $w2_b['series']['fw_accepted'] ?? [];
+    check('charts-06: čítač v dávce jako přírůstky, ne celoživotní součet', array_map('floatval', array_slice(array_column($w2_fw['points'] ?? [], 1), 0, 4)), [10.0, 20.0, 15.0, 10.0]);
+    check_true('charts-06: a řekne to v popisku', str_contains((string)($w2_fw['label'] ?? ''), '(přírůstek)') && ($w2_fw['counter'] ?? false) === true);
+    [, $w2_ms] = api_get_auth($base, 'action=metric_series&monitor_id=193&metric=fw_accepted&period=24h', $cookie_jar);
+    check('charts-15: metric_series stejné přírůstky, přes mezeru nic', array_map('floatval', array_slice(array_column($w2_ms['points'] ?? [], 1), 0, 4)), [10.0, 20.0, 15.0, 10.0]);
+    [, $w2_ent] = api_get_auth($base, 'action=metric_series&monitor_id=193&metric=entropy&period=24h', $cookie_jar);
+    check('W2-4: konstantní metrika má jednu hodnotu', $w2_ent['distinctValues'] ?? null, 1);
+
+    // --- W2-4 / charts-29: no correlation with the own family ---------------
+    [, $w2_corr] = api_get_auth($base, 'action=metric_correlations&monitor_id=193&metric=load1&period=24h&all=1', $cookie_jar);
+    $w2_corr_keys = array_column($w2_corr['correlations'] ?? [], 'key');
+    check_false('charts-29: load1 se nesrovnává s load5/load15', in_array('load5', $w2_corr_keys, true) || in_array('load15', $w2_corr_keys, true));
+    check('charts-29: rodina předmětu', $w2_corr['family'] ?? null, 'load');
+    [, $w2_corr_cpu] = api_get_auth($base, 'action=metric_correlations&monitor_id=193&metric=cpu&period=24h', $cookie_jar);
+    $w2_loads = array_intersect(array_column($w2_corr_cpu['correlations'] ?? [], 'key'), ['load1', 'load5', 'load15']);
+    check('charts-29: z rodiny load jen nejsilnější člen', count($w2_loads), 1);
+
+    // --- charts-25: the heatmap starts where the data starts --------------
+    [, $w2_hm] = api_get_auth($base, 'action=metric_heatmap&monitor_id=193&metric=cpu&days=30', $cookie_jar);
+    $w2_first = $pdo->query("SELECT DATE(MIN(checked_at)) FROM vps_metrics WHERE monitor_id = 193")->fetchColumn();
+    check('charts-25: firstSampleDay je první den se vzorkem', $w2_hm['firstSampleDay'] ?? null, $w2_first);
+    $w2_hm_days = array_column($w2_hm['days'] ?? [], 'day');
+    check_true('charts-25: mřížka zůstává hustá a ten den v ní je', count($w2_hm_days) === 30 && in_array($w2_first, $w2_hm_days, true));
+    check('charts-25: požadované okno zůstává čitelné', $w2_hm['requestedDays'] ?? null, 30);
+
+    // --- W2-10: the recorded HTTP code, not an invented "200 OK" ----------
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, check_stages) VALUES
+                (1, 'down', 120, '" . json_encode(['http' => ['ok' => false, 'status_code' => 502]]) . "')");
+    [, $w2_wo] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
+    check('W2-10: přehled webů nese zaznamenaný kód HTTP', $w2_wo['monitors']['1']['httpStatusCode'] ?? 'chybí', 502);
+    check_true('W2-10: a čas té kontroly', is_string($w2_wo['monitors']['1']['httpCheckedAt'] ?? null));
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (1, 'down', NULL, 'DNS selhalo')");
+    [, $w2_wo2] = api_get_auth($base, 'action=websites_overview', $cookie_jar);
+    check('W2-10: kontrola bez HTTP fáze nemá kód, ne 200', array_key_exists('httpStatusCode', $w2_wo2['monitors']['1'] ?? []) ? $w2_wo2['monitors']['1']['httpStatusCode'] : 'chybí', null);
+
+    // --- W2-7: downtime against the budget, incidents per monitor ---------
+    $pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('W2 incident', 'minor', 'resolved', 190)");
+    [$w2_sla_code, $w2_sla] = api_get_auth($base, 'action=sla_report&days=7', $cookie_jar);
+    check('W2-7: sla_report vrací 200', $w2_sla_code, 200);
+    $w2_sla_row = array_values(array_filter($w2_sla['monitors'] ?? [], fn ($r) => (int)($r['id'] ?? 0) === 190))[0] ?? [];
+    check('W2-7: počet incidentů v okně', $w2_sla_row['incidentCount'] ?? null, 1);
+    $w2_budget = $w2_sla_row['measuredMinutes'] !== null ? round($w2_sla_row['measuredMinutes'] * (100 - (float)$w2_sla['slaGoal']) / 100, 1) : null;
+    check_true('W2-7: rozpočet výpadku je cíl nad změřeným časem (dostal ' . json_encode([$w2_sla_row['measuredMinutes'] ?? null, $w2_sla_row['budgetMinutes'] ?? null]) . ')',
+        ($w2_sla_row['measuredMinutes'] ?? 0) > 0 && ($w2_sla_row['budgetMinutes'] ?? null) === $w2_budget);
+
+    // --- charts-15: which day an interface's bytes belong to ---------------
+    $pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface IN ('w2test0', 'w2big0')");
+    $w2_if = function (float $rx) use ($base, $agent_payload): int {
+        $ch = curl_init($base . '/agent_api.php');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true, CURLOPT_POST => true, CURLOPT_TIMEOUT => 20,
+            CURLOPT_POSTFIELDS => json_encode(array_merge($agent_payload, ['interfaces' => [['iface' => 'w2test0', 'rx_bytes' => $rx, 'tx_bytes' => 0]]])),
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        ]);
+        curl_exec($ch);
+        return (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+    };
+    $w2_today_rx = fn (): ?float => ($v = $pdo->query("SELECT rx_bytes_total FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface = 'w2test0' AND date = CURDATE()")->fetchColumn()) === false ? null : (float)$v;
+    check('charts-15: hlášení s rozhraním projde', $w2_if(5e12), 200);
+    check('charts-15: první čtení je základ, ne dnešních 5 TB', $w2_today_rx(), 0.0);
+    $w2_if(5e12 + 1000);
+    check('charts-15: další čtení téhož dne se připíše', $w2_today_rx(), 1000.0);
+    // The router was off over midnight: the row is yesterday's and old.
+    $pdo->exec("UPDATE monitor_interface_traffic SET date = DATE_SUB(CURDATE(), INTERVAL 1 DAY), updated_at = DATE_SUB(NOW(), INTERVAL 2 DAY)
+                WHERE monitor_id = 2 AND iface = 'w2test0'");
+    $w2_if(5e12 + 8e11);
+    check('charts-15: bajty chybějících dnů se dnešku nepřipíšou', $w2_today_rx(), 0.0);
+    $pdo->exec("INSERT INTO monitor_interface_traffic (monitor_id, iface, date, rx_bytes_total, tx_bytes_total) VALUES (2, 'w2big0', CURDATE(), 2e14, 1000)");
+    [, $w2_itd] = api_get_auth($base, 'action=interface_traffic_daily&monitor_id=2&days=3', $cookie_jar);
+    $w2_big = array_values(array_filter($w2_itd['interfaces'] ?? [], fn ($i) => ($i['iface'] ?? '') === 'w2big0'))[0]['days'][0] ?? [];
+    check('charts-15: den nad rychlostí linky × 24 h se odmítne, ne nakreslí',
+        [array_key_exists('rxBytes', $w2_big) ? $w2_big['rxBytes'] : 'chybí', (float)($w2_big['txBytes'] ?? -1), $w2_big['rejected'] ?? null], [null, 1000.0, ['rx']]);
+    $w2_big_if = array_values(array_filter($w2_itd['interfaces'] ?? [], fn ($i) => ($i['iface'] ?? '') === 'w2big0'))[0] ?? [];
+    check('charts-15: neznámá rychlost linky je null, ne vymyšlená', array_key_exists('linkMbit', $w2_big_if) ? $w2_big_if['linkMbit'] : 'chybí', null);
+
+    // --- C-12: one findings feed -------------------------------------------
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message) VALUES (194, 'down', NULL, 'HTTP 502 Bad Gateway')");
+    [$w2_anon] = api_get($base, 'action=findings');
+    check('C-12: zjištění jen po přihlášení', $w2_anon, 401);
+    [$w2_f_code, $w2_f] = api_get_auth($base, 'action=findings&limit=500&lang=cs', $cookie_jar);
+    check('C-12: findings vrací 200', $w2_f_code, 200);
+    $w2_by_key = [];
+    foreach ($w2_f['findings'] ?? [] as $w2_item) {
+        $w2_by_key[$w2_item['key']] = $w2_item;
+    }
+    $w2_down = $w2_by_key['status:194:status_down'] ?? [];
+    check('C-12: výpadek je kritický nález u svého zařízení', [$w2_down['severity'] ?? null, $w2_down['monitorName'] ?? null, $w2_down['title'] ?? null], ['critical', 'W2 nález', 'Nedostupný']);
+    check('C-12: a nese důvod poslední kontroly', $w2_down['detail'] ?? null, 'HTTP 502 Bad Gateway');
+    check_true('C-12: a od kdy', is_string($w2_down['since'] ?? null));
+    check('C-12: certifikát za 3 dny je varování', [$w2_by_key['certificate:194:ssl_expiring']['severity'] ?? null, $w2_by_key['certificate:194:ssl_expiring']['detail'] ?? null], ['warning', 'Zbývá dní: 3.']);
+    check_true('C-12: agent mlčí je nález', isset($w2_by_key['status:192:status_unknown_stale']));
+    check_false('C-12: čekání na první data ani údržba nálezem nejsou', isset($w2_by_key['status:191:status_unknown_stale']) || count(array_filter(array_keys($w2_by_key), fn ($k) => str_contains($k, ':195:'))) > 0);
+    check('C-12: kritické první', $w2_f['findings'][0]['severity'] ?? null, 'critical');
+    check('C-12: zdroj se nerozbil', $w2_f['sourceErrors'] ?? null, []);
+    $w2_dev = array_values(array_filter($w2_f['devices'] ?? [], fn ($d) => ($d['monitorId'] ?? 0) === 194))[0] ?? [];
+    check('C-12: zařízení s nejhorším nálezem', [$w2_dev['worst'] ?? null, $w2_dev['critical'] ?? null], ['critical', 1]);
+    check_true('C-12: počty a prohlédnutá zařízení', ($w2_f['counts']['critical'] ?? 0) >= 1 && ($w2_f['monitorsChecked'] ?? 0) >= count($w2_f['devices'] ?? []));
+    [, $w2_one] = api_get_auth($base, 'action=findings&monitor_id=194', $cookie_jar);
+    check_true('C-12: jedno zařízení = jen jeho nálezy', ($w2_one['total'] ?? 0) >= 2
+        && array_unique(array_column($w2_one['findings'] ?? [], 'monitorId')) === [194]);
+    [, $w2_en] = api_get_auth($base, 'action=findings&monitor_id=194&lang=en', $cookie_jar);
+    check('C-12: anglicky', array_column($w2_en['findings'] ?? [], 'title', 'key')['status:194:status_down'] ?? null, 'Down');
+    api_get_auth($base, 'action=findings&limit=1&lang=cs', $cookie_jar);
+    [, $w2_page] = api_get_auth($base, 'action=findings&limit=1&offset=1', $cookie_jar);
+    check('C-12: stránkování', [count($w2_page['findings'] ?? []), $w2_page['offset'] ?? null, $w2_page['total'] ?? null], [1, 1, $w2_f['total'] ?? -1]);
+
+    // --- C-3: previousAvg, the mean of the window before -------------------
+    // The previous 24 h window lies 24-48 h back. Readings 25 h ago, a minute
+    // apart: CPU 10/20/30, TS3 process CPU only twice (too few for a mean),
+    // fw_accepted 1000 -> 1030 (increments 5, 10, 15), entropy never.
+    $s3_prev = $pdo->prepare("INSERT INTO vps_metrics (monitor_id, checked_at, cpu_usage, ts_clients_online, ts_process_cpu, fw_accepted)
+                              VALUES (?, DATE_SUB(NOW(), INTERVAL ? SECOND), ?, ?, ?, ?)");
+    foreach ([[90000, 10, null, 50, 1000], [89940, 20, null, 70, 1005], [89880, 30, null, null, 1015], [89820, null, null, null, 1030]] as $s3_row) {
+        $s3_prev->execute([193, ...$s3_row]);
+    }
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+                (193, 'up', 100, DATE_SUB(NOW(), INTERVAL 25 HOUR)), (193, 'up', 200, DATE_SUB(NOW(), INTERVAL 25 HOUR)),
+                (193, 'up', 300, DATE_SUB(NOW(), INTERVAL 25 HOUR))");
+    $s3_avg = fn (array $b, string $k) => array_key_exists('previousAvg', $b['series'][$k] ?? [])
+        ? ($b['series'][$k]['previousAvg'] === null ? null : (float)$b['series'][$k]['previousAvg']) : 'chybí';
+    [$s3_code, $s3_b] = api_get_auth($base, 'action=metric_series_batch&monitor_id=193&period=24h&lang=cs', $cookie_jar);
+    check('C-3: dávka vrací 200', $s3_code, 200);
+    check('C-3: průměr předchozího okna', [$s3_avg($s3_b, 'cpu'), $s3_avg($s3_b, 'response_time')], [20.0, 200.0]);
+    check('C-3: čítač srovnává přírůstky, ne celoživotní součet', $s3_avg($s3_b, 'fw_accepted'), 10.0);
+    check('C-3: dva vzorky jsou málo, null', $s3_avg($s3_b, 'ts_process_cpu'), null);
+    check('C-3: nic neměřeno = null, ne nula', $s3_avg($s3_b, 'entropy'), null);
+    check('C-3: každá řada nese previousAvg', array_keys(array_filter($s3_b['series'] ?? [], fn ($s) => !array_key_exists('previousAvg', $s))), []);
+    // Several series share ts_clients_online; its SQL alias must not slide
+    // onto the next column and hand TeamSpeak clients the TS3 CPU mean.
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at, last_checked) VALUES
+                (196, 'W2 TeamSpeak', 'teamspeak', 'ts.example.org', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW())");
+    foreach ([[90000, null, 4, 50, null], [89940, null, 6, 70, null], [89880, null, 8, 90, null]] as $s3_row) {
+        $s3_prev->execute([196, ...$s3_row]);
+    }
+    [, $s3_ts] = api_get_auth($base, 'action=metric_series_batch&monitor_id=196&period=24h', $cookie_jar);
+    check('C-3: sdílený sloupec nepřebere průměr jiné metriky', [$s3_avg($s3_ts, 'ts_clients'), $s3_avg($s3_ts, 'ts_process_cpu')], [6.0, 70.0]);
+
+    // --- R351: TeamSpeak's summary quotes the ring's score ------------------
+    // It quoted TeamSpeak's own area score, so the sentence and the ring next
+    // to it could show two different numbers for one server. An open
+    // incident costs the ring points, the area score none: here they differ.
+    $pdo->exec("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES
+                (196, 'up', 40, DATE_SUB(NOW(), INTERVAL 3 MINUTE)),
+                (196, 'up', 42, DATE_SUB(NOW(), INTERVAL 2 MINUTE)),
+                (196, 'up', 41, DATE_SUB(NOW(), INTERVAL 1 MINUTE))");
+    $pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('W2 incident', 'minor', 'investigating', 196)");
+    [$ts_mi_code, $ts_mi] = api_get_auth($base, 'action=monitor_insights&monitor_id=196&lang=cs', $cookie_jar);
+    $ts_ring = $ts_mi['health']['score'] ?? null;
+    check_true('R351: TeamSpeak má skóre prstence jiné než staré skóre oblastí (dostal ' . json_encode([$ts_ring, $ts_mi['healthScore']['score'] ?? null]) . ')',
+        $ts_mi_code === 200 && is_int($ts_ring) && $ts_ring !== ($ts_mi['healthScore']['score'] ?? null));
+    check_true('R351: věta i stavová věta citují skóre prstence (dostal ' . json_encode([$ts_mi['summary'] ?? null, $ts_mi['healthScore']['score'] ?? null], JSON_UNESCAPED_UNICODE) . ')',
+        str_contains((string)($ts_mi['summary'] ?? ''), "({$ts_ring}/100)") && str_contains((string)($ts_mi['statusSentence'] ?? ''), "({$ts_ring}/100)"));
+    check_true('R351: staré healthScore pro starší klienty zůstává', is_array($ts_mi['healthScore'] ?? null));
+    [, $w2_web_mi] = api_get_auth($base, 'action=monitor_insights&monitor_id=193&lang=cs', $cookie_jar);
+    check_false('R351: jiný typ dál skóre do věty nedává', str_contains((string)($w2_web_mi['summary'] ?? ''), '/100)'));
+
+    // --- charts-22: an English page gets English metric names ---------------
+    [, $s3_en] = api_get_auth($base, 'action=metric_series_batch&monitor_id=193&period=24h&lang=en', $cookie_jar);
+    check('charts-22: dávka anglicky', [$s3_en['series']['cpu']['label'] ?? null, $s3_en['series']['response_time']['label'] ?? null, $s3_en['series']['fw_accepted']['label'] ?? null],
+        ['CPU usage', 'Response time (HTTP/Ping)', 'Firewall - accepted (increase)']);
+    [, $s3_ms] = api_get_auth($base, 'action=metric_series&monitor_id=193&metric=fw_accepted&period=24h&lang=en', $cookie_jar);
+    check('charts-22: řada čítače anglicky', $s3_ms['label'] ?? null, 'Firewall - accepted (increase)');
+    [, $s3_md] = api_get_auth($base, 'action=metric_detail&monitor_id=193&metric=cpu&lang=en', $cookie_jar);
+    check('charts-22: stránka metriky anglicky i s příbuznými', [$s3_md['metric']['label'] ?? null, array_column($s3_md['related'] ?? [], 'label', 'key')['load1'] ?? null], ['CPU usage', 'Load average (1 min)']);
+    [, $s3_hm] = api_get_auth($base, 'action=metric_heatmap&monitor_id=193&metric=cpu&days=30&lang=en', $cookie_jar);
+    check('charts-22: heatmapa anglicky', $s3_hm['label'] ?? null, 'CPU usage');
+    [, $s3_corr] = api_get_auth($base, 'action=metric_correlations&monitor_id=193&metric=load1&period=24h&all=1&lang=en', $cookie_jar);
+    check('charts-22: korelace anglicky', [$s3_corr['label'] ?? null, array_column($s3_corr['correlations'] ?? [], 'label', 'key')['cpu'] ?? null], ['Load average (1 min)', 'CPU usage']);
+    // ?lang sticks to the session (lang.php): switch back, and Czech returns.
+    [, $s3_cs] = api_get_auth($base, 'action=metric_series_batch&monitor_id=193&period=24h&lang=cs', $cookie_jar);
+    check('charts-22: zpět česky', [$s3_cs['series']['cpu']['label'] ?? null, $s3_cs['series']['fw_accepted']['label'] ?? null], ['Využití CPU', 'Firewall - propuštěno (přírůstek)']);
+} finally {
+    $pdo->exec("DELETE FROM monitor_interface_traffic WHERE monitor_id = 2 AND iface IN ('w2test0', 'w2big0')");
+    $pdo->exec("DELETE FROM incidents WHERE title = 'W2 incident'");
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = 1 AND (check_stages LIKE '%502%' OR error_message = 'DNS selhalo')");
+    $pdo->exec("DELETE FROM settings WHERE key_name IN ('websites_overview_cache', 'dashboard_insights_cache_cs', 'dashboard_insights_cache_en')");
+    foreach ([190, 191, 192, 193, 194, 195, 196] as $w2_mid) {
+        $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = {$w2_mid}");
+        $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = {$w2_mid}");
+        $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id = {$w2_mid}");
+        $pdo->exec("DELETE FROM monitors WHERE id = {$w2_mid}");
+    }
+}
+
+// =======================================================================
+// UX wave 2 on main (w2m), server.
+//
+// N-2  the 90-day strip reads finished days from the uptime_daily rollup, so
+//      days 31-90 keep their response and check counts after log pruning;
+// N-3  findings&summary=1: the bell's counts, kept a minute, cleared by an
+//      archive or a mute;
+// CR-9b the knowledge tips in the findings feed, without repeating a reason;
+// N-1  the health score 0-100 with its breakdown, public without hardware;
+//      regions carry the country for the public page's flags.
+// =======================================================================
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at, last_checked) VALUES
+            (197, 'W2M web s historií', 'web', 'https://w2m.example.org', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 100 DAY), NOW()),
+            (198, 'W2M server', 'vps', 'w2m-server', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 6 DAY), NOW()),
+            (199, 'W2M bez dat', 'web', 'https://w2m-nic.example.org', 'unknown', 'Test', NOW(), NULL)");
+$pdo->prepare("UPDATE monitors SET last_details = ? WHERE id = 198")->execute([json_encode([
+    'agent_last_seen' => time(), 'cpu' => 97, 'ram' => 30, 'temperature' => 85, 'agent_type' => 'bash',
+    // A latch of the router rules (two bad reports in a row): an open problem.
+    'wan_alert_sent' => true,
+])]);
+$pdo->exec("INSERT INTO incidents (title, impact, status, monitor_id) VALUES ('W2M incident', 'minor', 'monitoring', 197)");
+$w2m_ud = $pdo->prepare("INSERT INTO uptime_daily (monitor_id, day, checks_total, checks_up, checks_down, checks_warning, avg_response_ms,
+                         secs_up, secs_down, secs_warning, secs_silent, secs_maintenance, secs_unmeasured)
+                         VALUES (197, DATE_SUB(CURDATE(), INTERVAL ? DAY), ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)");
+// 60 days back: known only from its check counts (rolled up before the time
+// columns existed, its logs long pruned). 45 days back: a whole day in time.
+$w2m_ud->execute([60, 100, 98, 2, 250.0, null, null, null, null, null, null]);
+$w2m_ud->execute([45, 288, 288, 0, 180.0, 86400, 0, 0, 0, 0, 0]);
+$w2m_logs = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_from, checked_at) VALUES (?, 'up', ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+foreach ([50, 40, 30, 20, 10, 2] as $w2m_min) {
+    $w2m_logs->execute([198, 20, null, $w2m_min]);
+    $w2m_logs->execute([197, 120, '🇩🇪 Frankfurt, DE (AS13335 Cloudflare)', $w2m_min]);
+}
+$pdo->exec("INSERT INTO vps_metrics (monitor_id, checked_at, cpu_usage, ram_usage) VALUES (198, NOW(), 97, 30)");
+try {
+    // --- N-2 ---------------------------------------------------------------
+    [$w2m_code, $w2m_du] = api_get_auth($base, 'action=daily_uptime&days=90&lang=cs', $cookie_jar);
+    check('N-2: daily_uptime na 90 dní vrací 200', $w2m_code, 200);
+    $w2m_days = array_column($w2m_du['series']['197'] ?? [], null, 'day');
+    $w2m_d60 = $w2m_days[date('Y-m-d', strtotime('-60 day'))] ?? [];
+    $w2m_d45 = $w2m_days[date('Y-m-d', strtotime('-45 day'))] ?? [];
+    $w2m_d50 = $w2m_days[date('Y-m-d', strtotime('-50 day'))] ?? [];
+    check('N-2: den jen z počtů kontrol: výpadek, odezva ze souhrnu, pokrytí neznámé',
+        [$w2m_d60['status'] ?? null, $w2m_d60['avgMs'] ?? null, array_key_exists('coveragePct', $w2m_d60) ? $w2m_d60['coveragePct'] : 'chybí'], ['down', 250, null]);
+    check_true('N-2: a věta cituje počty kontrol (dostal ' . json_encode($w2m_d60['detail'] ?? null, JSON_UNESCAPED_UNICODE) . ')',
+        str_contains((string)($w2m_d60['detail'] ?? ''), '2 z 100'));
+    check('N-2: den v čase po pročištění logů: zelený, odezva ze souhrnu, celé pokrytí',
+        [$w2m_d45['status'] ?? null, $w2m_d45['avgMs'] ?? null, (float)($w2m_d45['coveragePct'] ?? -1)], ['up', 180, 100.0]);
+    check('N-2: den bez souhrnu i logů je nodata bez odezvy', [$w2m_d50['status'] ?? null, array_key_exists('avgMs', $w2m_d50) ? $w2m_d50['avgMs'] : 'chybí'], ['nodata', null]);
+    check('N-2: dnešek dál z logů', $w2m_days[date('Y-m-d')]['avgMs'] ?? null, 120);
+    check('N-2: řada má všech 90 dní', count($w2m_du['series']['197'] ?? []), 90);
+
+    // --- CR-9b: tips in the feed -------------------------------------------
+    $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'findings\\_summary\\_%'");
+    [$w2m_fc, $w2m_f] = api_get_auth($base, 'action=findings&monitor_id=198&lang=cs', $cookie_jar);
+    check('CR-9b: zjištění jednoho zařízení vrací 200 bez chyb zdroje', [$w2m_fc, $w2m_f['sourceErrors'] ?? null], [200, []]);
+    $w2m_keys = array_column($w2m_f['findings'] ?? [], 'source', 'key');
+    check('CR-9b: tip o teplotě je v jednom seznamu jako zdroj tip',
+        [$w2m_keys['tip:198:knowledge_tip_temperature_high'] ?? null, $w2m_keys['metric:198:metric_high'] ?? null], ['tip', 'metric']);
+    check_false('CR-9b: tip o CPU vedle metric_high CPU nezdvojí', isset($w2m_keys['tip:198:knowledge_tip_cpu_high']));
+
+    // --- N-3: the bell's counts ---------------------------------------------
+    [$w2m_sc, $w2m_s] = api_get_auth($base, 'action=findings&summary=1', $cookie_jar);
+    [, $w2m_full] = api_get_auth($base, 'action=findings&limit=500', $cookie_jar);
+    check('N-3: souhrn vrací 200 a jen počty', [$w2m_sc, array_key_exists('findings', $w2m_s), array_key_exists('cachedAt', $w2m_s) ? $w2m_s['cachedAt'] : 'chybí'], [200, false, null]);
+    check('N-3: počty souhlasí s plným seznamem', [$w2m_s['counts'] ?? null, $w2m_s['total'] ?? null], [$w2m_full['counts'] ?? -1, $w2m_full['total'] ?? -1]);
+    [, $w2m_s2] = api_get_auth($base, 'action=findings&summary=1', $cookie_jar);
+    check_true('N-3: druhý dotaz do minuty je z uložených počtů a přizná to', is_string($w2m_s2['cachedAt'] ?? null) && ($w2m_s2['counts'] ?? null) === ($w2m_s['counts'] ?? -1));
+    // The public health score is kept for a minute as well, and the archive's
+    // own list of keys used to leave it out.
+    api_get($base, 'action=health&scope=public&lang=cs');
+    $w2m_hc_kept = fn (): int => (int)$pdo->query("SELECT COUNT(*) FROM settings WHERE key_name = 'health_cache_public'")->fetchColumn();
+    check('N-3: veřejné skóre zdraví je v cache', $w2m_hc_kept(), 1);
+    [$w2m_ac] = api_post($base, 'action=archive_monitor', ['id' => 199], $cookie_jar);
+    check('N-3: archivace projde', $w2m_ac, 200);
+    check('N-3: archivace smaže uložené počty', (int)$pdo->query("SELECT COUNT(*) FROM settings WHERE key_name LIKE 'findings\\_summary\\_%'")->fetchColumn(), 0);
+    check('N-3: i veřejné skóre zdraví, které monitor ještě počítalo', $w2m_hc_kept(), 0);
+    api_post($base, 'action=unarchive_monitor', ['id' => 199], $cookie_jar);
+    $pdo->exec("UPDATE monitors SET status = 'unknown', last_checked = NULL WHERE id = 199");
+
+    // --- N-1: health score --------------------------------------------------
+    [$w2m_mi_code, $w2m_mi] = api_get_auth($base, 'action=monitor_insights&monitor_id=198&lang=cs', $cookie_jar);
+    check('N-1: monitor_insights vrací 200', $w2m_mi_code, 200);
+    $w2m_h = $w2m_mi['health'] ?? [];
+    $w2m_hc = array_column($w2m_h['components'] ?? [], null, 'key');
+    // availability 100, WAN 20 ms 100, alerts 50 (WAN lost), fresh 100,
+    // CPU 97 % = 0, 85 °C = 20, disk unmeasured:
+    // (3000 + 1000 + 750 + 1000 + 0 + 200) / 90 = 66,1.
+    check('N-1: skóre serveru jen ze změřeného', [$w2m_h['score'] ?? null, $w2m_h['grade'] ?? null, $w2m_h['measuredWeight'] ?? null, $w2m_h['measuredComponents'] ?? null], [66, 'poor', 90, 6]);
+    $w2m_pts = fn (string $k) => array_key_exists($k, $w2m_hc) ? $w2m_hc[$k]['points'] : 'chybí';
+    check('N-1: rozpad bodů pod prstencem', [$w2m_pts('cpu_ram'), $w2m_pts('temperature'), $w2m_pts('disk'), $w2m_pts('latency'), $w2m_pts('alerts')], [0, 20, null, 100, 50]);
+    check('N-1: složky nesou český název', $w2m_hc['availability']['label'] ?? null, 'Dostupnost');
+    check('N-1: jmenované srážky česky, s hodnotou a prahem, od největší',
+        array_map(fn ($d) => [$d['kind'], $d['label'], $d['points']], $w2m_h['deductions'] ?? []),
+        [['cpu_high', 'Vytížení CPU 97 %, nad 70 %', 16.7], ['cpu_temp_high', 'Teplota CPU 85 °C, nad 65 °C', 8.9], ['wan_lost', 'Primární WAN bez internetu', 8.3]]);
+    check_false('N-1: srážka nevrací vnitřní parametry', array_key_exists('params', $w2m_h['deductions'][0] ?? ['params' => 1]));
+    [, $w2m_mi197] = api_get_auth($base, 'action=monitor_insights&monitor_id=197&lang=cs', $cookie_jar);
+    check_true('N-1: otevřený incident běžícího webu je jmenovaná srážka',
+        in_array(['incident_open', 'Otevřený incident'], array_map(fn ($d) => [$d['kind'], $d['label']], $w2m_mi197['health']['deductions'] ?? []), true));
+    // The website shares an asset with the server's agent: the page's tips
+    // borrow the agent's CPU/RAM (bk_enrich_monitor_details), the score must not.
+    $pdo->exec("INSERT INTO assets (id, name) VALUES (9197, 'W2M stroj')");
+    $pdo->exec("UPDATE monitors SET asset_id = 9197, agent_key = 'w2m-score-key' WHERE id = 198");
+    $pdo->exec("UPDATE monitors SET asset_id = 9197 WHERE id = 197");
+    [, $w2m_mi197b] = api_get_auth($base, 'action=monitor_insights&monitor_id=197&lang=cs', $cookie_jar);
+    $w2m_c197 = array_column($w2m_mi197b['health']['components'] ?? [], null, 'key');
+    check('N-1: web na stejném stroji nepřebírá CPU serveru', array_key_exists('cpu_ram', $w2m_c197) ? $w2m_c197['cpu_ram']['points'] : 'chybí', null);
+    [, $w2m_mi_en] = api_get_auth($base, 'action=monitor_insights&monitor_id=198&lang=en', $cookie_jar);
+    check('N-1: anglicky anglická slova', array_column($w2m_mi_en['health']['deductions'] ?? [], 'label'),
+        ['CPU usage 97 %, above 70 %', 'CPU temperature 85 °C, above 65 °C', 'Primary WAN has no internet']);
+    // lang sticks to the session (lang.php): back to Czech for what follows.
+    api_get_auth($base, 'action=monitor_insights&monitor_id=198&lang=cs', $cookie_jar);
+
+    [$w2m_hs_code, $w2m_hs] = api_get_auth($base, 'action=health&lang=cs', $cookie_jar);
+    check('N-1: action=health vrací 200', $w2m_hs_code, 200);
+    $w2m_assets = array_column($w2m_hs['assets'] ?? [], null, 'monitorId');
+    check('N-1: zařízení bez dat nemá skóre, ne 100', array_key_exists(199, $w2m_assets) ? $w2m_assets[199]['score'] : 'chybí', null);
+    check('N-1: skóre zařízení v přehledu = skóre na jeho stránce, i se srážkami',
+        [$w2m_assets[198]['score'] ?? null, array_column($w2m_assets[198]['deductions'] ?? [], 'label')], [66, array_column($w2m_h['deductions'] ?? [], 'label')]);
+    check('N-1: i web sdílející stroj s agentem má v přehledu totéž skóre jako na své stránce',
+        [$w2m_assets[197]['score'] ?? 'chybí', array_column($w2m_assets[197]['deductions'] ?? [], 'kind')],
+        [$w2m_mi197b['health']['score'] ?? 'chybí', array_column($w2m_mi197b['health']['deductions'] ?? [], 'kind')]);
+    // The network: the mean of the scored, non-paused monitors - or null when
+    // fewer than half of them have a score. The test database holds fixtures
+    // of earlier blocks too, so the rule is checked against the answer's own list.
+    $w2m_live = array_filter($w2m_hs['assets'] ?? [], fn ($a) => empty($a['paused']));
+    $w2m_scored = array_values(array_filter(array_column($w2m_live, 'score'), fn ($v) => $v !== null));
+    $w2m_net = $w2m_hs['network'] ?? [];
+    check('N-1: síť počítá změřená a nepozastavená zařízení', [$w2m_net['assetsScored'] ?? null, $w2m_net['assetsTotal'] ?? null], [count($w2m_scored), count($w2m_live)]);
+    check('N-1: síť je průměr změřených, nebo null pod polovinou',
+        $w2m_net['score'] ?? 'chybí', 2 * count($w2m_scored) >= count($w2m_live) && $w2m_scored ? (int)round(array_sum($w2m_scored) / count($w2m_scored)) : null);
+    check_true('N-1: srážky sítě nesou zařízení a český popis', ($w2m_net['score'] ?? null) === null
+        || array_filter($w2m_net['deductions'] ?? [], fn ($d) => !is_int($d['monitorId'] ?? null) || !is_string($d['label'] ?? null) || $d['label'] === '') === []);
+
+    $pdo->exec("DELETE FROM settings WHERE key_name = 'health_cache_public'");
+    [$w2m_pub_code, $w2m_pub] = api_get($base, 'action=health&scope=public&lang=cs');
+    check('N-1: veřejné skóre vrací 200', $w2m_pub_code, 200);
+    check('N-1: veřejně jen skóre sítě, žádné skóre po zařízeních', array_keys($w2m_pub), ['network', 'formulaVersion', 'generatedAt']);
+    check('N-1: veřejně bez hardwaru', array_values(array_intersect(array_column($w2m_pub['network']['components'] ?? [], 'key'), ['cpu_ram', 'disk', 'temperature'])), []);
+    $w2m_pub_ids = array_map('intval', array_column(api_get($base, 'action=monitors&scope=public')[1]['monitors'] ?? [], 'id'));
+    check('N-1: veřejné srážky jen veřejných služeb, bez hardwaru a vnitřností routeru',
+        array_values(array_filter($w2m_pub['network']['deductions'] ?? [], fn ($d) => !in_array((int)($d['monitorId'] ?? 0), $w2m_pub_ids, true)
+            || in_array($d['kind'] ?? '', ['cpu_high', 'ram_high', 'disk_full', 'smart_failed', 'cpu_temp_high', 'disk_temp_high', 'wan_lost', 'lte_backup_lost', 'wan_link_degraded', 'conntrack_full', 'firewall_disabled', 'dns_resolver_failed'], true))), []);
+    check_false('N-1: soukromý server se veřejně nejmenuje', in_array(198, array_map(fn ($d) => (int)($d['monitorId'] ?? 0), $w2m_pub['network']['deductions'] ?? []), true));
+    [, $w2m_pub_en] = api_get($base, 'action=health&scope=public&lang=en');
+    check_true('N-1: uložená veřejná odpověď se přesto popíše jazykem návštěvníka',
+        ($w2m_pub_en['network']['components'][0]['label'] ?? null) === 'Availability' && ($w2m_pub_en['generatedAt'] ?? 1) === ($w2m_pub['generatedAt'] ?? 2));
+
+    // --- regions: the country for the flags ---------------------------------
+    $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'regions_cache_%'");
+    [$w2m_rc, $w2m_rg] = api_get($base, 'action=regions&scope=public');
+    $w2m_fra = array_values(array_filter($w2m_rg['regions'] ?? [], fn ($r) => str_contains((string)($r['location'] ?? ''), 'Frankfurt')))[0] ?? [];
+    check('vlajky: veřejná místa nesou zemi', [$w2m_rc, $w2m_fra['country'] ?? null], [200, 'DE']);
+    check_true('vlajky: každé místo má klíč country (null = bez vlajky)', array_filter($w2m_rg['regions'] ?? [], fn ($r) => !array_key_exists('country', $r)) === []);
+} finally {
+    $pdo->exec("DELETE FROM settings WHERE key_name LIKE 'findings\\_summary\\_%' OR key_name LIKE 'regions_cache_%' OR key_name = 'health_cache_public'");
+    $pdo->exec("DELETE FROM incidents WHERE monitor_id IN (197, 198, 199)");
+    $pdo->exec("DELETE FROM assets WHERE id = 9197");
+    foreach ([197, 198, 199] as $w2m_mid) {
+        $pdo->exec("DELETE FROM vps_metrics WHERE monitor_id = {$w2m_mid}");
+        $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id = {$w2m_mid}");
+        $pdo->exec("DELETE FROM uptime_daily WHERE monitor_id = {$w2m_mid}");
+        $pdo->exec("DELETE FROM monitors WHERE id = {$w2m_mid}");
+    }
+}
+
+// =======================================================================
+// config.php that prints something (27 Sep 2026)
+//
+// A hand edit on the server left "Ah" before <?php. Every endpoint that loads
+// config.php answered "Ah{...}", /app could not parse a single answer for an
+// hour, and the monitoring noticed nothing. db.php now holds such output
+// back: the machine endpoints answer exactly as before, health.php fails its
+// check and site_health tells an admin what the file prints.
+// =======================================================================
+$co_clean = (string)file_get_contents($config_path);
+[, $co_ps_clean] = api_get($base, 'action=public_status');
+try {
+    bk_test_put_config($config_path, 'Ah' . $co_clean);
+    [$c, $j, $b] = api_get($base, 'action=public_status');
+    check('config.php s „Ah": veřejné API odpoví čistým JSONem', [$c, substr($b, 0, 1), is_array($j)], [200, '{', true]);
+    check('se stejnými klíči jako s čistým souborem', array_keys((array)$j), array_keys((array)$co_ps_clean));
+    [$c, , $b] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'], '{"agent_key":"neexistujici"}');
+    check_true('příjem od agenta odpoví JSONem bez „Ah"', is_array(json_decode($b, true)) && !str_starts_with($b, 'Ah'));
+    [$c, , $b] = hb_ping($base, str_repeat('b', 48));
+    check_true('heartbeat taky', is_array(json_decode($b, true)) && !str_starts_with($b, 'Ah'));
+    [$c, $j, $b] = api_get_auth($base, 'action=site_health', $cookie_jar);
+    check('site_health adminovi řekne 2 bajty před <?php a jaké',
+        [$c, $j['configOutput'] ?? null], [200, ['bytes' => 2, 'where' => ['before_open_tag'], 'excerpt' => 'Ah']]);
+    check('a sám začíná JSONem', substr($b, 0, 1), '{');
+    [$c] = api_get($base, 'action=site_health');
+    check('anonym site_health nedostane', $c, 403);
+    [$c, $b] = $page_get('/health.php?format=json', $cookie_jar);
+    $co_health = json_decode($b, true);
+    $co_check = array_values(array_filter($co_health['checks'] ?? [], fn ($x) => ($x['name'] ?? '') === 'config.php output'))[0] ?? [];
+    check('health.php to hlásí jako chybu', [$c, $co_health['success'] ?? null, $co_check['ok'] ?? null], [200, false, false]);
+    check_true('s počtem bajtů a úryvkem', str_contains((string)($co_check['detail'] ?? ''), 'prints 2 bytes')
+        && str_contains((string)($co_check['detail'] ?? ''), '"Ah"'));
+
+    // The classic ending: PHP swallows the one newline after the closing tag.
+    bk_test_put_config($config_path, $co_clean . "?>\n");
+    [$c, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+    check('klasické ukončení značkou a koncem řádku nic nevypisuje',
+        [$c, array_key_exists('configOutput', (array)$j) ? $j['configOutput'] : 'chybí'], [200, null]);
+    [, $b] = $page_get('/health.php?format=json', $cookie_jar);
+    $co_check = array_values(array_filter(json_decode($b, true)['checks'] ?? [], fn ($x) => ($x['name'] ?? '') === 'config.php output'))[0] ?? [];
+    check('a health.php ho nechá projít', $co_check['ok'] ?? null, true);
+    bk_test_put_config($config_path, $co_clean . "?>\n\n");
+    [, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+    check('prázdný řádek navíc za koncovou značkou je 1 bajt za ní',
+        $j['configOutput'] ?? null, ['bytes' => 1, 'where' => ['after_close_tag'], 'excerpt' => '\\n']);
+} finally {
+    bk_test_put_config($config_path, $co_clean);
+}
+[, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+check('s čistým config.php site_health nic nehlásí', array_key_exists('configOutput', (array)$j) ? $j['configOutput'] : 'x', null);
+
+// =======================================================================
+// The cron self-check of the site's own public API
+//
+// bk_self_check_run() against this server's real public_status, in a child
+// PHP that loads the app the way cron.php does. The channels are replaced by
+// a recorder, so nothing is sent; a failure is a stubbed "Ah{...}" answer on
+// the same URL, because db.php keeps the real API clean now.
+// =======================================================================
+$sc_code = 'require ' . var_export($root . '/bootstrap.php', true) . ';'
+    . '$notes = [];'
+    . '$notify = function (PDO $p, string $e, array $s) use (&$notes): array {'
+    . '    $notes[] = [$e, $s["failures"] ?? null];'
+    . '    return ["attempted" => 2, "sent" => 0, "unknown" => 1, "failed" => 1];'
+    . '};'
+    . '$bad = fn (string $u): array => ["code" => 200, "body" => "Ah{\"status\":\"healthy\"}", "errno" => 0, "error" => ""];'
+    . '$url = ' . var_export($base . '/api.php?action=public_status', true) . ';'
+    . '$pdo->exec("DELETE FROM settings WHERE key_name = \'self_check_state\'");'
+    . '$t = time(); $r = [];'
+    . '$r[] = bk_self_check_run($pdo, $url, $t, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 30, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 300, fetch: $bad, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 360, fetch: $bad, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 420, fetch: $bad, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 480, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 540, notify: $notify);'
+    . '$cfg = ["bytes" => 2, "where" => ["before_open_tag"], "excerpt" => "Ah"];'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 780, $cfg, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, $url, $t + 840, $cfg, notify: $notify);'
+    . '$r[] = bk_self_check_run($pdo, null, $t + 900, notify: $notify);'
+    . 'echo json_encode(["runs" => $r, "notes" => $notes]);';
+$sc_out = [];
+exec(escapeshellarg(PHP_BINARY) . ' -r ' . escapeshellarg($sc_code) . ' 2>&1', $sc_out, $sc_rc);
+$sc = json_decode((string)end($sc_out), true);
+check('samokontrola proběhla v podřízeném PHP', [$sc_rc, is_array($sc)], [0, true]);
+$sc_runs = $sc['runs'] ?? [];
+check('skutečné veřejné API prochází', [$sc_runs[0]['state'] ?? null, $sc_runs[0]['ran'] ?? null,
+    array_key_exists('reason', $sc_runs[0] ?? []) ? $sc_runs[0]['reason'] : 'chybí'], ['ok', true, null]);
+check('za 30 s se znovu nečte', [$sc_runs[1]['ran'] ?? null, $sc_runs[1]['state'] ?? null], [false, 'ok']);
+check('„Ah{…}": první selhání, zatím nikomu', [$sc_runs[2]['state'] ?? null, $sc_runs[2]['failures'] ?? null, $sc_runs[2]['reason'] ?? null],
+    ['failed', 1, '2 bytes before the JSON: "Ah"']);
+check('druhé: upozornění odešlo, převzetí nepotvrzené', [$sc_runs[3]['failures'] ?? null, $sc_runs[3]['alertResult'] ?? null, $sc_runs[3]['alerted'] ?? null],
+    [2, 'unknown', true]);
+check('třetí už nikomu', $sc_runs[4]['failures'] ?? null, 3);
+// One pass after an announced failure is not a recovery yet: a flapping API
+// would send a failure and a recovery every few minutes.
+check('první úspěch po ohlášeném selhání: zatím se obnova neohlásí', [$sc_runs[5]['state'] ?? null, $sc_runs[5]['ran'] ?? null,
+    $sc_runs[5]['alerted'] ?? null], ['recovering', true, true]);
+check('druhý za sebou: stav ok a výsledek zprávy o obnově', [$sc_runs[6]['state'] ?? null, $sc_runs[6]['recoveryResult'] ?? null], ['ok', 'unknown']);
+// db.php keeps the real API clean while config.php prints something, so the
+// fault fails the check itself, or it would reach no channel.
+check('výstup config.php selže kontrolu i s čistým API', [$sc_runs[7]['state'] ?? null, $sc_runs[7]['failures'] ?? null, $sc_runs[7]['reason'] ?? null],
+    ['failed', 1, 'config.php prints 2 bytes (before_open_tag); held back from every answer']);
+check('a po druhém za sebou jde upozornění stejnou cestou', [$sc_runs[8]['failures'] ?? null, $sc_runs[8]['alertResult'] ?? null,
+    $sc_runs[8]['alerted'] ?? null], [2, 'unknown', true]);
+check('upozornění: selhání API, obnova, selhání kvůli config.php', $sc['notes'] ?? null, [['failed', 2], ['restored', 0], ['failed', 2]]);
+check('bez site_url kontrola neběží a řekne to', [$sc_runs[9]['state'] ?? null, $sc_runs[9]['ran'] ?? null], ['unconfigured', false]);
+[$c, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+check('site_health nese stav samokontroly', [$c, $j['selfCheck']['state'] ?? null], [200, 'unconfigured']);
+$pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('self_check_state', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")
+    ->execute([json_encode(['state' => 'failed', 'url' => 'https://example.com/status/api.php?action=public_status',
+        'checkedAt' => '2026-09-27T18:10:00+02:00', 'failures' => 3, 'since' => '2026-09-27T18:00:00+02:00',
+        'reason' => 'HTTP 500', 'lastOkAt' => null, 'alerted' => false, 'alertAttemptAt' => '2026-09-27T18:05:00+02:00',
+        'alertResult' => 'failed', 'recoveredFrom' => null])]);
+[, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+check('a selhání se vším, co /app ukazuje', $j['selfCheck'] ?? null, ['state' => 'failed',
+    'url' => 'https://example.com/status/api.php?action=public_status', 'checkedAt' => '2026-09-27T18:10:00+02:00',
+    'failures' => 3, 'since' => '2026-09-27T18:00:00+02:00', 'reason' => 'HTTP 500', 'lastOkAt' => null,
+    'alertAttemptAt' => '2026-09-27T18:05:00+02:00', 'alertResult' => 'failed']);
+$pdo->exec("DELETE FROM settings WHERE key_name = 'self_check_state'");
+[, $j] = api_get_auth($base, 'action=site_health', $cookie_jar);
+check('před prvním během cronu je selfCheck null', array_key_exists('selfCheck', (array)$j) ? $j['selfCheck'] : 'chybí', null);
+
+// =======================================================================
+// Agent contract: the agents' own golden payloads (agents/tests/golden).
+//
+// Every report above is written on this side of the wire. The agents repo
+// keeps one normalised dry-run payload per agent, and its CI fails when the
+// agent's output drifts from it (tests/README.md, "Golden payloads"). Here
+// those files go through the real agent_api.php, twice, so the second report
+// takes the "previous report" paths too. Each must be accepted with nothing in
+// ingest_issues or details_dropped, and every key the agent sends must land
+// in last_details or in a column, or be on the short list below that says
+// where else it goes. A value the agent measured must not come out as null.
+// A key the server drops is then a red test on the gitlink bump that brings
+// it, instead of a value that quietly never shows up.
+// =======================================================================
+$ac_dir = $root . '/../../agents/tests/golden';
+// File => the agent_type inside it, so a file mixed up with another cannot pass.
+$ac_files = ['openwrt' => 'openwrt', 'linux-bash' => 'bash', 'linux-python' => 'python'];
+// Keys that are deliberately NOT in last_details or a column, and where they go.
+$ac_elsewhere = [
+    'agent_key' => 'the credential: checked, never stored',
+    'speedtests' => 'rows in speedtest_results, counted below',
+];
+// Ingest issues a golden payload is KNOWN to raise, pinned exactly: a new one
+// fails, and so does an entry here once its cause is gone (then delete it).
+// openwrt: the stub librespeed files of the agents' tests/openwrt-stubs carry
+// byte counts that do not fit 15 s at the stated rate (1850.23 Mbit/s with
+// 2531000000 B), so the server rightly flags the items as a unit error. The
+// fix belongs to that stub fixture, not to the server.
+$ac_known_issues = [
+    'openwrt' => [
+        ['type' => 'unit_mismatch', 'key' => '2026-09-20T05:23:41+02:00', 'bytes' => null],
+        ['type' => 'unit_mismatch', 'key' => '2026-09-20T05:41:02+02:00', 'bytes' => null],
+        ['type' => 'unit_mismatch', 'key' => '2026-09-20T06:02:00+02:00', 'bytes' => null],
+    ],
+];
+$ac_not_metrics = require __DIR__ . '/fixtures/agent_not_metrics.php';
+
+$ac_golden = [];
+foreach ($ac_files as $ac_name => $ac_type) {
+    $ac_raw = is_file("{$ac_dir}/{$ac_name}.json") ? file_get_contents("{$ac_dir}/{$ac_name}.json") : false;
+    $ac_pl = is_string($ac_raw) ? json_decode($ac_raw, true) : null;
+    $ac_ok = is_array($ac_pl) && ($ac_pl['agent_type'] ?? null) === $ac_type;
+    // Never a skip: a green section over zero payloads would verify nothing,
+    // exactly like a run without the submodule used to.
+    check("kontrakt: agents/tests/golden/{$ac_name}.json je hlášení agenta {$ac_type}", $ac_ok, true);
+    if ($ac_ok) {
+        $ac_golden[$ac_name] = $ac_pl;
+    } else {
+        fwrite(STDERR, "  {$ac_dir}/{$ac_name}.json chybí nebo není platný. Chybí submodul `agents`?\n"
+            . "  Spusťte: git submodule update --init (gitlink agents musí obsahovat tests/golden/)\n");
+    }
+}
+
+// Which agent key feeds which vps_metrics column, read from $metric_row the
+// way run_agent_metric_lint.php reads it. A column is 1:1 when its value is
+// bk_agent_num/int($data, 'key') or one variable assigned from exactly one
+// key. Composite values ($swap ?? $ow_swap_pct, band totals, WAN steps) count
+// their keys as stored, but are not compared value by value.
+$ac_api_src = (string)file_get_contents($root . '/agent_report.php');
+$ac_col_of = [];
+$ac_stored = [];
+$ac_cols = [];
+preg_match('/\$metric_row = \[(.*?)\n            \];/s', $ac_api_src, $ac_row_m);
+preg_match_all("/^\s*'([a-z0-9_]+)' => (.+),\s*$/m", $ac_row_m[1] ?? '', $ac_rows, PREG_SET_ORDER);
+foreach ($ac_rows as [, $ac_col, $ac_expr]) {
+    $ac_cols[] = $ac_col;
+    $ac_keys = [];
+    if (preg_match("/^bk_agent_(?:num|int)\(\\\$data, '([a-z0-9_]+)'\)$/", $ac_expr, $ac_direct)) {
+        $ac_keys = [$ac_direct[1]];
+    } else {
+        preg_match_all('/\$(\w+)/', $ac_expr, $ac_vars);
+        foreach (array_unique($ac_vars[1]) as $ac_var) {
+            if (preg_match('/\$' . preg_quote($ac_var, '/') . '\s*=(?!=)([^;]*);/', $ac_api_src, $ac_assign)) {
+                preg_match_all("/\\\$data\['([a-z0-9_]+)'\]|bk_agent_(?:num|int|str|bool)\(\\\$data, '([a-z0-9_]+)'/", $ac_assign[1], $ac_km, PREG_SET_ORDER);
+                foreach ($ac_km as $ac_k) {
+                    $ac_keys[] = ($ac_k[2] ?? '') !== '' ? $ac_k[2] : $ac_k[1];
+                }
+            }
+        }
+        $ac_keys = array_values(array_unique($ac_keys));
+        if (!preg_match('/^\$\w+$/', $ac_expr) || count($ac_keys) !== 1) {
+            foreach ($ac_keys as $ac_k) {
+                $ac_stored[$ac_k] = true;
+            }
+            continue;
+        }
+    }
+    $ac_stored[$ac_keys[0]] = true;
+    $ac_col_of[$ac_keys[0]] = $ac_col;
+}
+// The reading is tried on known rows first: a pattern that stopped matching
+// would otherwise report every key as "fine" for ever.
+check('kontrakt: mapa $metric_row se z agent_api.php přečte (vzorky)', [
+    $ac_col_of['cpu'] ?? null, $ac_col_of['entropy'] ?? null, $ac_col_of['fw_accepted'] ?? null,
+    $ac_col_of['cpu_core_max_pct'] ?? null, isset($ac_col_of['swap']), isset($ac_stored['swap_pct']),
+    isset($ac_col_of['wan_rx_errors']), count($ac_cols) >= 80,
+], ['cpu_usage', 'entropy_avail', 'fw_accepted', 'cpu_core_max', false, true, false, true]);
+
+// The payload goes out exactly as the agent printed it; only the key and the
+// router's clock (the stored metric is its distance from ours) are replaced.
+$ac_post = function (array $body) use ($base): array {
+    $ch = curl_init($base . '/agent_api.php');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION),
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
+        CURLOPT_TIMEOUT => 20,
+    ]);
+    $raw = (string)curl_exec($ch);
+    return [(int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE), json_decode($raw, true), $raw];
+};
+$ac_details = function (int $id) use ($pdo): array {
+    $st = $pdo->prepare("SELECT last_details FROM monitors WHERE id = ?");
+    $st->execute([$id]);
+    $d = json_decode((string)$st->fetchColumn(), true);
+    return is_array($d) ? $d : [];
+};
+$ac_metrics = function (int $id) use ($pdo): array {
+    $st = $pdo->prepare("SELECT * FROM vps_metrics WHERE monitor_id = ? ORDER BY id DESC LIMIT 1");
+    $st->execute([$id]);
+    return $st->fetch() ?: [];
+};
+// What one report left behind: [code, success, ingest_issues, details_dropped].
+$ac_outcome = function (array $resp, int $code, string $raw, array $d): array {
+    return [$code, $resp['success'] ?? substr($raw, 0, 300),
+        array_key_exists('ingest_issues', $d) ? $d['ingest_issues'] : 'chybí', $d['details_dropped'] ?? []];
+};
+// Every object key path inside a value: 'wifi_radios[].noise', 'wan_path.sqm[].iface'.
+$ac_paths = function ($v, string $prefix) use (&$ac_paths): array {
+    $out = [];
+    if (!is_array($v)) {
+        return $out;
+    }
+    $list = array_is_list($v);
+    foreach ($v as $k => $item) {
+        $p = $list ? $prefix . '[]' : $prefix . '.' . $k;
+        if (!$list) {
+            $out[$p] = true;
+        }
+        $out += $ac_paths($item, $p);
+    }
+    return $out;
+};
+$ac_ids = [];
+$ac_new_monitor = function (string $name, string $agent_type) use ($pdo, &$ac_ids): array {
+    $id = 9301 + count($ac_ids);
+    $key = bin2hex(random_bytes(16));
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, agent_key) VALUES (?, ?, ?, '', 'unknown', 'Kontrakt', ?)")
+        ->execute([$id, $name, $agent_type === 'openwrt' ? 'openwrt' : 'vps', $key]);
+    $ac_ids[] = $id;
+    return [$id, $key];
+};
+
+try {
+    $ac_seen = [];
+    foreach ($ac_golden as $ac_name => $ac_pl) {
+        $ac_seen = array_merge($ac_seen, array_keys($ac_pl));
+        [$ac_id, $ac_key] = $ac_new_monitor("Kontrakt {$ac_name}", $ac_pl['agent_type']);
+        $ac_body = array_merge($ac_pl, ['agent_key' => $ac_key]);
+        if (array_key_exists('agent_time', $ac_pl)) {
+            $ac_body['agent_time'] = time();
+        }
+        foreach ([1, 2] as $ac_n) {
+            [$ac_code, $ac_resp, $ac_raw] = $ac_post($ac_body);
+            check("kontrakt {$ac_name}, hlášení {$ac_n}: přijato (200, success) a nic se neztratí (ingest_issues, details_dropped)",
+                $ac_outcome(is_array($ac_resp) ? $ac_resp : [], $ac_code, $ac_raw, $ac_details($ac_id)),
+                [200, true, $ac_known_issues[$ac_name] ?? [], []]);
+        }
+
+        $ac_d = $ac_details($ac_id);
+        $ac_row = $ac_metrics($ac_id);
+        $ac_lost = [];
+        foreach ($ac_pl as $ac_k => $ac_v) {
+            if (isset($ac_elsewhere[$ac_k])) {
+                continue;
+            }
+            $ac_in_details = array_key_exists($ac_k, $ac_d);
+            $ac_col = $ac_col_of[$ac_k] ?? null;
+            if (!$ac_in_details && !isset($ac_stored[$ac_k])) {
+                $ac_lost[] = "{$ac_k}: zahozený potichu, není v last_details ani ve sloupci";
+                continue;
+            }
+            if ($ac_v === null) {
+                continue;
+            }
+            if ($ac_in_details && $ac_d[$ac_k] === null) {
+                $ac_lost[] = "{$ac_k}: agent poslal hodnotu, v last_details je null";
+            }
+            if ($ac_col !== null && (is_int($ac_v) || is_float($ac_v)) && ($ac_row[$ac_col] ?? null) === null) {
+                $ac_lost[] = "{$ac_k}: agent poslal číslo, sloupec {$ac_col} je NULL";
+            }
+        }
+        check("kontrakt {$ac_name}: každý klíč agenta se uloží a změřená hodnota nezmizí", $ac_lost, []);
+
+        // The sanitizers (wifi_radios, storage_disks, wan_path, lan_ports) keep
+        // an allow-list of nested keys, and drop the rest on purpose: that is
+        // where a new key of the agent would vanish without a trace. Today
+        // they keep every key the agents send; a new one fails here.
+        $ac_nested = [];
+        foreach ($ac_pl as $ac_k => $ac_v) {
+            if (is_array($ac_v) && is_array($ac_d[$ac_k] ?? null)) {
+                $ac_nested = array_merge($ac_nested,
+                    array_keys(array_diff_key($ac_paths($ac_v, $ac_k), $ac_paths($ac_d[$ac_k], $ac_k))));
+            }
+        }
+        check("kontrakt {$ac_name}: ani vnořený klíč agenta se v last_details neztratí", $ac_nested, []);
+
+        $ac_st = $pdo->prepare("SELECT COUNT(*) FROM speedtest_results WHERE monitor_id = ?");
+        $ac_st->execute([$ac_id]);
+        check("kontrakt {$ac_name}: každý speedtest je řádek speedtest_results, i po druhém hlášení jen jednou",
+            (int)$ac_st->fetchColumn(), is_array($ac_pl['speedtests'] ?? null) ? count($ac_pl['speedtests']) : 0);
+
+        // The lint reads the agents' sources with a regex; agent.py and keys
+        // composed at run time slip past it. The golden payload does not.
+        $ac_unlisted = [];
+        foreach ($ac_pl as $ac_k => $ac_v) {
+            if ((is_int($ac_v) || is_float($ac_v)) && !isset($ac_stored[$ac_k]) && !in_array($ac_k, $ac_not_metrics, true)) {
+                $ac_unlisted[] = $ac_k;
+            }
+        }
+        check("kontrakt {$ac_name}: číselný klíč je ukládaná metrika, nebo výjimka v fixtures/agent_not_metrics.php", $ac_unlisted, []);
+
+        // A brand-new router's first report: nothing measured yet. Accepted,
+        // nothing lost, and no column may make a number up.
+        [$ac_id0, $ac_key0] = $ac_new_monitor("Kontrakt {$ac_name} (vše null)", $ac_pl['agent_type']);
+        $ac_nulls = array_merge(array_fill_keys(array_keys($ac_pl), null),
+            ['agent_key' => $ac_key0, 'agent_type' => $ac_pl['agent_type'], 'version' => $ac_pl['version'] ?? null]);
+        [$ac_code, $ac_resp, $ac_raw] = $ac_post($ac_nulls);
+        check("kontrakt {$ac_name}, vše null: přijato a nic se neztratí",
+            $ac_outcome(is_array($ac_resp) ? $ac_resp : [], $ac_code, $ac_raw, $ac_details($ac_id0)), [200, true, [], []]);
+        $ac_row0 = $ac_metrics($ac_id0);
+        check("kontrakt {$ac_name}, vše null: žádný sloupec vps_metrics si hodnotu nevymyslí",
+            array_keys(array_filter(array_intersect_key($ac_row0, array_flip($ac_cols)), fn ($v) => $v !== null)), []);
+        check_true("kontrakt {$ac_name}, vše null: řádek metrik vznikl", $ac_row0 !== []);
+    }
+    // An entry no golden payload carries any more is stale and would hide the
+    // next key of that name.
+    if ($ac_golden !== []) {
+        check('kontrakt: seznam klíčů mimo last_details nemá zastaralé položky', array_values(array_diff(array_keys($ac_elsewhere), $ac_seen)), []);
+    }
+} finally {
+    if ($ac_ids !== []) {
+        $ac_in = implode(', ', array_map('intval', $ac_ids));
+        $ac_tables = $pdo->query("SELECT DISTINCT TABLE_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'monitor_id'")->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($ac_tables as $ac_table) {
+            $pdo->exec("DELETE FROM `{$ac_table}` WHERE monitor_id IN ({$ac_in})");
+        }
+        $pdo->exec("DELETE FROM monitors WHERE id IN ({$ac_in})");
+    }
+}
+
+// =======================================================================
+// A check that measured nothing is not 0 ms (R2).
+//
+// Failed checks and maintenance rows were logged with response_time 0, and
+// the raw latency readers filtered only IS NOT NULL: every outage was a 0 ms
+// dip in the charts, averaged into the heatmap and previousAvg, exported to
+// Prometheus and printed on the public map, while the daily rollup (NULLIF)
+// left it out. Writers store NULL now; older rows stay for the 30-day
+// retention, so the readers skip 0 too. The 0 rows below are those older rows.
+// Own monitors, removed at the end.
+// =======================================================================
+$rt_settings = $pdo->query("SELECT key_name, key_value FROM settings WHERE key_name IN ('cron_key', 'metrics_token')")->fetchAll(PDO::FETCH_KEY_PAIR);
+try {
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category) VALUES
+                (261, 'R2 web', 'web', 'https://r2.example.com', 'up', 'Test'),
+                (262, 'R2 TeamSpeak', 'teamspeak', 'ts-r2.example.com', 'down', 'Test')");
+    $rt_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, check_stages, checked_at)
+                             VALUES (?, ?, ?, ?, ?, DATE_SUB(NOW(), INTERVAL ? MINUTE))");
+    foreach ([
+        // The 24 hours before the window, for previousAvg: three measured, three
+        // outages. Inserted first - metrics.php reads the newest row by id.
+        [261, 'down', 0, 'Timeout', null, 35 * 60], [261, 'down', 0, 'Timeout', null, 34 * 60], [261, 'down', 0, 'Timeout', null, 33 * 60],
+        [261, 'up', 300, null, null, 32 * 60], [261, 'up', 300, null, null, 31 * 60], [261, 'up', 300, null, null, 30 * 60],
+        // The last 24 hours: two measured checks, an outage and a maintenance tick.
+        [261, 'up', 100, null, null, 50],
+        [261, 'down', 0, 'cURL chyba: Connection refused', '{"dns":{"ok":true}}', 40],
+        [261, 'maintenance', 0, 'Plánovaná údržba', null, 30],
+        [261, 'up', 200, null, null, 20],
+        // A TeamSpeak node that answered in 40 ms and then went down.
+        [262, 'up', 40, null, null, 60],
+        [262, 'down', 0, 'TS3 Query port nedostupný', null, 10],
+    ] as $rt_row) {
+        $rt_log->execute($rt_row);
+    }
+    $pdo->exec("UPDATE monitors SET last_status_change = DATE_SUB(NOW(), INTERVAL 10 MINUTE) WHERE id = 262");
+
+    [, $rt_series] = api_get_auth($base, 'action=metric_series&monitor_id=261&metric=response_time&period=24h', $cookie_jar);
+    check('R2: graf odezvy kreslí jen naměřené kontroly, výpadek ani údržba nejsou 0 ms',
+        array_map(fn ($pt) => (float)$pt[1], $rt_series['points'] ?? []), [100.0, 200.0]);
+
+    [, $rt_batch] = api_get_auth($base, 'action=metric_series_batch&monitor_id=261&period=24h', $cookie_jar);
+    check('R2: dávka grafů detailu taky',
+        array_map(fn ($pt) => (float)$pt[1], $rt_batch['series']['response_time']['points'] ?? []), [100.0, 200.0]);
+    $rt_prev = $rt_batch['series']['response_time']['previousAvg'] ?? null;
+    check('R2: průměr předchozího období nestahují výpadky k nule', $rt_prev === null ? null : (float)$rt_prev, 300.0);
+
+    [, $rt_hm] = api_get_auth($base, 'action=metric_heatmap&monitor_id=261&metric=response_time&days=3', $cookie_jar);
+    $rt_hm_samples = 0;
+    $rt_hm_low = [];
+    foreach ($rt_hm['days'] ?? [] as $rt_day) {
+        $rt_hm_samples += array_sum($rt_day['samples'] ?? []);
+        foreach ($rt_day['hours'] ?? [] as $rt_val) {
+            if ($rt_val !== null && $rt_val < 100) {
+                $rt_hm_low[] = $rt_val;
+            }
+        }
+    }
+    check('R2: heatmapa počítá jen naměřené vzorky a žádná hodina neklesne pod nejrychlejší kontrolu',
+        [$rt_hm_samples, $rt_hm_low], [5, []]);
+
+    [, $rt_ev] = api_get_auth($base, 'action=events&monitor_id=261&limit=50', $cookie_jar);
+    $rt_ev_by = [];
+    foreach ($rt_ev['events'] ?? [] as $rt_e) {
+        $rt_ev_by[$rt_e['rawStatus'] . ':' . ($rt_e['responseTime'] ?? 'null')] = true;
+    }
+    check_true('R2: v událostech má výpadek i údržba odezvu null, naměřená kontrola svoje ms',
+        isset($rt_ev_by['down:null'], $rt_ev_by['maintenance:null'], $rt_ev_by['up:200'])
+        && !isset($rt_ev_by['down:0']) && !isset($rt_ev_by['maintenance:0']));
+    [, $rt_ev_ts] = api_get_auth($base, 'action=events&monitor_id=262&limit=50', $cookie_jar);
+    check('R2: řádek změny stavu taky',
+        [$rt_ev_ts['statusChange']['status'] ?? 'chybí', array_key_exists('responseTime', $rt_ev_ts['statusChange'] ?? []) ? $rt_ev_ts['statusChange']['responseTime'] : 'chybí'],
+        ['down', null]);
+
+    [, $rt_stages] = api_get_auth($base, 'action=check_stages&monitor_id=261', $cookie_jar);
+    check('R2: rozpad kontroly u výpadku neukazuje 0 ms',
+        [$rt_stages['status'] ?? 'chybí', array_key_exists('responseMs', $rt_stages ?? []) ? $rt_stages['responseMs'] : 'chybí'], ['down', null]);
+
+    [, , $rt_csv] = api_get_auth($base, 'action=export_csv&monitor_id=261&days=1', $cookie_jar);
+    $rt_csv_rt = [];
+    // Data rows only: they start with the check time (a PHP notice printed by
+    // the test server would be a line of its own).
+    foreach (preg_split('/\r?\n/', (string)$rt_csv) as $rt_line) {
+        if (preg_match('/^"?\d{4}-\d{2}-\d{2} /', $rt_line)) {
+            $rt_cells = str_getcsv($rt_line, ',', '"', '');
+            $rt_csv_rt[] = ($rt_cells[1] ?? '?') . '=' . ($rt_cells[2] ?? '?');
+        }
+    }
+    check('R2: CSV nechá nezměřenou odezvu prázdnou', $rt_csv_rt, ['up=200', 'maintenance=', 'down=', 'up=100']);
+
+    [, $rt_ps] = api_get_auth($base, 'action=public_status', $cookie_jar);
+    $rt_node = array_values(array_filter($rt_ps['nodes'] ?? [], fn ($n) => ($n['name'] ?? '') === 'R2 TeamSpeak'))[0] ?? null;
+    // Not the 40 ms from before the outage either: the map prints the value
+    // next to the state word, as the latency the node has now.
+    check('R2: uzel mimo provoz nemá na mapě webu odezvu, ani 0 ms z výpadku, ani starou',
+        [$rt_node['status'] ?? 'chybí', array_key_exists('latencyMs', $rt_node ?? []) ? $rt_node['latencyMs'] : 'chybí'], ['offline', null]);
+
+    $rt_token = 'r2-' . bin2hex(random_bytes(8));
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('metrics_token', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")->execute([$rt_token]);
+    [$rt_prom_code, , $rt_prom] = bk_raw_request($base . '/metrics.php?token=' . $rt_token);
+    check('R2: Prometheus exportuje odezvu webu z naměřené kontroly',
+        [$rt_prom_code, (bool)preg_match('/^bloodkings_monitor_response_time_ms\{name="R2 web",type="web"\} 200$/m', $rt_prom)], [200, true]);
+    check_false('R2: a TeamSpeak po výpadku žádnou 0 ms nemá',
+        str_contains($rt_prom, 'bloodkings_monitor_response_time_ms{name="R2 TeamSpeak"'));
+    // R58: an unknown state was exported as down, and a silent agent's last
+    // CPU as current.
+    $pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, last_details) VALUES
+                (263, 'R58 neznámý', 'agent_service', 'dnsmasq', 'unknown', 'Test', NULL),
+                (264, 'R58 tichý', 'vps', 'vps-r58.example.com', 'down', 'Test', '" . json_encode(['cpu' => 42, 'agent_last_seen' => time() - 86400]) . "'),
+                (265, 'R58 živý', 'vps', 'vps-r58b.example.com', 'up', 'Test', '" . json_encode(['cpu' => 17, 'agent_last_seen' => time() - 60]) . "')");
+    [, , $rt_prom58] = bk_raw_request($base . '/metrics.php?token=' . $rt_token);
+    check('R58: neznámý stav nemá vzorek, tichý agent nemá „aktuální“ CPU, živý ano', [
+        str_contains($rt_prom58, 'bloodkings_monitor_up{name="R58 neznámý"'),
+        str_contains($rt_prom58, 'bloodkings_vps_cpu_percent{name="R58 tichý"}'),
+        str_contains($rt_prom58, 'bloodkings_vps_agent_last_seen_timestamp{name="R58 tichý"}'),
+        str_contains($rt_prom58, 'bloodkings_vps_cpu_percent{name="R58 živý"} 17'),
+    ], [false, false, true, true]);
+    $pdo->exec("DELETE FROM monitors WHERE id IN (263, 264, 265)");
+
+    // The deleted PHP node (node_client.php) sent 0 for a failed check; a
+    // result that sends nothing used to be stored as 0 too. An 'up' result is
+    // timed after the answer arrived (the Cloudflare Worker), so its 0 is an
+    // answer under 1 ms.
+    $rt_key = 'r2-' . bin2hex(random_bytes(8));
+    $pdo->prepare("INSERT INTO settings (key_name, key_value) VALUES ('cron_key', ?) ON DUPLICATE KEY UPDATE key_value = VALUES(key_value)")->execute([$rt_key]);
+    [$rt_node_code] = bk_raw_request($base . '/node_api.php?action=post_results&key=' . $rt_key, ['Content-Type: application/json'], json_encode([
+        'location' => 'R2 sonda',
+        'results' => [
+            ['id' => 261, 'status' => 'down', 'response_time' => 0, 'error' => 'Zavřeno'],
+            ['id' => 261, 'status' => 'down', 'error' => 'cURL chyba'],
+            ['id' => 261, 'status' => 'up', 'response_time' => 150],
+            // A measured answer under 1 ms was truncated to 0, then NULL.
+            ['id' => 261, 'status' => 'up', 'response_time' => 0.4],
+            ['id' => 261, 'status' => 'up', 'response_time' => 0],
+        ],
+    ]));
+    $rt_probe = $pdo->query("SELECT response_time FROM monitor_logs WHERE monitor_id = 261 AND checked_from = 'R2 sonda' ORDER BY id")->fetchAll(PDO::FETCH_COLUMN);
+    check('R2: vzdálená sonda uloží nezměřenou odezvu jako NULL a odezvu pod 1 ms jako 1 ms',
+        [$rt_node_code, array_map(fn ($v) => $v === null ? null : (int)$v, $rt_probe)], [200, [null, null, 150, 1, 1]]);
+
+    // A measured answer is never 0 either. monitor_logs keeps whole ms, and a
+    // router whose WAN sits on another router's LAN reaches its gateway in
+    // 0.3 ms: that went in as 0, which every reader above skips as unmeasured.
+    $rt_wan_key = 'r2-wan-' . bin2hex(random_bytes(8));
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, agent_key) VALUES (263, 'R2 router', 'openwrt', 'r2-router.example.com', 'up', 'Test', ?)")
+        ->execute([$rt_wan_key]);
+    $rt_wan_codes = [];
+    foreach ([0.3, 18.4, 0, -2, null] as $rt_wan) {
+        [$rt_wan_codes[]] = bk_raw_request($base . '/agent_api.php', ['Content-Type: application/json'],
+            (string)json_encode(['agent_key' => $rt_wan_key, 'cpu' => 10.0, 'ram' => 20.0, 'hdd' => 30.0, 'wan_latency_ms' => $rt_wan]));
+    }
+    $rt_wan_rows = $pdo->query("SELECT response_time FROM monitor_logs WHERE monitor_id = 263 ORDER BY id")->fetchAll(PDO::FETCH_COLUMN);
+    check('R2: latence WAN pod 1 ms je v historii 1 ms, ne 0; nula, záporná a chybějící jsou NULL',
+        [$rt_wan_codes, array_map(fn ($v) => $v === null ? null : (int)$v, $rt_wan_rows)],
+        [[200, 200, 200, 200, 200], [1, 18, null, null, null]]);
+    [, $rt_wan_series] = api_get_auth($base, 'action=metric_series&monitor_id=263&metric=response_time&period=24h', $cookie_jar);
+    $rt_wan_points = array_map(fn ($pt) => (float)$pt[1], $rt_wan_series['points'] ?? []);
+    sort($rt_wan_points);
+    check('R2: a graf odezvy routeru tu 1 ms nakreslí', $rt_wan_points, [1.0, 18.0]);
+    // A node in service keeps its newest measured latency on the map, past
+    // the reports whose ping got no answer.
+    [, $rt_ps_up] = api_get_auth($base, 'action=public_status', $cookie_jar);
+    $rt_router = array_values(array_filter($rt_ps_up['nodes'] ?? [], fn ($n) => ($n['name'] ?? '') === 'R2 router'))[0] ?? null;
+    check('R2: router v provozu má na mapě webu poslední naměřenou odezvu',
+        [$rt_router['status'] ?? 'chybí', $rt_router['latencyMs'] ?? 'chybí'], ['online', 18]);
+
+    // That look-back stays inside the node's current state. 264 answered in
+    // 40 ms, went down a minute later and is up again through checks that
+    // measured nothing (the agent fallback): its 40 ms predates the outage.
+    // 265 shows why the bound starts a few seconds early: the check that
+    // brought it up is logged before the change is stamped.
+    // One clock for the stamp and the rows, so the second between them is exact.
+    $rt_now = (string)$pdo->query("SELECT NOW()")->fetchColumn();
+    $pdo->prepare("INSERT INTO monitors (id, name, type, target, status, category, last_status_change) VALUES
+                (264, 'R2 TeamSpeak po výpadku', 'teamspeak', 'ts-r2b.example.com', 'up', 'Test', DATE_SUB(?, INTERVAL 300 SECOND)),
+                (265, 'R2 TeamSpeak po návratu', 'teamspeak', 'ts-r2c.example.com', 'up', 'Test', DATE_SUB(?, INTERVAL 300 SECOND))")
+        ->execute([$rt_now, $rt_now]);
+    $rt_spell = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, checked_at) VALUES (?, ?, ?, DATE_SUB(?, INTERVAL ? SECOND))");
+    foreach ([
+        [264, 'up', 40, 360], [264, 'down', null, 330], [264, 'up', null, 300], [264, 'up', null, 240],
+        [265, 'down', null, 330], [265, 'up', 25, 301], [265, 'up', null, 240],
+    ] as [$rt_mid, $rt_st, $rt_ms, $rt_ago]) {
+        $rt_spell->execute([$rt_mid, $rt_st, $rt_ms, $rt_now, $rt_ago]);
+    }
+    [, $rt_ps_spell] = api_get_auth($base, 'action=public_status', $cookie_jar);
+    $rt_spell_lat = [];
+    foreach ($rt_ps_spell['nodes'] ?? [] as $rt_n) {
+        if (in_array($rt_n['name'] ?? '', ['R2 TeamSpeak po výpadku', 'R2 TeamSpeak po návratu'], true)) {
+            $rt_spell_lat[$rt_n['name']] = [$rt_n['status'] ?? 'chybí', array_key_exists('latencyMs', $rt_n) ? $rt_n['latencyMs'] : 'chybí'];
+        }
+    }
+    ksort($rt_spell_lat);
+    check('R2: uzel po výpadku nemá na mapě odezvu z doby před ním, jen naměřenou od změny stavu',
+        $rt_spell_lat, ['R2 TeamSpeak po návratu' => ['online', 25], 'R2 TeamSpeak po výpadku' => ['online', null]]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (261, 262, 264, 265)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (261, 262, 264, 265)");
+    // The router's reports reach more tables than the log.
+    foreach ($pdo->query("SELECT DISTINCT TABLE_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND COLUMN_NAME = 'monitor_id'")->fetchAll(PDO::FETCH_COLUMN) as $rt_table) {
+        $pdo->exec("DELETE FROM `{$rt_table}` WHERE monitor_id = 263");
+    }
+    $pdo->exec("DELETE FROM monitors WHERE id = 263");
+    foreach (['cron_key', 'metrics_token'] as $rt_name) {
+        if (array_key_exists($rt_name, $rt_settings)) {
+            $pdo->prepare("UPDATE settings SET key_value = ? WHERE key_name = ?")->execute([$rt_settings[$rt_name], $rt_name]);
+        } else {
+            $pdo->prepare("DELETE FROM settings WHERE key_name = ?")->execute([$rt_name]);
+        }
+    }
+}
+
+// =======================================================================
+// R143: sla_report's last outage starts where the outage started.
+//
+// cron writes a row on every check, and the outage used to start at the
+// latest down row: a two-hour outage read as one minute, so did its MTTR,
+// an ongoing one was always a minute old, and a monitor that left 'down'
+// for 'warning' without an 'up' ended at its own start, 0 s. A maintenance
+// window bounds an outage as an 'up' does, the way availability counts it:
+// its rows are no outage, but a 'down' logged inside it is one until the
+// window's next row.
+// =======================================================================
+$pdo->exec("INSERT INTO monitors (id, name, type, target, status, category, created_at) VALUES
+            (1431, 'R143 vyřešený', 'web', 'https://r143-a.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1432, 'R143 trvá', 'web', 'https://r143-b.example.com', 'down', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1433, 'R143 varování', 'web', 'https://r143-c.example.com', 'warning', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1434, 'R143 down po up v téže sekundě', 'web', 'https://r143-d.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1435, 'R143 down před up v téže sekundě', 'web', 'https://r143-e.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1436, 'R143 výpadek do údržby', 'web', 'https://r143-f.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1437, 'R143 sonda v údržbě', 'web', 'https://r143-g.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1438, 'R143 výpadek po údržbě', 'web', 'https://r143-h.example.com', 'down', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1439, 'R143 down po údržbě v téže sekundě', 'web', 'https://r143-i.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY)),
+            (1440, 'R143 down před údržbou v téže sekundě', 'web', 'https://r143-j.example.com', 'up', 'Test', DATE_SUB(NOW(), INTERVAL 1 DAY))");
+try {
+    // Oldest first, so the ids follow time as they do for cron; whole minutes
+    // from one NOW(), or the seconds the inserts take land in the durations.
+    $r143_now = (string)$pdo->query('SELECT NOW()')->fetchColumn();
+    $r143_log = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at)
+                               VALUES (?, ?, ?, ?, DATE_SUB(?, INTERVAL ? MINUTE))");
+    $r143_run = function (int $mid, string $status, int $from_min, int $to_min) use ($r143_log, $r143_now): void {
+        // A failed check and a maintenance tick measured no response time.
+        $words = ['down' => 'HTTP 503', 'maintenance' => 'Plánovaná údržba'];
+        for ($min = $from_min; $min >= $to_min; $min--) {
+            $r143_log->execute([$mid, $status, isset($words[$status]) ? null : 100, $words[$status] ?? null, $r143_now, $min]);
+        }
+    };
+    // An earlier outage, then two hours down with one warning check inside
+    // (the incident stays open over it), then up again an hour ago.
+    $r143_run(1431, 'up', 300, 241);
+    $r143_run(1431, 'down', 240, 231);
+    $r143_run(1431, 'up', 230, 181);
+    $r143_run(1431, 'down', 180, 121);
+    $r143_run(1431, 'warning', 120, 120);
+    $r143_run(1431, 'down', 119, 61);
+    $r143_run(1431, 'up', 60, 0);
+    // Down for three hours and still down; no 'up' anywhere in the logs.
+    $r143_run(1432, 'down', 180, 0);
+    // Down for an hour, then warning for half an hour, no 'up' since.
+    $r143_run(1433, 'up', 120, 91);
+    $r143_run(1433, 'down', 90, 31);
+    $r143_run(1433, 'warning', 30, 0);
+    // cron and a remote probe both log a monitor, so an 'up' and a 'down' can
+    // share a second; the id says which came first. These rows have no source,
+    // as every row from before schema r024 (a probe's then included), so they
+    // all count; the r024 block above has a probe's row skipped. 1434: the outage's first
+    // down row is written after the 'up' in that second, and it counts.
+    $r143_run(1434, 'up', 180, 121);
+    $r143_run(1434, 'down', 121, 61);
+    $r143_run(1434, 'up', 60, 0);
+    // 1435: a down row written before the 'up' in that second is not part of
+    // the outage that follows it.
+    $r143_run(1435, 'up', 180, 122);
+    $r143_run(1435, 'down', 121, 121);
+    $r143_run(1435, 'up', 121, 121);
+    $r143_run(1435, 'down', 120, 61);
+    $r143_run(1435, 'up', 60, 0);
+    // An hour down, then an hour of maintenance (cron logs 'maintenance' and
+    // checks nothing; the incident stays open), then up again.
+    $r143_run(1436, 'up', 240, 181);
+    $r143_run(1436, 'down', 180, 121);
+    $r143_run(1436, 'maintenance', 120, 61);
+    $r143_run(1436, 'up', 60, 0);
+    // No outage of its own: an hour of maintenance in which a remote probe
+    // logged the planned work's 503 every five minutes, 20 s after cron's
+    // row (from before r024: no source, so it counts; node_api has since
+    // stopped logging in a window). Each such 'down' is down until cron's
+    // next row, 40 s, which is what availability counts - not one outage
+    // across the whole window.
+    $r143_probe = $pdo->prepare("INSERT INTO monitor_logs (monitor_id, status, response_time, error_message, checked_at)
+                                 VALUES (?, 'down', NULL, 'HTTP 503', DATE_SUB(?, INTERVAL ? SECOND))");
+    $r143_run(1437, 'up', 180, 121);
+    for ($min = 120; $min >= 61; $min--) {
+        $r143_run(1437, 'maintenance', $min, $min);
+        if ($min % 5 === 0) {
+            $r143_probe->execute([1437, $r143_now, $min * 60 - 20]);
+        }
+    }
+    $r143_run(1437, 'up', 60, 0);
+    // Down before an hour of maintenance and down again after it, still.
+    $r143_run(1438, 'down', 180, 121);
+    $r143_run(1438, 'maintenance', 120, 61);
+    $r143_run(1438, 'down', 60, 0);
+    // The same tie with a 'maintenance' row, which bounds an outage as an
+    // 'up' does. 1439: a probe's 'down' written after the window's first
+    // row in that second is an outage until the window's next row, 60 s,
+    // not part of the one before the window.
+    $r143_run(1439, 'up', 240, 181);
+    $r143_run(1439, 'down', 180, 121);
+    $r143_run(1439, 'maintenance', 120, 120);
+    $r143_run(1439, 'down', 120, 120);
+    $r143_run(1439, 'maintenance', 119, 61);
+    $r143_run(1439, 'up', 60, 0);
+    // 1440: a 'down' written before the window's last row in that second
+    // is not part of the outage that follows the window.
+    $r143_run(1440, 'maintenance', 180, 122);
+    $r143_run(1440, 'down', 121, 121);
+    $r143_run(1440, 'maintenance', 121, 121);
+    $r143_run(1440, 'down', 120, 61);
+    $r143_run(1440, 'up', 60, 0);
+
+    [$r143_code, $r143_sla] = api_get_auth($base, 'action=sla_report&days=7', $cookie_jar);
+    check('R143: sla_report vrací 200', $r143_code, 200);
+    $r143_rows = array_column($r143_sla['monitors'] ?? [], null, 'id');
+    $r143_a = $r143_rows[1431]['lastOutage'] ?? [];
+    check('R143: vyřešený výpadek trvá od prvního down po posledním up do dalšího up, ne jednu kontrolu',
+        [$r143_a['durationSec'] ?? null, $r143_rows[1431]['mttrSec'] ?? null, $r143_a['resolved'] ?? null], [7200, 7200, true]);
+    $r143_a_start = DateTime::createFromFormat('d.m.Y H:i:s', (string)($r143_a['start'] ?? ''));
+    $r143_a_end = DateTime::createFromFormat('d.m.Y H:i:s', (string)($r143_a['end'] ?? ''));
+    check('R143: konec minus začátek je ta délka',
+        $r143_a_start !== false && $r143_a_end !== false ? $r143_a_end->getTimestamp() - $r143_a_start->getTimestamp() : null, 7200);
+
+    $r143_b = $r143_rows[1432]['lastOutage'] ?? [];
+    check_true('R143: trvající výpadek běží od nejstaršího down, ne od poslední kontroly (dostal ' . json_encode($r143_b['durationSec'] ?? null) . ')',
+        ($r143_b['resolved'] ?? null) === false && ($r143_b['durationSec'] ?? 0) >= 10800 && ($r143_b['durationSec'] ?? 0) < 10800 + 300);
+    // array_key_exists, not ?? - the ?? operator treats NULL as a missing value.
+    check('R143: a nemá konec ani MTTR',
+        [array_key_exists('end', $r143_b) ? $r143_b['end'] : 'chybí', array_key_exists('mttrSec', $r143_rows[1432] ?? []) ? $r143_rows[1432]['mttrSec'] : 'chybí'],
+        [null, null]);
+
+    $r143_c = $r143_rows[1433]['lastOutage'] ?? [];
+    check('R143: výpadek bez dalšího up nemá konec ani délku, ne 0 s',
+        [
+            $r143_c['resolved'] ?? null,
+            array_key_exists('end', $r143_c) ? $r143_c['end'] : 'chybí',
+            array_key_exists('durationSec', $r143_c) ? $r143_c['durationSec'] : 'chybí',
+            array_key_exists('mttrSec', $r143_rows[1433] ?? []) ? $r143_rows[1433]['mttrSec'] : 'chybí',
+        ],
+        [true, null, null, null]);
+    check_true('R143: a začátek má', is_string($r143_c['start'] ?? null) && $r143_c['start'] !== '');
+
+    check('R143: down zapsaný v téže sekundě po up výpadek začíná, ne až další kontrola',
+        [$r143_rows[1434]['lastOutage']['durationSec'] ?? null, $r143_rows[1434]['mttrSec'] ?? null], [3660, 3660]);
+    check('R143: down zapsaný v téže sekundě před up do výpadku po něm nepatří',
+        [$r143_rows[1435]['lastOutage']['durationSec'] ?? null, $r143_rows[1435]['mttrSec'] ?? null], [3600, 3600]);
+
+    $r143_f = $r143_rows[1436]['lastOutage'] ?? [];
+    check('R143: výpadek, který přešel do údržby, končí jejím začátkem; údržba do délky ani MTTR nepatří',
+        [$r143_f['durationSec'] ?? null, $r143_rows[1436]['mttrSec'] ?? null, $r143_f['resolved'] ?? null], [3600, 3600, true]);
+    check('R143: down sondy v údržbě trvá do další kontroly cronu jako v dostupnosti, ne celé okno',
+        [$r143_rows[1437]['lastOutage']['durationSec'] ?? null, $r143_rows[1437]['mttrSec'] ?? null], [40, 40]);
+    $r143_h = $r143_rows[1438]['lastOutage'] ?? [];
+    check_true('R143: výpadek po údržbě běží od jejího konce, ne od výpadku před ní (dostal ' . json_encode($r143_h['durationSec'] ?? null) . ')',
+        ($r143_h['resolved'] ?? null) === false && ($r143_h['durationSec'] ?? 0) >= 3600 && ($r143_h['durationSec'] ?? 0) < 3600 + 300);
+    check('R143: down zapsaný v téže sekundě po začátku údržby trvá do její další kontroly, ne od výpadku před ní',
+        [$r143_rows[1439]['lastOutage']['durationSec'] ?? null, $r143_rows[1439]['mttrSec'] ?? null], [60, 60]);
+    check('R143: down zapsaný v téže sekundě před koncem údržby do výpadku po ní nepatří',
+        [$r143_rows[1440]['lastOutage']['durationSec'] ?? null, $r143_rows[1440]['mttrSec'] ?? null], [3600, 3600]);
+} finally {
+    $pdo->exec("DELETE FROM monitor_logs WHERE monitor_id IN (1431, 1432, 1433, 1434, 1435, 1436, 1437, 1438, 1439, 1440)");
+    $pdo->exec("DELETE FROM monitors WHERE id IN (1431, 1432, 1433, 1434, 1435, 1436, 1437, 1438, 1439, 1440)");
+}
+
+// =======================================================================
+// First run: the installer (site W1-5).
+//
+// db.php used to copy config.sample.php over a missing config.php, so a fresh
+// upload died on placeholder credentials with a 500 page. Now: needs_setup
+// (503 JSON for programs and machine endpoints, 302 to /app/setup for a
+// browser), and installer.php walks config -> schema -> account -> cron in a
+// scratch database. Then the lock: a finished install refuses every step, and
+// a real config.php whose database is down is never replaced.
+// =======================================================================
+/** The session cookie from a curl cookie jar, for a raw request that must carry it. */
+function bk_test_jar_cookie(string $jar): string {
+    foreach (file($jar, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+        // curl writes HttpOnly cookies with this prefix, which is not a comment.
+        $line = (string)preg_replace('/^#HttpOnly_/', '', $line);
+        $parts = explode("\t", $line);
+        if ($line !== '' && $line[0] !== '#' && count($parts) >= 7) {
+            return $parts[5] . '=' . $parts[6];
+        }
+    }
+    return '';
+}
+
+/**
+ * The test itself rewrites config.php below. `php -S` runs OPcache with
+ * revalidate_freq (2 s by default), counted in whole seconds from the last
+ * check: a file changed right after a request can be served from the cache
+ * for up to three seconds (2.2 s of waiting failed now and then). The
+ * installer's own write invalidates the cache and needs no wait.
+ */
+function bk_test_put_config(string $path, string $text): void {
+    file_put_contents($path, $text);
+    usleep(3300000);
+}
+
+/**
+ * Whether an installer response hands a password back: as a value of its own,
+ * or quoted the way config.php (var_export) or JSON would carry it. A bare
+ * substring proves nothing for a short password - CI's "test" is part of the
+ * database name bk_test_* and of the config text's own "connection test"
+ * comment. The define lines filled with known non-secret values are removed
+ * first, so a password equal to the user name or to 'mysql' is no false alarm.
+ *
+ * @param array<string, string|int> $known  define name => the value it was given
+ */
+function bk_test_returns_secret(string $raw, string $secret, array $known): bool {
+    $body = json_decode($raw, true);
+    if (!is_array($body)) {
+        return str_contains($raw, $secret);
+    }
+    $lines = [];
+    foreach ($known as $name => $value) {
+        $lines[] = "define('{$name}', " . var_export($value, true) . ');';
+    }
+    $quoted = [var_export($secret, true), json_encode($secret, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)];
+    $leak = false;
+    array_walk_recursive($body, static function ($value) use ($secret, $lines, $quoted, &$leak): void {
+        if (!is_string($value)) {
+            return;
+        }
+        $text = str_replace($lines, '', $value);
+        $leak = $leak || $value === $secret || str_contains($text, $quoted[0]) || str_contains($text, $quoted[1]);
+    });
+    return $leak;
+}
+
+$in_test_config = (string)file_get_contents($config_path);
+$in_db = $db_name . '_inst';
+$pdo->exec("DROP DATABASE IF EXISTS `{$in_db}`");
+$pdo->exec("CREATE DATABASE `{$in_db}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+register_shutdown_function(function () use ($pdo, $in_db) {
+    try {
+        $pdo->exec("DROP DATABASE IF EXISTS `{$in_db}`");
+    } catch (Throwable $e) {
+        fwrite(STDERR, "Databázi {$in_db} se nepodařilo smazat: {$e->getMessage()}\n");
+    }
+});
+$in_jar = (string)tempnam(sys_get_temp_dir(), 'bk_inst');
+$in_anon = (string)tempnam(sys_get_temp_dir(), 'bk_inst_anon');
+$in_cfg = ['host' => $db_host, 'port' => $db_port, 'database' => $in_db, 'user' => $db_user, 'password' => $db_pass];
+$in_machine = [
+    'agent_api.php' => ['{"agent_key":"x"}', 'příjem od agenta'],
+    'heartbeat.php?token=' . str_repeat('a', 48) => [null, 'heartbeat'],
+    'node_api.php?action=get_monitors' => [null, 'API vzdálených uzlů'],
+    'metrics.php' => [null, 'Prometheus'],
+    'cron.php' => [null, 'cron přes HTTP'],
+];
+$in_chmod = false;
+$in_sync = $root . '/.ftp-deploy-sync-state.json';
+$in_sync_made = false;
+try {
+    // --- A fresh upload: no config.php at all ---------------------------
+    unlink($config_path);
+    [$c, , $b] = bk_raw_request($base . '/api.php?action=session');
+    $j = json_decode($b, true);
+    check('čerstvé nahrání: API odpoví 503 needs_setup', [$c, $j['error'] ?? null, $j['reason'] ?? null, $j['setupUrl'] ?? null], [503, 'needs_setup', 'config_missing', '/app/setup']);
+    check_false('db.php už nekopíruje vzorový config.php', file_exists($config_path));
+    [$c, $h] = bk_raw_request($base . '/index.php', ['Accept: text/html']);
+    check('čerstvé nahrání: prohlížeč jde do instalátoru', [$c, preg_match('/^location:\s*\/app\/setup\s*$/mi', $h)], [302, 1]);
+    foreach ($in_machine as $in_path => [$in_post, $in_label]) {
+        [$c, $h, $b] = bk_raw_request($base . '/' . $in_path, [], $in_post);
+        check("čerstvé nahrání, {$in_label}: 503 needs_setup v JSON, bez přesměrování",
+            [$c, json_decode($b, true)['error'] ?? null, preg_match('/^location:/mi', $h)], [503, 'needs_setup', 0]);
+    }
+
+    [$c, $st] = api_get_auth($base, 'action=install_status', $in_jar);
+    check('instalátor: krok config, nic nezamčeno', [$c, $st['step'] ?? null, $st['locked'] ?? null, $st['config']['exists'] ?? null], [200, 'config', false, false]);
+    check_true('instalátor ukáže požadavky na server', is_bool($st['requirements']['extensions']['pdo_mysql'] ?? null));
+    $in_csrf = (string)($st['csrfToken'] ?? '');
+    check_true('instalátor vydá CSRF token', strlen($in_csrf) === 64);
+
+    [$c, $r] = api_post($base, 'action=install_test_db', $in_cfg, $in_jar, '');
+    check('test databáze bez CSRF tokenu: 403', [$c, $r['error'] ?? null], [403, 'csrf_invalid']);
+    [$c] = api_get_auth($base, 'action=install_write_config', $in_jar);
+    check('zápis configu přes GET: 405 (heslo nikdy v URL)', $c, 405);
+    [$c, $r] = api_post($base, 'action=install_test_db', ['host' => 'db;unix_socket=/tmp/x'] + $in_cfg, $in_jar, $in_csrf);
+    check('host se středníkem se do DSN nedostane', [$c, $r['error'] ?? null], [400, 'invalid_host']);
+    [$c, $r] = api_post($base, 'action=install_test_db', ['password' => 'heslo_databaze'] + $in_cfg, $in_jar, $in_csrf);
+    check('vzorové heslo instalátor odmítne', [$c, $r['error'] ?? null], [400, 'invalid_password']);
+    $in_wrong = 'Spatne-' . bin2hex(random_bytes(6));
+    [$c, $r, $raw] = api_post($base, 'action=install_test_db', ['password' => $in_wrong] + $in_cfg, $in_jar, $in_csrf);
+    check('špatné heslo: ok=false a access_denied', [$c, $r['ok'] ?? null, $r['error'] ?? null], [200, false, 'access_denied']);
+    check_false('a heslo se v odpovědi nevrátí', str_contains($raw, $in_wrong));
+    [$c, $r] = api_post($base, 'action=install_test_db', ['database' => $in_db . '_nope'] + $in_cfg, $in_jar, $in_csrf);
+    check('neexistující databáze: unknown_database', [$r['ok'] ?? null, $r['error'] ?? null], [false, 'unknown_database']);
+    [$c, $r] = api_post($base, 'action=install_test_db', $in_cfg, $in_jar, $in_csrf);
+    check('správné údaje: prázdná databáze bez schématu a účtů', [$c, $r['ok'] ?? null, $r['database']['schema'] ?? null, $r['database']['users'] ?? null], [200, true, 'missing', 0]);
+    check_false('test připojení nic nezapíše', file_exists($config_path));
+
+    // PHP without write access: the text comes back, the password does not.
+    $in_can_chmod = !(function_exists('posix_geteuid') && posix_geteuid() === 0);
+    if ($in_can_chmod) {
+        $in_chmod = chmod($root, 0555);
+        clearstatcache();
+        [$c, $r, $raw] = api_post($base, 'action=install_write_config', $in_cfg, $in_jar, $in_csrf);
+        chmod($root, 0755);
+        $in_chmod = false;
+        check('bez práva zápisu: written=false a text ke zkopírování', [$c, $r['written'] ?? null, $r['passwordPlaceholder'] ?? null], [200, false, '__DB_PASSWORD__']);
+        check_true('text má místo hesla zástupný znak', str_contains((string)($r['configText'] ?? ''), "define('DB_PASS', '__DB_PASSWORD__');"));
+        check_true('a testovanou databázi', str_contains((string)($r['configText'] ?? ''), "define('DB_NAME', " . var_export($in_db, true) . ");"));
+        check_false('a soubor nevznikl', file_exists($config_path));
+        if (strlen($db_pass) >= 4) {
+            check_false('heslo databáze se nevrátí ani v textu ke zkopírování', bk_test_returns_secret($raw, $db_pass,
+                ['DB_DRIVER' => 'mysql', 'DB_HOST' => $db_host, 'DB_PORT' => $db_port, 'DB_NAME' => $in_db, 'DB_USER' => $db_user]));
+        }
+    } else {
+        echo "  (přeskočeno: pod rootem nejde složku zamknout proti zápisu)\n";
+    }
+    // --- config -> schema -> account --------------------------------------
+    [$c, $r] = api_post($base, 'action=install_write_config', $in_cfg + ['timezone' => 'Europe/Prague'], $in_jar, $in_csrf);
+    check('zápis configu po úspěšném testu', [$c, $r['written'] ?? null, $r['next'] ?? null], [200, true, 'schema']);
+    $in_written = (string)@file_get_contents($config_path);
+    check_true('config.php nese testovanou databázi', str_contains($in_written, "define('DB_NAME', " . var_export($in_db, true) . ");"));
+    check_true('a session blok ze vzoru', str_contains($in_written, 'session_set_cookie_params'));
+    exec(escapeshellarg(PHP_BINARY) . ' -l ' . escapeshellarg($config_path) . ' 2>&1', $in_lint, $in_lint_rc);
+    check('zapsaný config.php je platné PHP', $in_lint_rc, 0);
+    [$c, , $b] = bk_raw_request($base . '/api.php?action=session');
+    check('config bez schématu: needs_setup schema_missing', [$c, json_decode($b, true)['reason'] ?? null], [503, 'schema_missing']);
+    [$c, $h] = bk_raw_request($base . '/monitor.php?id=1', ['Accept: text/html']);
+    check('a prohlížeč pořád do instalátoru', [$c, preg_match('/^location:\s*\/app\/setup\s*$/mi', $h)], [302, 1]);
+    foreach (['install_test_db', 'install_write_config'] as $in_action) {
+        [$c, $r] = api_post($base, 'action=' . $in_action, $in_cfg, $in_jar, $in_csrf);
+        check("funkční config.php už instalátor nepřepíše ({$in_action})", [$c, $r['error'] ?? null], [409, 'config_exists']);
+    }
+    [$c, $r] = api_post($base, 'action=install_import_schema', [], $in_jar, $in_csrf);
+    check('import schema.sql', [$c, $r['imported'] ?? null, $r['next'] ?? null], [200, true, 'account']);
+    $in_tables = $pdo->prepare("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = ?");
+    $in_tables->execute([$in_db]);
+    check('v databázi jsou všechny tabulky ze schema.sql', (int)$in_tables->fetchColumn(), preg_match_all('/CREATE TABLE IF NOT EXISTS/', (string)file_get_contents($root . '/schema.sql')));
+    $in_key = $pdo->query("SELECT key_value FROM `{$in_db}`.settings WHERE key_name = 'cron_key'")->fetchColumn();
+    check_true('čerstvá instalace dostane vlastní cron klíč', is_string($in_key) && strlen($in_key) === 32);
+    // The version comes after the whole file, from the installer, and it is
+    // not the current one: the next request runs the migrations, which add
+    // what schema.sql lacks, and stores the real version.
+    check('po importu jen cron klíč a verze z instalátoru',
+        $pdo->query("SELECT key_name, key_value FROM `{$in_db}`.settings WHERE key_name <> 'cron_key' ORDER BY key_name")->fetchAll(PDO::FETCH_KEY_PAIR),
+        ['schema_version' => 'schema.sql']);
+    [$c, $r] = api_post($base, 'action=install_import_schema', [], $in_jar, $in_csrf);
+    check('druhý import nic nepřepíše', [$c, $r['imported'] ?? null, $r['alreadyImported'] ?? null], [200, false, true]);
+    [$c, $s] = api_get($base, 'action=session');
+    check('po importu API běží a nabídne první účet', [$c, $s['installed'] ?? 'chybí'], [200, false]);
+    check('první požadavek po importu doběhne migrace a uloží verzi',
+        $pdo->query("SELECT key_value FROM `{$in_db}`.settings WHERE key_name = 'schema_version'")->fetchColumn(), $schema_version_src);
+    [$c, $cr] = api_get_auth($base, 'action=install_cron', $in_jar);
+    check('cron řádek z __DIR__, každou minutu', [$c, $cr['script'] ?? null, $cr['schedule'] ?? null], [200, $root . '/cron.php', '* * * * *']);
+    check_true('crontab řádek = plán + příkaz pro cPanel', ($cr['crontabLine'] ?? '') === '* * * * * ' . ($cr['command'] ?? '-'));
+    [$c, $su] = api_post($base, 'action=setup', ['username' => 'installer', 'email' => 'installer@example.com', 'password' => 'Inst-' . bin2hex(random_bytes(6))], $in_jar, '');
+    check('první účet po instalátoru', [$c, $su['id'] ?? null], [200, 1]);
+
+    // --- the first cron run, with exactly the command the installer printed
+    [, $ch] = api_get($base, 'action=collection_health');
+    check('před prvním během: lastRunAt null a stale, žádná zelená',
+        [is_array($ch) && array_key_exists('lastRunAt', $ch) ? $ch['lastRunAt'] : 'chybí', $ch['stale'] ?? null], [null, true]);
+    [$c, $cr] = api_get_auth($base, 'action=install_cron', $in_jar);
+    check('po instalaci dostane cron řádek admin', $c, 200);
+    exec((string)($cr['command'] ?? 'false'), $in_cron_out, $in_cron_rc);
+    check('příkaz z instalátoru doběhne', $in_cron_rc, 0);
+    [, $ch] = api_get($base, 'action=collection_health');
+    check_true('a první běh je vidět v collection_health', is_string($ch['lastRunAt'] ?? null) && ($ch['stale'] ?? null) === false);
+
+    // --- the lock: a finished install refuses every step ----------------
+    $in_before = md5_file($config_path);
+    [$c, $st] = api_get_auth($base, 'action=install_status', $in_anon);
+    check('hotová instalace prozradí jen, že je hotová', [$c, $st], [200, ['step' => 'installed', 'locked' => true]]);
+    foreach (['install_test_db', 'install_write_config', 'install_import_schema'] as $in_action) {
+        [$c, $r] = api_post($base, 'action=' . $in_action, $in_cfg, $in_anon, 'x');
+        check("druhý běh, {$in_action}: 409 installer_locked", [$c, $r['error'] ?? null], [409, 'installer_locked']);
+        [$c, $r] = api_post($base, 'action=' . $in_action, $in_cfg, $in_jar, $in_csrf);
+        check("druhý běh i s tokenem admina, {$in_action}: 409", [$c, $r['error'] ?? null], [409, 'installer_locked']);
+    }
+    [$c, $r] = api_get_auth($base, 'action=install_cron', $in_anon);
+    check('cron řádek anonymovi po instalaci ne', [$c, $r['error'] ?? null], [409, 'installer_locked']);
+    [$c] = api_post($base, 'action=setup', ['username' => 'x', 'email' => 'x@example.com', 'password' => 'Xx-12345678'], $in_anon, '');
+    check('ani druhý první účet', $c, 409);
+    check('config.php zůstal, jak byl', md5_file($config_path), $in_before);
+
+    // Machine endpoints on the finished install: their own answers, no redirect.
+    $in_expect = ['agent_api.php' => 401, 'heartbeat.php?token=' . str_repeat('a', 48) => 404,
+        'node_api.php?action=get_monitors' => 403, 'metrics.php' => 404, 'cron.php' => 403];
+    foreach ($in_machine as $in_path => [$in_post, $in_label]) {
+        [$c, $h] = bk_raw_request($base . '/' . $in_path, [], $in_post);
+        check("po instalaci, {$in_label}: vlastní odpověď, žádné přesměrování", [$c, preg_match('/^location:/mi', $h)], [$in_expect[$in_path], 0]);
+    }
+
+    // --- the sample's placeholder config: still a first run ---------------
+    bk_test_put_config($config_path, (string)file_get_contents($root . '/config.sample.php'));
+    [$c, , $b] = bk_raw_request($base . '/api.php?action=session');
+    check('vzorový config.php: needs_setup config_sample', [$c, json_decode($b, true)['reason'] ?? null], [503, 'config_sample']);
+    [, $st] = api_get_auth($base, 'action=install_status', $in_anon);
+    check('a instalátor ho smí nahradit', [$st['step'] ?? null, $st['config']['sample'] ?? null], ['config', true]);
+
+    // --- a REAL config.php whose database is down: an outage, not a setup --
+    bk_test_put_config($config_path, $in_test_config);
+    [$c, , $b] = bk_raw_request($base . '/api.php?action=session', ['X-BK-Test-DB-Down: 1']);
+    check('výpadek databáze zůstává database_unavailable', [$c, json_decode($b, true)], [503, ['error' => 'database_unavailable']]);
+    [$c, $h, $b] = bk_raw_request($base . '/api.php?action=install_status', ['X-BK-Test-DB-Down: 1']);
+    check('instalátor při výpadku: zamčeno, bez tokenu', json_decode($b, true), ['step' => 'config_unreachable', 'locked' => true]);
+    [$c, $h, $b] = bk_raw_request($base . '/api.php?action=install_write_config',
+        ['X-BK-Test-DB-Down: 1', 'Content-Type: application/json', 'X-CSRF-Token: ' . $in_csrf, 'Cookie: ' . bk_test_jar_cookie($in_jar)],
+        json_encode($in_cfg));
+    check('při výpadku instalátor skutečný config.php nepřepíše', [$c, json_decode($b, true)['error'] ?? null], [409, 'config_exists']);
+    check('config.php je pořád ten testovací', (string)file_get_contents($config_path), $in_test_config);
+
+    // --- a CI-deployed directory that lost its config.php: still locked --
+    // FTP-Deploy-Action leaves .ftp-deploy-sync-state.json next to what it
+    // uploads; a fresh upload never has it. config.php gone there (a scanner's
+    // quarantine, an FTP mistake) or back to the sample is a broken deploy,
+    // and a config step would let whoever noticed point the site elsewhere.
+    $in_sync_made = !file_exists($in_sync) && file_put_contents($in_sync, '{"version":"1.0.0","data":[]}') !== false;
+    check_true('složka z CI: stav synchronizace FTP je na místě', $in_sync_made);
+    unlink($config_path);
+    foreach (['anonym' => $in_anon, 'relace s tokenem' => $in_jar] as $in_who => $in_who_jar) {
+        [$c, $st] = api_get_auth($base, 'action=install_status', $in_who_jar);
+        check("složka z CI bez config.php ({$in_who}): zamčeno, bez tokenu", [$c, $st], [200, ['step' => 'config_unreachable', 'locked' => true]]);
+    }
+    foreach (['install_test_db' => 'config_exists', 'install_write_config' => 'config_exists',
+        'install_import_schema' => 'database_not_configured'] as $in_action => $in_error) {
+        [$c, $r] = api_post($base, 'action=' . $in_action, $in_cfg, $in_anon, 'x');
+        check("složka z CI, {$in_action} bez tokenu: 403", [$c, $r['error'] ?? null], [403, 'csrf_invalid']);
+        [$c, $r] = api_post($base, 'action=' . $in_action, $in_cfg, $in_jar, $in_csrf);
+        check("složka z CI, {$in_action} i s tokenem: 409 {$in_error}", [$c, $r['error'] ?? null], [409, $in_error]);
+    }
+    [$c, $r] = api_get_auth($base, 'action=install_cron', $in_anon);
+    check('složka z CI: cron řádek ne', [$c, $r['error'] ?? null], [409, 'database_not_configured']);
+    [$c, $r] = api_post($base, 'action=setup', ['username' => 'x', 'email' => 'x@example.com', 'password' => 'Xx-12345678'], $in_anon, '');
+    check('složka z CI: ani první účet', [$c, $r['error'] ?? null], [503, 'needs_setup']);
+    check_false('složka z CI: config.php nevznikl', file_exists($config_path));
+    $in_sample = (string)file_get_contents($root . '/config.sample.php');
+    bk_test_put_config($config_path, $in_sample);
+    [$c, $st] = api_get_auth($base, 'action=install_status', $in_anon);
+    check('složka z CI se vzorovým config.php: taky zamčeno', [$c, $st], [200, ['step' => 'config_unreachable', 'locked' => true]]);
+    [$c, $r] = api_post($base, 'action=install_write_config', $in_cfg, $in_jar, $in_csrf);
+    check('a vzorový config.php tam instalátor nepřepíše', [$c, $r['error'] ?? null], [409, 'config_exists']);
+    check('config.php je pořád vzorový', (string)file_get_contents($config_path), $in_sample);
+} finally {
+    if ($in_chmod) {
+        chmod($root, 0755);
+    }
+    if ($in_sync_made) {
+        @unlink($in_sync);
+    }
+    file_put_contents($config_path, $in_test_config);
+    @unlink($in_jar);
+    @unlink($in_anon);
+}
+
+$failed = bk_test_report('api.php (integrační)');
+exit($failed > 0 ? 1 : 0);
